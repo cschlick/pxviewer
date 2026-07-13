@@ -174,6 +174,38 @@ def test_select_without_viewer_returns_none(session):
     assert session.select("index 1", timeout=0.2) is None
 
 
+def test_set_volume_color_command_reaches_client(session):
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_volume_color("vol1", "green")
+            message = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert isinstance(message, str)
+            event = json.loads(message)
+            assert event == {"type": "volume_color", "ref": "vol1", "color": "green"}
+
+    asyncio.run(scenario())
+
+
+def test_set_volume_opacity_command_reaches_client(session):
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_volume_opacity("vol2", 0.25)
+            message = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert isinstance(message, str)
+            event = json.loads(message)
+            assert event == {"type": "volume_opacity", "ref": "vol2", "opacity": 0.25}
+
+    asyncio.run(scenario())
+
+
 def test_highlight_replayed_to_late_client(session):
     """A viewer connecting after a highlight is caught up to the active selection."""
 

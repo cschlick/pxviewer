@@ -22,6 +22,7 @@ import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import { Script } from 'molstar/lib/mol-script/script';
 import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
+import { decodeColor } from 'molstar/lib/mol-util/color/utils';
 
 export interface AtomInfo {
     id: number;
@@ -273,6 +274,34 @@ async function setAxis(plugin: PluginContext, visible: boolean) {
     });
 }
 
+async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+        old.colorTheme = { name: 'uniform', params: { value: decodeColor(color) } };
+    }).commit();
+}
+
+async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+        if (old.type?.name === 'isosurface') {
+            old.type.params.alpha = opacity;
+        }
+    }).commit();
+}
+
+async function findVolumeReprCell(plugin: PluginContext, ref: string) {
+    const tag = `mvs-ref:${ref}-repr`;
+    for (let i = 0; i < 200; i++) {
+        const cells = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(tag));
+        if (cells.length) return cells[0];
+        await new Promise((r) => setTimeout(r, 25));
+    }
+    return undefined;
+}
+
 export interface LiveConnectionHandle {
     close(): void;
 }
@@ -294,6 +323,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
+            } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
+                await setVolumeColor(plugin, msg.ref, msg.color);
+            } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
+                await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'select' && viewer) {
                 // Resolve a PyMOL selection in the viewer and echo the matched
                 // atom indices back so Python knows what was selected.

@@ -154,7 +154,7 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         else:
             raise ValueError(f"isosurface_kind must be 'absolute' or 'relative', got {volume.isosurface_kind!r}")
 
-    repr = mvs_volume.representation(**repr_kwargs)
+    repr = mvs_volume.representation(**repr_kwargs, ref=f"{ref}-repr")
     if volume.color is not None:
         repr = repr.color(color=volume.color)
     if volume.opacity is not None:

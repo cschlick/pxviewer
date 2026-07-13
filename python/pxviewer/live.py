@@ -248,6 +248,27 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_volume_color(self, ref: str, color: str) -> None:
+        """Broadcast a command to change the color of a volume by reference.
+
+        The ``ref`` is the volume reference used when the scene was built (e.g.
+        ``volume-0`` or a custom :class:`Volume` ref). Thread-safe.
+        """
+        message = json.dumps({"type": "volume_color", "ref": str(ref), "color": str(color)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_opacity(self, ref: str, opacity: float) -> None:
+        """Broadcast a command to change the opacity of a volume by reference.
+
+        Thread-safe: may be called from any thread.
+        """
+        message = json.dumps({"type": "volume_opacity", "ref": str(ref), "opacity": float(opacity)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     # -- selection (python -> scene -> python) ---------------------------
 
     def select(
