@@ -105,6 +105,11 @@ export class LiveViewer {
     private highlightIndices: number[] = [];
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
+    private mouseSelectionEnabled = false;
+    private mouseSelectionSet = new Set<number>();
+    private pickHandler?: (info: AtomInfo | null) => void;
+    /** Set by the connection to report the click-built selection back to Python. */
+    onSelectionChange?: (indices: number[]) => void;
 
     private constructor(private plugin: PluginContext) {}
 
@@ -115,7 +120,7 @@ export class LiveViewer {
     ): Promise<LiveViewer> {
         const viewer = new LiveViewer(plugin);
         await viewer.build(topologyBcif);
-        if (onPick) viewer.subscribePick(onPick);
+        viewer.subscribeClick(onPick);
         return viewer;
     }
 
@@ -260,26 +265,49 @@ export class LiveViewer {
         for (const id of Array.from(this.primitives.keys())) await this.removePrimitive(id);
     }
 
-    private subscribePick(onPick: (info: AtomInfo | null) => void) {
+    /** Enable/disable click-to-select in the viewer. When on, clicks build a selection. */
+    setMouseSelectionEnabled(on: boolean) {
+        this.mouseSelectionEnabled = on;
+    }
+
+    private subscribeClick(onPick?: (info: AtomInfo | null) => void) {
+        this.pickHandler = onPick;
         this.plugin.behaviors.interaction.click.subscribe((e) => {
             const loci = e.current.loci;
-            if (!StructureElement.Loci.is(loci)) {
-                onPick(null);
-                return;
+            const location = StructureElement.Loci.is(loci)
+                ? StructureElement.Loci.getFirstLocation(loci)
+                : undefined;
+            if (this.pickHandler) {
+                this.pickHandler(location ? {
+                    id: StructureProperties.atom.id(location),
+                    name: StructureProperties.atom.label_atom_id(location),
+                    resname: StructureProperties.atom.label_comp_id(location),
+                    resseq: StructureProperties.residue.label_seq_id(location),
+                    chain: StructureProperties.chain.label_asym_id(location),
+                } : null);
             }
-            const location = StructureElement.Loci.getFirstLocation(loci);
-            if (!location) {
-                onPick(null);
-                return;
-            }
-            onPick({
-                id: StructureProperties.atom.id(location),
-                name: StructureProperties.atom.label_atom_id(location),
-                resname: StructureProperties.atom.label_comp_id(location),
-                resseq: StructureProperties.residue.label_seq_id(location),
-                chain: StructureProperties.chain.label_asym_id(location),
-            });
+            if (this.mouseSelectionEnabled) this.handleSelectionClick(location, !!e.modifiers?.shift);
         });
+    }
+
+    // Click selects just that atom; shift-click toggles it in the set; a click on
+    // empty space clears. Highlights the set and reports it back to Python.
+    private handleSelectionClick(location: StructureElement.Location | undefined, shift: boolean) {
+        if (!location) {
+            if (!shift) this.mouseSelectionSet.clear();
+        } else {
+            const el = location.element as unknown as number;
+            if (shift) {
+                if (this.mouseSelectionSet.has(el)) this.mouseSelectionSet.delete(el);
+                else this.mouseSelectionSet.add(el);
+            } else {
+                this.mouseSelectionSet.clear();
+                this.mouseSelectionSet.add(el);
+            }
+        }
+        const indices = Array.from(this.mouseSelectionSet).sort((a, b) => a - b);
+        this.setHighlight(indices);
+        this.onSelectionChange?.(indices);
     }
 }
 
@@ -383,6 +411,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
+            } else if (msg.type === 'mouse-selection-mode' && viewer) {
+                viewer.setMouseSelectionEnabled(!!msg.enabled);
             } else if (msg.type === 'primitive' && viewer) {
                 try {
                     if (msg.action === 'add') {
@@ -408,6 +438,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             viewer = await LiveViewer.create(plugin, bcif, (info) => {
                 ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined }));
             });
+            viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
             building = false;
             ws.send(JSON.stringify({ type: 'ready' }));
         } else if (tag === TAG_FRAME && viewer) {

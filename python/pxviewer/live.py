@@ -24,10 +24,12 @@ Server -> client (UTF-8 JSON text control messages):
      "id": str, "groups": [[int,...],...], "options": {...}}    dihedral/label
   - {"type": "primitive", "action": "remove", "id": str}       remove one primitive
   - {"type": "primitive", "action": "clear"}                   remove all primitives
+  - {"type": "mouse-selection-mode", "enabled": bool}          click-to-select on/off
 
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
+  - {"type": "mouse-selection", "indices": [int]} click-built selection (mode on)
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -239,6 +241,13 @@ class LiveSession:
         # Active drawing primitives (id -> the "add" message), replayed to late clients.
         self._primitives: dict = {}
         self._primitive_counter = 0
+
+        # Mouse-driven selection: the user clicks atoms in the viewer and the picked
+        # set is streamed back here.
+        self._mouse_selection_mode = False
+        self._mouse_selection_indices: List[int] = []
+        self._selection_handlers: List[Callable[[Selection], None]] = []
+        self._selection_changed = threading.Event()
 
         self.host = "127.0.0.1"
         self.port = 8787
@@ -461,6 +470,45 @@ class LiveSession:
         self._last_highlight_indices = []
         self._send_control({"type": "highlight", "atoms": _encode_index_set([])})
 
+    # -- mouse selection (scene -> python) -------------------------------
+
+    def enable_mouse_selection(self, on_change: Optional[Callable[[Selection], None]] = None) -> None:
+        """Let the viewer's user pick atoms by clicking (shift-click adds/removes).
+
+        The picked set is reported back to Python: read the :attr:`mouse_selection`
+        property, register ``on_change`` (or :meth:`on_selection`) for a callback,
+        or block with :meth:`wait_for_selection`. Thread-safe.
+        """
+        if on_change is not None:
+            self.on_selection(on_change)
+        self._mouse_selection_mode = True
+        self._send_control({"type": "mouse-selection-mode", "enabled": True})
+
+    def disable_mouse_selection(self) -> None:
+        """Stop click-to-select in the viewer. Thread-safe."""
+        self._mouse_selection_mode = False
+        self._send_control({"type": "mouse-selection-mode", "enabled": False})
+
+    def on_selection(self, handler: Callable[[Selection], None]) -> None:
+        """Register a callback invoked with a :class:`Selection` when the mouse selection changes."""
+        self._selection_handlers.append(handler)
+
+    @property
+    def mouse_selection(self) -> Selection:
+        """The current mouse selection — the atoms the user has clicked in the viewer."""
+        idx = list(self._mouse_selection_indices)
+        return Selection(idx, [self.atoms[i] for i in idx], self._n_atoms)
+
+    def wait_for_selection(self, timeout: Optional[float] = None) -> Optional[Selection]:
+        """Block until the mouse selection next changes, then return it.
+
+        Returns the new :class:`Selection`, or ``None`` if ``timeout`` elapses first.
+        """
+        self._selection_changed.clear()
+        if self._selection_changed.wait(timeout):
+            return self.mouse_selection
+        return None
+
     # -- internals -------------------------------------------------------
 
     def _send_control(self, message: dict) -> None:
@@ -600,6 +648,8 @@ class LiveSession:
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
                 await websocket.send(json.dumps(message))
+            if self._mouse_selection_mode:
+                await websocket.send(json.dumps({"type": "mouse-selection-mode", "enabled": True}))
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -622,6 +672,17 @@ class LiveSession:
             for handler in self._pick_handlers:
                 try:
                     handler(info)
+                except Exception:  # pragma: no cover - user callback errors
+                    pass
+        elif etype == "mouse-selection":
+            raw = event.get("indices") or []
+            indices = sorted({i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms})
+            self._mouse_selection_indices = indices
+            selection = Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
+            self._selection_changed.set()
+            for handler in self._selection_handlers:
+                try:
+                    handler(selection)
                 except Exception:  # pragma: no cover - user callback errors
                     pass
 

@@ -123,6 +123,30 @@ wire carries only indices, run-length-encoded for large contiguous selections.
 Highlights re-map onto each streamed frame in O(selected), and are replayed to
 viewers that connect later.
 
+### Selecting atoms with the mouse
+
+Let the person at the viewer pick atoms and read their choice back in Python.
+Enable click-to-select, then **click** an atom (**shift-click** to add or remove
+more); the running selection streams back:
+
+```python
+session.enable_mouse_selection()
+
+sel = session.wait_for_selection()      # block until the user clicks; returns a Selection
+print(sel.indices, sel.ids)
+
+# …or react to every change:
+session.enable_mouse_selection(on_change=lambda sel: print("picked", sel.indices))
+
+session.mouse_selection                  # the current pick set, at any time
+session.disable_mouse_selection()
+```
+
+Click selects a single atom; shift-click toggles atoms in and out; clicking empty
+space clears. Picked atoms are highlighted in the viewer and reported as positional
+indices — the same `Selection` you can hand straight to `highlight`, `add_angle`,
+and friends.
+
 ### Drawing measurements (angles, distances, dihedrals, labels)
 
 Draw Mol\*'s measurement graphics from Python. Atoms are named by a `Selection`
@@ -161,8 +185,10 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
+| server → client | mouse-selection-mode | JSON `{"type":"mouse-selection-mode","enabled":bool}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
+| client → server | mouse-selection | JSON `{"type":"mouse-selection","indices":[int…]}` |
 
 An `<index-set>` is `{"list":[int,…]}` or run-length `{"runs":[[start,end],…]}`.
 All atom addressing is by positional index; the wire carries no query language.
