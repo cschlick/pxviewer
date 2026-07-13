@@ -5,6 +5,7 @@ import time
 
 from .api import create_example_view
 from .data import Atom
+from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
 
 
@@ -40,6 +41,15 @@ def main() -> None:
     demo.add_argument("--atoms", type=int, default=24, help="Number of atoms in the demo chain")
     demo.add_argument("--fps", type=float, default=30.0, help="Frames per second to stream")
 
+    run = subparsers.add_parser(
+        "demo",
+        help="Run a narrated, slowed-down demo for the live frontend",
+    )
+    run.add_argument("name", nargs="?", help="Demo to run; omit to list available demos")
+    run.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    run.add_argument("--port", type=int, default=8787, help="Port to bind")
+    run.add_argument("--fps", type=float, default=30.0, help="Frames per second within each motion")
+
     args = parser.parse_args()
 
     if args.command == "create-example-view":
@@ -65,6 +75,15 @@ def main() -> None:
             print("\nstopping...")
         finally:
             session.stop()
+
+    elif args.command == "demo":
+        if not args.name:
+            print("Available demos:\n")
+            for name, description in list_demos():
+                print(f"  {name:10s} {description}")
+            print("\nRun one with:  python -m pxviewer demo <name>")
+            return
+        run_demo(args.name, host=args.host, port=args.port, fps=args.fps)
 
 
 if __name__ == "__main__":

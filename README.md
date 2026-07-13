@@ -51,6 +51,28 @@ python -m pxviewer serve-demo            # ws://127.0.0.1:8787
 
 Clicking an atom prints its identity back in the Python terminal (the duplex path).
 
+### Demos
+
+Narrated, slowed-down scenarios meant to be *watched* in the browser (like tests,
+but for human eyes). List them, then run one and open the printed URL:
+
+```bash
+cd python
+python -m pxviewer demo                   # list available demos
+python -m pxviewer demo wave              # then open index.html?ws=ws://127.0.0.1:8787
+```
+
+| Demo | What you see |
+| --- | --- |
+| `wave` | a chain rippling with a growing travelling wave |
+| `breathe` | a sphere of atoms expanding and contracting |
+| `orbit` | a rigid body gliding around a square path |
+| `morph` | a chain folding into a helix and back |
+| `pick` | click atoms to make them pulse — the scene → Python path |
+
+Each demo waits for the viewer to connect, narrates each step in the terminal, and
+loops until Ctrl-C. Use `--fps` to change smoothness within a motion.
+
 ### From your own code
 
 ```python

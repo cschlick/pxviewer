@@ -99,6 +99,7 @@ class LiveSession:
         self._clients: set = set()
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
+        self._client_ready = threading.Event()
         self.host = "127.0.0.1"
         self.port = 8787
 
@@ -107,6 +108,17 @@ class LiveSession:
     def on_pick(self, handler: Callable[[Optional[dict]], None]) -> None:
         """Register a callback invoked (on the server's loop thread) for each pick."""
         self._pick_handlers.append(handler)
+
+    def wait_for_client(self, timeout: Optional[float] = None) -> bool:
+        """Block until a client has connected and reported it parsed the topology.
+
+        Returns True if a client became ready within ``timeout`` seconds.
+        """
+        return self._client_ready.wait(timeout)
+
+    @property
+    def client_count(self) -> int:
+        return len(self._clients)
 
     # -- lifecycle -------------------------------------------------------
 
@@ -216,7 +228,10 @@ class LiveSession:
             event = json.loads(message)
         except (ValueError, TypeError):
             return
-        if event.get("type") == "pick":
+        etype = event.get("type")
+        if etype == "ready":
+            self._client_ready.set()
+        elif etype == "pick":
             info = None if event.get("empty") else event.get("atom")
             for handler in self._pick_handlers:
                 try:
