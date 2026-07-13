@@ -316,6 +316,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let viewer: LiveViewer | null = null;
     let building = false;
 
+    ws.onopen = () => {
+        console.log('pxviewer live connected to', url);
+    };
+    ws.onerror = (err) => {
+        console.error('pxviewer live WebSocket error for', url, err);
+    };
+    ws.onclose = (ev) => {
+        if (!ev.wasClean) {
+            console.error('pxviewer live WebSocket closed unexpectedly:', ev.code, ev.reason);
+        }
+    };
+
     ws.onmessage = async (ev) => {
         if (typeof ev.data === 'string') {
             // Server -> client control messages (JSON text).

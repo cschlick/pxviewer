@@ -151,6 +151,8 @@ class LiveSession:
         self._clients: set = set()
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
+        self._started_or_error = threading.Event()
+        self._start_error: Optional[BaseException] = None
         self._client_ready = threading.Event()
 
         # PyMOL selections are evaluated in the browser and echoed back; each
@@ -194,7 +196,15 @@ class LiveSession:
         self.port = port
         self._thread = threading.Thread(target=self._run, name="pxviewer-live", daemon=True)
         self._thread.start()
-        self._ready.wait(timeout=10)
+        self._started_or_error.wait(timeout=10)
+        if self._start_error is not None:
+            raise RuntimeError(
+                f"LiveSession server failed to start on {host}:{port}"
+            ) from self._start_error
+        if not self._ready.is_set():
+            raise RuntimeError(
+                f"LiveSession server failed to start on {host}:{port} (timeout)"
+            )
         return self
 
     def stop(self) -> None:
@@ -360,9 +370,12 @@ class LiveSession:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
-        loop.run_until_complete(self._serve())
         try:
+            loop.run_until_complete(self._serve())
             loop.run_forever()
+        except Exception as exc:
+            self._start_error = exc
+            self._started_or_error.set()
         finally:
             loop.run_until_complete(self._shutdown())
             loop.close()
@@ -378,6 +391,7 @@ class LiveSession:
             self.port = sock.getsockname()[1]
             break
         self._ready.set()
+        self._started_or_error.set()
 
     async def _shutdown(self) -> None:
         if self._server is not None:

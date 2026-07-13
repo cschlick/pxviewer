@@ -348,7 +348,7 @@ def run_live_volume_demo(
     *,
     host: str = "127.0.0.1",
     http_port: int = 5173,
-    ws_port: int = 8787,
+    ws_port: int = 0,
     voxel_size: float = 1.0,
     shape: Tuple[int, int, int] = (32, 32, 32),
     period: float = 2.0,

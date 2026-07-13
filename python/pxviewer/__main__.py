@@ -86,7 +86,7 @@ def main() -> None:
     )
     live_vol.add_argument("--host", default="127.0.0.1", help="Host to bind")
     live_vol.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
-    live_vol.add_argument("--ws-port", type=int, default=8787, help="Port for the WebSocket control channel")
+    live_vol.add_argument("--ws-port", type=int, default=0, help="Port for the WebSocket control channel (0 = ephemeral)")
     live_vol.add_argument("--voxel-size", type=float, default=1.0, help="Isotropic voxel size in Angstroms")
     live_vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
     live_vol.add_argument("--period", type=float, default=2.0, help="Seconds between color/opacity updates")
