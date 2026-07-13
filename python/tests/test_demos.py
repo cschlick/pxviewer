@@ -16,9 +16,25 @@ from pxviewer.demos import DEMOS, Player
 class _StubSession:
     def __init__(self):
         self.frames = []
+        self.selections = []
 
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
+
+    # The select demo drives these; record expressions, no viewer to answer.
+    def select(self, expression, **kwargs):
+        self.selections.append(expression)
+        return None
+
+    def highlight(self, expression, **kwargs):
+        self.selections.append(expression)
+        return None
+
+    def focus(self, expression, **kwargs):
+        return None
+
+    def clear_selection(self):
+        self.selections.append(None)
 
 
 @pytest.mark.parametrize("name", list(DEMOS))
@@ -62,3 +78,20 @@ def test_pick_demo_reacts_to_pick():
     # Atom 0 should have moved away from its rest position at some point.
     moved = any(not np.allclose(f[0], base[0]) for f in stub.frames)
     assert moved, "picked atom never pulsed"
+
+
+def test_select_demo_issues_selections():
+    demo = DEMOS["select"]
+    atoms = demo.make_atoms()
+    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    stub = _StubSession()
+    player = Player(stub, base, fps=240)
+
+    thread = threading.Thread(target=demo.run, args=(player,), daemon=True)
+    thread.start()
+    time.sleep(0.4)
+    player.stop()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive(), "select demo did not stop"
+    assert any(isinstance(x, str) for x in stub.selections), "select demo issued no selections"

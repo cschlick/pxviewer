@@ -73,6 +73,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 | `orbit` | a rigid body gliding around a square path |
 | `morph` | a chain folding into a helix and back |
 | `pick` | click atoms to make them pulse — the scene → Python path |
+| `select` | atoms highlighted by PyMOL selection, driven from Python |
 
 Each demo serves the frontend, waits for the viewer to connect, narrates each step
 in the terminal, and loops until Ctrl-C. Use `--fps` to change smoothness within a
