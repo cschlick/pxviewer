@@ -122,6 +122,33 @@ returns a `Selection`, or `None` if no viewer answered. Supported selectors
 include `name`, `elem`, `resn`, `resi`, `chain`, `id`, and `index`, with boolean
 `and`/`or`/`not`, parentheses, ranges (`resi 1-10`) and lists (`resi 1+2+3`).
 
+### Drawing measurements (angles, distances, dihedrals, labels)
+
+Draw Mol\*'s measurement graphics from Python. Atoms are named by a `Selection`
+(from `select(...)`, or `select_by(indices=…)` / `select_by(ids=…)` with no
+viewer needed) — or anything coercible: an index, a list of indices, or a PyMOL
+string. A multi-atom group is reduced to its **centroid**, so these also work
+between groups. Each primitive **tracks the atoms as they move**.
+
+```python
+a = session.select_by(indices=[0]); b = session.select_by(ids=[5]); c = session.select_by(indices=[9])
+
+ang  = session.add_angle(a, b, c)              # thin pie-shaped wedge at vertex b
+dist = session.add_distance(a, b)              # dashed line + distance
+dih  = session.add_dihedral(a, b, c, "resi 7") # torsion across b–c
+lbl  = session.add_label(a, "active site")     # floating text
+
+ang.degrees      # measured angle, computed in Python from current coords
+dist.distance    # measured distance in Å
+session.remove_primitive(ang.id)               # remove one
+session.clear_primitives()                     # remove all
+```
+
+`add_angle`/`add_dihedral` take `opacity=` (wedge translucency) and `label=`
+(toggle the value text). Every `add_*` returns a `Primitive` with an `id` (for
+removal), the measured `value` (degrees / Å / `None`), and its `selections`.
+Primitives are replayed to viewers that connect later.
+
 ## Live wire protocol (`pxviewer-live/1`)
 
 WebSocket; binary messages are little-endian and begin with a `uint32` tag.
@@ -131,6 +158,7 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | topology | `[u32 tag=0][BinaryCIF bytes]` (sent once on connect) |
 | server → client | frame | `[u32 tag=1][u32 frameIndex][f32 × 3N]` interleaved `x,y,z` |
 | server → client | select | JSON `{"type":"select","reqId":int,"expression":str,"highlight":bool,"focus":bool}` |
+| server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
 | client → server | selection-result | JSON `{"type":"selection-result","reqId":int,"indices":[int…],"error":str?}` |

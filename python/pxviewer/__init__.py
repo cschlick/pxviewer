@@ -18,7 +18,7 @@ from .api import (
     write_bcif,
     write_volume,
 )
-from .live import ATOM_IDENTITY_CONTRACT, LiveSession, Selection
+from .live import ATOM_IDENTITY_CONTRACT, LiveSession, Primitive, Selection
 
 __all__ = [
     "Atom",
@@ -37,5 +37,6 @@ __all__ = [
     "write_volume",
     "LiveSession",
     "Selection",
+    "Primitive",
     "ATOM_IDENTITY_CONTRACT",
 ]

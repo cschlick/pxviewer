@@ -104,6 +104,7 @@ export class LiveViewer {
     private version = 0;
     private nAtoms = 0;
     private highlightIndices: number[] = [];
+    private primitives = new Map<string, StateObjectSelector>();
 
     private constructor(private plugin: PluginContext) {}
 
@@ -213,6 +214,56 @@ export class LiveViewer {
     private reapplyHighlight() {
         const structure = this.currentStructure();
         if (structure) this.showHighlight(structure, this.highlightIndices);
+    }
+
+    /**
+     * Add a measurement primitive from atom-index groups. Mol*'s measurement
+     * manager builds these from position-independent bundles that depend on the
+     * structure, so they recompute automatically as coordinates stream in.
+     */
+    async addMeasurement(
+        id: string,
+        kind: string,
+        groups: number[][],
+        options: { opacity?: number; label?: boolean; text?: string },
+    ) {
+        const structure = this.currentStructure();
+        if (!structure) return;
+        await this.removePrimitive(id); // replace if this id already exists
+        const loci = groups.map((g) => lociFromElementIndices(structure, g));
+        const m = this.plugin.managers.structure.measurement;
+        const opacity = options.opacity ?? 0.35;
+        const withText = <T extends string>(base: T[]): T[] => (options.label === false ? base : ([...base, 'text'] as T[]));
+        let res: any;
+        if (kind === 'distance' && loci.length >= 2) {
+            res = await m.addDistance(loci[0], loci[1], {
+                visualParams: { visuals: withText(['lines']) as any },
+            });
+        } else if (kind === 'angle' && loci.length >= 3) {
+            res = await m.addAngle(loci[0], loci[1], loci[2], {
+                visualParams: { visuals: withText(['vectors', 'sector', 'arc']) as any, sectorOpacity: opacity },
+            });
+        } else if (kind === 'dihedral' && loci.length >= 4) {
+            res = await m.addDihedral(loci[0], loci[1], loci[2], loci[3], {
+                visualParams: { visuals: withText(['vectors', 'extenders', 'connector', 'sector']) as any, sectorOpacity: opacity },
+            });
+        } else if (kind === 'label' && loci.length >= 1) {
+            res = await m.addLabel(loci[0], { visualParams: { customText: options.text ?? '' } });
+        }
+        if (res?.selection) this.primitives.set(id, res.selection);
+    }
+
+    /** Remove a single primitive by id. */
+    async removePrimitive(id: string) {
+        const selection = this.primitives.get(id);
+        if (!selection) return;
+        this.primitives.delete(id);
+        if (selection.ref) await this.plugin.state.data.build().delete(selection.ref).commit();
+    }
+
+    /** Remove all primitives. */
+    async clearPrimitives() {
+        for (const id of Array.from(this.primitives.keys())) await this.removePrimitive(id);
     }
 
     private subscribePick(onPick: (info: AtomInfo | null) => void) {
@@ -341,6 +392,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     error = e instanceof Error ? e.message : String(e);
                 }
                 ws.send(JSON.stringify({ type: 'selection-result', reqId: msg.reqId, indices, error }));
+            } else if (msg.type === 'primitive' && viewer) {
+                try {
+                    if (msg.action === 'add') {
+                        await viewer.addMeasurement(String(msg.id), String(msg.kind), msg.groups ?? [], msg.options ?? {});
+                    } else if (msg.action === 'remove') {
+                        await viewer.removePrimitive(String(msg.id));
+                    } else if (msg.action === 'clear') {
+                        await viewer.clearPrimitives();
+                    }
+                } catch {
+                    // ignore malformed primitive commands
+                }
             }
             return;
         }

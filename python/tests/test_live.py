@@ -230,6 +230,108 @@ def test_highlight_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
+def test_add_angle_message_reaches_client(session):
+    """add_angle broadcasts a primitive-add message with the atom-index groups."""
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            prim = session.add_angle(0, 1, 2, label=False)
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert message["type"] == "primitive"
+            assert message["action"] == "add"
+            assert message["kind"] == "angle"
+            assert message["id"] == prim.id
+            assert message["groups"] == [[0], [1], [2]]
+            assert message["options"] == {"opacity": pytest.approx(0.35), "label": False}
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "call,kind,n_groups",
+    [
+        (lambda s: s.add_distance(0, 1), "distance", 2),
+        (lambda s: s.add_angle(0, 1, 2), "angle", 3),
+        (lambda s: s.add_dihedral(0, 1, 2, 3), "dihedral", 4),
+        (lambda s: s.add_label(0, "hi"), "label", 1),
+    ],
+)
+def test_each_primitive_kind_reaches_client(session, call, kind, n_groups):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            call(session)
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert message["kind"] == kind
+            assert len(message["groups"]) == n_groups
+
+    asyncio.run(scenario())
+
+
+def test_remove_and_clear_messages_reach_client(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            prim = session.add_angle(0, 1, 2)
+            await asyncio.wait_for(ws.recv(), timeout=5)  # the add
+            session.remove_primitive(prim.id)
+            rem = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert rem == {"type": "primitive", "action": "remove", "id": prim.id}
+            session.clear_primitives()
+            clr = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert clr == {"type": "primitive", "action": "clear"}
+
+    asyncio.run(scenario())
+
+
+def test_primitives_replayed_to_late_client(session):
+    """A viewer connecting after primitives are added receives them all."""
+    session.add_angle(0, 1, 2, id="a1")
+    session.add_distance(0, 1, id="d1")
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            seen = {}
+            for _ in range(2):
+                msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+                assert msg["type"] == "primitive" and msg["action"] == "add"
+                seen[msg["id"]] = msg["kind"]
+            assert seen == {"a1": "angle", "d1": "distance"}
+
+    asyncio.run(scenario())
+
+
+def test_pymol_string_spec_resolves_then_draws(session):
+    """add_angle with a PyMOL string resolves it via the viewer, then draws the angle."""
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            # add_angle blocks while resolving the "chain A" string -> worker thread.
+            fut = asyncio.get_event_loop().run_in_executor(
+                None, lambda: session.add_angle("chain A", 1, 2)
+            )
+            # First the viewer is asked to resolve the selection...
+            sel_req = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert sel_req["type"] == "select"
+            await ws.send(json.dumps({"type": "selection-result", "reqId": sel_req["reqId"], "indices": [0]}))
+            # ...then the angle primitive is broadcast.
+            prim_msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert prim_msg["type"] == "primitive" and prim_msg["kind"] == "angle"
+            assert prim_msg["groups"] == [[0], [1], [2]]
+            return await asyncio.wait_for(fut, timeout=5)
+
+    prim = asyncio.run(scenario())
+    assert prim.selections[0].indices == [0]
+
+
 def _json(d):
     import json
 
