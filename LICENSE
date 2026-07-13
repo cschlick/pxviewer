@@ -1,0 +1,71 @@
+pxviewer Source-Available License
+Copyright (c) 2026 Christopher Schlicksup. All rights reserved.
+
+This software is source-available, NOT open source. The source code is published
+for transparency, reference, and evaluation only. No open-source or free-software
+license is granted, and nothing in this document should be read as one.
+
+1. Definitions.
+   "Software" means the source code, documentation, and other material in this
+   repository. "Licensor" means Christopher Schlicksup, the copyright holder. "You"
+   means any person or entity that accesses the Software.
+
+2. Grant of limited rights.
+   Subject to every term below, the Licensor grants You a personal,
+   non-exclusive, non-transferable, non-sublicensable, and revocable permission
+   to access and view the Software, and to build and run it locally for the sole
+   purpose of private, non-production evaluation and study.
+
+3. Reservation of all other rights.
+   All rights not expressly granted in Section 2 are reserved to the Licensor.
+   Without limiting that reservation, You may NOT, in whole or in part, and
+   whether or not for a fee:
+     (a) use the Software in, or as part of, any product, service, or system,
+         other than the private evaluation permitted in Section 2;
+     (b) run or deploy the Software in production or for any commercial purpose;
+     (c) copy, publish, distribute, or otherwise make the Software available to
+         any third party;
+     (d) modify the Software or create derivative works from it;
+     (e) fork, mirror, or host the Software except where a code-hosting platform
+         requires such a right solely to display this repository to You; or
+     (f) remove or alter this License or any copyright or attribution notice.
+
+4. Contributions.
+   If You submit any contribution to the Software (for example a patch, pull
+   request, or suggestion incorporated into the Software), You grant the Licensor
+   a perpetual, worldwide, irrevocable, royalty-free, transferable, and
+   sublicensable license to use, reproduce, modify, distribute, and relicense
+   that contribution under any terms, including open-source or proprietary
+   commercial terms, and You represent that You have the right to grant this. This
+   ensures the Licensor may relicense the Software as a whole.
+
+5. Future licensing.
+   The Licensor may, at its sole discretion and at any time, release any version
+   of the Software under different terms, including an open-source license or a
+   commercial license, and may incorporate the Software into closed-source or
+   commercial works. This License governs only the copy You obtained; it does not
+   obligate the Licensor to publish updates or to keep the Software publicly
+   available.
+
+6. Termination.
+   The permission in Section 2 terminates automatically if You breach any term of
+   this License, and the Licensor may revoke it at any time for any reason. On
+   termination You must stop accessing the Software and delete all copies in Your
+   possession or control.
+
+7. No warranty.
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+8. Limitation of liability.
+   TO THE MAXIMUM EXTENT PERMITTED BY LAW, IN NO EVENT SHALL THE LICENSOR BE
+   LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT,
+   OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE
+   USE OF OR OTHER DEALINGS IN THE SOFTWARE.
+
+9. No trademark rights.
+   This License grants no rights in the Licensor's names, logos, or trademarks.
+
+For any use beyond Section 2 — including commercial use, redistribution, or
+derivative works — contact the Licensor to obtain a separate written license.
