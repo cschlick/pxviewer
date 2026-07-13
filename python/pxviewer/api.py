@@ -47,7 +47,7 @@ def create_view(
         component = structure.component(selector=comp.get("selector", "all"))
         repr = component.representation(type=comp.get("representation", "cartoon"))
         repr.color(color=comp.get("color", "white"))
-    return builder.get_state(title=title).model_dump_json()
+    return builder.get_state(title=title).model_dump_json(exclude_none=True)
 
 
 def create_example_view(

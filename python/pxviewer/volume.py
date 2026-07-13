@@ -148,7 +148,9 @@ def create_volume_view(
     if opacity is not None:
         repr = repr.opacity(opacity=opacity)
 
-    return builder.get_state(title=title).model_dump_json()
+    volume.focus()
+
+    return builder.get_state(title=title).model_dump_json(exclude_none=True)
 
 
 def create_volume_view_from_data(
