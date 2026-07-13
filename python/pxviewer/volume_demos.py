@@ -21,6 +21,8 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from .data import Atom
+from .live import LiveSession
 from .volume import Volume, create_volume_view, write_volume
 
 __all__ = [
@@ -29,6 +31,7 @@ __all__ = [
     "list_volume_demos",
     "create_volume_demo",
     "run_volume_demo",
+    "run_live_volume_demo",
 ]
 
 
@@ -65,6 +68,13 @@ def _make_two_blobs(shape: Tuple[int, int, int]) -> np.ndarray:
     a = _gaussian_blob(shape, (-0.5, 0.0, 0.0), 0.25, 4.0)
     b = _gaussian_blob(shape, (0.5, 0.0, 0.0), 0.25, 4.0)
     return (a + b).astype(np.float32)
+
+
+def _make_two_blobs_multi(shape: Tuple[int, int, int]) -> List[np.ndarray]:
+    """Two separate Gaussian blobs, one per volume."""
+    a = _gaussian_blob(shape, (-0.5, 0.0, 0.0), 0.25, 4.0).astype(np.float32)
+    b = _gaussian_blob(shape, (0.5, 0.0, 0.0), 0.25, 4.0).astype(np.float32)
+    return [a, b]
 
 
 def _make_shell(shape: Tuple[int, int, int]) -> np.ndarray:
@@ -132,6 +142,15 @@ VOLUME_DEMOS: Dict[str, VolumeDemo] = {
             _make_ripple,
             {"isosurface_value": 2.0, "isosurface_kind": "relative", "color": "purple"},
         ),
+        VolumeDemo(
+            "multi_volume",
+            "Two addressable volumes with different initial colors and opacities.",
+            _make_two_blobs_multi,
+            [
+                {"isosurface_value": 2.0, "isosurface_kind": "relative", "color": "red", "opacity": 0.8},
+                {"isosurface_value": 2.0, "isosurface_kind": "relative", "color": "blue", "opacity": 0.8},
+            ],
+        ),
     ]
 }
 
@@ -174,10 +193,9 @@ def create_volume_demo(
 
     volumes = []
     mrc_path_obj = Path(mrc_path)
+    base_name = mrc_path_obj.name
     for i, vol_data in enumerate(data):
-        mrc_name = mrc_path_obj.name
-        if len(data) > 1:
-            mrc_name = f"{i}-{mrc_name}"
+        mrc_name = base_name if i == 0 else f"{i}-{base_name}"
         mrc_out = mrc_path_obj.with_name(mrc_name)
         vol_kwargs = dict(per_volume_demo_kwargs[i])
         vol_kwargs.update(view_kwargs)
@@ -204,16 +222,20 @@ def create_volume_demo(
 class _VolumeDemoHandler(http.server.SimpleHTTPRequestHandler):
     """Serve generated volume files from ``volume_dir`` with the frontend as fallback."""
 
-    def __init__(self, *args, volume_dir: str, frontend_dir: str, mvsj_url: str, **kwargs):
+    def __init__(self, *args, volume_dir: str, frontend_dir: str, mvsj_url: str, ws_url: Optional[str] = None, **kwargs):
         self.volume_dir = Path(volume_dir)
         self.frontend_dir = Path(frontend_dir)
         self.mvsj_url = mvsj_url
+        self.ws_url = ws_url
         super().__init__(*args, directory=str(volume_dir), **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802 (name required by base class)
         if self.path in ("/", "/index.html"):
             self.send_response(302)
-            self.send_header("Location", f"/index.html?mvsj={self.mvsj_url}")
+            location = f"/index.html?mvsj={self.mvsj_url}"
+            if self.ws_url:
+                location += f"&ws={self.ws_url}"
+            self.send_header("Location", location)
             self.end_headers()
             return
         super().do_GET()
@@ -318,5 +340,95 @@ def run_volume_demo(
         except KeyboardInterrupt:
             print("\nstopping...")
         finally:
+            httpd.shutdown()
+            httpd.server_close()
+
+
+def run_live_volume_demo(
+    *,
+    host: str = "127.0.0.1",
+    http_port: int = 5173,
+    ws_port: int = 8787,
+    voxel_size: float = 1.0,
+    shape: Tuple[int, int, int] = (32, 32, 32),
+    period: float = 2.0,
+) -> None:
+    """Serve a two-volume scene and live-cycle colors and opacities over it.
+
+    This opens the frontend at ``http://host:http_port/?mvsj=volume.mvsj&ws=...``
+    and starts a `LiveSession` (using a single off-screen atom for the WebSocket
+    channel). The main thread then animates the two volumes, demonstrating
+    multi-volume addressing, live color changes and live opacity changes.
+    """
+    frontend_dir = _find_frontend_dir()
+    if frontend_dir is None or not (frontend_dir / "build" / "index.js").exists():
+        raise SystemExit(
+            "frontend not built. Run `cd frontend && npm install && npm run build`"
+        )
+
+    x = np.linspace(-1.0, 1.0, shape[0])
+    y = np.linspace(-1.0, 1.0, shape[1])
+    z = np.linspace(-1.0, 1.0, shape[2])
+    X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
+    left = (4.0 * np.exp(-((X + 0.5) ** 2 + Y * Y + Z * Z) / (2.0 * 0.25 * 0.25))).astype(np.float32)
+    right = (4.0 * np.exp(-((X - 0.5) ** 2 + Y * Y + Z * Z) / (2.0 * 0.25 * 0.25))).astype(np.float32)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        volume_dir = Path(tmpdir)
+        write_volume(left, volume_dir / "0-volume.mrc", voxel_size=voxel_size, data_order="xyz")
+        write_volume(right, volume_dir / "1-volume.mrc", voxel_size=voxel_size, data_order="xyz")
+        mvsj = create_volume_view(
+            volumes=[
+                Volume(url="0-volume.mrc", ref="volume-0", color="red", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative"),
+                Volume(url="1-volume.mrc", ref="volume-1", color="blue", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative"),
+            ]
+        )
+        with open(volume_dir / "volume.mvsj", "w") as f:
+            f.write(mvsj)
+
+        # A single off-screen atom is enough to keep the LiveSession WebSocket open.
+        dummy_atom = Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=100.0, y=0.0, z=0.0)
+        session = LiveSession([dummy_atom])
+        session.start(host=host, port=ws_port)
+        ws_url = f"ws://{host}:{session.port}"
+
+        handler = functools.partial(
+            _VolumeDemoHandler,
+            volume_dir=str(volume_dir),
+            frontend_dir=str(frontend_dir),
+            mvsj_url="volume.mvsj",
+            ws_url=ws_url,
+        )
+        try:
+            httpd = _VolumeDemoServer((host, http_port), handler)
+        except OSError:
+            httpd = _VolumeDemoServer((host, 0), handler)
+        actual_port = httpd.server_address[1]
+        thread = threading.Thread(target=httpd.serve_forever, name="pxviewer-live-volume-demo", daemon=True)
+        thread.start()
+
+        print(f"\nLive two-volume demo: cycling colors and opacities over a {shape[0]}x{shape[1]}x{shape[2]} grid")
+        print(f"Open the viewer in your browser: http://{host}:{actual_port}/", flush=True)
+        print("Press Ctrl-C to stop.")
+
+        colors = ["red", "green", "blue", "purple", "gold"]
+        opacities = [1.0, 0.6, 0.3]
+        step = 0
+        try:
+            print("Waiting for a viewer to connect...", flush=True)
+            while session.client_count == 0:
+                time.sleep(0.25)
+            print("Viewer connected — animating.", flush=True)
+            while True:
+                session.set_volume_color("volume-0", colors[step % len(colors)])
+                session.set_volume_opacity("volume-0", opacities[step % len(opacities)])
+                session.set_volume_color("volume-1", colors[(step + 2) % len(colors)])
+                session.set_volume_opacity("volume-1", opacities[(step + 1) % len(opacities)])
+                time.sleep(period)
+                step += 1
+        except KeyboardInterrupt:
+            print("\nstopping...")
+        finally:
+            session.stop()
             httpd.shutdown()
             httpd.server_close()

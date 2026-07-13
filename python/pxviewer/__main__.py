@@ -10,7 +10,7 @@ from .appserver import announce_viewer, stop_all, stop_frontend
 from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
-from .volume_demos import create_volume_demo, list_volume_demos, run_volume_demo
+from .volume_demos import create_volume_demo, list_volume_demos, run_live_volume_demo, run_volume_demo
 
 
 def _demo_atoms(n: int) -> list[Atom]:
@@ -79,6 +79,17 @@ def main() -> None:
     vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
     vol.add_argument("--output-dir", help="Write volume.mrc and volume.mvsj here and exit without serving")
     vol.add_argument("--no-serve", action="store_true", help="Write files and exit without serving")
+
+    live_vol = subparsers.add_parser(
+        "live-volume-demo",
+        help="Serve a two-volume scene and live-cycle colors and opacities",
+    )
+    live_vol.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    live_vol.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
+    live_vol.add_argument("--ws-port", type=int, default=8787, help="Port for the WebSocket control channel")
+    live_vol.add_argument("--voxel-size", type=float, default=1.0, help="Isotropic voxel size in Angstroms")
+    live_vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
+    live_vol.add_argument("--period", type=float, default=2.0, help="Seconds between color/opacity updates")
 
     args = parser.parse_args()
 
@@ -169,6 +180,16 @@ def main() -> None:
             voxel_size=args.voxel_size,
             shape=tuple(args.shape),
             serve=not args.no_serve,
+        )
+
+    elif args.command == "live-volume-demo":
+        run_live_volume_demo(
+            host=args.host,
+            http_port=args.http_port,
+            ws_port=args.ws_port,
+            voxel_size=args.voxel_size,
+            shape=tuple(args.shape),
+            period=args.period,
         )
 
 

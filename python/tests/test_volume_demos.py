@@ -95,8 +95,13 @@ def test_create_volume_demo_unknown_name(tmp_path):
 def test_volume_demo_data_finite():
     for demo in VOLUME_DEMOS.values():
         data = demo.make_data((16, 16, 16))
-        assert data.shape == (16, 16, 16)
-        assert np.isfinite(data).all()
+        if isinstance(data, list):
+            for arr in data:
+                assert arr.shape == (16, 16, 16)
+                assert np.isfinite(arr).all()
+        else:
+            assert data.shape == (16, 16, 16)
+            assert np.isfinite(data).all()
 
 
 def test_volume_demo_server_serves_volume_and_frontend(tmp_path):
