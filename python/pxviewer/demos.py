@@ -290,6 +290,53 @@ def _run_select(p: Player) -> None:
         p.hold(1.5)
 
 
+def _bent_chain() -> List[Atom]:
+    """A short zig-zag chain — enough elbows for a visible angle and dihedral."""
+    pts = np.array(
+        [[-5, 0, 0], [-3, 0, 0], [-1, 1.5, 0], [1, 1.5, 0], [3, 0, 0], [5, 0, 0]],
+        dtype="<f4",
+    )
+    return _atoms(pts)
+
+
+def _run_primitives(p: Player) -> None:
+    session = p.session
+    base = p.base
+    n = len(base)
+
+    def flex(t: float) -> np.ndarray:
+        c = base.copy()
+        ang = 0.9 * math.sin(2.0 * math.pi * t)
+        ca, sa = math.cos(ang), math.sin(ang)
+        pivot = base[2]
+        for i in range(3, n):  # swing the tail about atom 2
+            dx, dy = base[i, 0] - pivot[0], base[i, 1] - pivot[1]
+            c[i, 0] = pivot[0] + ca * dx - sa * dy
+            c[i, 1] = pivot[1] + sa * dx + ca * dy
+        c[3, 2] = base[3, 2] + 1.5 * math.sin(2.0 * math.pi * t)  # out-of-plane -> dihedral moves
+        return c
+
+    while not p.stopped:
+        p.push(base)
+        p.step(1, "Distance between the two ends.")
+        session.add_distance(0, n - 1, id="dist")
+        p.hold(1.5)
+        p.step(2, "Angle at the first elbow.")
+        session.add_angle(1, 2, 3, id="ang")
+        p.hold(1.5)
+        p.step(3, "Dihedral across the middle four atoms.")
+        session.add_dihedral(1, 2, 3, 4, id="dih")
+        p.hold(1.5)
+        p.step(4, "A label on the far end.")
+        session.add_label(n - 1, "tip", id="lbl")
+        p.hold(1.5)
+        p.step(5, "Flexing — every measurement tracks the motion.")
+        p.play(flex, seconds=5.0)
+        p.step(6, "Clearing all primitives.")
+        session.clear_primitives()
+        p.hold(1.2)
+
+
 @dataclasses.dataclass
 class Demo:
     name: str
@@ -307,6 +354,7 @@ DEMOS: dict[str, Demo] = {
         Demo("morph", "A chain folding into a helix and back.", lambda: _atoms(_line(30, spacing=1.2)), _run_morph),
         Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _atoms(_ring(16)), _run_pick),
         Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
+        Demo("primitives", "Angle/distance/dihedral/label measurements that track motion.", _bent_chain, _run_primitives),
     ]
 }
 

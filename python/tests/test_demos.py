@@ -17,9 +17,29 @@ class _StubSession:
     def __init__(self):
         self.frames = []
         self.selections = []
+        self.primitives_added = []
 
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
+
+    # The primitives demo drives these; record the kinds drawn.
+    def add_distance(self, *a, **k):
+        self.primitives_added.append("distance")
+
+    def add_angle(self, *a, **k):
+        self.primitives_added.append("angle")
+
+    def add_dihedral(self, *a, **k):
+        self.primitives_added.append("dihedral")
+
+    def add_label(self, *a, **k):
+        self.primitives_added.append("label")
+
+    def remove_primitive(self, primitive_id):
+        pass
+
+    def clear_primitives(self):
+        pass
 
     # The select demo drives these; record the atom specs. select() returns a
     # length-having value like a real Selection so the demo can report a count.
@@ -96,3 +116,20 @@ def test_select_demo_issues_selections():
 
     assert not thread.is_alive(), "select demo did not stop"
     assert stub.selections, "select demo issued no selections"
+
+
+def test_primitives_demo_draws_measurements():
+    demo = DEMOS["primitives"]
+    atoms = demo.make_atoms()
+    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    stub = _StubSession()
+    player = Player(stub, base, fps=240)
+
+    thread = threading.Thread(target=demo.run, args=(player,), daemon=True)
+    thread.start()
+    time.sleep(0.5)
+    player.stop()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive(), "primitives demo did not stop"
+    assert stub.primitives_added, "primitives demo drew nothing"
