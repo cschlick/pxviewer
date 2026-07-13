@@ -6,7 +6,15 @@ from typing import List
 import molviewspec as mvs
 
 from .data import Atom, encode_bcif, read_atoms, write_bcif
-from .volume import create_volume_view, create_volume_view_from_data, read_volume, write_volume
+from .volume import (
+    Volume,
+    create_volume_view,
+    create_volume_view_from_data,
+    read_volume,
+    set_volume_color,
+    set_volume_opacity,
+    write_volume,
+)
 
 __all__ = [
     "create_view",
@@ -14,6 +22,9 @@ __all__ = [
     "create_fragment_view",
     "create_volume_view",
     "create_volume_view_from_data",
+    "set_volume_color",
+    "set_volume_opacity",
+    "Volume",
     "Atom",
     "write_bcif",
     "encode_bcif",

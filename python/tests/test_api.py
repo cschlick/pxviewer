@@ -6,11 +6,14 @@ import pytest
 
 from pxviewer import (
     Atom,
+    Volume,
     create_example_view,
     create_fragment_view,
     create_view,
     create_volume_view,
     create_volume_view_from_data,
+    set_volume_color,
+    set_volume_opacity,
 )
 
 
@@ -132,3 +135,50 @@ def test_create_volume_view_default_isosurface():
     assert repr["params"]["type"] == "isosurface"
     assert "absolute_isovalue" not in repr["params"]
     assert "relative_isovalue" not in repr["params"]
+
+
+def test_create_volume_view_multiple_volumes():
+    """Build an MVSJ with several independently addressable volumes."""
+    mvsj = create_volume_view(
+        volumes=[
+            Volume(url="a.mrc", ref="vol1", color="red", opacity=0.5),
+            Volume(url="b.mrc", ref="vol2", color="blue", opacity=0.8, isosurface_value=2.0, isosurface_kind="absolute"),
+        ]
+    )
+    state = json.loads(mvsj)
+    root = state["root"]
+    assert len(root["children"]) == 2
+
+    urls = [d["params"]["url"] for d in root["children"]]
+    assert urls == ["a.mrc", "b.mrc"]
+
+    volumes = [d["children"][0]["children"][0] for d in root["children"]]
+    assert [v["ref"] for v in volumes] == ["vol1", "vol2"]
+
+    repr2 = volumes[1]["children"][0]
+    assert repr2["params"]["absolute_isovalue"] == pytest.approx(2.0)
+
+
+def test_set_volume_color_and_opacity():
+    """Update color and opacity of a specific volume by ref."""
+    mvsj = create_volume_view(
+        volumes=[
+            Volume(url="a.mrc", ref="vol1", color="red"),
+            Volume(url="b.mrc", ref="vol2", color="blue"),
+        ]
+    )
+
+    mvsj = set_volume_color(mvsj, "vol1", "green")
+    mvsj = set_volume_opacity(mvsj, "vol2", 0.25)
+
+    state = json.loads(mvsj)
+    volumes = [d["children"][0]["children"][0] for d in state["root"]["children"]]
+    by_ref = {v["ref"]: v for v in volumes}
+
+    repr1 = by_ref["vol1"]["children"][0]
+    color_nodes = [c for c in repr1["children"] if c["kind"] == "color"]
+    assert color_nodes[0]["params"]["color"] == "green"
+
+    repr2 = by_ref["vol2"]["children"][0]
+    opacity_nodes = [c for c in repr2["children"] if c["kind"] == "opacity"]
+    assert opacity_nodes[0]["params"]["opacity"] == pytest.approx(0.25)

@@ -1,17 +1,34 @@
 """Volumetric data helpers for writing MRC/MAP files and building MVS scenes."""
 
+import dataclasses
+import json
 import os
-from typing import Literal
+from typing import Any, List, Literal
 
 import mrcfile
 import numpy as np
 
 __all__ = [
+    "Volume",
     "write_volume",
     "read_volume",
     "create_volume_view",
     "create_volume_view_from_data",
+    "set_volume_color",
+    "set_volume_opacity",
 ]
+
+
+@dataclasses.dataclass
+class Volume:
+    """A single volume and how it should be rendered in an MVSJ scene."""
+
+    url: str
+    ref: str | None = None
+    isosurface_value: float | None = None
+    isosurface_kind: Literal["absolute", "relative"] = "relative"
+    color: str | None = "gold"
+    opacity: float | None = 1.0
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
@@ -113,42 +130,82 @@ def read_volume(path: str | os.PathLike) -> dict:
         }
 
 
+def _normalize_volume(v: str | Volume | dict) -> Volume:
+    """Convert a string URL or dict into a Volume object."""
+    if isinstance(v, Volume):
+        return v
+    if isinstance(v, str):
+        return Volume(url=v)
+    return Volume(**v)
+
+
+def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
+    """Add one volume branch to the MVS builder and return the volume ref."""
+    import molviewspec as mvs
+
+    mvs_volume = builder.download(url=volume.url).parse(format="map").volume(ref=ref)
+
+    repr_kwargs: dict = {"type": "isosurface"}
+    if volume.isosurface_value is not None:
+        if volume.isosurface_kind == "absolute":
+            repr_kwargs["absolute_isovalue"] = volume.isosurface_value
+        elif volume.isosurface_kind == "relative":
+            repr_kwargs["relative_isovalue"] = volume.isosurface_value
+        else:
+            raise ValueError(f"isosurface_kind must be 'absolute' or 'relative', got {volume.isosurface_kind!r}")
+
+    repr = mvs_volume.representation(**repr_kwargs)
+    if volume.color is not None:
+        repr = repr.color(color=volume.color)
+    if volume.opacity is not None:
+        repr = repr.opacity(opacity=volume.opacity)
+
+    mvs_volume.focus()
+    return ref
+
+
 def create_volume_view(
-    volume_url: str,
+    volume_url: str | None = None,
     *,
+    volumes: List[str | Volume | dict] | None = None,
     isosurface_value: float | None = None,
     isosurface_kind: Literal["absolute", "relative"] = "relative",
     color: str | None = "gold",
     opacity: float | None = 1.0,
     title: str | None = None,
 ) -> str:
-    """Build an MVSJ scene that loads an MRC/MAP volume from a URL.
+    """Build an MVSJ scene that loads one or more MRC/MAP volumes from URLs.
 
-    The ``volume_url`` should be the URL (or relative path) that the Mol*
-    frontend will use to fetch the volume. If the file is local, use the
-    filename relative to the MVSJ file.
+    A single volume may be passed as ``volume_url`` (or with the convenience
+    keyword arguments). For multiple volumes, pass ``volumes`` as a list of
+    strings, dicts, or :class:`Volume` objects.
+
+    Each volume may be addressed by its ``ref`` (auto-generated if not given)
+    so that color and opacity can be changed later with
+    :func:`set_volume_color` and :func:`set_volume_opacity`.
     """
     import molviewspec as mvs
 
     builder = mvs.create_builder()
-    volume = builder.download(url=volume_url).parse(format="map").volume()
 
-    repr_kwargs: dict = {"type": "isosurface"}
-    if isosurface_value is not None:
-        if isosurface_kind == "absolute":
-            repr_kwargs["absolute_isovalue"] = isosurface_value
-        elif isosurface_kind == "relative":
-            repr_kwargs["relative_isovalue"] = isosurface_value
-        else:
-            raise ValueError(f"isosurface_kind must be 'absolute' or 'relative', got {isosurface_kind!r}")
+    if volumes is not None:
+        volume_list = [_normalize_volume(v) for v in volumes]
+    elif volume_url is not None:
+        volume_list = [
+            Volume(
+                url=volume_url,
+                isosurface_value=isosurface_value,
+                isosurface_kind=isosurface_kind,
+                color=color,
+                opacity=opacity,
+            )
+        ]
+    else:
+        raise ValueError("create_volume_view requires volume_url or volumes")
 
-    repr = volume.representation(**repr_kwargs)
-    if color is not None:
-        repr = repr.color(color=color)
-    if opacity is not None:
-        repr = repr.opacity(opacity=opacity)
-
-    volume.focus()
+    for i, volume in enumerate(volume_list):
+        ref = volume.ref or f"volume-{i}"
+        _build_volume(builder, volume, ref)
 
     return builder.get_state(title=title).model_dump_json(exclude_none=True)
 
@@ -171,10 +228,67 @@ def create_volume_view_from_data(
     view_kwargs = view_kwargs or {}
 
     write_volume(data, mrc_path, **write_kwargs)
-    mvsj = create_volume_view(os.path.basename(str(mrc_path)), title=title, **view_kwargs)
+    mvsj = create_volume_view(str(os.path.basename(str(mrc_path))), title=title, **view_kwargs)
 
     if mvsj_path is not None:
         with open(mvsj_path, "w") as f:
             f.write(mvsj)
 
     return mvsj
+
+
+def _find_volume_node(root: dict, ref: str) -> dict | None:
+    """Locate a volume node with the given ref in an MVS tree."""
+    for download in root.get("children", []):
+        if download.get("kind") != "download":
+            continue
+        for parse in download.get("children", []):
+            if parse.get("kind") != "parse":
+                continue
+            for volume in parse.get("children", []):
+                if volume.get("kind") == "volume" and volume.get("ref") == ref:
+                    return volume
+    return None
+
+
+def _upsert_child_node(parent: dict, kind: str, params: dict) -> None:
+    """Replace a child node of ``kind`` with ``params`` or append a new one."""
+    children = parent.setdefault("children", [])
+    for child in children:
+        if child.get("kind") == kind:
+            child["params"] = params
+            return
+    children.append({"kind": kind, "params": params})
+
+
+def set_volume_color(mvsj: str, ref: str, color: str) -> str:
+    """Set the color of a specific volume in an MVSJ string.
+
+    ``ref`` is the volume reference used when the scene was built (e.g.
+    ``volume-0`` or a custom value passed to :class:`Volume`).
+    """
+    state = json.loads(mvsj)
+    root = state["root"]
+    volume = _find_volume_node(root, ref)
+    if volume is None:
+        raise ValueError(f"volume with ref '{ref}' not found in MVSJ")
+    for repr_node in volume.get("children", []):
+        if repr_node.get("kind") == "volume_representation":
+            _upsert_child_node(repr_node, "color", {"color": color})
+    return json.dumps(state, separators=(",", ":"))
+
+
+def set_volume_opacity(mvsj: str, ref: str, opacity: float) -> str:
+    """Set the opacity of a specific volume in an MVSJ string.
+
+    ``ref`` is the volume reference used when the scene was built.
+    """
+    state = json.loads(mvsj)
+    root = state["root"]
+    volume = _find_volume_node(root, ref)
+    if volume is None:
+        raise ValueError(f"volume with ref '{ref}' not found in MVSJ")
+    for repr_node in volume.get("children", []):
+        if repr_node.get("kind") == "volume_representation":
+            _upsert_child_node(repr_node, "opacity", {"opacity": opacity})
+    return json.dumps(state, separators=(",", ":"))

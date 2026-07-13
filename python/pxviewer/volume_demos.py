@@ -21,7 +21,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .volume import create_volume_view_from_data
+from .volume import Volume, create_volume_view, write_volume
 
 __all__ = [
     "VolumeDemo",
@@ -95,8 +95,8 @@ def _make_ripple(shape: Tuple[int, int, int]) -> np.ndarray:
 class VolumeDemo:
     name: str
     description: str
-    make_data: Callable[[Tuple[int, int, int]], np.ndarray]
-    view_kwargs: dict
+    make_data: Callable[[Tuple[int, int, int]], np.ndarray | List[np.ndarray]]
+    view_kwargs: dict | List[dict]
 
 
 VOLUME_DEMOS: Dict[str, VolumeDemo] = {
@@ -160,21 +160,45 @@ def create_volume_demo(
         raise ValueError(f"unknown volume demo '{name}'. Available: {available}")
 
     data = demo.make_data(shape)
-    merged_view_kwargs = dict(demo.view_kwargs)
-    if view_kwargs:
-        merged_view_kwargs.update(view_kwargs)
+    if not isinstance(data, list):
+        data = [data]
 
-    merged_write_kwargs = {"voxel_size": voxel_size, "data_order": "xyz"}
-    if write_kwargs:
-        merged_write_kwargs.update(write_kwargs)
+    demo_view_kwargs = demo.view_kwargs
+    if isinstance(demo_view_kwargs, list):
+        per_volume_demo_kwargs = demo_view_kwargs
+    else:
+        per_volume_demo_kwargs = [demo_view_kwargs] * len(data)
 
-    return create_volume_view_from_data(
-        data,
-        mrc_path=mrc_path,
-        mvsj_path=mvsj_path,
-        write_kwargs=merged_write_kwargs,
-        view_kwargs=merged_view_kwargs,
-    )
+    if view_kwargs is None:
+        view_kwargs = {}
+
+    volumes = []
+    mrc_path_obj = Path(mrc_path)
+    for i, vol_data in enumerate(data):
+        mrc_name = mrc_path_obj.name
+        if len(data) > 1:
+            mrc_name = f"{i}-{mrc_name}"
+        mrc_out = mrc_path_obj.with_name(mrc_name)
+        vol_kwargs = dict(per_volume_demo_kwargs[i])
+        vol_kwargs.update(view_kwargs)
+        write_volume(
+            vol_data,
+            mrc_out,
+            voxel_size=voxel_size,
+            data_order="xyz",
+        )
+        volumes.append(
+            Volume(
+                url=mrc_out.name,
+                ref=f"volume-{i}",
+                **vol_kwargs,
+            )
+        )
+
+    mvsj = create_volume_view(volumes=volumes)
+    with open(mvsj_path, "w") as f:
+        f.write(mvsj)
+    return mvsj
 
 
 class _VolumeDemoHandler(http.server.SimpleHTTPRequestHandler):
