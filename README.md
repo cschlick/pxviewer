@@ -147,6 +147,19 @@ space clears. Picked atoms are highlighted in the viewer and reported as positio
 indices — the same `Selection` you can hand straight to `highlight`, `add_angle`,
 and friends.
 
+**Measure modes** are a distinct click mode: instead of building a selection,
+clicking atoms *draws a measurement*. Click the required number of atoms and the
+primitive appears (and tracks the atoms), with the result reported back:
+
+```python
+session.enable_measure_mode("angle", on_measure=lambda p: print(p.degrees))
+# click 3 atoms -> an angle wedge is drawn
+```
+
+`kind` is `"distance"` (2 clicks), `"angle"` (3), `"dihedral"` (4), or `"label"`
+(1). Modes are mutually exclusive — `enable_mouse_selection`, `enable_measure_mode`,
+and `disable_mouse_selection` switch between select / measure / off.
+
 ### Drawing measurements (angles, distances, dihedrals, labels)
 
 Draw Mol\*'s measurement graphics from Python. Atoms are named by a `Selection`

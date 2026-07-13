@@ -105,11 +105,14 @@ export class LiveViewer {
     private highlightIndices: number[] = [];
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
-    private mouseSelectionEnabled = false;
+    private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
+    private measurePending: number[] = [];
     private pickHandler?: (info: AtomInfo | null) => void;
-    /** Set by the connection to report the click-built selection back to Python. */
+    /** Set by the connection to report a click-built selection back to Python. */
     onSelectionChange?: (indices: number[]) => void;
+    /** Set by the connection to report a click-built measurement back to Python. */
+    onMeasure?: (kind: string, atoms: number[]) => void;
 
     private constructor(private plugin: PluginContext) {}
 
@@ -265,9 +268,14 @@ export class LiveViewer {
         for (const id of Array.from(this.primitives.keys())) await this.removePrimitive(id);
     }
 
-    /** Enable/disable click-to-select in the viewer. When on, clicks build a selection. */
-    setMouseSelectionEnabled(on: boolean) {
-        this.mouseSelectionEnabled = on;
+    /**
+     * Set the click interaction mode. `'select'` builds a selection reported to
+     * Python; `'distance'|'angle'|'dihedral'|'label'` collect N clicks then draw
+     * that measurement; `'off'` does neither. Modes are mutually exclusive.
+     */
+    setClickMode(mode: string) {
+        this.clickMode = mode;
+        this.measurePending = [];
     }
 
     private subscribeClick(onPick?: (info: AtomInfo | null) => void) {
@@ -286,7 +294,8 @@ export class LiveViewer {
                     chain: StructureProperties.chain.label_asym_id(location),
                 } : null);
             }
-            if (this.mouseSelectionEnabled) this.handleSelectionClick(location, !!e.modifiers?.shift);
+            if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);
+            else if (this.clickMode !== 'off') this.handleMeasureClick(location, this.clickMode);
         });
     }
 
@@ -309,7 +318,32 @@ export class LiveViewer {
         this.setHighlight(indices);
         this.onSelectionChange?.(indices);
     }
+
+    // Collect clicks (in order) until we have the arity for `kind`, highlighting
+    // progress; then report the atoms to Python, which draws the primitive. A
+    // click on empty space resets the in-progress collection.
+    private handleMeasureClick(location: StructureElement.Location | undefined, kind: string) {
+        const arity = MEASURE_ARITY[kind];
+        if (!arity) return;
+        if (!location) {
+            this.measurePending = [];
+            this.setHighlight([]);
+            return;
+        }
+        const el = location.element as unknown as number;
+        if (this.measurePending.includes(el)) return; // ignore a repeat click on the same atom
+        this.measurePending.push(el);
+        this.setHighlight([...this.measurePending].sort((a, b) => a - b));
+        if (this.measurePending.length >= arity) {
+            const atoms = this.measurePending.slice(); // click order matters (vertex, torsion)
+            this.measurePending = [];
+            this.setHighlight([]);
+            this.onMeasure?.(kind, atoms);
+        }
+    }
 }
+
+const MEASURE_ARITY: Record<string, number> = { distance: 2, angle: 3, dihedral: 4, label: 1 };
 
 /**
  * Build an element loci for the given (sorted) positional atom indices. Looks
@@ -411,8 +445,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
-            } else if (msg.type === 'mouse-selection-mode' && viewer) {
-                viewer.setMouseSelectionEnabled(!!msg.enabled);
+            } else if (msg.type === 'click-mode' && viewer) {
+                viewer.setClickMode(String(msg.mode ?? 'off'));
             } else if (msg.type === 'primitive' && viewer) {
                 try {
                     if (msg.action === 'add') {
@@ -439,6 +473,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined }));
             });
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
+            viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));
             building = false;
             ws.send(JSON.stringify({ type: 'ready' }));
         } else if (tag === TAG_FRAME && viewer) {

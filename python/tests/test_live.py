@@ -258,12 +258,12 @@ def test_remove_and_clear_messages_reach_client(session):
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
             prim = session.add_angle(0, 1, 2)
-            await asyncio.wait_for(ws.recv(), timeout=5)  # the add
+            await _wait_primitive(ws, "add")
             session.remove_primitive(prim.id)
-            rem = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert rem == {"type": "primitive", "action": "remove", "id": prim.id}
+            rem = await _wait_primitive(ws, "remove")
+            assert rem["id"] == prim.id
             session.clear_primitives()
-            clr = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            clr = await _wait_primitive(ws, "clear")
             assert clr == {"type": "primitive", "action": "clear"}
 
     asyncio.run(scenario())
@@ -294,11 +294,9 @@ def test_enable_mouse_selection_message_reaches_client(session):
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
             session.enable_mouse_selection()
-            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert msg == {"type": "mouse-selection-mode", "enabled": True}
+            await _wait_mode(ws, "select")
             session.disable_mouse_selection()
-            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert msg == {"type": "mouse-selection-mode", "enabled": False}
+            await _wait_mode(ws, "off")
 
     asyncio.run(scenario())
 
@@ -343,7 +341,7 @@ def test_wait_for_selection_blocks_until_change(session):
     assert sel is not None and sel.indices == [2]
 
 
-def test_mouse_selection_mode_replayed_to_late_client(session):
+def test_click_mode_replayed_to_late_client(session):
     session.enable_mouse_selection()
 
     async def scenario():
@@ -351,9 +349,74 @@ def test_mouse_selection_mode_replayed_to_late_client(session):
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
             replay = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert replay == {"type": "mouse-selection-mode", "enabled": True}
+            assert replay == {"type": "click-mode", "mode": "select"}
 
     asyncio.run(scenario())
+
+
+def test_enable_measure_mode_message(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.enable_measure_mode("angle")
+            await _wait_mode(ws, "angle")
+
+    asyncio.run(scenario())
+
+
+def test_enable_measure_mode_rejects_bad_kind(session):
+    with pytest.raises(ValueError):
+        session.enable_measure_mode("banana")
+
+
+def test_measure_mode_draws_primitive_and_fires_callback(session):
+    """A click-built angle from the viewer is drawn as a primitive and reported back."""
+    drawn = []
+    session.enable_measure_mode("angle", on_measure=lambda p: drawn.append(p.kind))
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            await ws.recv()  # click-mode replay
+            await ws.send(json.dumps({"type": "measure", "kind": "angle", "atoms": [0, 1, 2]}))
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert msg["type"] == "primitive" and msg["kind"] == "angle"
+            assert msg["groups"] == [[0], [1], [2]]
+            for _ in range(50):
+                if drawn:
+                    break
+                await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+    assert drawn == ["angle"]
+    assert len(session._primitives) == 1  # recorded server-side, so it replays/removes
+
+
+async def _wait_primitive(ws, action, timeout=5):
+    """Read messages until a primitive message with the given action arrives.
+
+    Tolerates a duplicate `add` that can occur when the primitive is created in the
+    window around a client's connect handshake (harmless — the frontend applies
+    primitive adds idempotently by id).
+    """
+    while True:
+        m = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if m.get("type") == "primitive" and m.get("action") == action:
+            return m
+
+
+async def _wait_mode(ws, expected, timeout=5):
+    """Read messages until a click-mode with the expected mode arrives.
+
+    Tolerates a duplicate click-mode that can occur when a mode change coincides
+    with a client's connect handshake (harmless; the client still converges).
+    """
+    while True:
+        m = json.loads(await asyncio.wait_for(ws.recv(), timeout))
+        if m.get("type") == "click-mode" and m.get("mode") == expected:
+            return m
 
 
 def _decode(atoms):

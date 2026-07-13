@@ -24,12 +24,13 @@ Server -> client (UTF-8 JSON text control messages):
      "id": str, "groups": [[int,...],...], "options": {...}}    dihedral/label
   - {"type": "primitive", "action": "remove", "id": str}       remove one primitive
   - {"type": "primitive", "action": "clear"}                   remove all primitives
-  - {"type": "mouse-selection-mode", "enabled": bool}          click-to-select on/off
+  - {"type": "click-mode", "mode": str}                        'select'|measure|'off'
 
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
-  - {"type": "mouse-selection", "indices": [int]} click-built selection (mode on)
+  - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
+  - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -242,12 +243,17 @@ class LiveSession:
         self._primitives: dict = {}
         self._primitive_counter = 0
 
-        # Mouse-driven selection: the user clicks atoms in the viewer and the picked
-        # set is streamed back here.
-        self._mouse_selection_mode = False
+        # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
+        # | 'label'. In 'select' the user builds a selection streamed back here; in a
+        # measure mode they click N atoms and the primitive is drawn.
+        self._click_mode = "off"
         self._mouse_selection_indices: List[int] = []
         self._selection_handlers: List[Callable[[Selection], None]] = []
+        self._measure_handlers: List[Callable[[Primitive], None]] = []
         self._selection_changed = threading.Event()
+        # Per-connection send lock: websockets forbids concurrent send() on one
+        # connection, so serialize sends (this also preserves message order).
+        self._send_locks: dict = {}
 
         self.host = "127.0.0.1"
         self.port = 8787
@@ -470,28 +476,54 @@ class LiveSession:
         self._last_highlight_indices = []
         self._send_control({"type": "highlight", "atoms": _encode_index_set([])})
 
-    # -- mouse selection (scene -> python) -------------------------------
+    # -- click interaction (scene -> python) -----------------------------
+
+    _MEASURE_ARITY = {"distance": 2, "angle": 3, "dihedral": 4, "label": 1}
 
     def enable_mouse_selection(self, on_change: Optional[Callable[[Selection], None]] = None) -> None:
-        """Let the viewer's user pick atoms by clicking (shift-click adds/removes).
+        """Select mode: let the user pick atoms by clicking (shift-click adds/removes).
 
-        The picked set is reported back to Python: read the :attr:`mouse_selection`
-        property, register ``on_change`` (or :meth:`on_selection`) for a callback,
-        or block with :meth:`wait_for_selection`. Thread-safe.
+        This is the primary mode — the picked set is reported back to Python: read
+        the :attr:`mouse_selection` property, register ``on_change`` (or
+        :meth:`on_selection`) for a callback, or block with
+        :meth:`wait_for_selection`. Thread-safe.
         """
         if on_change is not None:
             self.on_selection(on_change)
-        self._mouse_selection_mode = True
-        self._send_control({"type": "mouse-selection-mode", "enabled": True})
+        self._set_click_mode("select")
+
+    def enable_measure_mode(
+        self, kind: str, on_measure: Optional[Callable[["Primitive"], None]] = None
+    ) -> None:
+        """Measure mode: let the user click atoms to draw a measurement.
+
+        A distinct mode from :meth:`enable_mouse_selection`. ``kind`` is
+        ``"distance"`` (2 clicks), ``"angle"`` (3), ``"dihedral"`` (4), or
+        ``"label"`` (1). Each completed set is drawn as a primitive that tracks the
+        atoms; ``on_measure`` (or :meth:`on_measurement`) is called with the
+        resulting :class:`Primitive`. Thread-safe.
+        """
+        if kind not in self._MEASURE_ARITY:
+            raise ValueError(f"unknown measure kind {kind!r}; use one of {list(self._MEASURE_ARITY)}")
+        if on_measure is not None:
+            self.on_measurement(on_measure)
+        self._set_click_mode(kind)
 
     def disable_mouse_selection(self) -> None:
-        """Stop click-to-select in the viewer. Thread-safe."""
-        self._mouse_selection_mode = False
-        self._send_control({"type": "mouse-selection-mode", "enabled": False})
+        """Turn off any click interaction (select or measure mode). Thread-safe."""
+        self._set_click_mode("off")
+
+    def _set_click_mode(self, mode: str) -> None:
+        self._click_mode = mode
+        self._send_control({"type": "click-mode", "mode": mode})
 
     def on_selection(self, handler: Callable[[Selection], None]) -> None:
         """Register a callback invoked with a :class:`Selection` when the mouse selection changes."""
         self._selection_handlers.append(handler)
+
+    def on_measurement(self, handler: Callable[["Primitive"], None]) -> None:
+        """Register a callback invoked with a :class:`Primitive` when the user draws a measurement."""
+        self._measure_handlers.append(handler)
 
     @property
     def mouse_selection(self) -> Selection:
@@ -564,6 +596,34 @@ class LiveSession:
             text=options.get("text"),
         )
 
+    def _on_measure(self, event: dict) -> None:
+        """Draw a primitive the user built by clicking atoms, and fire callbacks."""
+        kind = event.get("kind")
+        arity = self._MEASURE_ARITY.get(kind)
+        raw = event.get("atoms") or []
+        atoms = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
+        if arity is None or len(atoms) != arity:
+            return  # ignore malformed / incomplete requests
+        options = self._default_measure_options(kind, atoms)
+        try:
+            primitive = self._add_primitive(kind, atoms, options, None)
+        except Exception:  # pragma: no cover - defensive
+            return
+        for handler in self._measure_handlers:
+            try:
+                handler(primitive)
+            except Exception:  # pragma: no cover - user callback errors
+                pass
+
+    def _default_measure_options(self, kind: str, atoms: List[int]) -> dict:
+        if kind == "label":
+            atom = self.atoms[atoms[0]]
+            return {"text": f"{atom.name}{atom.resseq}"}
+        options: dict = {"label": True}
+        if kind in ("angle", "dihedral"):
+            options["opacity"] = 0.35
+        return options
+
     def _current_coords(self) -> np.ndarray:
         """The most recent coordinates (last streamed frame, else the topology's)."""
         if self._last_frame is not None:
@@ -635,21 +695,23 @@ class LiveSession:
         return connection.respond(HTTPStatus.UPGRADE_REQUIRED, body)
 
     async def _handler(self, websocket: Any) -> None:
+        self._send_locks[websocket] = asyncio.Lock()
         self._clients.add(websocket)
         try:
-            await websocket.send(struct.pack("<I", _TAG_TOPOLOGY) + self._topology)
+            await self._locked_send(websocket, struct.pack("<I", _TAG_TOPOLOGY) + self._topology)
             if self._last_frame is not None:
-                await websocket.send(self._last_frame)
+                await self._locked_send(websocket, self._last_frame)
             if self._last_highlight_indices:
                 # Bring a late-joining viewer up to the current highlight.
-                await websocket.send(
-                    json.dumps({"type": "highlight", "atoms": _encode_index_set(self._last_highlight_indices)})
+                await self._locked_send(
+                    websocket,
+                    json.dumps({"type": "highlight", "atoms": _encode_index_set(self._last_highlight_indices)}),
                 )
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
-                await websocket.send(json.dumps(message))
-            if self._mouse_selection_mode:
-                await websocket.send(json.dumps({"type": "mouse-selection-mode", "enabled": True}))
+                await self._locked_send(websocket, json.dumps(message))
+            if self._click_mode != "off":
+                await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -658,6 +720,7 @@ class LiveSession:
             pass
         finally:
             self._clients.discard(websocket)
+            self._send_locks.pop(websocket, None)
 
     def _on_message(self, message: str) -> None:
         try:
@@ -685,6 +748,8 @@ class LiveSession:
                     handler(selection)
                 except Exception:  # pragma: no cover - user callback errors
                     pass
+        elif etype == "measure":
+            self._on_measure(event)
 
     def _broadcast(self, payload: bytes) -> None:
         for websocket in list(self._clients):
@@ -695,17 +760,28 @@ class LiveSession:
         for websocket in list(self._clients):
             asyncio.ensure_future(self._safe_send_text(websocket, message))
 
+    async def _locked_send(self, websocket: Any, data: Any) -> None:
+        """Send holding the per-connection lock so sends never overlap or reorder."""
+        lock = self._send_locks.get(websocket)
+        if lock is None:
+            await websocket.send(data)
+        else:
+            async with lock:
+                await websocket.send(data)
+
     async def _safe_send(self, websocket: Any, payload: bytes) -> None:
         try:
-            await websocket.send(payload)
+            await self._locked_send(websocket, payload)
         except Exception:  # pragma: no cover - drop on closed sockets
             self._clients.discard(websocket)
+            self._send_locks.pop(websocket, None)
 
     async def _safe_send_text(self, websocket: Any, message: str) -> None:
         try:
-            await websocket.send(message)
+            await self._locked_send(websocket, message)
         except Exception:  # pragma: no cover - drop on closed sockets
             self._clients.discard(websocket)
+            self._send_locks.pop(websocket, None)
 
 
 def oscillating_frames(
