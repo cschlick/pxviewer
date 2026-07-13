@@ -1,0 +1,21 @@
+{
+  "name": "pxviewer-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/index.tsx --bundle --outfile=build/index.js --minify --sourcemap",
+    "watch": "esbuild src/index.tsx --bundle --outfile=build/index.js --watch --sourcemap",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "molstar": "^5.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2"
+  }
+}

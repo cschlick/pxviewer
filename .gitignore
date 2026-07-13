@@ -1,0 +1,17 @@
+# Node
+node_modules/
+build/
+dist/
+.env
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+*.whl
+
+# OS
+.DS_Store
