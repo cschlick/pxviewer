@@ -103,6 +103,22 @@ def test_frame_length_mismatch_rejected(session):
         session.push([[0, 0, 0], [1, 1, 1]])  # only 2 atoms, topology has 4
 
 
+def test_set_axis_command_reaches_client(session):
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_axis(False)
+            message = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert isinstance(message, str)
+            event = json.loads(message)
+            assert event == {"type": "axis", "visible": False}
+
+    asyncio.run(scenario())
+
+
 def _json(d):
     import json
 

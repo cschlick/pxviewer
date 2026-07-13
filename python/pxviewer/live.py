@@ -179,6 +179,16 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast, payload)
         return index
 
+    def set_axis(self, visible: bool) -> None:
+        """Broadcast a command to show or hide the camera XYZ axis helper.
+
+        Thread-safe: may be called from any thread.
+        """
+        message = json.dumps({"type": "axis", "visible": bool(visible)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     # -- internals -------------------------------------------------------
 
     def _run(self) -> None:
@@ -267,9 +277,19 @@ class LiveSession:
             # Fire-and-forget: scheduling the coroutine keeps push() non-blocking.
             asyncio.ensure_future(self._safe_send(websocket, payload))
 
+    def _broadcast_text(self, message: str) -> None:
+        for websocket in list(self._clients):
+            asyncio.ensure_future(self._safe_send_text(websocket, message))
+
     async def _safe_send(self, websocket: Any, payload: bytes) -> None:
         try:
             await websocket.send(payload)
+        except Exception:  # pragma: no cover - drop on closed sockets
+            self._clients.discard(websocket)
+
+    async def _safe_send_text(self, websocket: Any, message: str) -> None:
+        try:
+            await websocket.send(message)
         except Exception:  # pragma: no cover - drop on closed sockets
             self._clients.discard(websocket)
 

@@ -18,6 +18,7 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Model, StructureElement, StructureProperties } from 'molstar/lib/mol-model/structure';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
+import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 
 export interface AtomInfo {
     id: number;
@@ -180,6 +181,14 @@ export class LiveViewer {
 const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 
+async function setAxis(plugin: PluginContext, visible: boolean) {
+    await plugin.canvas3dInitialized;
+    if (!plugin.canvas3d) return;
+    plugin.canvas3d.setProps((p: Canvas3DProps) => {
+        p.camera.helper.axes.name = visible ? 'on' : 'off';
+    });
+}
+
 export interface LiveConnectionHandle {
     close(): void;
 }
@@ -195,7 +204,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let building = false;
 
     ws.onmessage = async (ev) => {
-        if (typeof ev.data === 'string') return; // reserved for future control messages
+        if (typeof ev.data === 'string') {
+            // Server -> client control messages (JSON text).
+            const msg = JSON.parse(ev.data) as { type: string; visible?: boolean };
+            if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
+                await setAxis(plugin, msg.visible);
+            }
+            return;
+        }
         const buffer = ev.data as ArrayBuffer;
         const tag = new DataView(buffer).getUint32(0, true);
 
