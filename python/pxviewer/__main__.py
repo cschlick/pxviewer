@@ -3,7 +3,9 @@
 import argparse
 import time
 
-from .api import create_example_view
+import numpy as np
+
+from .api import create_example_view, create_volume_view_from_data
 from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
@@ -32,6 +34,16 @@ def main() -> None:
     )
     view.add_argument("--output", "-o", default="scene.mvsj", help="Output MVSJ file path")
 
+    vol = subparsers.add_parser(
+        "create-volume-view",
+        help="Create an example MVSJ scene for a generated volume",
+    )
+    vol.add_argument("--output-mrc", default="volume.mrc", help="Output MRC file path")
+    vol.add_argument("--output-mvsj", default="volume.mvsj", help="Output MVSJ file path")
+    vol.add_argument("--voxel-size", type=float, default=1.0, help="Isotropic voxel size in Angstroms")
+    vol.add_argument("--isovalue", type=float, default=2.0, help="Isovalue for the isosurface")
+    vol.add_argument("--isovalue-kind", choices=["absolute", "relative"], default="relative", help="Whether the isovalue is absolute or relative (sigma)")
+
     demo = subparsers.add_parser(
         "serve-demo",
         help="Stream an oscillating demo structure over WebSocket for the live frontend",
@@ -57,6 +69,22 @@ def main() -> None:
         with open(args.output, "w") as f:
             f.write(mvsj)
         print(f"Wrote {args.output}")
+
+    elif args.command == "create-volume-view":
+        shape = (32, 32, 32)
+        x = np.linspace(-1.5, 1.5, shape[2])
+        y = np.linspace(-1.5, 1.5, shape[1])
+        z = np.linspace(-1.5, 1.5, shape[0])
+        X, Y, Z = np.meshgrid(x, y, z, indexing="ij")
+        data = np.exp(-(X**2 + Y**2 + Z**2)) * 5.0
+        create_volume_view_from_data(
+            data,
+            mrc_path=args.output_mrc,
+            mvsj_path=args.output_mvsj,
+            write_kwargs={"voxel_size": args.voxel_size, "data_order": "xyz"},
+            view_kwargs={"isosurface_value": args.isovalue, "isosurface_kind": args.isovalue_kind, "color": "gold"},
+        )
+        print(f"Wrote {args.output_mrc} and {args.output_mvsj}")
 
     elif args.command == "serve-demo":
         atoms = _demo_atoms(args.atoms)

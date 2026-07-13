@@ -7,9 +7,13 @@ from .api import (
     create_example_view,
     create_fragment_view,
     create_view,
+    create_volume_view,
+    create_volume_view_from_data,
     encode_bcif,
     read_atoms,
+    read_volume,
     write_bcif,
+    write_volume,
 )
 from .live import ATOM_IDENTITY_CONTRACT, LiveSession
 
@@ -18,9 +22,13 @@ __all__ = [
     "create_example_view",
     "create_fragment_view",
     "create_view",
+    "create_volume_view",
+    "create_volume_view_from_data",
     "encode_bcif",
     "read_atoms",
+    "read_volume",
     "write_bcif",
+    "write_volume",
     "LiveSession",
     "ATOM_IDENTITY_CONTRACT",
 ]
