@@ -292,6 +292,27 @@ async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: num
     }).commit();
 }
 
+const STYLE_VISUALS: Record<string, string[]> = {
+    surface: ['solid'],
+    wireframe: ['wireframe'],
+    mesh: ['solid', 'wireframe'],
+};
+
+async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    const visuals = STYLE_VISUALS[style.toLowerCase()];
+    if (!visuals) {
+        console.warn('Unknown volume style:', style);
+        return;
+    }
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+        if (old.type?.name === 'isosurface') {
+            old.type.params.visuals = visuals;
+        }
+    }).commit();
+}
+
 async function findVolumeReprCell(plugin: PluginContext, ref: string) {
     const tag = `mvs-ref:${ref}-repr`;
     for (let i = 0; i < 200; i++) {
@@ -339,6 +360,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
+            } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
+                await setVolumeStyle(plugin, msg.ref, msg.style);
             } else if (msg.type === 'select' && viewer) {
                 // Resolve a PyMOL selection in the viewer and echo the matched
                 // atom indices back so Python knows what was selected.

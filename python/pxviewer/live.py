@@ -279,6 +279,17 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_volume_style(self, ref: str, style: str) -> None:
+        """Broadcast a command to change the isosurface style of a volume by reference.
+
+        ``style`` is one of ``'surface'``, ``'wireframe'`` or ``'mesh'``.
+        Thread-safe: may be called from any thread.
+        """
+        message = json.dumps({"type": "volume_style", "ref": str(ref), "style": str(style)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     # -- selection (python -> scene -> python) ---------------------------
 
     def select(

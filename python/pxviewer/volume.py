@@ -16,7 +16,11 @@ __all__ = [
     "create_volume_view_from_data",
     "set_volume_color",
     "set_volume_opacity",
+    "set_volume_style",
 ]
+
+
+VolumeStyle = Literal["surface", "wireframe", "mesh"]
 
 
 @dataclasses.dataclass
@@ -29,6 +33,7 @@ class Volume:
     isosurface_kind: Literal["absolute", "relative"] = "relative"
     color: str | None = "gold"
     opacity: float | None = 1.0
+    style: VolumeStyle | None = "surface"
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
@@ -154,6 +159,18 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         else:
             raise ValueError(f"isosurface_kind must be 'absolute' or 'relative', got {volume.isosurface_kind!r}")
 
+    if volume.style == "surface":
+        repr_kwargs["show_wireframe"] = False
+        repr_kwargs["show_faces"] = True
+    elif volume.style == "wireframe":
+        repr_kwargs["show_wireframe"] = True
+        repr_kwargs["show_faces"] = False
+    elif volume.style == "mesh":
+        repr_kwargs["show_wireframe"] = True
+        repr_kwargs["show_faces"] = True
+    elif volume.style is not None:
+        raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {volume.style!r}")
+
     repr = mvs_volume.representation(**repr_kwargs, ref=f"{ref}-repr")
     if volume.color is not None:
         repr = repr.color(color=volume.color)
@@ -172,6 +189,7 @@ def create_volume_view(
     isosurface_kind: Literal["absolute", "relative"] = "relative",
     color: str | None = "gold",
     opacity: float | None = 1.0,
+    style: VolumeStyle | None = "surface",
     title: str | None = None,
 ) -> str:
     """Build an MVSJ scene that loads one or more MRC/MAP volumes from URLs.
@@ -181,8 +199,9 @@ def create_volume_view(
     strings, dicts, or :class:`Volume` objects.
 
     Each volume may be addressed by its ``ref`` (auto-generated if not given)
-    so that color and opacity can be changed later with
-    :func:`set_volume_color` and :func:`set_volume_opacity`.
+    so that color, opacity and style can be changed later with
+    :func:`set_volume_color`, :func:`set_volume_opacity` and
+    :func:`set_volume_style`.
     """
     import molviewspec as mvs
 
@@ -198,6 +217,7 @@ def create_volume_view(
                 isosurface_kind=isosurface_kind,
                 color=color,
                 opacity=opacity,
+                style=style,
             )
         ]
     else:
@@ -291,4 +311,35 @@ def set_volume_opacity(mvsj: str, ref: str, opacity: float) -> str:
     for repr_node in volume.get("children", []):
         if repr_node.get("kind") == "volume_representation":
             _upsert_child_node(repr_node, "opacity", {"opacity": opacity})
+    return json.dumps(state, separators=(",", ":"))
+
+
+def _style_to_show_flags(style: VolumeStyle) -> tuple[bool, bool]:
+    """Return (show_wireframe, show_faces) for a given volume style."""
+    if style == "surface":
+        return False, True
+    if style == "wireframe":
+        return True, False
+    if style == "mesh":
+        return True, True
+    raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {style!r}")
+
+
+def set_volume_style(mvsj: str, ref: str, style: VolumeStyle) -> str:
+    """Set the isosurface style of a specific volume in an MVSJ string.
+
+    ``style`` is one of ``'surface'`` (filled triangles), ``'wireframe'`` (edges
+    only), or ``'mesh'`` (filled triangles with wireframe overlay).
+    """
+    show_wireframe, show_faces = _style_to_show_flags(style)
+    state = json.loads(mvsj)
+    root = state["root"]
+    volume = _find_volume_node(root, ref)
+    if volume is None:
+        raise ValueError(f"volume with ref '{ref}' not found in MVSJ")
+    for repr_node in volume.get("children", []):
+        if repr_node.get("kind") == "volume_representation":
+            params = repr_node.setdefault("params", {})
+            params["show_wireframe"] = show_wireframe
+            params["show_faces"] = show_faces
     return json.dumps(state, separators=(",", ":"))

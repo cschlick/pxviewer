@@ -8,11 +8,13 @@ import molviewspec as mvs
 from .data import Atom, encode_bcif, read_atoms, write_bcif
 from .volume import (
     Volume,
+    VolumeStyle,
     create_volume_view,
     create_volume_view_from_data,
     read_volume,
     set_volume_color,
     set_volume_opacity,
+    set_volume_style,
     write_volume,
 )
 
@@ -24,7 +26,9 @@ __all__ = [
     "create_volume_view_from_data",
     "set_volume_color",
     "set_volume_opacity",
+    "set_volume_style",
     "Volume",
+    "VolumeStyle",
     "Atom",
     "write_bcif",
     "encode_bcif",

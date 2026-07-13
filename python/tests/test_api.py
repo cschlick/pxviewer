@@ -14,6 +14,7 @@ from pxviewer import (
     create_volume_view_from_data,
     set_volume_color,
     set_volume_opacity,
+    set_volume_style,
 )
 
 
@@ -182,3 +183,36 @@ def test_set_volume_color_and_opacity():
     repr2 = by_ref["vol2"]["children"][0]
     opacity_nodes = [c for c in repr2["children"] if c["kind"] == "opacity"]
     assert opacity_nodes[0]["params"]["opacity"] == pytest.approx(0.25)
+
+
+def test_create_volume_view_style():
+    """Build an MVSJ with a wireframe isosurface style."""
+    mvsj = create_volume_view("density.mrc", style="wireframe")
+    state = json.loads(mvsj)
+    repr = state["root"]["children"][0]["children"][0]["children"][0]["children"][0]
+    assert repr["params"]["show_wireframe"] is True
+    assert repr["params"]["show_faces"] is False
+
+
+def test_set_volume_style():
+    """Update the isosurface style of a specific volume by ref."""
+    mvsj = create_volume_view(
+        volumes=[
+            Volume(url="a.mrc", ref="vol1", style="surface"),
+            Volume(url="b.mrc", ref="vol2", style="wireframe"),
+        ]
+    )
+
+    mvsj = set_volume_style(mvsj, "vol1", "mesh")
+
+    state = json.loads(mvsj)
+    volumes = [d["children"][0]["children"][0] for d in state["root"]["children"]]
+    by_ref = {v["ref"]: v for v in volumes}
+
+    repr1 = by_ref["vol1"]["children"][0]
+    assert repr1["params"]["show_wireframe"] is True
+    assert repr1["params"]["show_faces"] is True
+
+    repr2 = by_ref["vol2"]["children"][0]
+    assert repr2["params"]["show_wireframe"] is True
+    assert repr2["params"]["show_faces"] is False

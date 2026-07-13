@@ -353,12 +353,13 @@ def run_live_volume_demo(
     shape: Tuple[int, int, int] = (32, 32, 32),
     period: float = 2.0,
 ) -> None:
-    """Serve a two-volume scene and live-cycle colors and opacities over it.
+    """Serve a two-volume scene and live-cycle colors, opacities and styles over it.
 
     This opens the frontend at ``http://host:http_port/?mvsj=volume.mvsj&ws=...``
     and starts a `LiveSession` (using a single off-screen atom for the WebSocket
     channel). The main thread then animates the two volumes, demonstrating
-    multi-volume addressing, live color changes and live opacity changes.
+    multi-volume addressing, live color changes, live opacity changes and live
+    isosurface style changes (surface, wireframe, mesh).
     """
     frontend_dir = _find_frontend_dir()
     if frontend_dir is None or not (frontend_dir / "build" / "index.js").exists():
@@ -407,12 +408,13 @@ def run_live_volume_demo(
         thread = threading.Thread(target=httpd.serve_forever, name="pxviewer-live-volume-demo", daemon=True)
         thread.start()
 
-        print(f"\nLive two-volume demo: cycling colors and opacities over a {shape[0]}x{shape[1]}x{shape[2]} grid")
+        print(f"\nLive two-volume demo: cycling colors, opacities and styles over a {shape[0]}x{shape[1]}x{shape[2]} grid")
         print(f"Open the viewer in your browser: http://{host}:{actual_port}/", flush=True)
         print("Press Ctrl-C to stop.")
 
         colors = ["red", "green", "blue", "purple", "gold"]
         opacities = [1.0, 0.6, 0.3]
+        styles = ["surface", "wireframe", "mesh"]
         step = 0
         try:
             print("Waiting for a viewer to connect...", flush=True)
@@ -422,8 +424,10 @@ def run_live_volume_demo(
             while True:
                 session.set_volume_color("volume-0", colors[step % len(colors)])
                 session.set_volume_opacity("volume-0", opacities[step % len(opacities)])
+                session.set_volume_style("volume-0", styles[step % len(styles)])
                 session.set_volume_color("volume-1", colors[(step + 2) % len(colors)])
                 session.set_volume_opacity("volume-1", opacities[(step + 1) % len(opacities)])
+                session.set_volume_style("volume-1", styles[(step + 2) % len(styles)])
                 time.sleep(period)
                 step += 1
         except KeyboardInterrupt:
