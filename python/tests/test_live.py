@@ -394,6 +394,34 @@ def test_measure_mode_draws_primitive_and_fires_callback(session):
     assert len(session._primitives) == 1  # recorded server-side, so it replays/removes
 
 
+def test_set_representation_message_reaches_client(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology (frontend uses its default until we set one)
+            rid = session.set_representation("cartoon", color="secondary-structure")
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert msg["type"] == "representations"
+            assert msg["reprs"] == [{"id": rid, "type": "cartoon", "color": "secondary-structure"}]
+
+    asyncio.run(scenario())
+
+
+def test_representations_replayed_to_late_client(session):
+    session.add_representation("spacefill", color="chain-id")
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert msg["type"] == "representations"
+            assert msg["reprs"][0]["type"] == "spacefill"
+            assert msg["reprs"][0]["color"] == "chain-id"
+
+    asyncio.run(scenario())
+
+
 async def _wait_primitive(ws, action, timeout=5):
     """Read messages until a primitive message with the given action arrives.
 

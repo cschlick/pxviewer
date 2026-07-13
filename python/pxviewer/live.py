@@ -24,6 +24,7 @@ Server -> client (UTF-8 JSON text control messages):
      "id": str, "groups": [[int,...],...], "options": {...}}    dihedral/label
   - {"type": "primitive", "action": "remove", "id": str}       remove one primitive
   - {"type": "primitive", "action": "clear"}                   remove all primitives
+  - {"type": "representations", "reprs": [{...}, ...]}          declarative repr list
   - {"type": "click-mode", "mode": str}                        'select'|measure|'off'
 
 Client -> server (UTF-8 JSON text):
@@ -215,11 +216,19 @@ class LiveSession:
             session.push(frame)
     """
 
-    def __init__(self, atoms: Iterable[Atom]):
+    def __init__(
+        self,
+        atoms: Iterable[Atom],
+        *,
+        polymer: bool = False,
+        secondary_structure: Optional[Any] = None,
+    ):
         self.atoms: List[Atom] = list(atoms)
         if not self.atoms:
             raise ValueError("LiveSession requires at least one atom")
-        self._topology: bytes = encode_bcif(self.atoms)
+        self._topology: bytes = encode_bcif(
+            self.atoms, polymer=polymer, secondary_structure=secondary_structure
+        )
         self._n_atoms = len(self.atoms)
 
         self._frame_index = 0
@@ -242,6 +251,9 @@ class LiveSession:
         # Active drawing primitives (id -> the "add" message), replayed to late clients.
         self._primitives: dict = {}
         self._primitive_counter = 0
+        # Representations (id -> spec), sent declaratively; replayed to late clients.
+        self._representations: dict = {}
+        self._representation_counter = 0
 
         # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
         # | 'label'. In 'select' the user builds a selection streamed back here; in a
@@ -458,6 +470,54 @@ class LiveSession:
         self._primitives.clear()
         self._send_control({"type": "primitive", "action": "clear"})
 
+    # -- representations -------------------------------------------------
+
+    _REPR_ALIASES = {"sphere": "spacefill", "ribbon": "cartoon", "surface": "molecular-surface"}
+
+    def set_representation(self, type: str, **kwargs: Any) -> str:
+        """Replace all representations with a single one. See :meth:`add_representation`."""
+        self._representations.clear()
+        return self.add_representation(type, **kwargs)
+
+    def add_representation(
+        self,
+        type: str,
+        *,
+        color: Optional[str] = None,
+        color_value: Optional[str] = None,
+        on: Any = None,
+        opacity: Optional[float] = None,
+        params: Optional[dict] = None,
+        id: Optional[str] = None,
+    ) -> str:
+        """Add a representation of the structure (or a subset).
+
+        ``type`` is a Mol* representation — ``'ball-and-stick'``, ``'spacefill'``
+        (alias ``'sphere'``), ``'cartoon'`` (alias ``'ribbon'``),
+        ``'molecular-surface'``, ``'gaussian-surface'``, ``'point'``, ``'line'``,
+        ``'putty'``, ``'backbone'``, ``'ellipsoid'``, … ``color`` is a color-theme
+        name (``'element-symbol'``, ``'chain-id'``, ``'secondary-structure'``,
+        ``'residue-name'``, ``'hydrophobicity'``, ``'molecule-type'``, …); for a flat
+        colour pass ``color_value`` (or a ``'#rrggbb'`` ``color``). ``on`` restricts
+        it to a subset (a :class:`Selection` or coercible); omit for the whole
+        structure. ``opacity`` sets transparency and ``params`` passes type-specific
+        options. Returns the id; representations track streamed coordinates.
+        """
+        spec = self._make_repr_spec(type, color, color_value, on, opacity, params, id)
+        self._representations[spec["id"]] = spec
+        self._send_representations()
+        return spec["id"]
+
+    def remove_representation(self, representation_id: str) -> None:
+        """Remove a representation by id. Thread-safe."""
+        self._representations.pop(representation_id, None)
+        self._send_representations()
+
+    def clear_representations(self) -> None:
+        """Remove all representations (restoring the default ball-and-stick). Thread-safe."""
+        self._representations.clear()
+        self._send_representations()
+
     def highlight(self, atoms: Any) -> Selection:
         """Show the selection overlay on the given atoms (:class:`Selection` or coercible)."""
         sel = self._as_selection(atoms)
@@ -553,6 +613,36 @@ class LiveSession:
         with self._lock:
             self._primitive_counter += 1
             return f"{kind}-{self._primitive_counter}"
+
+    def _next_representation_id(self) -> str:
+        with self._lock:
+            self._representation_counter += 1
+            return f"repr-{self._representation_counter}"
+
+    def _make_repr_spec(self, type, color, color_value, on, opacity, params, id) -> dict:
+        theme, value = color, None
+        if color_value is not None:
+            theme, value = "uniform", color_value
+        elif color is not None and color.startswith("#"):
+            theme, value = "uniform", color
+        spec: dict = {
+            "id": id if id is not None else self._next_representation_id(),
+            "type": self._REPR_ALIASES.get(type, type),
+        }
+        if theme is not None:
+            spec["color"] = theme
+        if value is not None:
+            spec["colorValue"] = value
+        if on is not None:
+            spec["on"] = _encode_index_set(self._as_selection(on).indices)
+        if opacity is not None:
+            spec["opacity"] = float(opacity)
+        if params:
+            spec["params"] = params
+        return spec
+
+    def _send_representations(self) -> None:
+        self._send_control({"type": "representations", "reprs": list(self._representations.values())})
 
     def _as_selection(self, spec: Any) -> Selection:
         """Coerce a Selection / index / iterable-of-indices / boolean mask to a Selection."""
@@ -710,6 +800,10 @@ class LiveSession:
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
                 await self._locked_send(websocket, json.dumps(message))
+            if self._representations:
+                await self._locked_send(
+                    websocket, json.dumps({"type": "representations", "reprs": list(self._representations.values())})
+                )
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:

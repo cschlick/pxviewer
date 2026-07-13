@@ -105,6 +105,7 @@ export class LiveViewer {
     private highlightIndices: number[] = [];
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
+    private reprNodes: StateObjectSelector[] = [];
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -153,10 +154,48 @@ export class LiveViewer {
         const liveModel = await plugin.builders.structure.createModel(this.liveTraj);
         const structure = await plugin.builders.structure.createStructure(liveModel);
         this.structure = structure;
-        await plugin.builders.structure.representation.addRepresentation(structure, {
-            type: 'ball-and-stick',
-            color: 'element-symbol',
-        });
+        await this.setRepresentations([]); // the default (ball-and-stick / element-symbol)
+    }
+
+    /**
+     * Declaratively set the representations from Python specs. Tears down the
+     * current ones and rebuilds; an empty list restores the default. Each spec:
+     * { id, type, color?, colorValue?, on?: <index-set>, opacity?, params? }.
+     * Representations hang off the live structure, so they coordinate-update per frame.
+     */
+    async setRepresentations(specs: any[]) {
+        if (this.reprNodes.length) {
+            const b = this.plugin.state.data.build();
+            for (const node of this.reprNodes) if (node.ref) b.delete(node.ref);
+            await b.commit();
+            this.reprNodes = [];
+        }
+        const list = specs && specs.length ? specs : [{ type: 'ball-and-stick', color: 'element-symbol' }];
+        for (const spec of list) {
+            let target: StateObjectSelector = this.structure;
+            if (spec.on) {
+                const struct = this.currentStructure();
+                const indices = decodeIndexSet(spec.on);
+                if (!struct || indices.length === 0) continue;
+                const bundle = StructureElement.Bundle.fromLoci(lociFromElementIndices(struct, indices));
+                const comp = await this.plugin.builders.structure.tryCreateComponent(
+                    this.structure,
+                    { type: { name: 'bundle', params: bundle }, nullIfEmpty: true, label: `rep:${spec.id}` } as any,
+                    `rep-comp:${spec.id}`,
+                );
+                if (!comp) continue;
+                target = comp;
+                this.reprNodes.push(comp);
+            }
+            const params: any = { type: spec.type };
+            if (spec.color) params.color = spec.color;
+            if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
+            const typeParams: any = spec.params ? { ...spec.params } : {};
+            if (spec.opacity != null) typeParams.alpha = spec.opacity;
+            if (Object.keys(typeParams).length) params.typeParams = typeParams;
+            const repr = await this.plugin.builders.structure.representation.addRepresentation(target, params);
+            this.reprNodes.push(repr);
+        }
     }
 
     /** Swap in a new frame given interleaved [x0,y0,z0,x1,...] coordinates. */
@@ -445,6 +484,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
+            } else if (msg.type === 'representations' && viewer) {
+                await viewer.setRepresentations(msg.reprs ?? []);
             } else if (msg.type === 'click-mode' && viewer) {
                 viewer.setClickMode(String(msg.mode ?? 'off'));
             } else if (msg.type === 'primitive' && viewer) {

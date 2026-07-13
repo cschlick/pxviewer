@@ -27,6 +27,11 @@ class Atom:
 class AtomSiteCategory(CIFCategoryDesc):
     """CIF category for _atom_site."""
 
+    def __init__(self, polymer: bool = False):
+        # When polymer, atoms are linked to entity "1" so Mol* classifies the
+        # chain as a polymer (enabling cartoon/secondary-structure code paths).
+        self._polymer = polymer
+
     @property
     def name(self) -> str:
         return "atom_site"
@@ -35,9 +40,8 @@ class AtomSiteCategory(CIFCategoryDesc):
     def get_row_count(atoms: List[Atom]) -> int:
         return len(atoms)
 
-    @staticmethod
-    def get_field_descriptors(atoms: List[Atom]) -> List[CIFFieldDesc]:
-        return [
+    def get_field_descriptors(self, atoms: List[Atom]) -> List[CIFFieldDesc]:
+        fields = [
             CIFFieldDesc.number_array(
                 name="id",
                 dtype=np.int32,
@@ -92,6 +96,11 @@ class AtomSiteCategory(CIFCategoryDesc):
                 array=lambda a: np.array([atom.z for atom in a], dtype=np.float32),
             ),
         ]
+        if self._polymer:
+            fields.append(
+                CIFFieldDesc.string_array(name="label_entity_id", array=lambda a: ["1" for _ in a])
+            )
+        return fields
 
 
 @dataclasses.dataclass
@@ -183,11 +192,130 @@ class SymmetryCategory(CIFCategoryDesc):
         ]
 
 
-def encode_bcif(atoms: List[Atom], *, block_header: str = "PXVIEWER") -> bytes:
-    """Encode a list of atoms as a minimal BinaryCIF document and return the bytes."""
+class _RowsCategory(CIFCategoryDesc):
+    """Base for categories whose data is a list of row-tuples."""
+
+    @staticmethod
+    def get_row_count(rows: list) -> int:
+        return len(rows)
+
+
+class EntityCategory(_RowsCategory):
+    """_entity: rows = [(id, type), ...]."""
+
+    @property
+    def name(self) -> str:
+        return "entity"
+
+    @staticmethod
+    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
+        return [
+            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[0] for r in rs]),
+            CIFFieldDesc.string_array(name="type", array=lambda rs: [r[1] for r in rs]),
+        ]
+
+
+class EntityPolyCategory(_RowsCategory):
+    """_entity_poly: rows = [(entity_id, type), ...]."""
+
+    @property
+    def name(self) -> str:
+        return "entity_poly"
+
+    @staticmethod
+    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
+        return [
+            CIFFieldDesc.string_array(name="entity_id", array=lambda rs: [r[0] for r in rs]),
+            CIFFieldDesc.string_array(name="type", array=lambda rs: [r[1] for r in rs]),
+        ]
+
+
+class StructConfCategory(_RowsCategory):
+    """_struct_conf (helices): rows = [(id, chain, beg_seq, end_seq), ...]."""
+
+    @property
+    def name(self) -> str:
+        return "struct_conf"
+
+    @staticmethod
+    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
+        return [
+            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[0] for r in rs]),
+            CIFFieldDesc.string_array(name="conf_type_id", array=lambda rs: ["HELX_P" for _ in rs]),
+            CIFFieldDesc.string_array(name="beg_label_asym_id", array=lambda rs: [r[1] for r in rs]),
+            CIFFieldDesc.number_array(name="beg_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[2] for r in rs], dtype=np.int32)),
+            CIFFieldDesc.string_array(name="end_label_asym_id", array=lambda rs: [r[1] for r in rs]),
+            CIFFieldDesc.number_array(name="end_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[3] for r in rs], dtype=np.int32)),
+        ]
+
+
+class StructSheetRangeCategory(_RowsCategory):
+    """_struct_sheet_range (strands): rows = [(sheet_id, id, chain, beg_seq, end_seq), ...]."""
+
+    @property
+    def name(self) -> str:
+        return "struct_sheet_range"
+
+    @staticmethod
+    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
+        return [
+            CIFFieldDesc.string_array(name="sheet_id", array=lambda rs: [r[0] for r in rs]),
+            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[1] for r in rs]),
+            CIFFieldDesc.string_array(name="beg_label_asym_id", array=lambda rs: [r[2] for r in rs]),
+            CIFFieldDesc.number_array(name="beg_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[3] for r in rs], dtype=np.int32)),
+            CIFFieldDesc.string_array(name="end_label_asym_id", array=lambda rs: [r[2] for r in rs]),
+            CIFFieldDesc.number_array(name="end_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[4] for r in rs], dtype=np.int32)),
+        ]
+
+
+_HELIX_KINDS = {"helix", "h", "helx", "helx_p"}
+_SHEET_KINDS = {"sheet", "strand", "e", "s", "beta"}
+
+
+def _normalize_ss(secondary_structure) -> tuple:
+    """Split [(chain, beg, end, kind)] into _struct_conf and _struct_sheet_range rows."""
+    helices, sheets = [], []
+    for entry in secondary_structure:
+        chain, beg, end, kind = entry
+        k = str(kind).lower()
+        if k in _HELIX_KINDS:
+            helices.append((f"H{len(helices) + 1}", str(chain), int(beg), int(end)))
+        elif k in _SHEET_KINDS:
+            n = len(sheets) + 1
+            sheets.append((str(n), str(n), str(chain), int(beg), int(end)))
+        else:
+            raise ValueError(f"unknown secondary-structure kind {kind!r}; use 'helix' or 'sheet'")
+    return helices, sheets
+
+
+def encode_bcif(
+    atoms: List[Atom],
+    *,
+    block_header: str = "PXVIEWER",
+    polymer: bool = False,
+    secondary_structure=None,
+) -> bytes:
+    """Encode a list of atoms as a minimal BinaryCIF document and return the bytes.
+
+    With ``polymer=True`` (implied when ``secondary_structure`` is given) the atoms
+    are declared as a polypeptide entity so Mol* enables cartoon / secondary-structure
+    rendering. ``secondary_structure`` is a list of ``(chain, beg_resseq, end_resseq,
+    kind)`` where ``kind`` is ``"helix"`` or ``"sheet"``.
+    """
+    if secondary_structure:
+        polymer = True
     writer = create_binary_writer()
     writer.start_data_block(block_header)
-    writer.write_category(AtomSiteCategory(), [atoms])
+    writer.write_category(AtomSiteCategory(polymer=polymer), [atoms])
+    if polymer:
+        writer.write_category(EntityCategory(), [[("1", "polymer")]])
+        writer.write_category(EntityPolyCategory(), [[("1", "polypeptide(L)")]])
+    if secondary_structure:
+        helices, sheets = _normalize_ss(secondary_structure)
+        if helices:
+            writer.write_category(StructConfCategory(), [helices])
+        if sheets:
+            writer.write_category(StructSheetRangeCategory(), [sheets])
     writer.write_category(CellCategory(), [_Cell()])
     writer.write_category(SymmetryCategory(), [_Symmetry()])
     return writer.encode()

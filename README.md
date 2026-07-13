@@ -188,6 +188,55 @@ session.clear_primitives()                     # remove all
 removal), the measured `value` (degrees / Å / `None`), and its `selections`.
 Primitives are replayed to viewers that connect later.
 
+### Representations
+
+Control how the structure is drawn — any of Mol\*'s representations and color
+themes, on the whole structure or a subset:
+
+```python
+session.set_representation("cartoon", color="secondary-structure")   # replace with one
+rid = session.add_representation("ball-and-stick", color="element-symbol",
+                                 on=session.select_by(ids=[101, 102, 103]))  # a subset
+session.add_representation("spacefill", color_value="orange", opacity=0.6)   # flat colour
+session.remove_representation(rid)
+session.clear_representations()                                       # back to default
+```
+
+- **`type`** — `ball-and-stick`, `spacefill` (alias `sphere`), `cartoon` (alias
+  `ribbon`), `molecular-surface`, `gaussian-surface`, `point`, `line`, `putty`,
+  `backbone`, `ellipsoid`, …
+- **`color`** — a theme: `element-symbol`, `chain-id`, `secondary-structure`,
+  `residue-name`, `hydrophobicity`, `molecule-type`, … For a flat colour pass
+  `color_value="orange"` (or `color="#ff8800"`).
+- **`on`** — a `Selection` (or coercible) to restrict to a subset; omit for the
+  whole structure. `opacity=` and a `params=` passthrough are also available.
+
+Representations **track the streamed coordinates**, and the current set is
+replayed to viewers that connect later. If you never set any, you get the default
+ball-and-stick / element-symbol.
+
+### Secondary structure (for cartoon / ribbon)
+
+Cartoon rendering and the `secondary-structure` color theme need a **polymer**
+with secondary-structure assignment. Declare both at session construction — this
+puts *your* SS into the topology (`_struct_conf` / `_struct_sheet_range`), so the
+ribbon reflects your algorithm rather than Mol\*'s built-in DSSP:
+
+```python
+session = LiveSession(
+    atoms,                                   # a protein: residues with backbone atoms
+    secondary_structure=[                    # (chain, beg_resseq, end_resseq, kind)
+        ("A", 1, 14, "helix"),
+        ("A", 20, 28, "sheet"),
+    ],
+)
+session.set_representation("cartoon", color="secondary-structure")
+```
+
+`secondary_structure=` implies `polymer=True` (you can also pass `polymer=True`
+on its own). It's topology-time — sent once with the structure; to change SS,
+start a new session.
+
 ## Live wire protocol (`pxviewer-live/1`)
 
 WebSocket; binary messages are little-endian and begin with a `uint32` tag.
@@ -199,6 +248,7 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
+| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?},…]}` |
 | server → client | mouse-selection-mode | JSON `{"type":"mouse-selection-mode","enabled":bool}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
