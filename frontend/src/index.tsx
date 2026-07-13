@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
+import { MolViewSpecBehavior } from 'molstar/lib/extensions/mvs/behavior';
 import { useCreatePluginViewModel } from 'molstar/lib/extensions/plugin/hooks/use-view-model';
 import { PluginCanvas } from 'molstar/lib/extensions/plugin/react';
 import { loadMVSFromUrl, loadPdb } from 'molstar/lib/extensions/plugin/loaders';
@@ -8,7 +9,12 @@ import { connectLive } from './live';
 const DEFAULT_WS = 'ws://127.0.0.1:8787';
 
 function App() {
-    const model = useCreatePluginViewModel();
+    const model = useCreatePluginViewModel({
+        spec: (s) => {
+            s.behaviors.push(MolViewSpecBehavior);
+            return s;
+        },
+    });
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
