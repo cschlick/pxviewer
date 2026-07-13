@@ -75,6 +75,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 | `pick` | click atoms to make them pulse — the scene → Python path |
 | `select` | atoms highlighted by index, cycling through subsets |
 | `primitives` | angle/distance/dihedral/label measurements tracking a flexing chain |
+| `measure` | click atoms to measure distances/angles/dihedrals — the scene → Python path |
 
 Each demo serves the frontend, waits for the viewer to connect, narrates each step
 in the terminal, and loops until Ctrl-C. Use `--fps` to change smoothness within a

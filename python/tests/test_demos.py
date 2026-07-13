@@ -18,6 +18,7 @@ class _StubSession:
         self.frames = []
         self.selections = []
         self.primitives_added = []
+        self.measure_modes = []
 
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
@@ -39,6 +40,13 @@ class _StubSession:
         pass
 
     def clear_primitives(self):
+        pass
+
+    # The measure demo drives these.
+    def enable_measure_mode(self, kind, on_measure=None, **kwargs):
+        self.measure_modes.append(kind)
+
+    def disable_mouse_selection(self):
         pass
 
     # The select demo drives these; record the atom specs. select() returns a
@@ -133,3 +141,21 @@ def test_primitives_demo_draws_measurements():
 
     assert not thread.is_alive(), "primitives demo did not stop"
     assert stub.primitives_added, "primitives demo drew nothing"
+
+
+def test_measure_demo_enables_measure_modes():
+    demo = DEMOS["measure"]
+    atoms = demo.make_atoms()
+    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    stub = _StubSession()
+    player = Player(stub, base, fps=240)
+
+    thread = threading.Thread(target=demo.run, args=(player,), daemon=True)
+    thread.start()
+    time.sleep(0.5)
+    player.stop()
+    thread.join(timeout=3)
+
+    assert not thread.is_alive(), "measure demo did not stop"
+    assert stub.measure_modes, "measure demo enabled no measure mode"
+    assert stub.frames, "measure demo streamed no frames"

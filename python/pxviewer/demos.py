@@ -337,6 +337,58 @@ def _run_primitives(p: Player) -> None:
         p.hold(1.2)
 
 
+def _spin(base: np.ndarray, a: float) -> np.ndarray:
+    """Rotate coordinates about the y axis by angle ``a`` (radians)."""
+    ca, sa = math.cos(a), math.sin(a)
+    c = base.copy()
+    c[:, 0] = ca * base[:, 0] + sa * base[:, 2]
+    c[:, 2] = -sa * base[:, 0] + ca * base[:, 2]
+    return c
+
+
+def _run_measure(p: Player) -> None:
+    session = p.session
+    base = p.base
+    pending: List[Any] = []
+    lock = threading.Lock()
+
+    def on_measure(prim: Any) -> None:  # runs on the server loop thread
+        with lock:
+            pending.append(prim)
+
+    def drain() -> None:
+        with lock:
+            items, pending[:] = list(pending), []
+        for prim in items:
+            value = "—" if prim.value is None else f"{prim.value:.1f}"
+            unit = "°" if prim.kind in ("angle", "dihedral") else (" Å" if prim.kind == "distance" else "")
+            p.step(prim.kind, f"drew {prim.kind} = {value}{unit}")
+
+    modes = [
+        ("distance", "Click 2 atoms to measure a distance."),
+        ("angle", "Click 3 atoms to measure an angle."),
+        ("dihedral", "Click 4 atoms to measure a dihedral."),
+    ]
+    dt = 1.0 / 30.0
+    angle = 0.0
+    while not p.stopped:
+        for kind, prompt in modes:
+            if p.stopped:
+                return
+            session.enable_measure_mode(kind, on_measure=on_measure)
+            p.step(kind, prompt)
+            for _ in range(270):  # ~9 s per mode; the structure turns slowly so drawn measures track
+                if p.stopped:
+                    return
+                angle += 0.008
+                p.push(_spin(base, angle))
+                drain()
+                p.hold(dt)
+        p.step("reset", "Clearing the measurements.")
+        session.clear_primitives()
+        p.hold(1.0)
+
+
 @dataclasses.dataclass
 class Demo:
     name: str
@@ -355,6 +407,7 @@ DEMOS: dict[str, Demo] = {
         Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _atoms(_ring(16)), _run_pick),
         Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
         Demo("primitives", "Angle/distance/dihedral/label measurements that track motion.", _bent_chain, _run_primitives),
+        Demo("measure", "Interactive: click atoms to measure distances/angles/dihedrals (scene → Python).", lambda: _atoms(_helix(12, radius=4.0, pitch=3.0)), _run_measure),
     ]
 }
 
