@@ -12,5 +12,13 @@ dependencies = [
     "ciftools>=0.2.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["pxviewer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
