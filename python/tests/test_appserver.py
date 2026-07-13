@@ -45,6 +45,27 @@ def test_root_redirects_to_wired_index():
         httpd.shutdown()
 
 
+def test_stop_all_survives_repeated_interrupt():
+    events = []
+
+    class ShutdownOnce:
+        """Raises KeyboardInterrupt the first time (like a Ctrl-C mid-cleanup)."""
+
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise KeyboardInterrupt
+            events.append("shutdown")
+
+    appserver.stop_all(lambda: events.append("stop_session"), ShutdownOnce())
+
+    # Cleanup still completed despite the interrupt during the second step.
+    assert "shutdown" in events
+
+
 def test_ws_port_answers_plain_http_without_crashing():
     session = LiveSession([Atom(id=1, element="C", x=0, y=0, z=0), Atom(id=2, element="C", x=1, y=0, z=0)])
     session.start(port=0)

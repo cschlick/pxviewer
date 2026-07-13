@@ -73,6 +73,34 @@ def serve_frontend(
     return httpd, actual_port
 
 
+def stop_all(*steps) -> None:
+    """Run each teardown step, retrying so a repeated Ctrl-C can't abort cleanup.
+
+    Steps must be idempotent (they may run more than once if interrupted).
+    """
+    while True:
+        try:
+            for step in steps:
+                step()
+            return
+        except KeyboardInterrupt:
+            continue
+
+
+def stop_frontend(httpd) -> None:
+    """Stop a server from `serve_frontend`/`announce_viewer`, ignoring errors."""
+    if httpd is None:
+        return
+    try:
+        httpd.shutdown()
+    except Exception:
+        pass
+    try:
+        httpd.server_close()
+    except Exception:
+        pass
+
+
 def announce_viewer(host: str, ws_url: str, *, http_port: int = 5173, serve: bool = True):
     """Serve the frontend if possible and print how to open the viewer.
 

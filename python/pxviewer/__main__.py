@@ -6,7 +6,7 @@ import time
 import numpy as np
 
 from .api import create_example_view, create_volume_view_from_data
-from .appserver import announce_viewer
+from .appserver import announce_viewer, stop_all, stop_frontend
 from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
@@ -108,9 +108,7 @@ def main() -> None:
         except KeyboardInterrupt:
             print("\nstopping...")
         finally:
-            session.stop()
-            if httpd is not None:
-                httpd.shutdown()
+            stop_all(session.stop, lambda: stop_frontend(httpd))
 
     elif args.command == "demo":
         if not args.name:

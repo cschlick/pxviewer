@@ -21,7 +21,7 @@ from typing import Any, Callable, List, Optional
 
 import numpy as np
 
-from .appserver import announce_viewer
+from .appserver import announce_viewer, stop_all, stop_frontend
 from .data import Atom
 from .live import LiveSession
 
@@ -265,6 +265,19 @@ def list_demos() -> List[tuple[str, str]]:
     return [(d.name, d.description) for d in DEMOS.values()]
 
 
+def _wait_for_client(session: LiveSession, *, timeout: float, tick: float = 0.25) -> bool:
+    """Wait for a viewer, polling in short ticks so Ctrl-C stays responsive.
+
+    A single long Event.wait() on the main thread defers a pending KeyboardInterrupt
+    until it returns; short ticks surface it within ``tick`` seconds.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if session.wait_for_client(tick):
+            return True
+    return session.wait_for_client(0)
+
+
 def run_demo(
     name: str,
     *,
@@ -292,7 +305,7 @@ def run_demo(
     print("Waiting for the viewer to connect…  (Ctrl-C to stop)\n", flush=True)
 
     try:
-        if session.wait_for_client(timeout=120):
+        if _wait_for_client(session, timeout=120):
             print("Viewer connected — starting.\n", flush=True)
             player.hold(0.5)
         else:
@@ -301,7 +314,5 @@ def run_demo(
     except KeyboardInterrupt:
         print("\nstopping…")
     finally:
-        player.stop()
-        session.stop()
-        if httpd is not None:
-            httpd.shutdown()
+        # Idempotent, interrupt-proof: a repeated Ctrl-C can't leave threads/ports dangling.
+        stop_all(player.stop, session.stop, lambda: stop_frontend(httpd))

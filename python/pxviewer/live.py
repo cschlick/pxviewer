@@ -139,14 +139,19 @@ class LiveSession:
         return self
 
     def stop(self) -> None:
-        """Stop the server and join the background thread."""
+        """Stop the server and join the background thread. Idempotent."""
         loop = self._loop
         if loop is None:
             return
-        loop.call_soon_threadsafe(loop.stop)
-        if self._thread is not None:
-            self._thread.join(timeout=5)
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except RuntimeError:
+            pass  # loop already stopped/closed (e.g. teardown interrupted then retried)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=5)
         self._thread = None
+        self._loop = None
 
     def __enter__(self) -> "LiveSession":
         if self._thread is None:
