@@ -40,16 +40,20 @@ swapped per frame, so representations do a coordinate update rather than a rebui
 
 ### Try the demo
 
-```bash
-# terminal 1 — stream an oscillating structure
-cd python
-python -m pxviewer serve-demo            # ws://127.0.0.1:8787
+Build the frontend once (`cd frontend && npm install && npm run build`), then:
 
-# terminal 2 — serve the frontend, then open:
-#   index.html?ws=ws://127.0.0.1:8787
+```bash
+cd python
+python -m pxviewer serve-demo            # prints a ready-to-click http:// URL
 ```
 
+The command serves **both** the WebSocket stream and the frontend page, and prints
+a single `http://127.0.0.1:5173/` URL. Open it — the page connects the WebSocket for
+you. (Don't open the `ws://` address in a browser directly; it's a WebSocket
+endpoint, not a web page, and will just tell you so.)
+
 Clicking an atom prints its identity back in the Python terminal (the duplex path).
+Pass `--no-frontend` to stream only, or `--http-port` to change the page port.
 
 ### Demos
 
@@ -59,7 +63,7 @@ but for human eyes). List them, then run one and open the printed URL:
 ```bash
 cd python
 python -m pxviewer demo                   # list available demos
-python -m pxviewer demo wave              # then open index.html?ws=ws://127.0.0.1:8787
+python -m pxviewer demo wave              # then open the http:// URL it prints
 ```
 
 | Demo | What you see |
@@ -70,8 +74,9 @@ python -m pxviewer demo wave              # then open index.html?ws=ws://127.0.0
 | `morph` | a chain folding into a helix and back |
 | `pick` | click atoms to make them pulse — the scene → Python path |
 
-Each demo waits for the viewer to connect, narrates each step in the terminal, and
-loops until Ctrl-C. Use `--fps` to change smoothness within a motion.
+Each demo serves the frontend, waits for the viewer to connect, narrates each step
+in the terminal, and loops until Ctrl-C. Use `--fps` to change smoothness within a
+motion, or `--no-frontend` to connect a page you're serving yourself.
 
 ### From your own code
 

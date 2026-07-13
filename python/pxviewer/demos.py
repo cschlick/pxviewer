@@ -21,6 +21,7 @@ from typing import Any, Callable, List, Optional
 
 import numpy as np
 
+from .appserver import announce_viewer
 from .data import Atom
 from .live import LiveSession
 
@@ -264,7 +265,15 @@ def list_demos() -> List[tuple[str, str]]:
     return [(d.name, d.description) for d in DEMOS.values()]
 
 
-def run_demo(name: str, *, host: str = "127.0.0.1", port: int = 8787, fps: float = 30.0) -> None:
+def run_demo(
+    name: str,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    fps: float = 30.0,
+    http_port: int = 5173,
+    serve_frontend: bool = True,
+) -> None:
     demo = DEMOS.get(name)
     if demo is None:
         available = ", ".join(DEMOS)
@@ -277,21 +286,22 @@ def run_demo(name: str, *, host: str = "127.0.0.1", port: int = 8787, fps: float
     session.on_pick(player._on_pick)
     session.start(host=host, port=port)
 
-    url = f"ws://{host}:{session.port}"
+    ws_url = f"ws://{host}:{session.port}"
     print(f"\n{demo.name}: {demo.description}")
-    print(f"Open the frontend at:  index.html?ws={url}")
+    httpd = announce_viewer(host, ws_url, http_port=http_port, serve=serve_frontend)
     print("Waiting for the viewer to connect…  (Ctrl-C to stop)\n", flush=True)
 
-    if session.wait_for_client(timeout=120):
-        print("Viewer connected — starting.\n", flush=True)
-        player.hold(0.5)
-    else:
-        print("No viewer connected within 2 min; starting anyway.\n", flush=True)
-
     try:
+        if session.wait_for_client(timeout=120):
+            print("Viewer connected — starting.\n", flush=True)
+            player.hold(0.5)
+        else:
+            print("No viewer connected within 2 min; starting anyway.\n", flush=True)
         demo.run(player)
     except KeyboardInterrupt:
         print("\nstopping…")
     finally:
         player.stop()
         session.stop()
+        if httpd is not None:
+            httpd.shutdown()

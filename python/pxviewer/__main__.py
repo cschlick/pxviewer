@@ -6,6 +6,7 @@ import time
 import numpy as np
 
 from .api import create_example_view, create_volume_view_from_data
+from .appserver import announce_viewer
 from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
@@ -52,6 +53,8 @@ def main() -> None:
     demo.add_argument("--port", type=int, default=8787, help="Port to bind")
     demo.add_argument("--atoms", type=int, default=24, help="Number of atoms in the demo chain")
     demo.add_argument("--fps", type=float, default=30.0, help="Frames per second to stream")
+    demo.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
+    demo.add_argument("--no-frontend", action="store_true", help="Do not serve the frontend (connect manually)")
 
     run = subparsers.add_parser(
         "demo",
@@ -61,6 +64,8 @@ def main() -> None:
     run.add_argument("--host", default="127.0.0.1", help="Host to bind")
     run.add_argument("--port", type=int, default=8787, help="Port to bind")
     run.add_argument("--fps", type=float, default=30.0, help="Frames per second within each motion")
+    run.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
+    run.add_argument("--no-frontend", action="store_true", help="Do not serve the frontend (connect manually)")
 
     args = parser.parse_args()
 
@@ -93,7 +98,8 @@ def main() -> None:
         session.start(host=args.host, port=args.port)
         url = f"ws://{args.host}:{session.port}"
         print(f"pxviewer live demo streaming at {url}")
-        print("Open the frontend with ?ws=" + url + " and press Ctrl-C to stop.")
+        httpd = announce_viewer(args.host, url, http_port=args.http_port, serve=not args.no_frontend)
+        print("Press Ctrl-C to stop.")
         delay = 1.0 / args.fps if args.fps > 0 else 0.0
         try:
             for frame in oscillating_frames(atoms):
@@ -103,6 +109,8 @@ def main() -> None:
             print("\nstopping...")
         finally:
             session.stop()
+            if httpd is not None:
+                httpd.shutdown()
 
     elif args.command == "demo":
         if not args.name:
@@ -111,7 +119,14 @@ def main() -> None:
                 print(f"  {name:10s} {description}")
             print("\nRun one with:  python -m pxviewer demo <name>")
             return
-        run_demo(args.name, host=args.host, port=args.port, fps=args.fps)
+        run_demo(
+            args.name,
+            host=args.host,
+            port=args.port,
+            fps=args.fps,
+            http_port=args.http_port,
+            serve_frontend=not args.no_frontend,
+        )
 
 
 if __name__ == "__main__":

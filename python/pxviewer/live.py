@@ -26,6 +26,7 @@ import asyncio
 import json
 import struct
 import threading
+from http import HTTPStatus
 from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -196,7 +197,9 @@ class LiveSession:
     async def _serve(self) -> None:
         import websockets
 
-        self._server = await websockets.serve(self._handler, self.host, self.port)
+        self._server = await websockets.serve(
+            self._handler, self.host, self.port, process_request=self._process_request
+        )
         # Resolve the actual bound port (matters when port=0 was requested).
         for sock in self._server.sockets or []:
             self.port = sock.getsockname()[1]
@@ -207,6 +210,21 @@ class LiveSession:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+
+    def _process_request(self, connection: Any, request: Any) -> Any:
+        """Answer plain HTTP requests with a helpful page instead of failing the
+        handshake (which otherwise logs a traceback for every stray browser hit)."""
+        upgrade = request.headers.get("Upgrade", "") or ""
+        if "websocket" in upgrade.lower():
+            return None  # genuine WebSocket handshake — let it proceed
+        body = (
+            "pxviewer live WebSocket endpoint\n\n"
+            "This address speaks the WebSocket protocol, not HTTP web pages, so it\n"
+            "cannot be opened directly in a browser. Open the pxviewer frontend page\n"
+            "instead and pass this address to it as ?ws=... (the demo command prints\n"
+            "a ready-to-click http:// URL that does this for you).\n"
+        )
+        return connection.respond(HTTPStatus.UPGRADE_REQUIRED, body)
 
     async def _handler(self, websocket: Any) -> None:
         self._clients.add(websocket)
