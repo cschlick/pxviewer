@@ -10,6 +10,7 @@ from .appserver import announce_viewer, stop_all, stop_frontend
 from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
+from .volume_demos import create_volume_demo, list_volume_demos, run_volume_demo
 
 
 def _demo_atoms(n: int) -> list[Atom]:
@@ -66,6 +67,18 @@ def main() -> None:
     run.add_argument("--fps", type=float, default=30.0, help="Frames per second within each motion")
     run.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
     run.add_argument("--no-frontend", action="store_true", help="Do not serve the frontend (connect manually)")
+
+    vol = subparsers.add_parser(
+        "volume-demo",
+        help="Generate and serve a static volume demo",
+    )
+    vol.add_argument("name", nargs="?", help="Demo to run; omit to list available demos")
+    vol.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    vol.add_argument("--port", type=int, default=5173, help="Port for the bundled frontend server")
+    vol.add_argument("--voxel-size", type=float, default=1.0, help="Isotropic voxel size in Angstroms")
+    vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
+    vol.add_argument("--output-dir", help="Write volume.mrc and volume.mvsj here and exit without serving")
+    vol.add_argument("--no-serve", action="store_true", help="Write files and exit without serving")
 
     args = parser.parse_args()
 
@@ -124,6 +137,38 @@ def main() -> None:
             fps=args.fps,
             http_port=args.http_port,
             serve_frontend=not args.no_frontend,
+        )
+
+    elif args.command == "volume-demo":
+        if not args.name:
+            print("Available volume demos:\n")
+            for name, description in list_volume_demos():
+                print(f"  {name:10s} {description}")
+            print("\nRun one with:  python -m pxviewer volume-demo <name>")
+            return
+
+        if args.output_dir:
+            from pathlib import Path
+
+            out = Path(args.output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            create_volume_demo(
+                args.name,
+                mrc_path=out / "volume.mrc",
+                mvsj_path=out / "volume.mvsj",
+                voxel_size=args.voxel_size,
+                shape=tuple(args.shape),
+            )
+            print(f"Wrote {out / 'volume.mrc'} and {out / 'volume.mvsj'}")
+            return
+
+        run_volume_demo(
+            args.name,
+            host=args.host,
+            port=args.port,
+            voxel_size=args.voxel_size,
+            shape=tuple(args.shape),
+            serve=not args.no_serve,
         )
 
 
