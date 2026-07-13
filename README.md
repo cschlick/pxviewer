@@ -73,7 +73,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 | `orbit` | a rigid body gliding around a square path |
 | `morph` | a chain folding into a helix and back |
 | `pick` | click atoms to make them pulse — the scene → Python path |
-| `select` | atoms highlighted by PyMOL selection, driven from Python |
+| `select` | atoms highlighted by index, cycling through subsets |
 
 Each demo serves the frontend, waits for the viewer to connect, narrates each step
 in the terminal, and loops until Ctrl-C. Use `--fps` to change smoothness within a
@@ -96,39 +96,39 @@ for coords in my_trajectory:             # coords: (N, 3) array-like, topology o
 Open the frontend at `index.html?ws=ws://127.0.0.1:8787`. With no `?ws=` param the
 page falls back to loading a static PDB.
 
-### Selecting atoms (PyMOL syntax)
+### Selecting atoms (by index)
 
-Drive the viewer's selection from Python using **PyMOL selection syntax**. The
-expression is parsed and evaluated by Mol* in the browser (its `mol-script` PyMOL
-transpiler), which echoes the matched atoms back — so a selection both *shows* in
-the viewer and *returns* what it matched:
+Atoms are addressed by **positional index** — the row in the topology's
+`_atom_site` table, the same stable key the whole live protocol uses. Build a
+`Selection` from indices, atom ids, or a boolean mask (all pure Python, no viewer
+needed), then show it:
 
 ```python
-sel = session.select("resi 1-20 and chain A")   # highlight + focus; returns a Selection
-sel.indices      # [0, 1, 2, ...]  positional atom rows (the identity-contract key)
-sel.atoms        # the matching Atom objects
-sel.ids          # their _atom_site.id values
-sel.mask         # boolean numpy array of length N — handy for coordinate math
+sel = session.select_by(indices=range(20))       # positional rows 0..19
+sel = session.select_by(ids=[10, 12, 14])         # by Atom.id
+sel = session.select_by(mask=my_bool_array)       # numpy mask of length N
+sel.indices   # [0, 1, 2, ...]   sel.atoms   sel.ids   sel.mask
 
-session.highlight("elem O")             # just the selection overlay, no camera move
-session.focus("id 5")                   # just aim the camera
-session.select("name CA", focus=False)  # compose the primitives: highlight only
-session.clear_selection()               # remove the highlight
+session.highlight(sel)                 # selection overlay
+session.focus([4, 5, 6])               # aim the camera (indices coerced to a Selection)
+session.select(sel, focus=False)       # compose highlight + focus (both on by default)
+session.clear_selection()              # remove the highlight
 ```
 
-`select` composes the `highlight` and `focus` primitives (both on by default).
-Each call blocks briefly for the viewer's echo (`timeout=`, default 5 s) and
-returns a `Selection`, or `None` if no viewer answered. Supported selectors
-include `name`, `elem`, `resn`, `resi`, `chain`, `id`, and `index`, with boolean
-`and`/`or`/`not`, parentheses, ranges (`resi 1-10`) and lists (`resi 1+2+3`).
+`highlight`/`focus`/`select` accept a `Selection` or anything coercible — an
+index, a list of indices, or a boolean mask. Resolution is entirely on the Python
+side, so these are **synchronous and viewer-independent** (no round-trip); the
+wire carries only indices, run-length-encoded for large contiguous selections.
+Highlights re-map onto each streamed frame in O(selected), and are replayed to
+viewers that connect later.
 
 ### Drawing measurements (angles, distances, dihedrals, labels)
 
 Draw Mol\*'s measurement graphics from Python. Atoms are named by a `Selection`
-(from `select(...)`, or `select_by(indices=…)` / `select_by(ids=…)` with no
-viewer needed) — or anything coercible: an index, a list of indices, or a PyMOL
-string. A multi-atom group is reduced to its **centroid**, so these also work
-between groups. Each primitive **tracks the atoms as they move**.
+(`select_by(indices=…)` / `select_by(ids=…)` / `select_by(mask=…)`) — or anything
+coercible: an index, a list of indices, or a boolean mask. A multi-atom group is
+reduced to its **centroid**, so these also work between groups. Each primitive
+**tracks the atoms as they move**.
 
 ```python
 a = session.select_by(indices=[0]); b = session.select_by(ids=[5]); c = session.select_by(indices=[9])
@@ -157,11 +157,14 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | --- | --- | --- |
 | server → client | topology | `[u32 tag=0][BinaryCIF bytes]` (sent once on connect) |
 | server → client | frame | `[u32 tag=1][u32 frameIndex][f32 × 3N]` interleaved `x,y,z` |
-| server → client | select | JSON `{"type":"select","reqId":int,"expression":str,"highlight":bool,"focus":bool}` |
+| server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
+| server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
-| client → server | selection-result | JSON `{"type":"selection-result","reqId":int,"indices":[int…],"error":str?}` |
+
+An `<index-set>` is `{"list":[int,…]}` or run-length `{"runs":[[start,end],…]}`.
+All atom addressing is by positional index; the wire carries no query language.
 
 ### Atom-identity contract
 

@@ -131,10 +131,30 @@ def test_coercion_rejects_bool(session):
         session.add_label(True, "nope")
 
 
-def test_str_spec_without_viewer_raises(session):
-    # PyMOL strings need the browser to resolve; without one this is an error.
-    with pytest.raises(RuntimeError):
+def test_str_spec_rejected(session):
+    # Strings are not a selection language any more — indices only.
+    with pytest.raises(TypeError):
         session.add_angle("resi 1", 1, 2)
+
+
+def test_select_by_mask(session):
+    m = np.zeros(4, dtype=bool)
+    m[[1, 3]] = True
+    assert session.select_by(mask=m).indices == [1, 3]
+
+
+def test_select_by_mask_wrong_shape(session):
+    with pytest.raises(ValueError):
+        session.select_by(mask=np.ones(3, dtype=bool))
+
+
+def test_coercion_accepts_mask(session):
+    a = session.add_distance(np.array([True, False, False, False]), [1, 2, 3])
+    assert session._primitives[a.id]["groups"] == [[0], [1, 2, 3]]
+
+
+def test_indices_sorted_and_deduped(session):
+    assert session.select_by(indices=[3, 1, 1, 0]).indices == [0, 1, 3]
 
 
 def test_empty_group_rejected(session):

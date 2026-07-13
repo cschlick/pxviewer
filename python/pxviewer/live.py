@@ -17,8 +17,8 @@ Server -> client (binary, little-endian; first uint32 is a tag):
 
 Server -> client (UTF-8 JSON text control messages):
   - {"type": "axis", "visible": bool}                          toggle the axis helper
-  - {"type": "select", "reqId": int, "expression": str,        evaluate a PyMOL
-     "highlight": bool, "focus": bool}                          selection and show it
+  - {"type": "highlight", "atoms": <index-set>}                show selection overlay
+  - {"type": "focus", "atoms": <index-set>}                    aim the camera
   - {"type": "primitive", "action": "add",                     draw a measurement:
      "kind": "angle"|"distance"|"dihedral"|"label",             angle/distance/
      "id": str, "groups": [[int,...],...], "options": {...}}    dihedral/label
@@ -28,12 +28,12 @@ Server -> client (UTF-8 JSON text control messages):
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
-  - {"type": "selection-result", "reqId": int,     echo of a "select" request;
-     "indices": [int, ...], "error": str|None}      indices are positional atom rows
 
-The PyMOL expression is parsed and evaluated by Mol* in the browser (via its
-`mol-script` pymol transpiler); Python sends the string and gets back the matched
-positional atom indices. See `Selection` and `LiveSession.select`.
+All atoms are addressed by *positional index* (row in the topology's _atom_site
+table). Selections are resolved to indices entirely on the Python side; the wire
+never carries a query language. An <index-set> is either {"list": [int,...]} or a
+run-length {"runs": [[start,end],...]} (see `_encode_index_set`), and a highlight
+with an empty set clears the selection.
 """
 
 from __future__ import annotations
@@ -75,6 +75,26 @@ This is what makes the update "in-place": the browser reuses the parsed topology
 """
 
 
+def _encode_index_set(indices: Iterable[int]) -> dict:
+    """Compactly encode a set of atom indices for the wire.
+
+    Selections are often contiguous (a chain, a residue range), so run-length
+    encoding collapses them to a few ``[start, end]`` pairs. When runs would be
+    larger than the explicit list (a scattered set), the plain list is sent
+    instead. Indices are sorted and de-duplicated.
+    """
+    idx = sorted({int(i) for i in indices})
+    runs: List[List[int]] = []
+    for i in idx:
+        if runs and i == runs[-1][1] + 1:
+            runs[-1][1] = i
+        else:
+            runs.append([i, i])
+    if len(runs) * 2 <= len(idx):
+        return {"runs": runs}
+    return {"list": idx}
+
+
 def _angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> Optional[float]:
     """Angle a-b-c at vertex ``b``, in degrees (None if a ray has zero length)."""
     va, vc = a - b, c - b
@@ -112,12 +132,13 @@ def _coords_to_f32(coords: Any, n_atoms: int) -> np.ndarray:
 
 @dataclasses.dataclass
 class Selection:
-    """Atoms matched by a PyMOL selection, resolved by the connected viewer.
+    """A set of atoms addressed by positional index.
 
     ``indices`` are positional (0-based) rows into the topology's _atom_site
     table — the same stable identity the rest of the live protocol uses (see
-    ``ATOM_IDENTITY_CONTRACT``). ``atoms`` are the matching ``Atom`` objects;
-    ``ids`` and ``mask`` are derived views.
+    ``ATOM_IDENTITY_CONTRACT``); they are kept sorted and de-duplicated. ``atoms``
+    are the corresponding ``Atom`` objects; ``ids`` and ``mask`` are derived views.
+    Build one with :meth:`LiveSession.select_by`.
     """
 
     indices: List[int]
@@ -209,15 +230,12 @@ class LiveSession:
         self._ready = threading.Event()
         self._client_ready = threading.Event()
 
-        # PyMOL selections are evaluated in the browser and echoed back; each
-        # request waits on an Event keyed by a monotonic id.
-        self._pending: dict = {}
-        self._pending_lock = threading.Lock()
-        self._req_counter = 0
-        self._last_highlight: Optional[str] = None  # replayed to clients that connect later
+        self._lock = threading.Lock()  # guards the primitive counter
 
         # Atom-id -> positional index, for building selections by id.
         self._id_to_index = {atom.id: i for i, atom in enumerate(self.atoms)}
+        # Active highlight (positional indices), replayed to clients that connect later.
+        self._last_highlight_indices: List[int] = []
         # Active drawing primitives (id -> the "add" message), replayed to late clients.
         self._primitives: dict = {}
         self._primitive_counter = 0
@@ -331,47 +349,44 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    # -- selection (python -> scene -> python) ---------------------------
+    # -- selection (all index-based) -------------------------------------
 
-    def select(
-        self,
-        expression: str,
-        *,
-        highlight: bool = True,
-        focus: bool = True,
-        show: bool = True,
-        timeout: float = 5.0,
-    ) -> Optional[Selection]:
-        """Select atoms by PyMOL syntax and show them in the viewer.
+    def select(self, atoms: Any, *, highlight: bool = True, focus: bool = True) -> Selection:
+        """Show a set of atoms in the viewer: highlight and/or focus.
 
-        Composes :meth:`highlight` and :meth:`focus`: with ``highlight`` the
-        matched atoms get the selection overlay; with ``focus`` the camera zooms
-        to them. Mol* evaluates the expression in the browser and echoes the
-        matched atoms back. Pass ``show=False`` to resolve an expression to a
-        :class:`Selection` without highlighting or moving the camera (handy for
-        naming atoms to feed to primitives).
-
-        Returns a :class:`Selection` of the matched atoms, or ``None`` if no
-        viewer answered within ``timeout`` seconds. Raises ``ValueError`` if the
-        viewer rejects the expression as invalid PyMOL syntax.
+        ``atoms`` is a :class:`Selection` or anything coercible to one — an atom
+        index, an iterable of indices, or a boolean mask of length N. Composes
+        :meth:`highlight` and :meth:`focus`. Resolution is entirely Python-side, so
+        this is fire-and-forget: no viewer round-trip. Returns the Selection.
         """
-        if not show:
-            highlight = focus = False
-        return self._selection_request(expression, highlight=highlight, focus=focus, timeout=timeout)
+        sel = self._as_selection(atoms)
+        if highlight:
+            self.highlight(sel)
+        if focus:
+            self.focus(sel)
+        return sel
 
     def select_by(
-        self, *, indices: Optional[Iterable[int]] = None, ids: Optional[Iterable[int]] = None
+        self,
+        *,
+        indices: Optional[Iterable[int]] = None,
+        ids: Optional[Iterable[int]] = None,
+        mask: Optional[Any] = None,
     ) -> Selection:
-        """Build a :class:`Selection` from positional indices or atom ids.
+        """Build a :class:`Selection` from positional indices, atom ids, or a mask.
 
-        Pure Python and does not need a viewer (unlike :meth:`select`, which
-        resolves PyMOL syntax in the browser). Exactly one of ``indices`` or
-        ``ids`` must be given. This is how you name atoms locally to pass to
-        primitives such as :meth:`add_angle`.
+        Pure Python; no viewer needed. Pass exactly one of ``indices``, ``ids``, or
+        ``mask`` (a boolean array of length N). The resulting indices are stored
+        sorted and de-duplicated.
         """
-        if (indices is None) == (ids is None):
-            raise ValueError("pass exactly one of indices= or ids=")
-        if ids is not None:
+        if sum(x is not None for x in (indices, ids, mask)) != 1:
+            raise ValueError("pass exactly one of indices=, ids=, or mask=")
+        if mask is not None:
+            m = np.asarray(mask, dtype=bool)
+            if m.shape != (self._n_atoms,):
+                raise ValueError(f"mask must have shape ({self._n_atoms},), got {tuple(m.shape)}")
+            idx = [int(i) for i in np.nonzero(m)[0]]
+        elif ids is not None:
             try:
                 idx = [self._id_to_index[int(i)] for i in ids]
             except KeyError as exc:
@@ -381,6 +396,7 @@ class LiveSession:
         for i in idx:
             if not 0 <= i < self._n_atoms:
                 raise ValueError(f"atom index {i} out of range [0, {self._n_atoms})")
+        idx = sorted(set(idx))
         return Selection(idx, [self.atoms[i] for i in idx], self._n_atoms)
 
     # -- graphics primitives ---------------------------------------------
@@ -395,9 +411,9 @@ class LiveSession:
         """Draw a pie-shaped angle wedge at the three atom groups ``a``-``b``-``c``.
 
         Each argument is a :class:`Selection` or anything coercible to one: an atom
-        index, an iterable of indices, or a PyMOL string (resolved via the viewer).
-        A multi-atom group uses its centroid, so this also draws the angle between
-        three groups. The wedge tracks the atoms as they move.
+        index, an iterable of indices, or a boolean mask of length N. A multi-atom
+        group uses its centroid, so this also draws the angle between three groups.
+        The wedge tracks the atoms as they move.
 
         ``opacity`` sets how translucent the wedge is; ``label`` toggles the degree
         text. Returns a :class:`Primitive` whose ``id`` removes it later and whose
@@ -427,27 +443,25 @@ class LiveSession:
         self._primitives.clear()
         self._send_control({"type": "primitive", "action": "clear"})
 
-    def highlight(self, expression: str, *, timeout: float = 5.0) -> Optional[Selection]:
-        """Highlight atoms matching a PyMOL selection (viewer selection overlay)."""
-        return self._selection_request(expression, highlight=True, focus=False, timeout=timeout)
+    def highlight(self, atoms: Any) -> Selection:
+        """Show the selection overlay on the given atoms (:class:`Selection` or coercible)."""
+        sel = self._as_selection(atoms)
+        self._last_highlight_indices = sel.indices
+        self._send_control({"type": "highlight", "atoms": _encode_index_set(sel.indices)})
+        return sel
 
-    def focus(self, expression: str, *, timeout: float = 5.0) -> Optional[Selection]:
-        """Aim the viewer camera at atoms matching a PyMOL selection."""
-        return self._selection_request(expression, highlight=False, focus=True, timeout=timeout)
+    def focus(self, atoms: Any) -> Selection:
+        """Aim the viewer camera at the given atoms (:class:`Selection` or coercible)."""
+        sel = self._as_selection(atoms)
+        self._send_control({"type": "focus", "atoms": _encode_index_set(sel.indices)})
+        return sel
 
     def clear_selection(self) -> None:
         """Clear any highlighted selection in the viewer. Thread-safe."""
-        self._last_highlight = None
-        self._send_control(
-            {"type": "select", "reqId": self._next_req(), "expression": "", "highlight": True, "focus": False}
-        )
+        self._last_highlight_indices = []
+        self._send_control({"type": "highlight", "atoms": _encode_index_set([])})
 
     # -- internals -------------------------------------------------------
-
-    def _next_req(self) -> int:
-        with self._pending_lock:
-            self._req_counter += 1
-            return self._req_counter
 
     def _send_control(self, message: dict) -> None:
         """Broadcast a JSON control message to all clients (thread-safe)."""
@@ -456,26 +470,24 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(message))
 
     def _next_primitive_id(self, kind: str) -> str:
-        with self._pending_lock:
+        with self._lock:
             self._primitive_counter += 1
             return f"{kind}-{self._primitive_counter}"
 
     def _as_selection(self, spec: Any) -> Selection:
-        """Coerce a Selection / index / iterable-of-indices / PyMOL string to a Selection."""
+        """Coerce a Selection / index / iterable-of-indices / boolean mask to a Selection."""
         if isinstance(spec, Selection):
             return spec
-        if isinstance(spec, str):
-            sel = self.select(spec, show=False)
-            if sel is None:
-                raise RuntimeError(f"no viewer connected to resolve selection {spec!r}")
-            return sel
         if isinstance(spec, bool):  # bool is an int subclass; reject to avoid surprises
             raise TypeError("bool is not a valid atom specifier")
-        if isinstance(spec, int):
-            return self.select_by(indices=[spec])
+        if isinstance(spec, (int, np.integer)):
+            return self.select_by(indices=[int(spec)])
+        arr = np.asarray(spec)
+        if arr.dtype == bool:
+            return self.select_by(mask=arr)
         try:
-            idx = [int(i) for i in spec]
-        except TypeError:
+            idx = [int(i) for i in arr.reshape(-1)]
+        except (TypeError, ValueError):
             raise TypeError(f"cannot interpret {spec!r} as atom(s)") from None
         return self.select_by(indices=idx)
 
@@ -523,35 +535,6 @@ class LiveSession:
         if kind == "dihedral":
             return _dihedral_deg(pts[0], pts[1], pts[2], pts[3])
         return None
-
-    def _selection_request(
-        self, expression: str, *, highlight: bool, focus: bool, timeout: float
-    ) -> Optional[Selection]:
-        req_id = self._next_req()
-        slot: dict = {"event": threading.Event(), "indices": None, "error": None}
-        with self._pending_lock:
-            self._pending[req_id] = slot
-        if highlight:
-            self._last_highlight = expression
-        self._send_control(
-            {
-                "type": "select",
-                "reqId": req_id,
-                "expression": expression,
-                "highlight": highlight,
-                "focus": focus,
-            }
-        )
-        answered = slot["event"].wait(timeout)
-        with self._pending_lock:
-            self._pending.pop(req_id, None)
-        if not answered:
-            return None  # no viewer connected, or it did not respond in time
-        if slot["error"]:
-            raise ValueError(f"invalid selection {expression!r}: {slot['error']}")
-        raw = slot["indices"] or []
-        indices = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
-        return Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
 
     def _run(self) -> None:
         try:
@@ -609,18 +592,10 @@ class LiveSession:
             await websocket.send(struct.pack("<I", _TAG_TOPOLOGY) + self._topology)
             if self._last_frame is not None:
                 await websocket.send(self._last_frame)
-            if self._last_highlight is not None:
+            if self._last_highlight_indices:
                 # Bring a late-joining viewer up to the current highlight.
                 await websocket.send(
-                    json.dumps(
-                        {
-                            "type": "select",
-                            "reqId": self._next_req(),
-                            "expression": self._last_highlight,
-                            "highlight": True,
-                            "focus": False,
-                        }
-                    )
+                    json.dumps({"type": "highlight", "atoms": _encode_index_set(self._last_highlight_indices)})
                 )
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
@@ -649,15 +624,6 @@ class LiveSession:
                     handler(info)
                 except Exception:  # pragma: no cover - user callback errors
                     pass
-        elif etype == "selection-result":
-            req_id = event.get("reqId")
-            with self._pending_lock:
-                slot = self._pending.get(req_id)
-            if slot is not None:
-                # First responder wins (harmless with multiple viewers connected).
-                slot["indices"] = event.get("indices")
-                slot["error"] = event.get("error")
-                slot["event"].set()
 
     def _broadcast(self, payload: bytes) -> None:
         for websocket in list(self._clients):

@@ -64,10 +64,9 @@ class AtomSiteCategory(CIFCategoryDesc):
                 name="label_asym_id",
                 array=lambda a: [atom.chain for atom in a],
             ),
-            # Author fields mirror the label fields. PyMOL-style selections
-            # (Mol*'s pymol transpiler) resolve `chain`/`resi` against auth_*,
-            # so emitting them makes those selectors match deterministically
-            # rather than relying on Mol*'s auth-from-label fallback.
+            # Author fields mirror the label fields. A canonical _atom_site has
+            # both; Mol* prefers auth_* for chain/residue labels and tooltips,
+            # falling back to label_* only when they are absent.
             CIFFieldDesc.string_array(
                 name="auth_asym_id",
                 array=lambda a: [atom.chain for atom in a],

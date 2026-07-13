@@ -244,8 +244,8 @@ def _run_pick(p: Player) -> None:
 def _labeled_chain(per_chain: int = 10, chains: int = 3, spacing: float = 1.4) -> List[Atom]:
     """A straight run of atoms split into named chains, one residue per atom.
 
-    Distinct chain/resseq labels make PyMOL selectors (`chain`, `resi`) land on
-    visibly different subsets.
+    The distinct chain/residue labels just make the highlighted index ranges read
+    as visibly different subsets.
     """
     n = per_chain * chains
     coords = _line(n, spacing)
@@ -269,21 +269,21 @@ def _labeled_chain(per_chain: int = 10, chains: int = 3, spacing: float = 1.4) -
 def _run_select(p: Player) -> None:
     session = p.session
     base = p.base
+    n = len(base)
     steps = [
-        ("chain A", "the first chain"),
-        ("resi 5-15", "a residue band spanning chains"),
-        ("chain C and resi 25+27+29", "a boolean AND with a residue list"),
-        ("elem C and resi 1-8", "the leading stretch"),
-        ("id 15", "one atom — the camera zooms in"),
+        ("first chain", list(range(0, 10)), "the first chain"),
+        ("a band", list(range(4, 16)), "a residue band spanning chains"),
+        ("scattered", list(range(24, 30, 2)), "a scattered subset"),
+        ("leading stretch", list(range(0, 8)), "the leading stretch"),
+        ("one atom", [min(14, n - 1)], "one atom — the camera zooms in"),
     ]
     while not p.stopped:
         p.push(base)  # stream the resting frame so a late viewer stays live
-        for expr, desc in steps:
+        for label, indices, desc in steps:
             if p.stopped:
                 return
-            sel = session.select(expr)  # highlight + focus; echoes matched atoms
-            n = len(sel) if sel else 0
-            p.step(expr, f"{desc} — {n} atom{'' if n == 1 else 's'} highlighted.")
+            sel = session.select(indices)  # highlight + focus, by positional index
+            p.step(label, f"{desc} — {len(sel)} atom{'' if len(sel) == 1 else 's'} highlighted.")
             p.hold(2.5)
         p.step("clear", "clearing the selection.")
         session.clear_selection()
@@ -306,7 +306,7 @@ DEMOS: dict[str, Demo] = {
         Demo("orbit", "A rigid body gliding around a square path.", lambda: _atoms(_helix(20, radius=2.5, pitch=3.0)), _run_orbit),
         Demo("morph", "A chain folding into a helix and back.", lambda: _atoms(_line(30, spacing=1.2)), _run_morph),
         Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _atoms(_ring(16)), _run_pick),
-        Demo("select", "Highlight atoms by PyMOL selection (Python → scene → Python).", _labeled_chain, _run_select),
+        Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
     ]
 }
 

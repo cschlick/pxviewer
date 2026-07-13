@@ -21,17 +21,18 @@ class _StubSession:
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
 
-    # The select demo drives these; record expressions, no viewer to answer.
-    def select(self, expression, **kwargs):
-        self.selections.append(expression)
-        return None
+    # The select demo drives these; record the atom specs. select() returns a
+    # length-having value like a real Selection so the demo can report a count.
+    def select(self, atoms, **kwargs):
+        self.selections.append(atoms)
+        return atoms if hasattr(atoms, "__len__") else [atoms]
 
-    def highlight(self, expression, **kwargs):
-        self.selections.append(expression)
-        return None
+    def highlight(self, atoms, **kwargs):
+        self.selections.append(atoms)
+        return atoms if hasattr(atoms, "__len__") else [atoms]
 
-    def focus(self, expression, **kwargs):
-        return None
+    def focus(self, atoms, **kwargs):
+        return atoms
 
     def clear_selection(self):
         self.selections.append(None)
@@ -94,4 +95,4 @@ def test_select_demo_issues_selections():
     thread.join(timeout=3)
 
     assert not thread.is_alive(), "select demo did not stop"
-    assert any(isinstance(x, str) for x in stub.selections), "select demo issued no selections"
+    assert stub.selections, "select demo issued no selections"
