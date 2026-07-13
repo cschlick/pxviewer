@@ -15,14 +15,26 @@ Server -> client (binary, little-endian; first uint32 is a tag):
   - tag 0 TOPOLOGY : [u32 tag=0][BinaryCIF bytes]
   - tag 1 FRAME    : [u32 tag=1][u32 frameIndex][f32 * 3N]  (x0,y0,z0,x1,y1,z1,...)
 
+Server -> client (UTF-8 JSON text control messages):
+  - {"type": "axis", "visible": bool}                          toggle the axis helper
+  - {"type": "select", "reqId": int, "expression": str,        evaluate a PyMOL
+     "highlight": bool, "focus": bool}                          selection and show it
+
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
+  - {"type": "selection-result", "reqId": int,     echo of a "select" request;
+     "indices": [int, ...], "error": str|None}      indices are positional atom rows
+
+The PyMOL expression is parsed and evaluated by Mol* in the browser (via its
+`mol-script` pymol transpiler); Python sends the string and gets back the matched
+positional atom indices. See `Selection` and `LiveSession.select`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import struct
 import threading
@@ -33,7 +45,7 @@ import numpy as np
 
 from .data import Atom, encode_bcif
 
-__all__ = ["LiveSession", "ATOM_IDENTITY_CONTRACT"]
+__all__ = ["LiveSession", "Selection", "ATOM_IDENTITY_CONTRACT"]
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
@@ -72,6 +84,45 @@ def _coords_to_f32(coords: Any, n_atoms: int) -> np.ndarray:
     return flat.reshape(n_atoms, 3)
 
 
+@dataclasses.dataclass
+class Selection:
+    """Atoms matched by a PyMOL selection, resolved by the connected viewer.
+
+    ``indices`` are positional (0-based) rows into the topology's _atom_site
+    table — the same stable identity the rest of the live protocol uses (see
+    ``ATOM_IDENTITY_CONTRACT``). ``atoms`` are the matching ``Atom`` objects;
+    ``ids`` and ``mask`` are derived views.
+    """
+
+    indices: List[int]
+    atoms: List[Atom]
+    n_total: int
+
+    @property
+    def ids(self) -> List[int]:
+        """The ``_atom_site.id`` of each matched atom."""
+        return [a.id for a in self.atoms]
+
+    @property
+    def mask(self) -> np.ndarray:
+        """A boolean array of length ``n_total``, True at matched positions."""
+        m = np.zeros(self.n_total, dtype=bool)
+        if self.indices:
+            m[self.indices] = True
+        return m
+
+    def __len__(self) -> int:
+        return len(self.indices)
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __repr__(self) -> str:
+        head = self.indices[:8]
+        tail = "..." if len(self.indices) > 8 else ""
+        return f"Selection({len(self.indices)} atoms, indices={head}{tail})"
+
+
 class LiveSession:
     """Serve a fixed topology and stream coordinate frames to Mol* clients.
 
@@ -101,6 +152,14 @@ class LiveSession:
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
         self._client_ready = threading.Event()
+
+        # PyMOL selections are evaluated in the browser and echoed back; each
+        # request waits on an Event keyed by a monotonic id.
+        self._pending: dict = {}
+        self._pending_lock = threading.Lock()
+        self._req_counter = 0
+        self._last_highlight: Optional[str] = None  # replayed to clients that connect later
+
         self.host = "127.0.0.1"
         self.port = 8787
 
@@ -189,7 +248,85 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    # -- selection (python -> scene -> python) ---------------------------
+
+    def select(
+        self,
+        expression: str,
+        *,
+        highlight: bool = True,
+        focus: bool = True,
+        timeout: float = 5.0,
+    ) -> Optional[Selection]:
+        """Select atoms by PyMOL syntax and show them in the viewer.
+
+        Composes :meth:`highlight` and :meth:`focus`: with ``highlight`` the
+        matched atoms get the selection overlay; with ``focus`` the camera zooms
+        to them. Mol* evaluates the expression in the browser and echoes the
+        matched atoms back.
+
+        Returns a :class:`Selection` of the matched atoms, or ``None`` if no
+        viewer answered within ``timeout`` seconds. Raises ``ValueError`` if the
+        viewer rejects the expression as invalid PyMOL syntax.
+        """
+        return self._selection_request(expression, highlight=highlight, focus=focus, timeout=timeout)
+
+    def highlight(self, expression: str, *, timeout: float = 5.0) -> Optional[Selection]:
+        """Highlight atoms matching a PyMOL selection (viewer selection overlay)."""
+        return self._selection_request(expression, highlight=True, focus=False, timeout=timeout)
+
+    def focus(self, expression: str, *, timeout: float = 5.0) -> Optional[Selection]:
+        """Aim the viewer camera at atoms matching a PyMOL selection."""
+        return self._selection_request(expression, highlight=False, focus=True, timeout=timeout)
+
+    def clear_selection(self) -> None:
+        """Clear any highlighted selection in the viewer. Thread-safe."""
+        self._last_highlight = None
+        self._send_control(
+            {"type": "select", "reqId": self._next_req(), "expression": "", "highlight": True, "focus": False}
+        )
+
     # -- internals -------------------------------------------------------
+
+    def _next_req(self) -> int:
+        with self._pending_lock:
+            self._req_counter += 1
+            return self._req_counter
+
+    def _send_control(self, message: dict) -> None:
+        """Broadcast a JSON control message to all clients (thread-safe)."""
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(message))
+
+    def _selection_request(
+        self, expression: str, *, highlight: bool, focus: bool, timeout: float
+    ) -> Optional[Selection]:
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "indices": None, "error": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        if highlight:
+            self._last_highlight = expression
+        self._send_control(
+            {
+                "type": "select",
+                "reqId": req_id,
+                "expression": expression,
+                "highlight": highlight,
+                "focus": focus,
+            }
+        )
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        if not answered:
+            return None  # no viewer connected, or it did not respond in time
+        if slot["error"]:
+            raise ValueError(f"invalid selection {expression!r}: {slot['error']}")
+        raw = slot["indices"] or []
+        indices = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
+        return Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
 
     def _run(self) -> None:
         try:
@@ -247,6 +384,19 @@ class LiveSession:
             await websocket.send(struct.pack("<I", _TAG_TOPOLOGY) + self._topology)
             if self._last_frame is not None:
                 await websocket.send(self._last_frame)
+            if self._last_highlight is not None:
+                # Bring a late-joining viewer up to the current highlight.
+                await websocket.send(
+                    json.dumps(
+                        {
+                            "type": "select",
+                            "reqId": self._next_req(),
+                            "expression": self._last_highlight,
+                            "highlight": True,
+                            "focus": False,
+                        }
+                    )
+                )
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -271,6 +421,15 @@ class LiveSession:
                     handler(info)
                 except Exception:  # pragma: no cover - user callback errors
                     pass
+        elif etype == "selection-result":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                # First responder wins (harmless with multiple viewers connected).
+                slot["indices"] = event.get("indices")
+                slot["error"] = event.get("error")
+                slot["event"].set()
 
     def _broadcast(self, payload: bytes) -> None:
         for websocket in list(self._clients):

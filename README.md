@@ -95,6 +95,32 @@ for coords in my_trajectory:             # coords: (N, 3) array-like, topology o
 Open the frontend at `index.html?ws=ws://127.0.0.1:8787`. With no `?ws=` param the
 page falls back to loading a static PDB.
 
+### Selecting atoms (PyMOL syntax)
+
+Drive the viewer's selection from Python using **PyMOL selection syntax**. The
+expression is parsed and evaluated by Mol* in the browser (its `mol-script` PyMOL
+transpiler), which echoes the matched atoms back — so a selection both *shows* in
+the viewer and *returns* what it matched:
+
+```python
+sel = session.select("resi 1-20 and chain A")   # highlight + focus; returns a Selection
+sel.indices      # [0, 1, 2, ...]  positional atom rows (the identity-contract key)
+sel.atoms        # the matching Atom objects
+sel.ids          # their _atom_site.id values
+sel.mask         # boolean numpy array of length N — handy for coordinate math
+
+session.highlight("elem O")             # just the selection overlay, no camera move
+session.focus("id 5")                   # just aim the camera
+session.select("name CA", focus=False)  # compose the primitives: highlight only
+session.clear_selection()               # remove the highlight
+```
+
+`select` composes the `highlight` and `focus` primitives (both on by default).
+Each call blocks briefly for the viewer's echo (`timeout=`, default 5 s) and
+returns a `Selection`, or `None` if no viewer answered. Supported selectors
+include `name`, `elem`, `resn`, `resi`, `chain`, `id`, and `index`, with boolean
+`and`/`or`/`not`, parentheses, ranges (`resi 1-10`) and lists (`resi 1+2+3`).
+
 ## Live wire protocol (`pxviewer-live/1`)
 
 WebSocket; binary messages are little-endian and begin with a `uint32` tag.
@@ -103,8 +129,10 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | --- | --- | --- |
 | server → client | topology | `[u32 tag=0][BinaryCIF bytes]` (sent once on connect) |
 | server → client | frame | `[u32 tag=1][u32 frameIndex][f32 × 3N]` interleaved `x,y,z` |
+| server → client | select | JSON `{"type":"select","reqId":int,"expression":str,"highlight":bool,"focus":bool}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
+| client → server | selection-result | JSON `{"type":"selection-result","reqId":int,"indices":[int…],"error":str?}` |
 
 ### Atom-identity contract
 
@@ -123,6 +151,6 @@ Read `pxviewer.ATOM_IDENTITY_CONTRACT` for the authoritative statement.
 ## Next steps
 
 - Batch/queue frames on the client to cap update rate under fast producers.
-- Stream a compact selection channel (server → client) so Python can drive highlights.
+- Echo large selections back over a compact binary channel (currently JSON indices).
 - Custom GPU visual (Level 3) that re-uploads only a position buffer, for large N.
 - Quantize coordinates on the wire (e.g. fixed-point) to cut bandwidth.

@@ -64,6 +64,19 @@ class AtomSiteCategory(CIFCategoryDesc):
                 name="label_asym_id",
                 array=lambda a: [atom.chain for atom in a],
             ),
+            # Author fields mirror the label fields. PyMOL-style selections
+            # (Mol*'s pymol transpiler) resolve `chain`/`resi` against auth_*,
+            # so emitting them makes those selectors match deterministically
+            # rather than relying on Mol*'s auth-from-label fallback.
+            CIFFieldDesc.string_array(
+                name="auth_asym_id",
+                array=lambda a: [atom.chain for atom in a],
+            ),
+            CIFFieldDesc.number_array(
+                name="auth_seq_id",
+                dtype=np.int32,
+                array=lambda a: np.array([atom.resseq for atom in a], dtype=np.int32),
+            ),
             CIFFieldDesc.number_array(
                 name="Cartn_x",
                 dtype=np.float32,

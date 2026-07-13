@@ -16,8 +16,11 @@ import { StateObjectSelector, StateTransformer } from 'molstar/lib/mol-state';
 import { PluginContext } from 'molstar/lib/mol-plugin/context';
 import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
-import { Model, StructureElement, StructureProperties } from 'molstar/lib/mol-model/structure';
+import { Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
+import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
+import { Script } from 'molstar/lib/mol-script/script';
+import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 
 export interface AtomInfo {
@@ -96,8 +99,10 @@ function deinterleave(flat: ArrayLike<number>, n: number) {
  */
 export class LiveViewer {
     private liveTraj!: StateObjectSelector<SO.Molecule.Trajectory, LiveTrajectory>;
+    private structure!: StateObjectSelector<SO.Molecule.Structure>;
     private version = 0;
     private nAtoms = 0;
+    private highlightIndices: number[] = [];
 
     private constructor(private plugin: PluginContext) {}
 
@@ -137,6 +142,7 @@ export class LiveViewer {
 
         const liveModel = await plugin.builders.structure.createModel(this.liveTraj);
         const structure = await plugin.builders.structure.createStructure(liveModel);
+        this.structure = structure;
         await plugin.builders.structure.representation.addRepresentation(structure, {
             type: 'ball-and-stick',
             color: 'element-symbol',
@@ -153,6 +159,59 @@ export class LiveViewer {
             .to(this.liveTraj)
             .update((old: LiveTrajectoryParams) => ({ ...old, version, x, y, z }))
             .commit();
+        // A frame rebuilds the structure, so re-apply any active highlight to it.
+        if (this.highlightIndices.length) this.reapplyHighlight();
+    }
+
+    /**
+     * Resolve a PyMOL selection against the current structure and show it. With
+     * `highlight` the matched atoms get the selection overlay; with `focus` the
+     * camera zooms to them. Returns the matched positional atom indices.
+     */
+    applySelection(expression: string, opts: { highlight: boolean; focus: boolean }): number[] {
+        const structure = this.currentStructure();
+        if (!structure) return [];
+        const expr = expression.trim();
+        if (expr === '') {
+            if (opts.highlight) this.clearSelection();
+            return [];
+        }
+        const parsed = pymolTranspiler(expr); // throws on invalid PyMOL syntax
+        const selection = Script.getStructureSelection(parsed, structure);
+        const loci = StructureSelection.toLociWithSourceUnits(selection);
+        const indices = collectElementIndices(loci);
+        if (opts.highlight) {
+            this.highlightIndices = indices;
+            this.showHighlight(structure, indices);
+        }
+        if (opts.focus && indices.length) {
+            this.plugin.managers.camera.focusLoci(loci);
+        }
+        return indices;
+    }
+
+    /** Clear any active highlight. */
+    clearSelection() {
+        this.highlightIndices = [];
+        this.plugin.managers.structure.selection.clear();
+    }
+
+    private currentStructure(): Structure | undefined {
+        return this.structure?.obj?.data as Structure | undefined;
+    }
+
+    private showHighlight(structure: Structure, indices: number[]) {
+        const selection = this.plugin.managers.structure.selection;
+        selection.clear();
+        if (indices.length) {
+            selection.fromLoci('set', lociFromElementIndices(structure, indices));
+        }
+    }
+
+    // Indices are topology-stable, so rebuild the loci against the fresh structure.
+    private reapplyHighlight() {
+        const structure = this.currentStructure();
+        if (structure) this.showHighlight(structure, this.highlightIndices);
     }
 
     private subscribePick(onPick: (info: AtomInfo | null) => void) {
@@ -176,6 +235,31 @@ export class LiveViewer {
             });
         });
     }
+}
+
+/** Positional atom rows (model element indices) covered by an element loci. */
+function collectElementIndices(loci: StructureElement.Loci): number[] {
+    const set = new Set<number>();
+    StructureElement.Loci.forEachLocation(loci, (loc) => { set.add(loc.element as unknown as number); });
+    return Array.from(set).sort((a, b) => a - b);
+}
+
+/** Build an element loci for the given positional atom indices against a structure. */
+function lociFromElementIndices(structure: Structure, indices: number[]): StructureElement.Loci {
+    const want = new Set(indices);
+    const elements: { unit: Unit; indices: OrderedSet }[] = [];
+    for (const unit of structure.units) {
+        const us = unit.elements;
+        const size = OrderedSet.size(us);
+        const positions: number[] = [];
+        for (let i = 0; i < size; i++) {
+            if (want.has(OrderedSet.getAt(us, i) as unknown as number)) positions.push(i);
+        }
+        if (positions.length) {
+            elements.push({ unit, indices: SortedArray.ofSortedArray(positions) });
+        }
+    }
+    return StructureElement.Loci(structure, elements as any);
 }
 
 const TAG_TOPOLOGY = 0;
@@ -206,9 +290,24 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     ws.onmessage = async (ev) => {
         if (typeof ev.data === 'string') {
             // Server -> client control messages (JSON text).
-            const msg = JSON.parse(ev.data) as { type: string; visible?: boolean };
+            let msg: any;
+            try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
+            } else if (msg.type === 'select' && viewer) {
+                // Resolve a PyMOL selection in the viewer and echo the matched
+                // atom indices back so Python knows what was selected.
+                let indices: number[] = [];
+                let error: string | undefined;
+                try {
+                    indices = viewer.applySelection(String(msg.expression ?? ''), {
+                        highlight: !!msg.highlight,
+                        focus: !!msg.focus,
+                    });
+                } catch (e) {
+                    error = e instanceof Error ? e.message : String(e);
+                }
+                ws.send(JSON.stringify({ type: 'selection-result', reqId: msg.reqId, indices, error }));
             }
             return;
         }
