@@ -7,15 +7,20 @@ from .api import (
     create_example_view,
     create_fragment_view,
     create_view,
+    encode_bcif,
     read_atoms,
     write_bcif,
 )
+from .live import ATOM_IDENTITY_CONTRACT, LiveSession
 
 __all__ = [
     "Atom",
     "create_example_view",
     "create_fragment_view",
     "create_view",
+    "encode_bcif",
     "read_atoms",
     "write_bcif",
+    "LiveSession",
+    "ATOM_IDENTITY_CONTRACT",
 ]

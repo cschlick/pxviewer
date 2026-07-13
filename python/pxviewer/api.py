@@ -5,7 +5,7 @@ from typing import List
 
 import molviewspec as mvs
 
-from .data import Atom, write_bcif
+from .data import Atom, encode_bcif, read_atoms, write_bcif
 
 __all__ = [
     "create_view",
@@ -13,6 +13,7 @@ __all__ = [
     "create_fragment_view",
     "Atom",
     "write_bcif",
+    "encode_bcif",
     "read_atoms",
 ]
 
@@ -77,6 +78,3 @@ def create_fragment_view(
         with open(mvsj_path, "w") as f:
             f.write(mvsj)
     return mvsj
-
-
-from .data import read_atoms

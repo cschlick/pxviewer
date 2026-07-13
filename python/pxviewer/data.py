@@ -171,15 +171,20 @@ class SymmetryCategory(CIFCategoryDesc):
         ]
 
 
-def write_bcif(atoms: List[Atom], path: str | os.PathLike, *, block_header: str = "PXVIEWER") -> None:
-    """Write a minimal BinaryCIF file from a list of atoms."""
+def encode_bcif(atoms: List[Atom], *, block_header: str = "PXVIEWER") -> bytes:
+    """Encode a list of atoms as a minimal BinaryCIF document and return the bytes."""
     writer = create_binary_writer()
     writer.start_data_block(block_header)
     writer.write_category(AtomSiteCategory(), [atoms])
     writer.write_category(CellCategory(), [_Cell()])
     writer.write_category(SymmetryCategory(), [_Symmetry()])
+    return writer.encode()
+
+
+def write_bcif(atoms: List[Atom], path: str | os.PathLike, *, block_header: str = "PXVIEWER") -> None:
+    """Write a minimal BinaryCIF file from a list of atoms."""
     with open(path, "wb") as f:
-        f.write(writer.encode())
+        f.write(encode_bcif(atoms, block_header=block_header))
 
 
 def read_atoms(path: str | os.PathLike) -> List[Atom]:
