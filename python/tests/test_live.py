@@ -222,6 +222,22 @@ def test_set_volume_style_command_reaches_client(session):
     asyncio.run(scenario())
 
 
+def test_set_volume_position_command_reaches_client(session):
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_volume_position("vol4", (1.0, 2.0, 3.0))
+            message = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert isinstance(message, str)
+            event = json.loads(message)
+            assert event == {"type": "volume_position", "ref": "vol4", "position": [1.0, 2.0, 3.0]}
+
+    asyncio.run(scenario())
+
+
 def test_highlight_replayed_to_late_client(session):
     """A viewer connecting after a highlight is caught up to the active selection."""
 

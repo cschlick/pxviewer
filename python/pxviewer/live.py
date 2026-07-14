@@ -290,6 +290,18 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_volume_position(self, ref: str, position: Any) -> None:
+        """Broadcast a command to translate a volume by reference.
+
+        ``position`` is a 3-element sequence of Angstrom offsets.
+        Thread-safe: may be called from any thread.
+        """
+        x, y, z = position
+        message = json.dumps({"type": "volume_position", "ref": str(ref), "position": [float(x), float(y), float(z)]})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     # -- selection (python -> scene -> python) ---------------------------
 
     def select(

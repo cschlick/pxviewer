@@ -34,6 +34,7 @@ class Volume:
     color: str | None = "gold"
     opacity: float | None = 1.0
     style: VolumeStyle | None = "surface"
+    position: tuple[float, float, float] | None = None
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
@@ -150,6 +151,9 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
 
     mvs_volume = builder.download(url=volume.url).parse(format="map").volume(ref=ref)
 
+    if volume.position is not None:
+        mvs_volume.transform(translation=volume.position)
+
     repr_kwargs: dict = {"type": "isosurface"}
     if volume.isosurface_value is not None:
         if volume.isosurface_kind == "absolute":
@@ -190,6 +194,7 @@ def create_volume_view(
     color: str | None = "gold",
     opacity: float | None = 1.0,
     style: VolumeStyle | None = "surface",
+    position: tuple[float, float, float] | None = None,
     title: str | None = None,
 ) -> str:
     """Build an MVSJ scene that loads one or more MRC/MAP volumes from URLs.
@@ -218,6 +223,7 @@ def create_volume_view(
                 color=color,
                 opacity=opacity,
                 style=style,
+                position=position,
             )
         ]
     else:
@@ -238,14 +244,30 @@ def create_volume_view_from_data(
     title: str | None = None,
     write_kwargs: dict | None = None,
     view_kwargs: dict | None = None,
+    voxel_size: float | tuple[float, float, float] | None = None,
+    origin: tuple[float, float, float] | None = None,
+    origin_units: Literal["angstrom", "grid"] = "angstrom",
+    position: tuple[float, float, float] | None = None,
 ) -> str:
     """Write a volume to MRC and return an MVSJ scene that loads it.
 
     The MVSJ uses the MRC filename as a relative URL, so both files should be
     served from the same directory.
+
+    ``voxel_size`` and ``origin`` set the MRC header coordinate system (in
+    Angstroms by default). ``position`` applies an MVS transform translation to
+    the volume after loading.
     """
-    write_kwargs = write_kwargs or {}
-    view_kwargs = view_kwargs or {}
+    write_kwargs = dict(write_kwargs or {})
+    view_kwargs = dict(view_kwargs or {})
+
+    if voxel_size is not None and "voxel_size" not in write_kwargs:
+        write_kwargs["voxel_size"] = voxel_size
+    if origin is not None and "origin" not in write_kwargs:
+        write_kwargs["origin"] = origin
+        write_kwargs["origin_units"] = origin_units
+    if position is not None and "position" not in view_kwargs:
+        view_kwargs["position"] = position
 
     write_volume(data, mrc_path, **write_kwargs)
     mvsj = create_volume_view(str(os.path.basename(str(mrc_path))), title=title, **view_kwargs)

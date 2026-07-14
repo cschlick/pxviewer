@@ -16,6 +16,7 @@ from pxviewer import (
     set_volume_opacity,
     set_volume_style,
 )
+import numpy as np
 
 
 def test_create_view_builds_download_node():
@@ -216,3 +217,44 @@ def test_set_volume_style():
     repr2 = by_ref["vol2"]["children"][0]
     assert repr2["params"]["show_wireframe"] is True
     assert repr2["params"]["show_faces"] is False
+
+
+def test_create_volume_view_position():
+    """Build an MVSJ with a volume transform position."""
+    mvsj = create_volume_view("density.mrc", position=(10.0, 0.0, -5.0))
+    state = json.loads(mvsj)
+    volume = state["root"]["children"][0]["children"][0]["children"][0]
+    transforms = [c for c in volume.get("children", []) if c["kind"] == "transform"]
+    assert len(transforms) == 1
+    assert transforms[0]["params"]["translation"] == [10.0, 0.0, -5.0]
+
+
+def test_create_volume_view_from_data_origin_and_position(tmp_path):
+    """Write an MRC with origin/voxel_size and build an MVSJ with a position transform."""
+    data = np.zeros((8, 8, 8), dtype=np.float32)
+    data[4, 4, 4] = 10.0
+    mrc_path = tmp_path / "model.mrc"
+    mvsj_path = tmp_path / "model.mvsj"
+
+    mvsj = create_volume_view_from_data(
+        data,
+        mrc_path=mrc_path,
+        mvsj_path=mvsj_path,
+        voxel_size=2.0,
+        origin=(5.0, 0.0, 0.0),
+        position=(1.0, 2.0, 3.0),
+    )
+
+    assert mrc_path.exists()
+    assert mvsj_path.exists()
+
+    from pxviewer import read_volume
+    read = read_volume(mrc_path)
+    assert read["voxel_size"] == pytest.approx((2.0, 2.0, 2.0))
+    assert read["origin"] == pytest.approx((5.0, 0.0, 0.0))
+
+    state = json.loads(mvsj)
+    volume = state["root"]["children"][0]["children"][0]["children"][0]
+    transforms = [c for c in volume.get("children", []) if c["kind"] == "transform"]
+    assert len(transforms) == 1
+    assert transforms[0]["params"]["translation"] == [1.0, 2.0, 3.0]

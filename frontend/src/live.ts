@@ -313,6 +313,36 @@ async function setVolumeStyle(plugin: PluginContext, ref: string, style: string)
     }).commit();
 }
 
+async function setVolumePosition(plugin: PluginContext, ref: string, position: [number, number, number]) {
+    const cell = await findVolumeCell(plugin, ref);
+    if (!cell) return;
+    const [x, y, z] = position;
+    await plugin.state.data.build().to(cell.transform.ref).update((old: any) => {
+        if (old.transform?.name === 'matrix' && old.transform.params?.data) {
+            const data = old.transform.params.data;
+            data[12] = x;
+            data[13] = y;
+            data[14] = z;
+        } else if (old.transform?.name === 'components' && old.transform.params?.translation) {
+            old.transform.params.translation[0] = x;
+            old.transform.params.translation[1] = y;
+            old.transform.params.translation[2] = z;
+        } else {
+            console.warn('Volume', ref, 'does not have a position transform; set Volume.position to enable live position updates.');
+        }
+    }).commit();
+}
+
+async function findVolumeCell(plugin: PluginContext, ref: string) {
+    const tag = `mvs-ref:${ref}`;
+    for (let i = 0; i < 200; i++) {
+        const cells = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(tag));
+        if (cells.length) return cells[0];
+        await new Promise((r) => setTimeout(r, 25));
+    }
+    return undefined;
+}
+
 async function findVolumeReprCell(plugin: PluginContext, ref: string) {
     const tag = `mvs-ref:${ref}-repr`;
     for (let i = 0; i < 200; i++) {
@@ -362,6 +392,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'volume_position' && typeof msg.ref === 'string' && Array.isArray(msg.position) && msg.position.length === 3) {
+                await setVolumePosition(plugin, msg.ref, msg.position);
             } else if (msg.type === 'select' && viewer) {
                 // Resolve a PyMOL selection in the viewer and echo the matched
                 // atom indices back so Python knows what was selected.
