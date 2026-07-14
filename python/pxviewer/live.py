@@ -48,10 +48,10 @@ import json
 import struct
 import threading
 from http import HTTPStatus
-from typing import Any, Callable, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Iterable, List, Optional, Sequence, get_args
 
 import numpy as np
-from molviewspec.nodes import ComponentExpression
+from molviewspec.nodes import ColorNamesT, ComponentExpression, RepresentationTypeT
 
 from .data import Atom, encode_bcif
 
@@ -59,6 +59,26 @@ __all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM
 
 # ComponentExpression fields pxviewer's minimal per-atom topology cannot resolve.
 _UNSUPPORTED_EXPR_FIELDS = ("residue_index", "instance_id", "pdbx_PDB_ins_code", "label_entity_id")
+
+# Representation vocabulary is MVS's RepresentationTypeT (structure subset), mapped
+# to Mol*'s internal representation names. Colours are MVS ColorNamesT (uniform)
+# or a Mol* colour theme layered on top (e.g. 'element-symbol').
+_SVG_COLOR_NAMES = set(get_args(ColorNamesT))
+_STRUCTURE_REPR_TYPES = set(get_args(RepresentationTypeT)) - {"isosurface"}  # isosurface is for volumes
+_REPR_ALIASES = {
+    "sphere": "spacefill",
+    "ribbon": "cartoon",
+    "ball-and-stick": "ball_and_stick",
+    "molecular-surface": "surface",
+    "gaussian-surface": "surface",
+}
+_MVS_TO_MOLSTAR_REPR = {
+    "ball_and_stick": "ball-and-stick",
+    "spacefill": "spacefill",
+    "cartoon": "cartoon",
+    "surface": "molecular-surface",
+    "carbohydrate": "carbohydrate",
+}
 
 
 def _atom_matches(atom: Atom, index: int, e: ComponentExpression) -> bool:
@@ -532,8 +552,6 @@ class LiveSession:
 
     # -- representations -------------------------------------------------
 
-    _REPR_ALIASES = {"sphere": "spacefill", "ribbon": "cartoon", "surface": "molecular-surface"}
-
     def set_representation(self, type: str, **kwargs: Any) -> str:
         """Replace all representations with a single one. See :meth:`add_representation`."""
         self._representations.clear()
@@ -552,14 +570,14 @@ class LiveSession:
     ) -> str:
         """Add a representation of the structure (or a subset).
 
-        ``type`` is a Mol* representation — ``'ball-and-stick'``, ``'spacefill'``
-        (alias ``'sphere'``), ``'cartoon'`` (alias ``'ribbon'``),
-        ``'molecular-surface'``, ``'gaussian-surface'``, ``'point'``, ``'line'``,
-        ``'putty'``, ``'backbone'``, ``'ellipsoid'``, … ``color`` is a color-theme
-        name (``'element-symbol'``, ``'chain-id'``, ``'secondary-structure'``,
-        ``'residue-name'``, ``'hydrophobicity'``, ``'molecule-type'``, …); for a flat
-        colour pass ``color_value`` (or a ``'#rrggbb'`` ``color``). ``on`` restricts
-        it to a subset (a :class:`Selection` or coercible); omit for the whole
+        ``type`` is an MVS representation — ``'ball_and_stick'``, ``'spacefill'``
+        (alias ``'sphere'``), ``'cartoon'`` (alias ``'ribbon'``), ``'surface'``, or
+        ``'carbohydrate'``. ``color`` is either a **uniform** colour (an SVG name
+        such as ``'orange'``, or ``'#ff8800'``) or a Mol* **colour theme** name
+        (``'element-symbol'``, ``'chain-id'``, ``'secondary-structure'``,
+        ``'residue-name'``, ``'hydrophobicity'``, …); ``color_value`` also forces a
+        uniform colour. ``on`` restricts it to a subset (a :class:`Selection`, an MVS
+        ``ComponentExpression``, or anything coercible); omit for the whole
         structure. ``opacity`` sets transparency and ``params`` passes type-specific
         options. Returns the id; representations track streamed coordinates.
         """
@@ -679,20 +697,28 @@ class LiveSession:
             self._representation_counter += 1
             return f"repr-{self._representation_counter}"
 
+    def _normalize_repr_type(self, type: str) -> str:
+        """Validate an MVS representation type and map it to Mol*'s internal name."""
+        mvs = _REPR_ALIASES.get(type, type)
+        if mvs not in _STRUCTURE_REPR_TYPES:
+            raise ValueError(
+                f"unknown representation type {type!r}; use one of "
+                f"{sorted(_STRUCTURE_REPR_TYPES)} (or aliases 'sphere', 'ribbon')"
+            )
+        return _MVS_TO_MOLSTAR_REPR[mvs]
+
     def _make_repr_spec(self, type, color, color_value, on, opacity, params, id) -> dict:
-        theme, value = color, None
-        if color_value is not None:
-            theme, value = "uniform", color_value
-        elif color is not None and color.startswith("#"):
-            theme, value = "uniform", color
         spec: dict = {
             "id": id if id is not None else self._next_representation_id(),
-            "type": self._REPR_ALIASES.get(type, type),
+            "type": self._normalize_repr_type(type),
         }
-        if theme is not None:
-            spec["color"] = theme
-        if value is not None:
-            spec["colorValue"] = value
+        # Colour: a uniform SVG name / hex (MVS ColorT), else a Mol* colour theme.
+        if color_value is not None:
+            spec["color"], spec["colorValue"] = "uniform", color_value
+        elif color is not None and (color.startswith("#") or color in _SVG_COLOR_NAMES):
+            spec["color"], spec["colorValue"] = "uniform", color
+        elif color is not None:
+            spec["color"] = color  # a Mol* colour theme, e.g. 'element-symbol'
         if on is not None:
             spec["on"] = _encode_index_set(self._as_selection(on).indices)
         if opacity is not None:

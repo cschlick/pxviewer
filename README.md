@@ -206,26 +206,27 @@ Primitives are replayed to viewers that connect later.
 
 ### Representations
 
-Control how the structure is drawn — any of Mol\*'s representations and color
-themes, on the whole structure or a subset:
+Control how the structure is drawn, on the whole structure or a subset:
 
 ```python
 session.set_representation("cartoon", color="secondary-structure")   # replace with one
-rid = session.add_representation("ball-and-stick", color="element-symbol",
+rid = session.add_representation("ball_and_stick", color="element-symbol",
                                  on=session.select_by(ids=[101, 102, 103]))  # a subset
 session.add_representation("spacefill", color_value="orange", opacity=0.6)   # flat colour
 session.remove_representation(rid)
 session.clear_representations()                                       # back to default
 ```
 
-- **`type`** — `ball-and-stick`, `spacefill` (alias `sphere`), `cartoon` (alias
-  `ribbon`), `molecular-surface`, `gaussian-surface`, `point`, `line`, `putty`,
-  `backbone`, `ellipsoid`, …
-- **`color`** — a theme: `element-symbol`, `chain-id`, `secondary-structure`,
-  `residue-name`, `hydrophobicity`, `molecule-type`, … For a flat colour pass
-  `color_value="orange"` (or `color="#ff8800"`).
-- **`on`** — a `Selection` (or coercible) to restrict to a subset; omit for the
-  whole structure. `opacity=` and a `params=` passthrough are also available.
+- **`type`** — MolViewSpec's representation types: `ball_and_stick`, `spacefill`
+  (alias `sphere`), `cartoon` (alias `ribbon`), `surface`, `carbohydrate`.
+- **`color`** — a **uniform** colour (an SVG name like `orange`, or `#ff8800`), or
+  a Mol\* **colour theme** name (`element-symbol`, `chain-id`,
+  `secondary-structure`, `residue-name`, `hydrophobicity`, …). `color_value=` also
+  forces a uniform colour. (Uniform colours are MVS's native `ColorT`; themes are
+  the Mol\* colouring mechanism layered on top.)
+- **`on`** — a `Selection`, an MVS `ComponentExpression`, or anything coercible, to
+  restrict to a subset; omit for the whole structure. `opacity=` and a `params=`
+  passthrough are also available.
 
 Representations **track the streamed coordinates**, and the current set is
 replayed to viewers that connect later. If you never set any, you get the default

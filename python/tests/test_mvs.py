@@ -83,3 +83,47 @@ def test_select_by_requires_exactly_one(session):
         session.select_by()
     with pytest.raises(ValueError):
         session.select_by(indices=[0], expression=ComponentExpression(atom_index=0))
+
+
+# -- representations on MVS types --------------------------------------------
+
+def test_repr_type_aliases_and_molstar_mapping(session):
+    def rtype(type):
+        return session._representations[session.add_representation(type)]["type"]
+    assert rtype("sphere") == "spacefill"
+    assert rtype("ribbon") == "cartoon"
+    assert rtype("surface") == "molecular-surface"
+    assert rtype("ball_and_stick") == "ball-and-stick"
+    assert rtype("ball-and-stick") == "ball-and-stick"
+
+
+def test_repr_unknown_type_rejected(session):
+    with pytest.raises(ValueError):
+        session.add_representation("putty")
+
+
+def test_repr_named_color_is_uniform(session):
+    spec = session._representations[session.add_representation("spacefill", color="orange")]
+    assert spec["color"] == "uniform" and spec["colorValue"] == "orange"
+
+
+def test_repr_hex_color_is_uniform(session):
+    spec = session._representations[session.add_representation("spacefill", color="#112233")]
+    assert spec["color"] == "uniform" and spec["colorValue"] == "#112233"
+
+
+def test_repr_theme_color_stays_theme(session):
+    spec = session._representations[session.add_representation("ball_and_stick", color="element-symbol")]
+    assert spec["color"] == "element-symbol" and "colorValue" not in spec
+
+
+def test_repr_color_value_forces_uniform(session):
+    spec = session._representations[session.add_representation("cartoon", color_value="red")]
+    assert spec["color"] == "uniform" and spec["colorValue"] == "red"
+
+
+def test_repr_subset_via_component_expression(session):
+    spec = session._representations[
+        session.add_representation("spacefill", on=ComponentExpression(label_asym_id="A"))
+    ]
+    assert spec["on"] == {"runs": [[0, 5]]}  # chain A = contiguous indices 0-5
