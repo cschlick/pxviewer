@@ -258,3 +258,60 @@ def test_create_volume_view_from_data_origin_and_position(tmp_path):
     transforms = [c for c in volume.get("children", []) if c["kind"] == "transform"]
     assert len(transforms) == 1
     assert transforms[0]["params"]["translation"] == [1.0, 2.0, 3.0]
+
+
+def test_create_volume_view_all_mvs_features():
+    """Use Volume to emit channel_id, rotation, matrix, instances, clip and grid_slice."""
+    mvsj = create_volume_view(
+        volumes=[
+            Volume(
+                url="em.mrc",
+                ref="em",
+                format="map",
+                isosurface_value=0.5,
+                isosurface_kind="absolute",
+                rotation=[1, 0, 0, 0, 1, 0, 0, 0, 1],
+                rotation_center=[0, 0, 0],
+                position=[1, 2, 3],
+                instances=[{"translation": [4, 0, 0]}],
+                color="blue",
+                opacity=0.6,
+                clip={"type": "sphere", "center": [0, 0, 0], "radius": 5.0},
+            ),
+            Volume(
+                url="bcif",
+                ref="slice",
+                format="bcif",
+                channel_id="2FO-FC",
+                representation="grid_slice",
+                grid_slice_dimension="z",
+                grid_slice_index=0.5,
+                grid_slice_index_kind="relative",
+                color="green",
+                focus=False,
+            ),
+        ]
+    )
+    state = json.loads(mvsj)
+
+    by_ref = {}
+    for download in state["root"]["children"]:
+        if download.get("kind") != "download":
+            continue
+        for parse in download.get("children", []):
+            for node in parse.get("children", []):
+                if node.get("kind") == "volume":
+                    by_ref[node["ref"]] = node
+    assert by_ref["em"]["params"].get("channel_id") is None
+    assert by_ref["em"]["children"][0]["kind"] == "transform"
+    assert by_ref["em"]["children"][0]["params"]["rotation"] == [1, 0, 0, 0, 1, 0, 0, 0, 1]
+    assert by_ref["em"]["children"][1]["kind"] == "instance"
+    repr_node = by_ref["em"]["children"][2]
+    assert repr_node["params"]["type"] == "isosurface"
+    clip_node = [c for c in repr_node.get("children", []) if c["kind"] == "clip"][0]
+    assert clip_node["params"]["type"] == "sphere"
+
+    assert by_ref["slice"]["params"]["channel_id"] == "2FO-FC"
+    assert by_ref["slice"]["children"][0]["params"]["type"] == "grid_slice"
+    assert by_ref["slice"]["children"][0]["params"]["dimension"] == "z"
+    assert by_ref["slice"]["children"][0]["params"]["relative_index"] == 0.5

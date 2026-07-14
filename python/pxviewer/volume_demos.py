@@ -206,6 +206,9 @@ def create_volume_demo(
             "origin_units": vol_kwargs.pop("origin_units", "angstrom"),
             "data_order": "xyz",
         }
+        # write_volume always produces MRC/MAP, so parsing must be map.
+        vol_kwargs["format"] = "map"
+        vol_kwargs.pop("channel_id", None)
         write_volume(vol_data, mrc_out, **write_kwargs)
         volumes.append(
             Volume(

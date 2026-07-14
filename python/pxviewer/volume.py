@@ -22,19 +22,39 @@ __all__ = [
 
 VolumeStyle = Literal["surface", "wireframe", "mesh"]
 
+VolumeFormatT = Literal["map", "dx", "dxbin", "bcif"]
+VolumeRepresentationT = Literal["isosurface", "grid_slice"]
+
 
 @dataclasses.dataclass
 class Volume:
-    """A single volume and how it should be rendered in an MVSJ scene."""
+    """A single volume and how it should be rendered in an MVSJ scene.
+
+    This maps onto the MVS ``volume``/``volume_representation`` tree nodes
+    supported by MolViewSpec. Most fields are optional and omitted from the
+    MVSJ JSON when not set.
+    """
 
     url: str
     ref: str | None = None
+    format: VolumeFormatT = "map"
+    channel_id: str | None = None
     isosurface_value: float | None = None
     isosurface_kind: Literal["absolute", "relative"] = "relative"
+    representation: VolumeRepresentationT = "isosurface"
+    grid_slice_dimension: Literal["x", "y", "z"] | None = None
+    grid_slice_index: float | None = None
+    grid_slice_index_kind: Literal["absolute", "relative"] = "relative"
     color: str | None = "gold"
     opacity: float | None = 1.0
     style: VolumeStyle | None = "surface"
     position: tuple[float, float, float] | None = None
+    rotation: tuple[float, ...] | None = None
+    rotation_center: tuple[float, float, float] | str | None = None
+    matrix: tuple[float, ...] | None = None
+    instances: list[dict] | None = None
+    clip: dict | None = None
+    focus: bool = True
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
@@ -149,12 +169,22 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
     """Add one volume branch to the MVS builder and return the volume ref."""
     import molviewspec as mvs
 
-    mvs_volume = builder.download(url=volume.url).parse(format="map").volume(ref=ref)
+    mvs_volume = builder.download(url=volume.url).parse(format=volume.format).volume(
+        ref=ref, channel_id=volume.channel_id
+    )
 
-    if volume.position is not None:
-        mvs_volume.transform(translation=volume.position)
+    # MVS transform node (rotation, translation, matrix)
+    transform_args = _make_transform_args(volume)
+    if transform_args:
+        mvs_volume = mvs_volume.transform(**transform_args)
 
-    repr_kwargs: dict = {"type": "isosurface"}
+    # MVS instance nodes
+    if volume.instances:
+        for inst in volume.instances:
+            mvs_volume = mvs_volume.instance(**inst)
+
+    # Build volume_representation kwargs
+    repr_kwargs: dict = {"type": volume.representation}
     if volume.isosurface_value is not None:
         if volume.isosurface_kind == "absolute":
             repr_kwargs["absolute_isovalue"] = volume.isosurface_value
@@ -163,38 +193,84 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         else:
             raise ValueError(f"isosurface_kind must be 'absolute' or 'relative', got {volume.isosurface_kind!r}")
 
-    if volume.style == "surface":
-        repr_kwargs["show_wireframe"] = False
-        repr_kwargs["show_faces"] = True
-    elif volume.style == "wireframe":
-        repr_kwargs["show_wireframe"] = True
-        repr_kwargs["show_faces"] = False
-    elif volume.style == "mesh":
-        repr_kwargs["show_wireframe"] = True
-        repr_kwargs["show_faces"] = True
-    elif volume.style is not None:
-        raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {volume.style!r}")
+    if volume.representation == "isosurface" and volume.style is not None:
+        if volume.style == "surface":
+            repr_kwargs["show_wireframe"] = False
+            repr_kwargs["show_faces"] = True
+        elif volume.style == "wireframe":
+            repr_kwargs["show_wireframe"] = True
+            repr_kwargs["show_faces"] = False
+        elif volume.style == "mesh":
+            repr_kwargs["show_wireframe"] = True
+            repr_kwargs["show_faces"] = True
+        else:
+            raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {volume.style!r}")
+
+    if volume.representation == "grid_slice":
+        if volume.grid_slice_dimension is not None:
+            repr_kwargs["dimension"] = volume.grid_slice_dimension
+        if volume.grid_slice_index is not None:
+            if volume.grid_slice_index_kind == "absolute":
+                repr_kwargs["absolute_index"] = int(volume.grid_slice_index)
+            elif volume.grid_slice_index_kind == "relative":
+                repr_kwargs["relative_index"] = float(volume.grid_slice_index)
+            else:
+                raise ValueError(f"grid_slice_index_kind must be 'absolute' or 'relative', got {volume.grid_slice_index_kind!r}")
 
     repr = mvs_volume.representation(**repr_kwargs, ref=f"{ref}-repr")
+
     if volume.color is not None:
         repr = repr.color(color=volume.color)
     if volume.opacity is not None:
         repr = repr.opacity(opacity=volume.opacity)
+    if volume.clip is not None:
+        repr = repr.clip(**volume.clip)
 
-    mvs_volume.focus()
+    if volume.focus:
+        mvs_volume.focus()
+
     return ref
+
+
+def _make_transform_args(volume: Volume) -> dict:
+    """Build MVS transform/instance kwargs from Volume fields."""
+    args: dict = {}
+    if volume.matrix is not None:
+        if volume.rotation is not None or volume.position is not None or volume.rotation_center is not None:
+            raise ValueError("matrix cannot be used together with rotation, position or rotation_center")
+        args["matrix"] = volume.matrix
+    else:
+        if volume.rotation is not None:
+            args["rotation"] = volume.rotation
+        if volume.position is not None:
+            args["translation"] = volume.position
+        if volume.rotation_center is not None:
+            args["rotation_center"] = volume.rotation_center
+    return args
 
 
 def create_volume_view(
     volume_url: str | None = None,
     *,
     volumes: List[str | Volume | dict] | None = None,
+    format: VolumeFormatT = "map",
+    channel_id: str | None = None,
     isosurface_value: float | None = None,
     isosurface_kind: Literal["absolute", "relative"] = "relative",
+    representation: VolumeRepresentationT = "isosurface",
+    grid_slice_dimension: Literal["x", "y", "z"] | None = None,
+    grid_slice_index: float | None = None,
+    grid_slice_index_kind: Literal["absolute", "relative"] = "relative",
     color: str | None = "gold",
     opacity: float | None = 1.0,
     style: VolumeStyle | None = "surface",
     position: tuple[float, float, float] | None = None,
+    rotation: tuple[float, ...] | None = None,
+    rotation_center: tuple[float, float, float] | str | None = None,
+    matrix: tuple[float, ...] | None = None,
+    instances: list[dict] | None = None,
+    clip: dict | None = None,
+    focus: bool = True,
     title: str | None = None,
 ) -> str:
     """Build an MVSJ scene that loads one or more MRC/MAP volumes from URLs.
@@ -218,12 +294,24 @@ def create_volume_view(
         volume_list = [
             Volume(
                 url=volume_url,
+                format=format,
+                channel_id=channel_id,
                 isosurface_value=isosurface_value,
                 isosurface_kind=isosurface_kind,
+                representation=representation,
+                grid_slice_dimension=grid_slice_dimension,
+                grid_slice_index=grid_slice_index,
+                grid_slice_index_kind=grid_slice_index_kind,
                 color=color,
                 opacity=opacity,
                 style=style,
                 position=position,
+                rotation=rotation,
+                rotation_center=rotation_center,
+                matrix=matrix,
+                instances=instances,
+                clip=clip,
+                focus=focus,
             )
         ]
     else:
@@ -257,6 +345,10 @@ def create_volume_view_from_data(
     ``voxel_size`` and ``origin`` set the MRC header coordinate system (in
     Angstroms by default). ``position`` applies an MVS transform translation to
     the volume after loading.
+
+    Any additional ``create_volume_view`` keyword arguments (``rotation``,
+    ``matrix``, ``clip``, ``grid_slice_dimension``, etc.) can be passed via
+    ``view_kwargs``.
     """
     write_kwargs = dict(write_kwargs or {})
     view_kwargs = dict(view_kwargs or {})
@@ -268,6 +360,10 @@ def create_volume_view_from_data(
         write_kwargs["origin_units"] = origin_units
     if position is not None and "position" not in view_kwargs:
         view_kwargs["position"] = position
+
+    # create_volume_view_from_data always writes MRC/MAP, so parsing must be map.
+    view_kwargs["format"] = "map"
+    view_kwargs.pop("channel_id", None)
 
     write_volume(data, mrc_path, **write_kwargs)
     mvsj = create_volume_view(str(os.path.basename(str(mrc_path))), title=title, **view_kwargs)
