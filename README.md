@@ -124,6 +124,22 @@ wire carries only indices, run-length-encoded for large contiguous selections.
 Highlights re-map onto each streamed frame in O(selected), and are replayed to
 viewers that connect later.
 
+`Selection` is built on **MolViewSpec**'s `ComponentExpression` — you can select
+by chemical identity (chain, residue, atom name, element, ranges, `atom_index`,
+`atom_id`) using the same type MVS uses, and pxviewer resolves it to indices:
+
+```python
+from pxviewer import ComponentExpression as CE
+
+sel = session.select_by(expression=CE(label_asym_id="A", beg_label_seq_id=1, end_label_seq_id=20))
+sel = session.select_by(expression=[CE(label_asym_id="B"), CE(type_symbol="N")])   # a union
+session.highlight(CE(label_atom_id="CA"))                                          # coerced like any spec
+sel.to_component_expression()                                                       # -> [ComponentExpression, …]
+```
+
+The index/id/mask constructors are sugar on top; `ComponentExpression` is the
+shared Mol\*/MVS vocabulary.
+
 ### Selecting atoms with the mouse
 
 Let the person at the viewer pick atoms and read their choice back in Python.

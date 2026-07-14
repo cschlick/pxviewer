@@ -51,10 +51,62 @@ from http import HTTPStatus
 from typing import Any, Callable, Iterable, List, Optional, Sequence
 
 import numpy as np
+from molviewspec.nodes import ComponentExpression
 
 from .data import Atom, encode_bcif
 
-__all__ = ["LiveSession", "Selection", "Primitive", "ATOM_IDENTITY_CONTRACT"]
+__all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM_IDENTITY_CONTRACT"]
+
+# ComponentExpression fields pxviewer's minimal per-atom topology cannot resolve.
+_UNSUPPORTED_EXPR_FIELDS = ("residue_index", "instance_id", "pdbx_PDB_ins_code", "label_entity_id")
+
+
+def _atom_matches(atom: Atom, index: int, e: ComponentExpression) -> bool:
+    """Whether ``atom`` (at positional ``index``) satisfies an MVS ComponentExpression.
+
+    label_* and auth_* share our single field (the writer mirrors them).
+    """
+    if e.label_asym_id is not None and atom.chain != e.label_asym_id:
+        return False
+    if e.auth_asym_id is not None and atom.chain != e.auth_asym_id:
+        return False
+    if e.label_seq_id is not None and atom.resseq != e.label_seq_id:
+        return False
+    if e.auth_seq_id is not None and atom.resseq != e.auth_seq_id:
+        return False
+    if e.beg_label_seq_id is not None and atom.resseq < e.beg_label_seq_id:
+        return False
+    if e.end_label_seq_id is not None and atom.resseq > e.end_label_seq_id:
+        return False
+    if e.beg_auth_seq_id is not None and atom.resseq < e.beg_auth_seq_id:
+        return False
+    if e.end_auth_seq_id is not None and atom.resseq > e.end_auth_seq_id:
+        return False
+    if e.label_comp_id is not None and atom.resname != e.label_comp_id:
+        return False
+    if e.auth_comp_id is not None and atom.resname != e.auth_comp_id:
+        return False
+    if e.label_atom_id is not None and atom.name != e.label_atom_id:
+        return False
+    if e.auth_atom_id is not None and atom.name != e.auth_atom_id:
+        return False
+    if e.type_symbol is not None and atom.element != e.type_symbol:
+        return False
+    if e.atom_id is not None and atom.id != e.atom_id:
+        return False
+    if e.atom_index is not None and index != e.atom_index:
+        return False
+    return True
+
+
+def _resolve_expressions(atoms: List[Atom], expression) -> List[int]:
+    """Resolve an MVS ComponentExpression (or list, unioned) to positional indices."""
+    exprs = list(expression) if isinstance(expression, (list, tuple)) else [expression]
+    for e in exprs:
+        for field in _UNSUPPORTED_EXPR_FIELDS:
+            if getattr(e, field) is not None:
+                raise ValueError(f"ComponentExpression field {field!r} is not supported by pxviewer's topology")
+    return [i for i, atom in enumerate(atoms) if any(_atom_matches(atom, i, e) for e in exprs)]
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
@@ -161,6 +213,10 @@ class Selection:
         if self.indices:
             m[self.indices] = True
         return m
+
+    def to_component_expression(self) -> List[ComponentExpression]:
+        """Express this selection as MVS ``ComponentExpression`` objects (one per atom)."""
+        return [ComponentExpression(atom_index=i) for i in self.indices]
 
     def __len__(self) -> int:
         return len(self.indices)
@@ -399,16 +455,20 @@ class LiveSession:
         indices: Optional[Iterable[int]] = None,
         ids: Optional[Iterable[int]] = None,
         mask: Optional[Any] = None,
+        expression: Optional[Any] = None,
     ) -> Selection:
-        """Build a :class:`Selection` from positional indices, atom ids, or a mask.
+        """Build a :class:`Selection` from positional indices, atom ids, a mask, or
+        an MVS ``ComponentExpression`` (or list of them, unioned).
 
-        Pure Python; no viewer needed. Pass exactly one of ``indices``, ``ids``, or
-        ``mask`` (a boolean array of length N). The resulting indices are stored
-        sorted and de-duplicated.
+        Pure Python; no viewer needed. Pass exactly one of ``indices``, ``ids``,
+        ``mask`` (a boolean array of length N), or ``expression``. The resulting
+        indices are stored sorted and de-duplicated.
         """
-        if sum(x is not None for x in (indices, ids, mask)) != 1:
-            raise ValueError("pass exactly one of indices=, ids=, or mask=")
-        if mask is not None:
+        if sum(x is not None for x in (indices, ids, mask, expression)) != 1:
+            raise ValueError("pass exactly one of indices=, ids=, mask=, or expression=")
+        if expression is not None:
+            idx = _resolve_expressions(self.atoms, expression)
+        elif mask is not None:
             m = np.asarray(mask, dtype=bool)
             if m.shape != (self._n_atoms,):
                 raise ValueError(f"mask must have shape ({self._n_atoms},), got {tuple(m.shape)}")
@@ -645,9 +705,13 @@ class LiveSession:
         self._send_control({"type": "representations", "reprs": list(self._representations.values())})
 
     def _as_selection(self, spec: Any) -> Selection:
-        """Coerce a Selection / index / iterable-of-indices / boolean mask to a Selection."""
+        """Coerce a Selection / index / indices / mask / ComponentExpression to a Selection."""
         if isinstance(spec, Selection):
             return spec
+        if isinstance(spec, ComponentExpression):
+            return self.select_by(expression=spec)
+        if isinstance(spec, (list, tuple)) and spec and all(isinstance(x, ComponentExpression) for x in spec):
+            return self.select_by(expression=list(spec))
         if isinstance(spec, bool):  # bool is an int subclass; reject to avoid surprises
             raise TypeError("bool is not a valid atom specifier")
         if isinstance(spec, (int, np.integer)):
