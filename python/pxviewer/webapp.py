@@ -166,7 +166,7 @@ class Webapp:
     def __init__(self, host: str = "127.0.0.1", port: int = 0):
         self.host = host
         self.port = port
-        self._volume_dir = Path(tempfile.mkdtemp(prefix="pxviewer-webapp-"))
+        self.volume_dir = Path(tempfile.mkdtemp(prefix="pxviewer-webapp-"))
         self._server: Optional[_WebappServer] = None
         self._thread: Optional[threading.Thread] = None
 
@@ -180,7 +180,7 @@ class Webapp:
 
         handler = functools.partial(
             _WebappHandler,
-            volume_dir=self._volume_dir,
+            volume_dir=self.volume_dir,
             frontend_dir=frontend_dir,
         )
         try:
