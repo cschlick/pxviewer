@@ -2,23 +2,39 @@
 
 The desktop app opens two side-by-side windows:
 
-1. **Viewport** — a `QWebEngineView` that loads the Mol* viewer and a volume demo.
-2. **Controls** — a native Qt window with demo chooser and live interaction toggles.
+1. **Viewport** — a `QWebEngineView` that loads the Mol* viewer.
+2. **Controls** — a native Qt window whose main screen opens a file from the
+   user's filesystem, with the demos tucked behind a second tab.
 
-A `LiveSession` is started in the background so the controls can toggle mouse
-selection mode and receive click-built selections. The whole thing is served by
-the local `Webapp` server, so no external browser is needed.
+A `LiveSession` runs in the background so the controls can toggle mouse selection
+and receive click-built selections, and so the model demos can stream coordinates
+into the viewport. The whole thing is served by the local `Webapp` server, so no
+external browser is needed.
 """
 
 from __future__ import annotations
 
 import sys
+import threading
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional
+
+import numpy as np
 
 from .data import Atom
+from .demos import DEMOS, Player, list_demos
+from .loader import FILE_DIALOG_FILTER, create_file_view
 from .volume_demos import create_volume_demo, list_volume_demos
 from .webapp import Webapp
+
+# A single off-screen atom is enough to keep the LiveSession WebSocket open and
+# route click-mode / mouse-selection messages for scenes that carry no live model.
+_DUMMY_KEY = "__dummy__"
+
+
+def _dummy_atoms() -> List[Atom]:
+    return [Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=100.0, y=0.0, z=0.0)]
 
 
 def _check_qt() -> None:
@@ -31,13 +47,27 @@ def _check_qt() -> None:
         ) from exc
 
 
+def _make_bridge():
+    """A QObject that marshals background-thread events onto the Qt GUI thread.
+
+    Selections and demo status arrive on the WebSocket/demo threads; touching
+    widgets from there is not allowed, so everything crosses over as a signal.
+    """
+    from PySide6.QtCore import QObject, Signal
+
+    class _Bridge(QObject):
+        selection_changed = Signal(object)
+        status_changed = Signal(str)
+
+    return _Bridge()
+
+
 class ViewportWindow:
     """A Qt window wrapping the Mol* viewer in a QWebEngineView."""
 
     def __init__(self, title: str = "pxviewer — viewport"):
         _check_qt()
 
-        from PySide6.QtCore import QUrl
         from PySide6.QtWebEngineCore import QWebEngineSettings
         from PySide6.QtWebEngineWidgets import QWebEngineView
         from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -70,16 +100,15 @@ class ViewportWindow:
 
 
 class ControlsWindow:
-    """A Qt window with controls for the viewport."""
+    """Controls for the viewport: open a file, or run a demo from the Demos tab."""
 
     def __init__(self, desktop: "DesktopApp", title: str = "pxviewer — controls"):
         _check_qt()
 
-        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
-            QComboBox,
             QLabel,
             QPushButton,
+            QTabWidget,
             QVBoxLayout,
             QWidget,
         )
@@ -87,7 +116,7 @@ class ControlsWindow:
         self._desktop = desktop
         self._window = QWidget()
         self._window.setWindowTitle(title)
-        self._window.setMinimumSize(320, 480)
+        self._window.setMinimumSize(360, 520)
 
         layout = QVBoxLayout(self._window)
         layout.setSpacing(12)
@@ -95,15 +124,13 @@ class ControlsWindow:
 
         layout.addWidget(QLabel("<h2>pxviewer</h2>"))
 
-        layout.addWidget(QLabel("Volume demo"))
-        self._demo_select = QComboBox()
-        for name, description in list_volume_demos():
-            self._demo_select.addItem(f"{name}: {description}", name)
-        layout.addWidget(self._demo_select)
+        tabs = QTabWidget()
+        tabs.addTab(self._build_file_tab(), "File")
+        tabs.addTab(self._build_demos_tab(), "Demos")
+        layout.addWidget(tabs, stretch=1)
 
-        self._load_btn = QPushButton("Load demo")
-        self._load_btn.clicked.connect(self._on_load_demo)
-        layout.addWidget(self._load_btn)
+        # Selection applies to whatever is loaded, so it sits below the tabs.
+        layout.addWidget(QLabel("<b>Selection</b>"))
 
         self._select_btn = QPushButton("Enable selection mode")
         self._select_btn.setCheckable(True)
@@ -114,15 +141,106 @@ class ControlsWindow:
         self._clear_btn.clicked.connect(self._on_clear_selection)
         layout.addWidget(self._clear_btn)
 
-        layout.addWidget(QLabel("Selected atoms:"))
         self._selection_label = QLabel("none")
         self._selection_label.setWordWrap(True)
         layout.addWidget(self._selection_label)
 
-        layout.addStretch()
-
         self._status_label = QLabel("Ready")
+        self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
+
+        desktop.bridge.selection_changed.connect(self._on_selection_changed)
+        desktop.bridge.status_changed.connect(self._set_status)
+
+    # -- tabs ------------------------------------------------------------
+
+    def _build_file_tab(self):
+        from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        blurb = QLabel("Open a structure or volume from your computer.")
+        blurb.setWordWrap(True)
+        layout.addWidget(blurb)
+
+        self._open_btn = QPushButton("Load file…")
+        self._open_btn.setMinimumHeight(44)
+        self._open_btn.clicked.connect(self._on_open_file)
+        layout.addWidget(self._open_btn)
+
+        self._file_label = QLabel("No file loaded")
+        self._file_label.setWordWrap(True)
+        layout.addWidget(self._file_label)
+
+        formats = QLabel("Structures: .pdb .ent .cif .mmcif .bcif\nVolumes: .mrc .map .ccp4")
+        formats.setWordWrap(True)
+        layout.addWidget(formats)
+
+        layout.addStretch()
+        return tab
+
+    def _build_demos_tab(self):
+        from PySide6.QtWidgets import (
+            QComboBox,
+            QLabel,
+            QPushButton,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(8)
+
+        layout.addWidget(QLabel("<b>Model demos</b>"))
+        model_blurb = QLabel("Animated coordinate streams from Python.")
+        model_blurb.setWordWrap(True)
+        layout.addWidget(model_blurb)
+
+        self._model_select = QComboBox()
+        for name, _ in list_demos():
+            self._model_select.addItem(name, name)
+        layout.addWidget(self._model_select)
+
+        self._model_desc = QLabel("")
+        self._model_desc.setWordWrap(True)
+        layout.addWidget(self._model_desc)
+        self._model_select.currentIndexChanged.connect(self._on_model_demo_changed)
+        self._on_model_demo_changed()
+
+        run_model = QPushButton("Run model demo")
+        run_model.clicked.connect(self._on_run_model_demo)
+        layout.addWidget(run_model)
+
+        layout.addSpacing(8)
+        layout.addWidget(QLabel("<b>Volume demos</b>"))
+
+        self._volume_select = QComboBox()
+        for name, _ in list_volume_demos():
+            self._volume_select.addItem(name, name)
+        layout.addWidget(self._volume_select)
+
+        self._volume_desc = QLabel("")
+        self._volume_desc.setWordWrap(True)
+        layout.addWidget(self._volume_desc)
+        self._volume_select.currentIndexChanged.connect(self._on_volume_demo_changed)
+        self._on_volume_demo_changed()
+
+        run_volume = QPushButton("Run volume demo")
+        run_volume.clicked.connect(self._on_run_volume_demo)
+        layout.addWidget(run_volume)
+
+        layout.addSpacing(8)
+        self._stop_btn = QPushButton("Stop demo")
+        self._stop_btn.clicked.connect(self._on_stop_demo)
+        layout.addWidget(self._stop_btn)
+
+        layout.addStretch()
+        return tab
+
+    # -- window ----------------------------------------------------------
 
     def show(self) -> None:
         self._window.show()
@@ -136,14 +254,50 @@ class ControlsWindow:
     def _set_status(self, text: str) -> None:
         self._status_label.setText(text)
 
-    def _on_load_demo(self) -> None:
-        name = self._demo_select.currentData()
+    # -- handlers --------------------------------------------------------
+
+    def _on_open_file(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Open structure or volume", "", FILE_DIALOG_FILTER
+        )
+        if not path:
+            return
+        try:
+            kind = self._desktop.load_file(path)
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not load file", str(exc))
+            self._set_status(f"Failed to load {Path(path).name}")
+            return
+        self._file_label.setText(f"{Path(path).name}  ({kind})")
+
+    def _on_model_demo_changed(self) -> None:
+        name = self._model_select.currentData()
+        demo = DEMOS.get(name)
+        self._model_desc.setText(demo.description if demo else "")
+
+    def _on_volume_demo_changed(self) -> None:
+        name = self._volume_select.currentData()
+        descriptions = dict(list_volume_demos())
+        self._volume_desc.setText(descriptions.get(name, ""))
+
+    def _on_run_model_demo(self) -> None:
+        name = self._model_select.currentData()
+        if name:
+            self._desktop.load_model_demo(name)
+
+    def _on_run_volume_demo(self) -> None:
+        name = self._volume_select.currentData()
         if name:
             self._desktop.load_volume_demo(name)
 
+    def _on_stop_demo(self) -> None:
+        self._desktop.stop_demo()
+
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
-            self._desktop.enable_mouse_selection(self._on_selection_changed)
+            self._desktop.enable_mouse_selection()
             self._select_btn.setText("Disable selection mode")
         else:
             self._desktop.disable_mouse_selection()
@@ -154,10 +308,13 @@ class ControlsWindow:
         self._selection_label.setText("none")
 
     def _on_selection_changed(self, selection) -> None:
-        indices = selection.indices
-        self._selection_label.setText(
-            f"{len(indices)} atom(s): {indices[:12]}{'...' if len(indices) > 12 else ''}"
-        )
+        indices = list(selection.indices)
+        if not indices:
+            self._selection_label.setText("none")
+            return
+        shown = indices[:12]
+        suffix = "…" if len(indices) > len(shown) else ""
+        self._selection_label.setText(f"{len(indices)} atom(s): {shown}{suffix}")
 
 
 class DesktopApp:
@@ -178,48 +335,40 @@ class DesktopApp:
 
         self._webapp = Webapp(host=host, port=port)
 
-        # A single off-screen atom is enough to keep the LiveSession WebSocket
-        # open and route click-mode / mouse-selection messages.
-        dummy_atom = Atom(
-            id=1, element="C", name="C", resname="UNL", resseq=1, chain="A",
-            x=100.0, y=0.0, z=0.0,
-        )
-        self._session = self._make_live_session([dummy_atom])
+        self._session: Optional[Any] = None
+        self._session_key: Optional[str] = None
+        self._player: Optional[Player] = None
+        self._demo_thread: Optional[threading.Thread] = None
+        self._selection_enabled = False
+        self._load_counter = 0
 
+        self.bridge = _make_bridge()
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
 
-    def _make_live_session(self, atoms):
-        try:
-            from .live import LiveSession
-            return LiveSession(atoms)
-        except Exception as exc:  # pragma: no cover - missing websockets
-            raise ImportError(
-                "The desktop viewer needs websockets. Install it with: "
-                "pip install 'pxviewer[live]'"
-            ) from exc
+    # -- lifecycle -------------------------------------------------------
 
     def start(self) -> int:
         self._webapp.start()
-        self._session.start(host=self._host, port=0)
-
-        print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
-
-        ws_url = f"ws://{self._host}:{self._session.port}"
 
         self._viewport.show()
         self._controls.show()
         self._arrange_windows()
 
-        # Load the first demo by default.
-        first_demo = self._controls._demo_select.currentData()
-        if first_demo:
-            self.load_volume_demo(first_demo, ws_url=ws_url)
+        # Land on an empty viewer: the main screen is "load a file", not a demo.
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
+        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
+        self._status(f"Ready — serving {self._webapp.url}")
+        print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
 
         return self._app.exec()
 
     def stop(self) -> None:
-        self._session.stop()
+        self.stop_demo()
+        if self._session is not None:
+            self._session.stop()
+            self._session = None
+            self._session_key = None
         self._webapp.stop()
 
     def _arrange_windows(self) -> None:
@@ -241,10 +390,66 @@ class DesktopApp:
         self._viewport.set_geometry(QRect(x, y, half_width, total_height))
         self._controls.set_geometry(QRect(x + half_width, y, total_width - half_width, total_height))
 
-    def load_volume_demo(self, name: str, *, ws_url: Optional[str] = None) -> None:
-        """Generate a volume demo and load it in the viewport."""
-        if ws_url is None:
-            ws_url = f"ws://{self._host}:{self._session.port}"
+    # -- live session ----------------------------------------------------
+
+    def _make_live_session(self, atoms):
+        try:
+            from .live import LiveSession
+            return LiveSession(atoms)
+        except Exception as exc:  # pragma: no cover - missing websockets
+            raise ImportError(
+                "The desktop viewer needs websockets. Install it with: "
+                "pip install 'pxviewer[live]'"
+            ) from exc
+
+    def _ensure_session(self, key: str, make_atoms) -> str:
+        """Return the WebSocket URL for a session whose topology is ``key``.
+
+        A session's atom set is fixed for its lifetime (the topology is parsed
+        once and only coordinates stream after), so switching to a different model
+        means a new session. Same key -> reuse, which keeps page reloads cheap.
+        """
+        if self._session is not None and self._session_key == key:
+            return f"ws://{self._host}:{self._session.port}"
+
+        if self._session is not None:
+            self._session.stop()
+
+        self._session = self._make_live_session(make_atoms())
+        self._session_key = key
+        self._session.start(host=self._host, port=0)
+        if self._selection_enabled:
+            self._session.enable_mouse_selection(self._emit_selection)
+        return f"ws://{self._host}:{self._session.port}"
+
+    def _status(self, text: str) -> None:
+        self.bridge.status_changed.emit(text)
+
+    def _emit_selection(self, selection) -> None:
+        # Called on the WebSocket thread; hop to the GUI thread via the bridge.
+        self.bridge.selection_changed.emit(selection)
+
+    # -- loading ---------------------------------------------------------
+
+    def load_file(self, path: str) -> str:
+        """Open a local structure or volume file in the viewport. Returns its kind."""
+        self.stop_demo()
+
+        # Each load gets a fresh directory, so a reloaded page can never pick up
+        # a cached scene or data file from the previous one.
+        self._load_counter += 1
+        out_dir = self._webapp.volume_dir / "file" / str(self._load_counter)
+        mvsj_path, kind = create_file_view(path, out_dir=out_dir)
+
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
+        mvsj_url = f"/file/{self._load_counter}/{mvsj_path.name}"
+        self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
+        self._status(f"Loaded {kind}: {Path(path).name}")
+        return kind
+
+    def load_volume_demo(self, name: str) -> None:
+        """Generate a volume demo and load its static scene in the viewport."""
+        self.stop_demo()
 
         demo_dir = self._webapp.volume_dir / name
         demo_dir.mkdir(parents=True, exist_ok=True)
@@ -255,19 +460,83 @@ class DesktopApp:
             shape=(32, 32, 32),
         )
 
-        base = self._webapp.url
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
         mvsj_url = f"/demo/{name}/volume.mvsj"
-        url = f"{base}index.html?mvsj={mvsj_url}&ws={ws_url}"
-        self._viewport.load(url)
+        self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
+        self._status(f"Volume demo: {name}")
 
-    def enable_mouse_selection(self, on_change) -> None:
-        self._session.enable_mouse_selection(on_change)
+    def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
+        """Stream an animated model demo into the viewport."""
+        demo = DEMOS.get(name)
+        if demo is None:
+            raise ValueError(f"unknown demo '{name}'. Available: {', '.join(DEMOS)}")
+
+        self.stop_demo()
+
+        atoms = demo.make_atoms()
+        ws_url = self._ensure_session(f"demo:{name}", lambda: atoms)
+        session = self._session
+
+        base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+        player = Player(session, base, fps=fps)
+        session.on_pick(player._on_pick)
+        self._player = player
+
+        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
+        self._status(f"Model demo: {name} — waiting for the viewport…")
+
+        self._demo_thread = threading.Thread(
+            target=self._drive_demo,
+            args=(demo, player, session),
+            name=f"pxviewer-demo-{name}",
+            daemon=True,
+        )
+        self._demo_thread.start()
+
+    def _drive_demo(self, demo, player: Player, session) -> None:
+        """Run a demo script once the viewport has connected. Runs off the GUI thread."""
+        deadline = time.monotonic() + 30.0
+        while not player.stopped and session.client_count == 0:
+            if time.monotonic() > deadline:
+                self._status(f"Model demo: {demo.name} — no viewport connected")
+                return
+            time.sleep(0.1)
+        if player.stopped:
+            return
+
+        self._status(f"Model demo: {demo.name} — running")
+        try:
+            demo.run(player)
+        except Exception as exc:  # a broken demo must not take the app down
+            self._status(f"Model demo '{demo.name}' failed: {exc}")
+            return
+        if not player.stopped:
+            self._status(f"Model demo: {demo.name} — finished")
+
+    def stop_demo(self) -> None:
+        """Stop any running model demo and wait for its thread to unwind."""
+        player, thread = self._player, self._demo_thread
+        self._player, self._demo_thread = None, None
+        if player is not None:
+            player.stop()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5)
+
+    # -- selection -------------------------------------------------------
+
+    def enable_mouse_selection(self) -> None:
+        self._selection_enabled = True
+        if self._session is not None:
+            self._session.enable_mouse_selection(self._emit_selection)
 
     def disable_mouse_selection(self) -> None:
-        self._session.disable_mouse_selection()
+        self._selection_enabled = False
+        if self._session is not None:
+            self._session.disable_mouse_selection()
 
     def clear_selection(self) -> None:
-        self._session.clear_selection()
+        if self._session is not None:
+            self._session.clear_selection()
 
 
 def run_desktop(host: str = "127.0.0.1", port: int = 5173) -> int:
