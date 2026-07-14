@@ -1,6 +1,7 @@
 """CLI entry point for pxviewer."""
 
 import argparse
+import sys
 import time
 
 import numpy as np
@@ -11,6 +12,7 @@ from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
 from .volume_demos import create_volume_demo, list_volume_demos, run_live_volume_demo, run_volume_demo
+from .webapp import run_webapp
 
 
 def _demo_atoms(n: int) -> list[Atom]:
@@ -90,6 +92,21 @@ def main() -> None:
     live_vol.add_argument("--voxel-size", type=float, default=1.0, help="Isotropic voxel size in Angstroms")
     live_vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
     live_vol.add_argument("--period", type=float, default=2.0, help="Seconds between color/opacity updates")
+
+    webapp = subparsers.add_parser(
+        "webapp",
+        help="Serve the pxviewer webapp in a browser",
+    )
+    webapp.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    webapp.add_argument("--port", type=int, default=5173, help="Port for the webapp server")
+    webapp.add_argument("--no-browser", action="store_true", help="Do not open a browser automatically")
+
+    desktop = subparsers.add_parser(
+        "desktop",
+        help="Open the pxviewer webapp in a PyQt webview",
+    )
+    desktop.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    desktop.add_argument("--port", type=int, default=5173, help="Port for the embedded webapp server")
 
     args = parser.parse_args()
 
@@ -191,6 +208,13 @@ def main() -> None:
             shape=tuple(args.shape),
             period=args.period,
         )
+
+    elif args.command == "webapp":
+        run_webapp(host=args.host, port=args.port, open_browser=not args.no_browser)
+
+    elif args.command == "desktop":
+        from .desktop import run_desktop
+        sys.exit(run_desktop(host=args.host, port=args.port))
 
 
 if __name__ == "__main__":
