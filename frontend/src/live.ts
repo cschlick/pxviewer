@@ -16,9 +16,10 @@ import { StateObjectSelector, StateTransformer } from 'molstar/lib/mol-state';
 import { PluginContext } from 'molstar/lib/mol-plugin/context';
 import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
-import { Model, Structure, StructureElement, Unit } from 'molstar/lib/mol-model/structure';
-import { StructureProperties } from 'molstar/lib/mol-model/structure';
+import { Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
+import { Script } from 'molstar/lib/mol-script/script';
+import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
 import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 import { decodeColor } from 'molstar/lib/mol-util/color/utils';
@@ -234,6 +235,36 @@ export class LiveViewer {
         this.plugin.managers.camera.focusLoci(lociFromElementIndices(structure, indices));
     }
 
+    /**
+     * Resolve a PyMOL selection against the current structure and show it. With
+     * `highlight` the matched atoms get the selection overlay; with `focus` the
+     * camera zooms to them. Returns the matched positional atom indices.
+     */
+    applySelection(expression: string, opts: { highlight: boolean; focus: boolean }): number[] {
+        const structure = this.currentStructure();
+        if (!structure) return [];
+        const expr = expression.trim();
+        if (expr === '') {
+            if (opts.highlight) this.clearSelection();
+            return [];
+        }
+        const parsed = pymolTranspiler(expr); // throws on invalid PyMOL syntax
+        const selection = Script.getStructureSelection(parsed, structure);
+        const loci = StructureSelection.toLociWithSourceUnits(selection);
+        const indices = collectElementIndices(loci);
+        if (opts.highlight) {
+            this.highlightIndices = indices;
+            this.highlightLoci = loci;
+            const sel = this.plugin.managers.structure.selection;
+            sel.clear();
+            if (indices.length) sel.fromLoci('set', loci);
+        }
+        if (opts.focus && indices.length) {
+            this.plugin.managers.camera.focusLoci(loci);
+        }
+        return indices;
+    }
+
     /** Clear any active highlight. */
     clearSelection() {
         this.highlightIndices = [];
@@ -405,6 +436,13 @@ function lociFromElementIndices(structure: Structure, indices: number[]): Struct
     return StructureElement.Loci(structure, elements as any);
 }
 
+/** Positional atom rows (model element indices) covered by an element loci. */
+function collectElementIndices(loci: StructureElement.Loci): number[] {
+    const set = new Set<number>();
+    StructureElement.Loci.forEachLocation(loci, (loc) => { set.add(loc.element as unknown as number); });
+    return Array.from(set).sort((a, b) => a - b);
+}
+
 /** Decode a wire index-set: either explicit `{list}` or run-length `{runs}`. */
 function decodeIndexSet(enc: any): number[] {
     if (!enc) return [];
@@ -445,6 +483,57 @@ async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: num
     }).commit();
 }
 
+const STYLE_VISUALS: Record<string, string[]> = {
+    surface: ['solid'],
+    wireframe: ['wireframe'],
+    mesh: ['solid', 'wireframe'],
+};
+
+async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    const visuals = STYLE_VISUALS[style.toLowerCase()];
+    if (!visuals) {
+        console.warn('Unknown volume style:', style);
+        return;
+    }
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+        if (old.type?.name === 'isosurface') {
+            old.type.params.visuals = visuals;
+        }
+    }).commit();
+}
+
+async function setVolumePosition(plugin: PluginContext, ref: string, position: [number, number, number]) {
+    const cell = await findVolumeCell(plugin, ref);
+    if (!cell) return;
+    const [x, y, z] = position;
+    await plugin.state.data.build().to(cell.transform.ref).update((old: any) => {
+        if (old.transform?.name === 'matrix' && old.transform.params?.data) {
+            const data = old.transform.params.data;
+            data[12] = x;
+            data[13] = y;
+            data[14] = z;
+        } else if (old.transform?.name === 'components' && old.transform.params?.translation) {
+            old.transform.params.translation[0] = x;
+            old.transform.params.translation[1] = y;
+            old.transform.params.translation[2] = z;
+        } else {
+            console.warn('Volume', ref, 'does not have a position transform; set Volume.position to enable live position updates.');
+        }
+    }).commit();
+}
+
+async function findVolumeCell(plugin: PluginContext, ref: string) {
+    const tag = `mvs-ref:${ref}`;
+    for (let i = 0; i < 200; i++) {
+        const cells = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(tag));
+        if (cells.length) return cells[0];
+        await new Promise((r) => setTimeout(r, 25));
+    }
+    return undefined;
+}
+
 async function findVolumeReprCell(plugin: PluginContext, ref: string) {
     const tag = `mvs-ref:${ref}-repr`;
     for (let i = 0; i < 200; i++) {
@@ -469,6 +558,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let viewer: LiveViewer | null = null;
     let building = false;
 
+    ws.onopen = () => {
+        console.log('pxviewer live connected to', url);
+    };
+    ws.onerror = (err) => {
+        console.error('pxviewer live WebSocket error for', url, err);
+    };
+    ws.onclose = (ev) => {
+        if (!ev.wasClean) {
+            console.error('pxviewer live WebSocket closed unexpectedly:', ev.code, ev.reason);
+        }
+    };
+
     ws.onmessage = async (ev) => {
         if (typeof ev.data === 'string') {
             // Server -> client control messages (JSON text).
@@ -480,6 +581,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
+            } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
+                await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'volume_position' && typeof msg.ref === 'string' && Array.isArray(msg.position) && msg.position.length === 3) {
+                await setVolumePosition(plugin, msg.ref, msg.position);
             } else if (msg.type === 'highlight' && viewer) {
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
@@ -500,6 +605,17 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 } catch {
                     // ignore malformed primitive commands
                 }
+            } else if (msg.type === 'select' && viewer) {
+                // Resolve a PyMOL selection in the viewer and echo the matched
+                // atom indices back so Python knows what was selected.
+                let indices: number[] = [];
+                let error: string | undefined;
+                try {
+                    indices = viewer.applySelection(String(msg.expression ?? ''), { highlight: !!msg.highlight, focus: !!msg.focus });
+                } catch (e) {
+                    error = e instanceof Error ? e.message : String(e);
+                }
+                ws.send(JSON.stringify({ type: 'selection-result', reqId: msg.reqId, indices, error }));
             }
             return;
         }

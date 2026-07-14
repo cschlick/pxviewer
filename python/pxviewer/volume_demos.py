@@ -199,12 +199,17 @@ def create_volume_demo(
         mrc_out = mrc_path_obj.with_name(mrc_name)
         vol_kwargs = dict(per_volume_demo_kwargs[i])
         vol_kwargs.update(view_kwargs)
-        write_volume(
-            vol_data,
-            mrc_out,
-            voxel_size=voxel_size,
-            data_order="xyz",
-        )
+
+        write_kwargs = {
+            "voxel_size": vol_kwargs.pop("voxel_size", voxel_size),
+            "origin": vol_kwargs.pop("origin", None),
+            "origin_units": vol_kwargs.pop("origin_units", "angstrom"),
+            "data_order": "xyz",
+        }
+        # write_volume always produces MRC/MAP, so parsing must be map.
+        vol_kwargs["format"] = "map"
+        vol_kwargs.pop("channel_id", None)
+        write_volume(vol_data, mrc_out, **write_kwargs)
         volumes.append(
             Volume(
                 url=mrc_out.name,
@@ -348,17 +353,18 @@ def run_live_volume_demo(
     *,
     host: str = "127.0.0.1",
     http_port: int = 5173,
-    ws_port: int = 8787,
+    ws_port: int = 0,
     voxel_size: float = 1.0,
     shape: Tuple[int, int, int] = (32, 32, 32),
     period: float = 2.0,
 ) -> None:
-    """Serve a two-volume scene and live-cycle colors and opacities over it.
+    """Serve a two-volume scene and live-cycle colors, opacities and styles over it.
 
     This opens the frontend at ``http://host:http_port/?mvsj=volume.mvsj&ws=...``
     and starts a `LiveSession` (using a single off-screen atom for the WebSocket
     channel). The main thread then animates the two volumes, demonstrating
-    multi-volume addressing, live color changes and live opacity changes.
+    multi-volume addressing, live color changes, live opacity changes and live
+    isosurface style changes (surface, wireframe, mesh).
     """
     frontend_dir = _find_frontend_dir()
     if frontend_dir is None or not (frontend_dir / "build" / "index.js").exists():
@@ -379,8 +385,8 @@ def run_live_volume_demo(
         write_volume(right, volume_dir / "1-volume.mrc", voxel_size=voxel_size, data_order="xyz")
         mvsj = create_volume_view(
             volumes=[
-                Volume(url="0-volume.mrc", ref="volume-0", color="red", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative"),
-                Volume(url="1-volume.mrc", ref="volume-1", color="blue", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative"),
+                Volume(url="0-volume.mrc", ref="volume-0", color="red", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative", position=(0.0, 0.0, 0.0)),
+                Volume(url="1-volume.mrc", ref="volume-1", color="blue", opacity=0.8, isosurface_value=2.0, isosurface_kind="relative", position=(0.0, 0.0, 0.0)),
             ]
         )
         with open(volume_dir / "volume.mvsj", "w") as f:
@@ -407,12 +413,14 @@ def run_live_volume_demo(
         thread = threading.Thread(target=httpd.serve_forever, name="pxviewer-live-volume-demo", daemon=True)
         thread.start()
 
-        print(f"\nLive two-volume demo: cycling colors and opacities over a {shape[0]}x{shape[1]}x{shape[2]} grid")
+        print(f"\nLive two-volume demo: cycling colors, opacities, styles and positions over a {shape[0]}x{shape[1]}x{shape[2]} grid")
         print(f"Open the viewer in your browser: http://{host}:{actual_port}/", flush=True)
         print("Press Ctrl-C to stop.")
 
         colors = ["red", "green", "blue", "purple", "gold"]
         opacities = [1.0, 0.6, 0.3]
+        styles = ["surface", "wireframe", "mesh"]
+        positions = [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 0.0, 0.0), (-2.0, 0.0, 0.0)]
         step = 0
         try:
             print("Waiting for a viewer to connect...", flush=True)
@@ -422,8 +430,12 @@ def run_live_volume_demo(
             while True:
                 session.set_volume_color("volume-0", colors[step % len(colors)])
                 session.set_volume_opacity("volume-0", opacities[step % len(opacities)])
+                session.set_volume_style("volume-0", styles[step % len(styles)])
+                session.set_volume_position("volume-0", positions[step % len(positions)])
                 session.set_volume_color("volume-1", colors[(step + 2) % len(colors)])
                 session.set_volume_opacity("volume-1", opacities[(step + 1) % len(opacities)])
+                session.set_volume_style("volume-1", styles[(step + 2) % len(styles)])
+                session.set_volume_position("volume-1", positions[(step + 2) % len(positions)])
                 time.sleep(period)
                 step += 1
         except KeyboardInterrupt:

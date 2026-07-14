@@ -316,6 +316,8 @@ class LiveSession:
         self._clients: set = set()
         self._thread: Optional[threading.Thread] = None
         self._ready = threading.Event()
+        self._started_or_error = threading.Event()
+        self._start_error: Optional[BaseException] = None
         self._client_ready = threading.Event()
 
         self._lock = threading.Lock()  # guards the primitive counter
@@ -324,6 +326,13 @@ class LiveSession:
         self._id_to_index = {atom.id: i for i, atom in enumerate(self.atoms)}
         # Active highlight (positional indices), replayed to clients that connect later.
         self._last_highlight_indices: List[int] = []
+        # Active highlight (PyMOL expression), replayed to clients that connect later.
+        self._last_highlight_expression: Optional[str] = None
+        # PyMOL selections are evaluated in the browser and echoed back; each
+        # request waits on an Event keyed by a monotonic id.
+        self._pending: dict = {}
+        self._pending_lock = threading.Lock()
+        self._req_counter = 0
         # Active drawing primitives (id -> the "add" message), replayed to late clients.
         self._primitives: dict = {}
         self._primitive_counter = 0
@@ -377,7 +386,15 @@ class LiveSession:
         self.port = port
         self._thread = threading.Thread(target=self._run, name="pxviewer-live", daemon=True)
         self._thread.start()
-        self._ready.wait(timeout=10)
+        self._started_or_error.wait(timeout=10)
+        if self._start_error is not None:
+            raise RuntimeError(
+                f"LiveSession server failed to start on {host}:{port}"
+            ) from self._start_error
+        if not self._ready.is_set():
+            raise RuntimeError(
+                f"LiveSession server failed to start on {host}:{port} (timeout)"
+            )
         return self
 
     def stop(self) -> None:
@@ -452,17 +469,50 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    # -- selection (all index-based) -------------------------------------
+    def set_volume_style(self, ref: str, style: str) -> None:
+        """Broadcast a command to change the isosurface style of a volume by reference.
 
-    def select(self, atoms: Any, *, highlight: bool = True, focus: bool = True) -> Selection:
+        ``style`` is one of ``'surface'``, ``'wireframe'`` or ``'mesh'``.
+        Thread-safe: may be called from any thread.
+        """
+        message = json.dumps({"type": "volume_style", "ref": str(ref), "style": str(style)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_position(self, ref: str, position: Any) -> None:
+        """Broadcast a command to translate a volume by reference.
+
+        ``position`` is a 3-element sequence of Angstrom offsets.
+        Thread-safe: may be called from any thread.
+        """
+        x, y, z = position
+        message = json.dumps({"type": "volume_position", "ref": str(ref), "position": [float(x), float(y), float(z)]})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    # -- selection (python -> scene -> python) ---------------------------
+
+    def select(
+        self,
+        atoms_or_expression: Any,
+        *,
+        highlight: bool = True,
+        focus: bool = True,
+        timeout: float = 5.0,
+    ) -> Optional[Selection]:
         """Show a set of atoms in the viewer: highlight and/or focus.
 
-        ``atoms`` is a :class:`Selection` or anything coercible to one — an atom
-        index, an iterable of indices, or a boolean mask of length N. Composes
-        :meth:`highlight` and :meth:`focus`. Resolution is entirely Python-side, so
-        this is fire-and-forget: no viewer round-trip. Returns the Selection.
+        If ``atoms_or_expression`` is a string, it is treated as a PyMOL selection
+        expression, evaluated by the browser, and the matched atoms are returned.
+        Otherwise it is coerced to a :class:`Selection` — an atom index, an
+        iterable of indices, or a boolean mask of length N. In the latter case
+        resolution is entirely Python-side and the selection is returned.
         """
-        sel = self._as_selection(atoms)
+        if isinstance(atoms_or_expression, str):
+            return self._selection_request(atoms_or_expression, highlight=highlight, focus=focus, timeout=timeout)
+        sel = self._as_selection(atoms_or_expression)
         if highlight:
             self.highlight(sel)
         if focus:
@@ -612,7 +662,46 @@ class LiveSession:
     def clear_selection(self) -> None:
         """Clear any highlighted selection in the viewer. Thread-safe."""
         self._last_highlight_indices = []
+        self._last_highlight_expression = None
         self._send_control({"type": "highlight", "atoms": _encode_index_set([])})
+        self._send_control(
+            {"type": "select", "reqId": -1, "expression": "", "highlight": True, "focus": False}
+        )
+
+    def _next_req(self) -> int:
+        with self._pending_lock:
+            self._req_counter += 1
+            return self._req_counter
+
+    def _selection_request(
+        self, expression: str, *, highlight: bool, focus: bool, timeout: float
+    ) -> Optional[Selection]:
+        """Send a PyMOL expression to the viewer and wait for the matched indices."""
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "indices": None, "error": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        if highlight:
+            self._last_highlight_expression = expression
+        self._send_control(
+            {
+                "type": "select",
+                "reqId": req_id,
+                "expression": expression,
+                "highlight": highlight,
+                "focus": focus,
+            }
+        )
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        if not answered:
+            return None
+        if slot["error"]:
+            raise ValueError(f"invalid selection {expression!r}: {slot['error']}")
+        raw = slot["indices"] or []
+        indices = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
+        return Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
 
     # -- click interaction (scene -> python) -----------------------------
 
@@ -835,9 +924,12 @@ class LiveSession:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
-        loop.run_until_complete(self._serve())
         try:
+            loop.run_until_complete(self._serve())
             loop.run_forever()
+        except Exception as exc:
+            self._start_error = exc
+            self._started_or_error.set()
         finally:
             loop.run_until_complete(self._shutdown())
             loop.close()
@@ -853,6 +945,7 @@ class LiveSession:
             self.port = sock.getsockname()[1]
             break
         self._ready.set()
+        self._started_or_error.set()
 
     async def _shutdown(self) -> None:
         if self._server is not None:
@@ -886,6 +979,20 @@ class LiveSession:
                 await self._locked_send(
                     websocket,
                     json.dumps({"type": "highlight", "atoms": _encode_index_set(self._last_highlight_indices)}),
+                )
+            if self._last_highlight_expression is not None:
+                # Bring a late-joining viewer up to the current PyMOL highlight.
+                await self._locked_send(
+                    websocket,
+                    json.dumps(
+                        {
+                            "type": "select",
+                            "reqId": -1,
+                            "expression": self._last_highlight_expression,
+                            "highlight": True,
+                            "focus": False,
+                        }
+                    ),
                 )
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
@@ -934,6 +1041,15 @@ class LiveSession:
                     pass
         elif etype == "measure":
             self._on_measure(event)
+        elif etype == "selection-result":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                # First responder wins (harmless with multiple viewers connected).
+                slot["indices"] = event.get("indices")
+                slot["error"] = event.get("error")
+                slot["event"].set()
 
     def _broadcast(self, payload: bytes) -> None:
         for websocket in list(self._clients):
