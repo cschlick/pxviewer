@@ -14,6 +14,7 @@ external browser is needed.
 
 from __future__ import annotations
 
+import signal
 import sys
 import threading
 import time
@@ -24,7 +25,7 @@ import numpy as np
 
 from .data import Atom
 from .demos import DEMOS, Player, list_demos
-from .loader import FILE_DIALOG_FILTER, create_file_view
+from .loader import FILE_DIALOG_FILTER, SAMPLE_STRUCTURE, create_file_view, sample_structure_path
 from .volume_demos import create_volume_demo, list_volume_demos
 from .webapp import Webapp
 
@@ -60,6 +61,23 @@ def _make_bridge():
         status_changed = Signal(str)
 
     return _Bridge()
+
+
+def _make_close_filter(on_close):
+    """An event filter that reports a window being closed.
+
+    The viewport and controls are two halves of one app, so closing either one
+    should bring the whole thing down rather than leaving the other orphaned.
+    """
+    from PySide6.QtCore import QEvent, QObject
+
+    class _CloseFilter(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.Close:
+                on_close()
+            return False  # let the widget close normally
+
+    return _CloseFilter()
 
 
 class ViewportWindow:
@@ -178,6 +196,20 @@ class ControlsWindow:
         formats.setWordWrap(True)
         layout.addWidget(formats)
 
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("<b>Sample</b>"))
+
+        sample = sample_structure_path()
+        self._sample_btn = QPushButton(f"Load {SAMPLE_STRUCTURE[1]}")
+        self._sample_btn.clicked.connect(self._on_load_sample)
+        if sample is None:
+            # Shipped under tests/data, so it is missing from an installed wheel.
+            self._sample_btn.setEnabled(False)
+            self._sample_btn.setToolTip("The bundled sample is only present in a source checkout.")
+        else:
+            self._sample_btn.setToolTip(str(sample))
+        layout.addWidget(self._sample_btn)
+
         layout.addStretch()
         return tab
 
@@ -272,6 +304,20 @@ class ControlsWindow:
             return
         self._file_label.setText(f"{Path(path).name}  ({kind})")
 
+    def _on_load_sample(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        sample = sample_structure_path()
+        if sample is None:
+            QMessageBox.warning(self._window, "Sample not available", "The bundled sample file is missing.")
+            return
+        try:
+            kind = self._desktop.load_file(str(sample))
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not load sample", str(exc))
+            return
+        self._file_label.setText(f"{sample.name}  ({kind})")
+
     def _on_model_demo_changed(self) -> None:
         name = self._model_select.currentData()
         demo = DEMOS.get(name)
@@ -342,9 +388,21 @@ class DesktopApp:
         self._selection_enabled = False
         self._load_counter = 0
 
+        self._stopped = False
+        self._prev_sigint = None
+        self._sigint_installed = False
+        self._sigint_timer = None
+
         self.bridge = _make_bridge()
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
+
+        # Closing either window quits the app; tear the backend down on the way out
+        # so background threads stop before Qt destroys the widgets they signal.
+        self._close_filter = _make_close_filter(self._app.quit)
+        self._viewport.widget().installEventFilter(self._close_filter)
+        self._controls.widget().installEventFilter(self._close_filter)
+        self._app.aboutToQuit.connect(self.stop)
 
     # -- lifecycle -------------------------------------------------------
 
@@ -360,10 +418,70 @@ class DesktopApp:
         self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
+        print("Press Ctrl-C (or close a window) to stop.", flush=True)
 
-        return self._app.exec()
+        self._install_sigint_handler()
+        try:
+            return self._app.exec()
+        except KeyboardInterrupt:  # a Ctrl-C that raced the handler being installed
+            return 0
+        finally:
+            self._restore_sigint_handler()
+
+    def _install_sigint_handler(self) -> None:
+        """Make Ctrl-C quit the Qt event loop instead of raising out of `exec()`.
+
+        Qt's event loop is C++: Python's SIGINT flag is only acted on once the
+        interpreter regains control, which surfaces as a KeyboardInterrupt traceback
+        thrown from inside `exec()`. So we (a) handle SIGINT by asking Qt to quit,
+        and (b) run an idle timer purely to hand the interpreter a slice often
+        enough for that handler to actually run.
+        """
+        from PySide6.QtCore import QTimer
+
+        def _quit(_signum, _frame):
+            print("\nstopping…", flush=True)
+            self._app.quit()
+
+        try:
+            self._prev_sigint = signal.signal(signal.SIGINT, _quit)
+        except ValueError:
+            return  # not on the main thread; nothing to install
+        self._sigint_installed = True
+
+        self._sigint_timer = QTimer()
+        self._sigint_timer.start(200)
+        self._sigint_timer.timeout.connect(lambda: None)
+
+    def _restore_sigint_handler(self) -> None:
+        if self._sigint_timer is not None:
+            self._sigint_timer.stop()
+            self._sigint_timer = None
+        if not self._sigint_installed:
+            return
+        self._sigint_installed = False
+
+        # By now we are on the way out, so a further Ctrl-C has nothing left to
+        # cancel — it can only land mid-teardown or inside an atexit hook and
+        # surface as a spurious traceback. Swallow it. A handler the caller
+        # installed themselves is theirs to keep, so hand that one back.
+        previous = self._prev_sigint
+        restore = previous if callable(previous) and previous is not signal.default_int_handler else signal.SIG_IGN
+        try:
+            signal.signal(signal.SIGINT, restore)
+        except ValueError:
+            pass
+        self._prev_sigint = None
 
     def stop(self) -> None:
+        """Tear down the demo, live session, and webapp. Idempotent.
+
+        Runs on `aboutToQuit` and again from `run_desktop`'s finally, so a second
+        call — or one that races a repeated Ctrl-C — must be a no-op.
+        """
+        if self._stopped:
+            return
+        self._stopped = True
         self.stop_demo()
         if self._session is not None:
             self._session.stop()

@@ -6,10 +6,12 @@ import pytest
 from pxviewer.data import Atom, write_bcif
 from pxviewer.loader import (
     FILE_DIALOG_FILTER,
+    SAMPLE_STRUCTURE,
     STRUCTURE_FORMATS,
     VOLUME_FORMATS,
     create_file_view,
     file_kind,
+    sample_structure_path,
     structure_format,
 )
 from pxviewer.volume import write_volume
@@ -79,6 +81,31 @@ def test_structure_file_is_copied_and_parsed_in_its_own_format(tmp_path):
     scene = mvsj_path.read_text()
     assert "frag.bcif" in scene
     assert "bcif" in scene  # parsed as bcif, not guessed as mmcif
+
+
+def test_bundled_lysozyme_sample_is_present_and_is_a_structure():
+    sample = sample_structure_path()
+    assert sample is not None, "the bundled lysozyme sample is missing from tests/data"
+    assert sample.name == SAMPLE_STRUCTURE[0]
+    assert file_kind(sample) == "structure"
+
+    text = sample.read_text()
+    assert "LYSOZYME" in text.upper()
+    assert sum(line.startswith("ATOM") for line in text.splitlines()) > 500
+
+
+def test_lysozyme_sample_loads_into_a_scene(tmp_path):
+    sample = sample_structure_path()
+    mvsj_path, kind = create_file_view(sample, out_dir=tmp_path / "served")
+
+    assert kind == "structure"
+    assert (tmp_path / "served" / sample.name).is_file()
+
+    scene = json.loads(mvsj_path.read_text())
+    blob = json.dumps(scene)
+    assert sample.name in blob
+    assert '"pdb"' in blob  # parsed as PDB, not mis-guessed as mmCIF
+    assert "cartoon" in blob  # the polymer actually gets a representation
 
 
 def test_each_load_can_target_a_fresh_directory(tmp_path):
