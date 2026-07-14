@@ -46,7 +46,9 @@ class _WebappHandler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(volume_dir), **kwargs)
 
     def do_GET(self) -> None:  # noqa: N802 (name required by base class)
-        path = self.path
+        # Route on the path alone: the viewer page is loaded as
+        # /index.html?mvsj=...&ws=..., and the query must not defeat the match.
+        path = self.path.split("?", 1)[0].split("#", 1)[0]
         if path == "/api/volume-demos":
             self._send_json([{"name": n, "description": d} for n, d in list_volume_demos()])
             return
