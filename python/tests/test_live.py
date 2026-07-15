@@ -208,6 +208,76 @@ def test_computed_interactions_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
+def _carbons(points):
+    return [
+        Atom(id=i + 1, element="C", name="C", resname="UNL", resseq=1, chain="A",
+             x=float(p[0]), y=float(p[1]), z=float(p[2]))
+        for i, p in enumerate(points)
+    ]
+
+
+def test_detect_clashes_flags_overlap():
+    # Two carbons 2.5 A apart overlap in vdW space (sum 3.4) but aren't bonded; a
+    # third sits far away.
+    s = LiveSession(_carbons([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)]))
+    assert s.detect_clashes() == [(0, 1)]
+
+
+def test_detect_clashes_excludes_bonded_and_distant():
+    bonded = LiveSession(_carbons([(0, 0, 0), (1.5, 0, 0)]))   # covalent distance
+    assert bonded.detect_clashes() == []
+    distant = LiveSession(_carbons([(0, 0, 0), (5.0, 0, 0)]))  # no vdW overlap
+    assert distant.detect_clashes() == []
+
+
+def test_detect_clashes_accepts_explicit_coords():
+    s = LiveSession(_carbons([(0, 0, 0), (10, 0, 0)]))  # far apart as built
+    moved = np.array([[0, 0, 0], [2.5, 0, 0]], dtype="<f4")  # but test them close
+    assert s.detect_clashes(coords=moved) == [(0, 1)]
+
+
+def test_set_clashes_validates_and_dedupes(session):
+    assert session.set_clashes([(0, 2), (2, 0), {"a": 1, "b": 3}]) == [(0, 2), (1, 3)]
+    with pytest.raises(ValueError, match="out of range"):
+        session.set_clashes([(0, 99)])
+    with pytest.raises(ValueError, match="two distinct atoms"):
+        session.set_clashes([(1, 1)])
+
+
+def test_set_clashes_message_reaches_client(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_clashes([(0, 2)])
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clashes", "action": "set", "pairs": [{"a": 0, "b": 2}]}
+            session.clear_clashes()
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clashes", "action": "clear"}
+
+    asyncio.run(scenario())
+
+
+def test_show_clashes_detects_and_draws(session):
+    # The fixture's 4 carbons at unit spacing put 0-2 and 1-3 in clashing range.
+    drawn = session.show_clashes()
+    assert drawn == [(0, 2), (1, 3)]
+
+
+def test_clashes_replayed_to_late_client(session):
+    session.set_clashes([(0, 2)])
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clashes", "action": "set", "pairs": [{"a": 0, "b": 2}]}
+
+    asyncio.run(scenario())
+
+
 def test_highlight_message_reaches_client(session):
     """highlight() broadcasts an index-set with no round-trip; select returns synchronously."""
 

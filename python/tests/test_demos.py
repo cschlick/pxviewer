@@ -20,6 +20,8 @@ class _StubSession:
         self.primitives_added = []
         self.measure_modes = []
         self.interactions = None
+        self.clashes = []
+        self.clashes_detected = 0
 
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
@@ -50,6 +52,18 @@ class _StubSession:
 
     def clear_interactions(self):
         self.interactions = None
+
+    # The clashes demo drives these.
+    def detect_clashes(self, **kwargs):
+        self.clashes_detected += 1
+        return [(0, 1)]
+
+    def set_clashes(self, pairs, **kwargs):
+        self.clashes = list(pairs)
+        return self.clashes
+
+    def clear_clashes(self):
+        self.clashes = []
 
     # The measure demo drives these.
     def enable_measure_mode(self, kind, on_measure=None, **kwargs):

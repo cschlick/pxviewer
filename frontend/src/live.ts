@@ -110,6 +110,7 @@ export class LiveViewer {
     private primitives = new Map<string, StateObjectSelector>();
     private reprNodes: StateObjectSelector[] = [];
     private interactionsNode: StateObjectSelector | undefined;
+    private clashesNode: StateObjectSelector | undefined;
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -392,6 +393,58 @@ export class LiveViewer {
     }
 
     /**
+     * Draw steric clashes supplied by Python as atom-index pairs. Rendered as
+     * distinct red solid cylinders (visually separate from the dashed interaction
+     * notation) via a dedicated `CustomInteractions` node, so — like interactions
+     * — the markers track streamed coordinates. An empty list clears them.
+     *
+     * Clashes reuse the interactions shape but on their own node, with the marker
+     * kind restyled red/solid; Mol* has no general clash detector of its own, so
+     * the pairs are exactly the ones Python computed.
+     */
+    async setClashes(pairs: { a: number; b: number }[]) {
+        if (!pairs || pairs.length === 0) {
+            await this.clearClashes();
+            return;
+        }
+        const ref = this.structure.ref;
+        // Marker kind is arbitrary (this node renders only 'unknown', restyled as a
+        // clash); the identity that matters is the atom_index pair.
+        const interactions = pairs.map((p) => ({
+            kind: 'unknown',
+            aStructureRef: ref,
+            a: { atom_index: p.a },
+            bStructureRef: ref,
+            b: { atom_index: p.b },
+        }));
+        if (this.clashesNode?.ref) {
+            await this.plugin.state.data
+                .build()
+                .to(this.clashesNode)
+                .update((old: any) => ({ ...old, interactions }))
+                .commit();
+            return;
+        }
+        const node = this.plugin.state.data
+            .build()
+            .toRoot()
+            .apply(CustomInteractions, { interactions } as any, { dependsOn: [ref] });
+        node.apply(InteractionsShape, {
+            kinds: ['unknown'],
+            styles: { unknown: { color: CLASH_COLOR, style: 'solid', radius: 0.1 } },
+        } as any).apply(ShapeRepresentation3D);
+        this.clashesNode = node.selector;
+        await node.commit();
+    }
+
+    /** Remove the clash overlay, if any. */
+    async clearClashes() {
+        const node = this.clashesNode;
+        this.clashesNode = undefined;
+        if (node?.ref) await this.plugin.state.data.build().delete(node.ref).commit();
+    }
+
+    /**
      * Set the click interaction mode. `'select'` builds a selection reported to
      * Python; `'distance'|'angle'|'dihedral'|'label'` collect N clicks then draw
      * that measurement; `'off'` does neither. Modes are mutually exclusive.
@@ -511,6 +564,7 @@ const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 
 const INTERACTIONS_TAG = 'pxviewer-interactions';
+const CLASH_COLOR = 0xee2222; // red — reads as "bad contact"
 
 /**
  * Show or hide the *computed* "Non-covalent Interactions" representation on every
@@ -670,6 +724,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'interactions' && viewer) {
                 if (msg.action === 'clear') await viewer.clearInteractions();
                 else await viewer.setInteractions(msg.contacts ?? []);
+            } else if (msg.type === 'clashes' && viewer) {
+                if (msg.action === 'clear') await viewer.clearClashes();
+                else await viewer.setClashes(msg.pairs ?? []);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {

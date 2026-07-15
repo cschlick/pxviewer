@@ -372,6 +372,53 @@ def _run_interactions(p: Player) -> None:
         p.hold(1.0)
 
 
+def _two_clusters() -> List[Atom]:
+    """Two small clusters of atoms, offset along x so they start well separated."""
+    grid = np.array([[dx, dy, 0.0] for dx in (-0.7, 0.7) for dy in (-0.7, 0.7)], dtype="<f4")
+    left = grid + np.array([-6.0, 0, 0], dtype="<f4")
+    right = grid + np.array([6.0, 0, 0], dtype="<f4")
+    return _atoms(np.concatenate([left, right]).astype("<f4"))
+
+
+def _run_clashes(p: Player) -> None:
+    session = p.session
+    base = p.base
+    n = len(base)
+    half = n // 2
+    dt = 1.0 / 30.0
+
+    def positioned(gap: float) -> np.ndarray:
+        c = base.copy()
+        c[:half, 0] = base[:half, 0] + (6.0 - gap / 2.0)   # slide left cluster right
+        c[half:, 0] = base[half:, 0] - (6.0 - gap / 2.0)   # slide right cluster left
+        return c
+
+    def sweep(gaps):
+        for gap in gaps:
+            if p.stopped:
+                return
+            coords = positioned(gap)
+            p.push(coords)
+            # Recompute clashes for this conformation and update the red markers.
+            session.set_clashes(session.detect_clashes(coords=coords))
+            p.hold(dt)
+
+    print("  Red markers appear where atoms overlap as the clusters interpenetrate.", flush=True)
+    while not p.stopped:
+        p.step(1, "Two clusters, well apart — no clashes.")
+        session.clear_clashes()
+        p.push(positioned(12.0))
+        p.hold(1.2)
+        p.step(2, "Driving them together — clashes light up as vdW shells overlap.")
+        sweep(np.linspace(12.0, 0.0, 90), "closing")
+        p.step(3, "Fully overlapped — many clashes.")
+        p.hold(1.0)
+        p.step(4, "Pulling apart — clashes clear as they separate.")
+        sweep(np.linspace(0.0, 12.0, 90), "opening")
+        session.clear_clashes()
+        p.hold(0.8)
+
+
 def _spin(base: np.ndarray, a: float) -> np.ndarray:
     """Rotate coordinates about the y axis by angle ``a`` (radians)."""
     ca, sa = math.cos(a), math.sin(a)
@@ -443,6 +490,7 @@ DEMOS: dict[str, Demo] = {
         Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
         Demo("primitives", "Angle/distance/dihedral/label measurements that track motion.", _bent_chain, _run_primitives),
         Demo("interactions", "Explicit typed non-covalent contacts that track motion.", _interaction_pair, _run_interactions),
+        Demo("clashes", "Steric clashes (vdW overlaps) lighting up red as clusters interpenetrate.", _two_clusters, _run_clashes),
         Demo("measure", "Interactive: click atoms to measure distances/angles/dihedrals (scene → Python).", lambda: _atoms(_helix(12, radius=4.0, pitch=3.0)), _run_measure),
     ]
 }

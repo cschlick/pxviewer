@@ -76,6 +76,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 | `select` | atoms highlighted by index, cycling through subsets |
 | `primitives` | angle/distance/dihedral/label measurements tracking a flexing chain |
 | `interactions` | explicit typed non-covalent contacts stretching as two strands separate |
+| `clashes` | steric clashes lighting up red as two clusters interpenetrate |
 | `measure` | click atoms to measure distances/angles/dihedrals — the scene → Python path |
 
 Each demo serves the frontend, waits for the viewer to connect, narrates each step
@@ -272,6 +273,30 @@ session.set_computed_interactions(True)   # or show_/hide_computed_interactions(
 In the desktop app the **Show computed interactions** button under *Display*
 toggles this.
 
+### Clashes
+
+Steric clashes — non-bonded atoms overlapping in van der Waals space — drawn as
+distinct **red** markers, so they read as "bad contact" next to the interaction
+notation. Mol\* has no general clash detector (its only clash support ingests
+RCSB validation reports), so pxviewer computes them from the coordinates you own:
+
+```python
+pairs = session.detect_clashes(tolerance=0.4)   # vdW overlap, excluding bonds
+session.set_clashes(pairs)                       # draw them
+session.show_clashes(tolerance=0.4)              # detect + draw in one call
+session.clear_clashes()
+```
+
+`detect_clashes` flags a pair when its separation is below ``vdw_i + vdw_j -
+tolerance`` but above ``cov_i + cov_j + bond_tolerance`` (covalent bonds are not
+clashes); radii are looked up by element. You can also pass explicit pairs to
+`set_clashes([(i, j), …])` if you compute clashes your own way. Like interactions,
+the markers reference atoms, so they **track streamed coordinates** — re-run
+`detect_clashes`/`set_clashes` as the structure moves to keep them current (see
+the `clashes` demo). This is a live-session feature: it needs the coordinates and
+elements Python holds, so it doesn't apply to a structure parsed only in the
+browser.
+
 ### Secondary structure (for cartoon / ribbon)
 
 Cartoon rendering and the `secondary-structure` color theme need a **polymer**
@@ -308,6 +333,7 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?},…]}` |
 | server → client | interactions | JSON `{"type":"interactions","action":"set","contacts":[{kind,a,b,description?},…]}` or `{"type":"interactions","action":"clear"}` (explicit typed contacts) |
 | server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
+| server → client | clashes | JSON `{"type":"clashes","action":"set","pairs":[{a,b},…]}` or `{"type":"clashes","action":"clear"}` (steric clashes, drawn red) |
 | server → client | mouse-selection-mode | JSON `{"type":"mouse-selection-mode","enabled":bool}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |

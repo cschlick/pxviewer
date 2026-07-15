@@ -260,6 +260,89 @@ def _normalize_interactions(interactions: Any, n_atoms: int) -> List[dict]:
     return contacts
 
 
+# Bondi van der Waals radii (Angstrom), for steric-clash detection. Fallback below.
+_VDW_RADII = {
+    "H": 1.20, "HE": 1.40, "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47, "NE": 1.54,
+    "P": 1.80, "S": 1.80, "CL": 1.75, "AR": 1.88, "BR": 1.85, "I": 1.98, "SE": 1.90,
+    "SI": 2.10, "B": 1.92, "NA": 2.27, "MG": 1.73, "K": 2.75, "CA": 2.31, "ZN": 1.39,
+    "FE": 2.05, "MN": 2.05, "CU": 1.40,
+}
+_VDW_FALLBACK = 1.70
+
+# Covalent radii (Angstrom), used to exclude bonded pairs from clashes.
+_COVALENT_RADII = {
+    "H": 0.31, "HE": 0.28, "C": 0.76, "N": 0.71, "O": 0.66, "F": 0.57, "NE": 0.58,
+    "P": 1.07, "S": 1.05, "CL": 1.02, "AR": 1.06, "BR": 1.20, "I": 1.39, "SE": 1.20,
+    "SI": 1.11, "B": 0.84, "NA": 1.66, "MG": 1.41, "K": 2.03, "CA": 1.76, "ZN": 1.22,
+    "FE": 1.32, "MN": 1.39, "CU": 1.32,
+}
+_COVALENT_FALLBACK = 0.77
+
+
+def _radii(elements: List[str], table: dict, fallback: float) -> np.ndarray:
+    return np.array([table.get(str(e).strip().upper(), fallback) for e in elements], dtype=float)
+
+
+def _detect_clashes(
+    coords: np.ndarray,
+    elements: List[str],
+    *,
+    tolerance: float,
+    bond_tolerance: float,
+) -> List[tuple]:
+    """Steric clashes: non-bonded atom pairs that overlap in van der Waals space.
+
+    A pair (i, j) clashes when their separation is less than ``vdw_i + vdw_j -
+    tolerance`` but greater than ``cov_i + cov_j + bond_tolerance`` (i.e. they are
+    close enough to interpenetrate yet too far apart to be a covalent bond — Mol*
+    infers bonds by distance, and we have no explicit connectivity to consult).
+
+    Returns sorted ``(i, j)`` index pairs with ``i < j``. O(N^2); fine for the
+    small-to-medium structures this tool streams.
+    """
+    n = len(elements)
+    if n < 2:
+        return []
+    vdw = _radii(elements, _VDW_RADII, _VDW_FALLBACK)
+    cov = _radii(elements, _COVALENT_RADII, _COVALENT_FALLBACK)
+
+    pairs: List[tuple] = []
+    for i in range(n - 1):
+        d = np.linalg.norm(coords[i + 1 :] - coords[i], axis=1)
+        vdw_sum = vdw[i] + vdw[i + 1 :]
+        bond_max = cov[i] + cov[i + 1 :] + bond_tolerance
+        hit = np.where((d < vdw_sum - tolerance) & (d > bond_max))[0]
+        for k in hit:
+            pairs.append((i, i + 1 + int(k)))
+    return pairs
+
+
+def _normalize_pairs(pairs: Any, n_atoms: int) -> List[dict]:
+    """Coerce clash pairs (tuples or dicts) into validated ``{a, b}`` dicts."""
+    def _atom(idx: Any) -> int:
+        i = int(idx)
+        if not 0 <= i < n_atoms:
+            raise ValueError(f"atom index {i} out of range [0, {n_atoms})")
+        return i
+
+    out: List[dict] = []
+    seen: set = set()
+    for pair in pairs or []:
+        if isinstance(pair, dict):
+            a, b = _atom(pair["a"]), _atom(pair["b"])
+        else:
+            a, b, *_ = pair
+            a, b = _atom(a), _atom(b)
+        if a == b:
+            raise ValueError(f"a clash needs two distinct atoms, got ({a}, {a})")
+        key = (a, b) if a < b else (b, a)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"a": key[0], "b": key[1]})
+    return out
+
+
 def _angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> Optional[float]:
     """Angle a-b-c at vertex ``b``, in degrees (None if a ray has zero length)."""
     va, vc = a - b, c - b
@@ -432,6 +515,8 @@ class LiveSession:
         self._interactions_contacts: List[dict] = []
         # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
         self._computed_interactions_visible = False
+        # Explicit clash pairs (list of {a, b} dicts); replayed to late clients.
+        self._clashes: List[dict] = []
 
         # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
         # | 'label'. In 'select' the user builds a selection streamed back here; in a
@@ -614,6 +699,70 @@ class LiveSession:
     def hide_computed_interactions(self) -> None:
         """Hide the computed overlay. See :meth:`set_computed_interactions`."""
         self.set_computed_interactions(False)
+
+    def detect_clashes(
+        self,
+        *,
+        tolerance: float = 0.4,
+        bond_tolerance: float = 0.45,
+        coords: Any = None,
+    ) -> List[tuple]:
+        """Compute steric clashes and return them as ``(i, j)`` atom-index pairs.
+
+        A clash is a pair of **non-bonded** atoms overlapping in van der Waals
+        space: separation ``< vdw_i + vdw_j - tolerance`` but ``> cov_i + cov_j +
+        bond_tolerance`` (so covalent bonds aren't flagged). Radii are looked up by
+        element (Bondi vdW; covalent), with sensible fallbacks. Mol\\* has no
+        general clash detector, so this is computed here from the coordinates you
+        own.
+
+        ``coords`` defaults to the most recent streamed frame (else the topology's
+        coordinates). Pass an ``(N, 3)`` array to test a specific conformation.
+        This only computes — call :meth:`set_clashes` to draw the result, or use
+        :meth:`show_clashes` to do both.
+        """
+        pts = self._current_coords() if coords is None else _coords_to_f32(coords, self._n_atoms).astype(float)
+        elements = [a.element for a in self.atoms]
+        return _detect_clashes(pts, elements, tolerance=tolerance, bond_tolerance=bond_tolerance)
+
+    def set_clashes(self, pairs: Any) -> List[tuple]:
+        """Draw steric clashes between the given atom-index pairs.
+
+        Each pair is drawn as a distinct red marker (visually separate from the
+        interaction notation). ``pairs`` is an iterable of ``(i, j)`` tuples or
+        ``{"a", "b"}`` dicts; indices are positional and validated against the atom
+        count, self-pairs are rejected, and duplicates are collapsed. Because the
+        markers reference atoms, they track streamed coordinates. Returns the
+        normalised ``(a, b)`` pairs. Thread-safe; replayed to late viewers. Pass an
+        empty iterable (or call :meth:`clear_clashes`) to remove them.
+        """
+        clashes = _normalize_pairs(pairs, self._n_atoms)
+        self._clashes = clashes
+        if clashes:
+            message = json.dumps({"type": "clashes", "action": "set", "pairs": clashes})
+        else:
+            message = json.dumps({"type": "clashes", "action": "clear"})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+        return [(c["a"], c["b"]) for c in clashes]
+
+    def clear_clashes(self) -> None:
+        """Remove all clash markers. See :meth:`set_clashes`."""
+        self._clashes = []
+        message = json.dumps({"type": "clashes", "action": "clear"})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def show_clashes(self, **detect_kwargs: Any) -> List[tuple]:
+        """Detect steric clashes and draw them in one call.
+
+        A convenience wrapper for ``set_clashes(detect_clashes(**kwargs))``; keyword
+        arguments are forwarded to :meth:`detect_clashes` (``tolerance``,
+        ``bond_tolerance``, ``coords``). Returns the drawn pairs.
+        """
+        return self.set_clashes(self.detect_clashes(**detect_kwargs))
 
     def set_volume_color(self, ref: str, color: str) -> None:
         """Broadcast a command to change the color of a volume by reference.
@@ -1175,6 +1324,10 @@ class LiveSession:
                 )
             if self._computed_interactions_visible:
                 await self._locked_send(websocket, json.dumps({"type": "computed-interactions", "visible": True}))
+            if self._clashes:
+                await self._locked_send(
+                    websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
+                )
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:
