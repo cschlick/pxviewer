@@ -19,6 +19,7 @@ class _StubSession:
         self.selections = []
         self.primitives_added = []
         self.measure_modes = []
+        self.interactions = None
 
     def push(self, coords):
         self.frames.append(np.asarray(coords, dtype="<f4"))
@@ -41,6 +42,14 @@ class _StubSession:
 
     def clear_primitives(self):
         pass
+
+    # The interactions demo drives these.
+    def set_interactions(self, interactions, **kwargs):
+        self.interactions = interactions
+        return interactions
+
+    def clear_interactions(self):
+        self.interactions = None
 
     # The measure demo drives these.
     def enable_measure_mode(self, kind, on_measure=None, **kwargs):

@@ -75,6 +75,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 | `pick` | click atoms to make them pulse — the scene → Python path |
 | `select` | atoms highlighted by index, cycling through subsets |
 | `primitives` | angle/distance/dihedral/label measurements tracking a flexing chain |
+| `interactions` | explicit typed non-covalent contacts stretching as two strands separate |
 | `measure` | click atoms to measure distances/angles/dihedrals — the scene → Python path |
 
 Each demo serves the frontend, waits for the viewer to connect, narrates each step
@@ -234,21 +235,42 @@ ball-and-stick / element-symbol.
 
 ### Non-covalent interactions
 
-Overlay Mol\*'s "Non-covalent Interactions" notation — dashed cylinders for
-hydrogen bonds, salt bridges, pi-stacking, halogen/metal and hydrophobic
-contacts — on top of whatever is drawn:
+Two ways to draw non-covalent (non-bonded) interaction notation — dashed
+cylinders, coloured by kind.
+
+**Explicit — you supply the contacts.** Give a typed table of atom-index pairs;
+nothing is inferred. This is the usual path when Python owns the atoms (a live
+session):
 
 ```python
-session.set_interactions(True)    # show
-session.show_interactions()       # same thing
-session.hide_interactions()       # off
+session.set_interactions({
+    "hydrogen-bond": [(0, 1), (5, 6)],
+    "salt-bridge":   [(3, 8)],       # alias for "ionic"
+    "hydrophobic":   [(10, 12)],
+})
+session.clear_interactions()
 ```
 
-The contacts are **computed in the browser** and recomputed as coordinates
-change, so the notation tracks live motion. It applies to every structure in the
-scene, whether it was loaded from a file/MVSJ scene or is streaming live, and the
-on/off state is replayed to viewers that connect later. In the desktop app the
-**Show non-bonded interactions** button under *Display* toggles the same thing.
+You can also pass `(kind, a, b)` tuples or `{"kind","a","b","description"}` dicts.
+Atom indices are **positional** (the same 0-based identity the rest of the live
+protocol uses); an out-of-range index or unknown kind raises `ValueError`. Kinds:
+`hydrogen-bond`, `weak-hydrogen-bond`, `ionic`, `hydrophobic`, `pi-stacking`,
+`cation-pi`, `halogen-bond`, `metal-coordination`, `water-bridge`, `covalent`,
+`unknown` (with aliases like `h-bond`, `salt-bridge`). Because the contacts
+reference atoms rather than fixed points, their endpoints **track the streamed
+coordinates**. The set is replayed to viewers that connect later. (See the
+`interactions` demo.)
+
+**Computed — Mol\* infers them.** When Python doesn't have a contact table — e.g.
+a structure loaded and parsed entirely in the browser — let Mol\* compute the
+contacts on every structure in the scene:
+
+```python
+session.set_computed_interactions(True)   # or show_/hide_computed_interactions()
+```
+
+In the desktop app the **Show computed interactions** button under *Display*
+toggles this.
 
 ### Secondary structure (for cartoon / ribbon)
 
@@ -284,7 +306,8 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
 | server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?},…]}` |
-| server → client | interactions | JSON `{"type":"interactions","visible":bool}` (non-covalent contact notation) |
+| server → client | interactions | JSON `{"type":"interactions","action":"set","contacts":[{kind,a,b,description?},…]}` or `{"type":"interactions","action":"clear"}` (explicit typed contacts) |
+| server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
 | server → client | mouse-selection-mode | JSON `{"type":"mouse-selection-mode","enabled":bool}` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |

@@ -20,6 +20,8 @@ import { Model, Structure, StructureElement, StructureProperties, StructureSelec
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
 import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
+import { CustomInteractions, InteractionsShape } from 'molstar/lib/extensions/interactions/transforms';
+import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
 import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 import { decodeColor } from 'molstar/lib/mol-util/color/utils';
@@ -107,6 +109,7 @@ export class LiveViewer {
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
     private reprNodes: StateObjectSelector[] = [];
+    private interactionsNode: StateObjectSelector | undefined;
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -339,6 +342,56 @@ export class LiveViewer {
     }
 
     /**
+     * Draw an explicit set of non-covalent interactions supplied by Python as
+     * typed atom-index pairs (e.g. hydrogen-bond between atoms 0 and 1). Unlike
+     * the computed overlay, nothing is inferred — these are exactly the contacts
+     * given. They hang off the live structure via `CustomInteractions`, so their
+     * endpoints track streamed coordinates. An empty list clears them.
+     *
+     * `contacts` items: { kind, a, b, description? } where a/b are positional
+     * atom indices (Mol*'s `atom_index` == our source-index identity).
+     */
+    async setInteractions(contacts: { kind: string; a: number; b: number; description?: string }[]) {
+        if (!contacts || contacts.length === 0) {
+            await this.clearInteractions();
+            return;
+        }
+        const ref = this.structure.ref;
+        // Each endpoint is a single atom addressed by its source index; both sides
+        // live in the same live structure, so a/bStructureRef are the same ref.
+        const interactions = contacts.map((c) => ({
+            kind: c.kind,
+            aStructureRef: ref,
+            a: { atom_index: c.a },
+            bStructureRef: ref,
+            b: { atom_index: c.b },
+            description: c.description,
+        }));
+        if (this.interactionsNode?.ref) {
+            await this.plugin.state.data
+                .build()
+                .to(this.interactionsNode)
+                .update((old: any) => ({ ...old, interactions }))
+                .commit();
+            return;
+        }
+        const node = this.plugin.state.data
+            .build()
+            .toRoot()
+            .apply(CustomInteractions, { interactions } as any, { dependsOn: [ref] });
+        node.apply(InteractionsShape).apply(ShapeRepresentation3D);
+        this.interactionsNode = node.selector;
+        await node.commit();
+    }
+
+    /** Remove the explicit interactions overlay, if any. */
+    async clearInteractions() {
+        const node = this.interactionsNode;
+        this.interactionsNode = undefined;
+        if (node?.ref) await this.plugin.state.data.build().delete(node.ref).commit();
+    }
+
+    /**
      * Set the click interaction mode. `'select'` builds a selection reported to
      * Python; `'distance'|'angle'|'dihedral'|'label'` collect N clicks then draw
      * that measurement; `'off'` does neither. Modes are mutually exclusive.
@@ -460,13 +513,15 @@ const TAG_FRAME = 1;
 const INTERACTIONS_TAG = 'pxviewer-interactions';
 
 /**
- * Show or hide the "Non-covalent Interactions" representation on every structure
- * in the scene — whether it was loaded from an MVSJ scene/file or is streaming
- * live. We tag the representations we add so we can find and remove exactly those,
- * and skip structures that already have one (so a repeated toggle is a no-op).
- * Hanging the representation off each structure means it recomputes per frame.
+ * Show or hide the *computed* "Non-covalent Interactions" representation on every
+ * structure in the scene — whether it was loaded from an MVSJ scene/file or is
+ * streaming live. Mol* infers the contacts. We tag the representations we add so
+ * we can find and remove exactly those, and skip structures that already have one
+ * (so a repeated toggle is a no-op). Hanging the representation off each structure
+ * means it recomputes per frame. For explicit, Python-supplied contacts instead,
+ * see `LiveViewer.setInteractions`.
  */
-async function setInteractions(plugin: PluginContext, visible: boolean) {
+async function setComputedInteractions(plugin: PluginContext, visible: boolean) {
     const structures = plugin.state.data.selectQ((q: any) => q.rootsOfType(SO.Molecule.Structure));
     if (visible) {
         for (const cell of structures) {
@@ -610,8 +665,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
-            } else if (msg.type === 'interactions' && typeof msg.visible === 'boolean') {
-                await setInteractions(plugin, msg.visible);
+            } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
+                await setComputedInteractions(plugin, msg.visible);
+            } else if (msg.type === 'interactions' && viewer) {
+                if (msg.action === 'clear') await viewer.clearInteractions();
+                else await viewer.setInteractions(msg.contacts ?? []);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {

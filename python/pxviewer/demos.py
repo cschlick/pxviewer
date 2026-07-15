@@ -337,6 +337,41 @@ def _run_primitives(p: Player) -> None:
         p.hold(1.2)
 
 
+def _interaction_pair() -> List[Atom]:
+    """Two short parallel strands whose facing atoms make a few contacts."""
+    top = np.stack([np.linspace(-4, 4, 5), np.full(5, 1.6), np.zeros(5)], axis=1)
+    bot = np.stack([np.linspace(-4, 4, 5), np.full(5, -1.6), np.zeros(5)], axis=1)
+    return _atoms(np.concatenate([top, bot]).astype("<f4"))
+
+
+def _run_interactions(p: Player) -> None:
+    session = p.session
+    base = p.base  # atoms 0..4 = top strand, 5..9 = bottom strand
+
+    # An explicit, typed contact table — exactly what Python declares, nothing
+    # inferred. Facing atoms across the two strands.
+    session.set_interactions({
+        "hydrogen-bond": [(0, 5), (2, 7), (4, 9)],
+        "hydrophobic": [(1, 6), (3, 8)],
+    })
+
+    def breathe(sep: float) -> np.ndarray:
+        c = base.copy()
+        c[:5, 1] = sep       # top strand y
+        c[5:, 1] = -sep      # bottom strand y
+        return c
+
+    while not p.stopped:
+        p.step(1, "Two strands with declared H-bonds and hydrophobic contacts.")
+        p.push(base)
+        p.hold(1.5)
+        p.step(2, "Pulling the strands apart — the interactions stretch with them.")
+        p.play(lambda t: breathe(1.6 + 2.0 * _smooth(t)), seconds=3.5)
+        p.step(3, "Bringing them back together.")
+        p.play(lambda t: breathe(3.6 - 2.0 * _smooth(t)), seconds=3.5)
+        p.hold(1.0)
+
+
 def _spin(base: np.ndarray, a: float) -> np.ndarray:
     """Rotate coordinates about the y axis by angle ``a`` (radians)."""
     ca, sa = math.cos(a), math.sin(a)
@@ -407,6 +442,7 @@ DEMOS: dict[str, Demo] = {
         Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _atoms(_ring(16)), _run_pick),
         Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
         Demo("primitives", "Angle/distance/dihedral/label measurements that track motion.", _bent_chain, _run_primitives),
+        Demo("interactions", "Explicit typed non-covalent contacts that track motion.", _interaction_pair, _run_interactions),
         Demo("measure", "Interactive: click atoms to measure distances/angles/dihedrals (scene → Python).", lambda: _atoms(_helix(12, radius=4.0, pitch=3.0)), _run_measure),
     ]
 }

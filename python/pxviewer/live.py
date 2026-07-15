@@ -171,6 +171,95 @@ def _encode_index_set(indices: Iterable[int]) -> dict:
     return {"list": idx}
 
 
+# The interaction kinds Mol*'s custom-interactions extension understands.
+_INTERACTION_KINDS = frozenset({
+    "unknown",
+    "ionic",
+    "pi-stacking",
+    "cation-pi",
+    "halogen-bond",
+    "hydrogen-bond",
+    "weak-hydrogen-bond",
+    "hydrophobic",
+    "metal-coordination",
+    "water-bridge",
+    "covalent",
+})
+
+# Friendly spellings people actually type -> the canonical kind.
+_INTERACTION_ALIASES = {
+    "h-bond": "hydrogen-bond",
+    "hbond": "hydrogen-bond",
+    "hydrogen bond": "hydrogen-bond",
+    "weak-h-bond": "weak-hydrogen-bond",
+    "weak hydrogen bond": "weak-hydrogen-bond",
+    "salt-bridge": "ionic",
+    "saltbridge": "ionic",
+    "salt bridge": "ionic",
+    "ionic-bond": "ionic",
+    "pi-pi": "pi-stacking",
+    "pi stacking": "pi-stacking",
+    "pi-cation": "cation-pi",
+    "cation pi": "cation-pi",
+    "halogen": "halogen-bond",
+    "metal": "metal-coordination",
+    "metal coordination": "metal-coordination",
+    "water bridge": "water-bridge",
+}
+
+
+def _normalize_kind(kind: Any) -> str:
+    """Map a user-supplied interaction kind to a canonical Mol* kind."""
+    key = str(kind).strip().lower().replace("_", "-")
+    key = _INTERACTION_ALIASES.get(key, key)
+    if key not in _INTERACTION_KINDS:
+        raise ValueError(
+            f"unknown interaction kind {kind!r}. Known kinds: {', '.join(sorted(_INTERACTION_KINDS))}"
+        )
+    return key
+
+
+def _normalize_interactions(interactions: Any, n_atoms: int) -> List[dict]:
+    """Coerce a user interaction table into a flat list of contact dicts.
+
+    Accepts a ``{kind: pairs}`` mapping, an iterable of ``(kind, a, b)`` tuples,
+    or an iterable of ``{kind, a, b, description?}`` dicts. Validates every atom
+    index against ``n_atoms`` and every kind against the known set.
+    """
+    def _atom(idx: Any) -> int:
+        i = int(idx)
+        if not 0 <= i < n_atoms:
+            raise ValueError(f"atom index {i} out of range [0, {n_atoms})")
+        return i
+
+    def _contact(kind: Any, a: Any, b: Any, description: Any = None) -> dict:
+        c = {"kind": _normalize_kind(kind), "a": _atom(a), "b": _atom(b)}
+        if description is not None:
+            c["description"] = str(description)
+        return c
+
+    if interactions is None:
+        return []
+
+    contacts: List[dict] = []
+    if isinstance(interactions, dict):
+        for kind, pairs in interactions.items():
+            for pair in pairs:
+                a, b, *rest = pair
+                contacts.append(_contact(kind, a, b, rest[0] if rest else None))
+        return contacts
+
+    for item in interactions:
+        if isinstance(item, dict):
+            contacts.append(
+                _contact(item["kind"], item["a"], item["b"], item.get("description"))
+            )
+        else:
+            kind, a, b, *rest = item
+            contacts.append(_contact(kind, a, b, rest[0] if rest else None))
+    return contacts
+
+
 def _angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> Optional[float]:
     """Angle a-b-c at vertex ``b``, in degrees (None if a ray has zero length)."""
     va, vc = a - b, c - b
@@ -339,8 +428,10 @@ class LiveSession:
         # Representations (id -> spec), sent declaratively; replayed to late clients.
         self._representations: dict = {}
         self._representation_counter = 0
-        # Whether non-covalent interaction notation is shown; replayed to late clients.
-        self._interactions_visible = False
+        # Explicit, Python-supplied interaction contacts (list of dicts); replayed.
+        self._interactions_contacts: List[dict] = []
+        # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
+        self._computed_interactions_visible = False
 
         # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
         # | 'label'. In 'select' the user builds a selection streamed back here; in a
@@ -450,33 +541,79 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def set_interactions(self, visible: bool) -> None:
-        """Show or hide non-covalent (non-bonded) interaction notation.
+    def set_interactions(self, interactions: Any) -> List[dict]:
+        """Draw an explicit set of non-covalent interactions between atom pairs.
 
-        This overlays Mol*'s "Non-covalent Interactions" representation — dashed
-        cylinders for hydrogen bonds, salt bridges, pi-stacking, hydrophobic and
-        other contacts — on every structure currently in the scene, whether it was
-        loaded from a file/MVSJ scene or is streaming live. The contacts recompute
-        as coordinates change, so the notation tracks live motion.
+        You supply the contacts; nothing is inferred. Each is a typed pair of
+        positional atom indices (the same 0-based identity the rest of the live
+        protocol uses). They are drawn as Mol*'s non-covalent interaction notation
+        (dashed cylinders, coloured by kind) and — because they reference atoms,
+        not fixed positions — their endpoints track streamed coordinates.
 
-        Thread-safe: may be called from any thread. Idempotent — toggling to the
-        same state twice is harmless, and the current state is replayed to viewers
-        that connect later.
+        ``interactions`` may be:
+
+        - a mapping of ``kind -> pairs``, e.g.::
+
+              session.set_interactions({
+                  "hydrogen-bond": [(0, 1), (5, 6)],
+                  "salt-bridge":   [(3, 8)],
+              })
+
+        - an iterable of ``(kind, a, b)`` tuples, e.g. ``[("h-bond", 0, 1), ...]``
+        - an iterable of dicts ``{"kind", "a", "b", "description"?}``
+
+        Kinds are ``hydrogen-bond``, ``weak-hydrogen-bond``, ``ionic``,
+        ``hydrophobic``, ``pi-stacking``, ``cation-pi``, ``halogen-bond``,
+        ``metal-coordination``, ``water-bridge``, ``covalent`` and ``unknown``;
+        common aliases like ``h-bond`` and ``salt-bridge`` are accepted.
+
+        Returns the normalised contacts. Raises ``ValueError`` for an unknown kind
+        or an out-of-range atom index (fail loud, per the identity contract).
+        Thread-safe; the set is replayed to viewers that connect later. Pass an
+        empty collection (or call :meth:`clear_interactions`) to remove them.
         """
-        visible = bool(visible)
-        self._interactions_visible = visible
-        message = json.dumps({"type": "interactions", "visible": visible})
+        contacts = _normalize_interactions(interactions, self._n_atoms)
+        self._interactions_contacts = contacts
+        if contacts:
+            message = json.dumps({"type": "interactions", "action": "set", "contacts": contacts})
+        else:
+            message = json.dumps({"type": "interactions", "action": "clear"})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+        return contacts
+
+    def clear_interactions(self) -> None:
+        """Remove all explicit interactions. See :meth:`set_interactions`."""
+        self._interactions_contacts = []
+        message = json.dumps({"type": "interactions", "action": "clear"})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def show_interactions(self) -> None:
-        """Show non-covalent interaction notation. See :meth:`set_interactions`."""
-        self.set_interactions(True)
+    def set_computed_interactions(self, visible: bool) -> None:
+        """Show or hide Mol*'s *computed* non-covalent interaction overlay.
 
-    def hide_interactions(self) -> None:
-        """Hide non-covalent interaction notation. See :meth:`set_interactions`."""
-        self.set_interactions(False)
+        Unlike :meth:`set_interactions`, the contacts are inferred by Mol* from
+        the geometry, on every structure in the scene (file/MVSJ or live). Useful
+        when Python doesn't have an explicit contact table — e.g. a structure
+        loaded and parsed entirely in the browser. Thread-safe; replayed to late
+        viewers.
+        """
+        visible = bool(visible)
+        self._computed_interactions_visible = visible
+        message = json.dumps({"type": "computed-interactions", "visible": visible})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def show_computed_interactions(self) -> None:
+        """Show the computed overlay. See :meth:`set_computed_interactions`."""
+        self.set_computed_interactions(True)
+
+    def hide_computed_interactions(self) -> None:
+        """Hide the computed overlay. See :meth:`set_computed_interactions`."""
+        self.set_computed_interactions(False)
 
     def set_volume_color(self, ref: str, color: str) -> None:
         """Broadcast a command to change the color of a volume by reference.
@@ -1031,8 +1168,13 @@ class LiveSession:
                 await self._locked_send(
                     websocket, json.dumps({"type": "representations", "reprs": list(self._representations.values())})
                 )
-            if self._interactions_visible:
-                await self._locked_send(websocket, json.dumps({"type": "interactions", "visible": True}))
+            if self._interactions_contacts:
+                await self._locked_send(
+                    websocket,
+                    json.dumps({"type": "interactions", "action": "set", "contacts": self._interactions_contacts}),
+                )
+            if self._computed_interactions_visible:
+                await self._locked_send(websocket, json.dumps({"type": "computed-interactions", "visible": True}))
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:

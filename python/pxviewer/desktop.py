@@ -151,11 +151,12 @@ class ControlsWindow:
         # These apply to whatever is loaded, so they sit below the tabs.
         layout.addWidget(QLabel("<b>Display</b>"))
 
-        self._interactions_btn = QPushButton("Show non-bonded interactions")
+        self._interactions_btn = QPushButton("Show computed interactions")
         self._interactions_btn.setCheckable(True)
         self._interactions_btn.setToolTip(
-            "Overlay non-covalent contacts (hydrogen bonds, salt bridges, "
-            "pi-stacking, hydrophobic) as dashed cylinders."
+            "Overlay Mol*-computed non-covalent contacts (hydrogen bonds, salt "
+            "bridges, pi-stacking, hydrophobic) as dashed cylinders. For explicit, "
+            "user-defined contacts, use LiveSession.set_interactions() from Python."
         )
         self._interactions_btn.clicked.connect(self._on_toggle_interactions)
         layout.addWidget(self._interactions_btn)
@@ -355,16 +356,16 @@ class ControlsWindow:
         self._desktop.stop_demo()
 
     def _on_toggle_interactions(self, checked: bool) -> None:
-        self._desktop.set_interactions(checked)
+        self._desktop.set_computed_interactions(checked)
         self._interactions_btn.setText(
-            "Hide non-bonded interactions" if checked else "Show non-bonded interactions"
+            "Hide computed interactions" if checked else "Show computed interactions"
         )
 
     def _on_interactions_reset(self, visible: bool) -> None:
         # A fresh load clears the overlay; keep the button in sync with that.
         self._interactions_btn.setChecked(visible)
         self._interactions_btn.setText(
-            "Hide non-bonded interactions" if visible else "Show non-bonded interactions"
+            "Hide computed interactions" if visible else "Show computed interactions"
         )
 
     def _on_toggle_select(self, checked: bool) -> None:
@@ -412,7 +413,7 @@ class DesktopApp:
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
-        self._interactions_visible = False
+        self._computed_interactions_visible = False
         self._load_counter = 0
 
         self._stopped = False
@@ -672,19 +673,19 @@ class DesktopApp:
 
     # -- display ---------------------------------------------------------
 
-    def set_interactions(self, visible: bool) -> None:
-        """Show or hide non-covalent interaction notation on the loaded structure."""
-        self._interactions_visible = bool(visible)
+    def set_computed_interactions(self, visible: bool) -> None:
+        """Show or hide Mol*'s computed interaction overlay on the loaded structure."""
+        self._computed_interactions_visible = bool(visible)
         if self._session is not None:
-            self._session.set_interactions(self._interactions_visible)
+            self._session.set_computed_interactions(self._computed_interactions_visible)
 
     def _reset_interactions(self) -> None:
         """Drop the overlay on load — a freshly loaded structure starts clean."""
-        if not self._interactions_visible:
+        if not self._computed_interactions_visible:
             return
-        self._interactions_visible = False
+        self._computed_interactions_visible = False
         if self._session is not None:
-            self._session.set_interactions(False)
+            self._session.set_computed_interactions(False)
         self.bridge.interactions_changed.emit(False)
 
     # -- selection -------------------------------------------------------

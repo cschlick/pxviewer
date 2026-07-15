@@ -121,45 +121,89 @@ def test_set_axis_command_reaches_client(session):
     asyncio.run(scenario())
 
 
-def test_set_interactions_command_reaches_client(session):
+def test_set_interactions_from_mapping_reaches_client(session):
     async def scenario():
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
-            session.set_interactions(True)
+            session.set_interactions({"h-bond": [(0, 1)], "salt-bridge": [(2, 3)]})
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert event == {"type": "interactions", "visible": True}
-            session.hide_interactions()
+            assert event["type"] == "interactions"
+            assert event["action"] == "set"
+            # aliases normalised to canonical Mol* kinds; indices preserved
+            assert {"kind": "hydrogen-bond", "a": 0, "b": 1} in event["contacts"]
+            assert {"kind": "ionic", "a": 2, "b": 3} in event["contacts"]
+
+    asyncio.run(scenario())
+
+
+def test_set_interactions_accepts_tuple_and_dict_forms(session):
+    from_tuples = session.set_interactions([("hydrogen-bond", 0, 1, "backbone")])
+    assert from_tuples == [{"kind": "hydrogen-bond", "a": 0, "b": 1, "description": "backbone"}]
+    from_dicts = session.set_interactions([{"kind": "hydrophobic", "a": 1, "b": 2}])
+    assert from_dicts == [{"kind": "hydrophobic", "a": 1, "b": 2}]
+
+
+def test_set_interactions_rejects_bad_index_and_kind(session):
+    with pytest.raises(ValueError, match="out of range"):
+        session.set_interactions({"hydrogen-bond": [(0, 999)]})
+    with pytest.raises(ValueError, match="unknown interaction kind"):
+        session.set_interactions([("not-a-bond", 0, 1)])
+
+
+def test_clear_interactions_message(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_interactions({"hydrogen-bond": [(0, 1)]})
+            await asyncio.wait_for(ws.recv(), timeout=5)  # the set
+            session.clear_interactions()
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert event == {"type": "interactions", "visible": False}
+            assert event == {"type": "interactions", "action": "clear"}
 
     asyncio.run(scenario())
 
 
 def test_interactions_replayed_to_late_client(session):
-    session.show_interactions()  # before anyone connects
+    session.set_interactions({"hydrogen-bond": [(0, 1)]})  # before anyone connects
 
     async def scenario():
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert event == {"type": "interactions", "visible": True}
+            assert event["type"] == "interactions"
+            assert event["action"] == "set"
+            assert event["contacts"] == [{"kind": "hydrogen-bond", "a": 0, "b": 1}]
 
     asyncio.run(scenario())
 
 
-def test_hidden_interactions_not_replayed_to_late_client(session):
-    """The default-off state shouldn't push an interactions message on connect."""
-    session.show_interactions()
-    session.hide_interactions()
+def test_computed_interactions_command_reaches_client(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_computed_interactions(True)
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "computed-interactions", "visible": True}
+            session.hide_computed_interactions()
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "computed-interactions", "visible": False}
+
+    asyncio.run(scenario())
+
+
+def test_computed_interactions_replayed_to_late_client(session):
+    session.show_computed_interactions()
 
     async def scenario():
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
-            with pytest.raises(asyncio.TimeoutError):
-                await asyncio.wait_for(ws.recv(), timeout=0.5)
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "computed-interactions", "visible": True}
 
     asyncio.run(scenario())
 
