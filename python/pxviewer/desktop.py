@@ -59,6 +59,7 @@ def _make_bridge():
     class _Bridge(QObject):
         selection_changed = Signal(object)
         status_changed = Signal(str)
+        interactions_changed = Signal(bool)
 
     return _Bridge()
 
@@ -147,7 +148,18 @@ class ControlsWindow:
         tabs.addTab(self._build_demos_tab(), "Demos")
         layout.addWidget(tabs, stretch=1)
 
-        # Selection applies to whatever is loaded, so it sits below the tabs.
+        # These apply to whatever is loaded, so they sit below the tabs.
+        layout.addWidget(QLabel("<b>Display</b>"))
+
+        self._interactions_btn = QPushButton("Show non-bonded interactions")
+        self._interactions_btn.setCheckable(True)
+        self._interactions_btn.setToolTip(
+            "Overlay non-covalent contacts (hydrogen bonds, salt bridges, "
+            "pi-stacking, hydrophobic) as dashed cylinders."
+        )
+        self._interactions_btn.clicked.connect(self._on_toggle_interactions)
+        layout.addWidget(self._interactions_btn)
+
         layout.addWidget(QLabel("<b>Selection</b>"))
 
         self._select_btn = QPushButton("Enable selection mode")
@@ -169,6 +181,7 @@ class ControlsWindow:
 
         desktop.bridge.selection_changed.connect(self._on_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
+        desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
 
     # -- tabs ------------------------------------------------------------
 
@@ -341,6 +354,19 @@ class ControlsWindow:
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
 
+    def _on_toggle_interactions(self, checked: bool) -> None:
+        self._desktop.set_interactions(checked)
+        self._interactions_btn.setText(
+            "Hide non-bonded interactions" if checked else "Show non-bonded interactions"
+        )
+
+    def _on_interactions_reset(self, visible: bool) -> None:
+        # A fresh load clears the overlay; keep the button in sync with that.
+        self._interactions_btn.setChecked(visible)
+        self._interactions_btn.setText(
+            "Hide non-bonded interactions" if visible else "Show non-bonded interactions"
+        )
+
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
             self._desktop.enable_mouse_selection()
@@ -386,6 +412,7 @@ class DesktopApp:
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
+        self._interactions_visible = False
         self._load_counter = 0
 
         self._stopped = False
@@ -552,6 +579,7 @@ class DesktopApp:
     def load_file(self, path: str) -> str:
         """Open a local structure or volume file in the viewport. Returns its kind."""
         self.stop_demo()
+        self._reset_interactions()
 
         # Each load gets a fresh directory, so a reloaded page can never pick up
         # a cached scene or data file from the previous one.
@@ -568,6 +596,7 @@ class DesktopApp:
     def load_volume_demo(self, name: str) -> None:
         """Generate a volume demo and load its static scene in the viewport."""
         self.stop_demo()
+        self._reset_interactions()
 
         demo_dir = self._webapp.volume_dir / name
         demo_dir.mkdir(parents=True, exist_ok=True)
@@ -590,6 +619,7 @@ class DesktopApp:
             raise ValueError(f"unknown demo '{name}'. Available: {', '.join(DEMOS)}")
 
         self.stop_demo()
+        self._reset_interactions()
 
         atoms = demo.make_atoms()
         ws_url = self._ensure_session(f"demo:{name}", lambda: atoms)
@@ -639,6 +669,23 @@ class DesktopApp:
             player.stop()
         if thread is not None and thread.is_alive():
             thread.join(timeout=5)
+
+    # -- display ---------------------------------------------------------
+
+    def set_interactions(self, visible: bool) -> None:
+        """Show or hide non-covalent interaction notation on the loaded structure."""
+        self._interactions_visible = bool(visible)
+        if self._session is not None:
+            self._session.set_interactions(self._interactions_visible)
+
+    def _reset_interactions(self) -> None:
+        """Drop the overlay on load — a freshly loaded structure starts clean."""
+        if not self._interactions_visible:
+            return
+        self._interactions_visible = False
+        if self._session is not None:
+            self._session.set_interactions(False)
+        self.bridge.interactions_changed.emit(False)
 
     # -- selection -------------------------------------------------------
 

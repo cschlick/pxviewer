@@ -339,6 +339,8 @@ class LiveSession:
         # Representations (id -> spec), sent declaratively; replayed to late clients.
         self._representations: dict = {}
         self._representation_counter = 0
+        # Whether non-covalent interaction notation is shown; replayed to late clients.
+        self._interactions_visible = False
 
         # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
         # | 'label'. In 'select' the user builds a selection streamed back here; in a
@@ -447,6 +449,34 @@ class LiveSession:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_interactions(self, visible: bool) -> None:
+        """Show or hide non-covalent (non-bonded) interaction notation.
+
+        This overlays Mol*'s "Non-covalent Interactions" representation — dashed
+        cylinders for hydrogen bonds, salt bridges, pi-stacking, hydrophobic and
+        other contacts — on every structure currently in the scene, whether it was
+        loaded from a file/MVSJ scene or is streaming live. The contacts recompute
+        as coordinates change, so the notation tracks live motion.
+
+        Thread-safe: may be called from any thread. Idempotent — toggling to the
+        same state twice is harmless, and the current state is replayed to viewers
+        that connect later.
+        """
+        visible = bool(visible)
+        self._interactions_visible = visible
+        message = json.dumps({"type": "interactions", "visible": visible})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def show_interactions(self) -> None:
+        """Show non-covalent interaction notation. See :meth:`set_interactions`."""
+        self.set_interactions(True)
+
+    def hide_interactions(self) -> None:
+        """Hide non-covalent interaction notation. See :meth:`set_interactions`."""
+        self.set_interactions(False)
 
     def set_volume_color(self, ref: str, color: str) -> None:
         """Broadcast a command to change the color of a volume by reference.
@@ -1001,6 +1031,8 @@ class LiveSession:
                 await self._locked_send(
                     websocket, json.dumps({"type": "representations", "reprs": list(self._representations.values())})
                 )
+            if self._interactions_visible:
+                await self._locked_send(websocket, json.dumps({"type": "interactions", "visible": True}))
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:

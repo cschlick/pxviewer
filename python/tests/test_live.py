@@ -121,6 +121,49 @@ def test_set_axis_command_reaches_client(session):
     asyncio.run(scenario())
 
 
+def test_set_interactions_command_reaches_client(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_interactions(True)
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "interactions", "visible": True}
+            session.hide_interactions()
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "interactions", "visible": False}
+
+    asyncio.run(scenario())
+
+
+def test_interactions_replayed_to_late_client(session):
+    session.show_interactions()  # before anyone connects
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "interactions", "visible": True}
+
+    asyncio.run(scenario())
+
+
+def test_hidden_interactions_not_replayed_to_late_client(session):
+    """The default-off state shouldn't push an interactions message on connect."""
+    session.show_interactions()
+    session.hide_interactions()
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(ws.recv(), timeout=0.5)
+
+    asyncio.run(scenario())
+
+
 def test_highlight_message_reaches_client(session):
     """highlight() broadcasts an index-set with no round-trip; select returns synchronously."""
 

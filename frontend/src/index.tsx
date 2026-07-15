@@ -4,6 +4,8 @@ import { MolViewSpecBehavior } from 'molstar/lib/extensions/mvs/behavior';
 import { useCreatePluginViewModel } from 'molstar/lib/extensions/plugin/hooks/use-view-model';
 import { PluginCanvas } from 'molstar/lib/extensions/plugin/react';
 import { loadMVSFromUrl, loadPdb } from 'molstar/lib/extensions/plugin/loaders';
+import { PluginSpec } from 'molstar/lib/mol-plugin/spec';
+import { Interactions } from 'molstar/lib/mol-plugin/behavior/dynamic/custom-props/computed/interactions';
 import { connectLive } from './live';
 
 const DEFAULT_WS = 'ws://127.0.0.1:8787';
@@ -12,6 +14,10 @@ function App() {
     const model = useCreatePluginViewModel({
         spec: (s) => {
             s.behaviors.push(MolViewSpecBehavior);
+            // Registers the 'interactions' representation type and its computed
+            // custom property, so `set_interactions` from Python has something
+            // to add. Not in the minimal default spec we start from.
+            s.behaviors.push(PluginSpec.Behavior(Interactions));
             return s;
         },
     });

@@ -457,6 +457,39 @@ function decodeIndexSet(enc: any): number[] {
 const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 
+const INTERACTIONS_TAG = 'pxviewer-interactions';
+
+/**
+ * Show or hide the "Non-covalent Interactions" representation on every structure
+ * in the scene — whether it was loaded from an MVSJ scene/file or is streaming
+ * live. We tag the representations we add so we can find and remove exactly those,
+ * and skip structures that already have one (so a repeated toggle is a no-op).
+ * Hanging the representation off each structure means it recomputes per frame.
+ */
+async function setInteractions(plugin: PluginContext, visible: boolean) {
+    const structures = plugin.state.data.selectQ((q: any) => q.rootsOfType(SO.Molecule.Structure));
+    if (visible) {
+        for (const cell of structures) {
+            const ref = cell.transform.ref;
+            const existing = plugin.state.data.selectQ((q: any) => q.byRef(ref).subtree().withTag(INTERACTIONS_TAG));
+            if (existing.length) continue;
+            // 'interactions' is a computed/extension type, so it's outside the
+            // built-in props union; the registered provider resolves it at runtime.
+            await plugin.builders.structure.representation.addRepresentation(
+                ref,
+                { type: 'interactions' } as any,
+                { tag: INTERACTIONS_TAG },
+            );
+        }
+    } else {
+        const reprs = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(INTERACTIONS_TAG));
+        if (!reprs.length) return;
+        const b = plugin.state.data.build();
+        for (const cell of reprs) b.delete(cell.transform.ref);
+        await b.commit();
+    }
+}
+
 async function setAxis(plugin: PluginContext, visible: boolean) {
     await plugin.canvas3dInitialized;
     if (!plugin.canvas3d) return;
@@ -577,6 +610,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             try { msg = JSON.parse(ev.data); } catch { return; }
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
+            } else if (msg.type === 'interactions' && typeof msg.visible === 'boolean') {
+                await setInteractions(plugin, msg.visible);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
