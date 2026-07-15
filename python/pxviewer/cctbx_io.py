@@ -246,9 +246,6 @@ class ModelData:
         """Base coordinates as ``(N, 3)`` float32 (topology frame)."""
         return self.arrays.xyz
 
-    def atom_at(self, i: int) -> Atom:
-        return self.arrays.atom_at(i)
-
     def has_model(self) -> bool:
         return self.model is not None
 

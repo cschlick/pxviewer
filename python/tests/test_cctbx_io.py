@@ -126,7 +126,7 @@ def test_load_model_reduces_to_streamable_bundle():
     # metadata accessors work on cctbx-sourced atoms
     sel = session.select_by(ids=[1, 2, 3])
     assert sel.indices == [0, 1, 2]
-    assert all(a.resname == "LYS" for a in sel.atoms)
+    assert all(r == "LYS" for r in sel.resnames)
 
 
 # -- ModelData: cctbx selection + drift --------------------------------------
@@ -135,7 +135,7 @@ def test_model_backed_session_uses_cctbx_selection():
     session = LiveSession.from_model_file(LYSOZYME)
     sel = session.select_by(selection="chain A and resseq 5:14 and name CA")
     assert len(sel) == 10
-    assert all(a.name == "CA" for a in sel.atoms)
+    assert all(n == "CA" for n in sel.names)
 
 
 def test_diff_detects_model_drift():

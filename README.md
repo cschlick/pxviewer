@@ -136,7 +136,7 @@ needed), then show it:
 sel = session.select_by(indices=range(20))       # positional rows 0..19
 sel = session.select_by(ids=[10, 12, 14])         # by Atom.id
 sel = session.select_by(mask=my_bool_array)       # numpy mask of length N
-sel.indices   # [0, 1, 2, ...]   sel.atoms   sel.ids   sel.mask
+sel.indices   # [0, 1, 2, ...]   columnar views: sel.ids sel.names sel.resnames sel.chains sel.resseqs sel.elements   sel.mask
 
 session.highlight(sel)                 # selection overlay
 session.focus([4, 5, 6])               # aim the camera (indices coerced to a Selection)

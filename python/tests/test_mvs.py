@@ -69,8 +69,20 @@ def test_selection_union(session):
 
 def test_selection_result_carries_labels(session):
     sel = session.select_by(selection="chain A and name CA")
-    assert [a.name for a in sel.atoms] == ["CA", "CA", "CA"]
-    assert all(a.chain == "A" for a in sel.atoms)
+    assert sel.names == ["CA", "CA", "CA"]
+    assert sel.chains == ["A", "A", "A"]
+
+
+def test_selection_columnar_accessors(session):
+    sel = session.select_by(selection="chain A")
+    # cctbx orders N before CA within each residue.
+    assert sel.indices == [0, 1, 2, 3, 4, 5]
+    assert sel.ids == [1, 2, 3, 4, 5, 6]  # id == i_seq + 1
+    assert sel.names == ["N", "CA", "N", "CA", "N", "CA"]
+    assert sel.elements == ["N", "C", "N", "C", "N", "C"]
+    assert sel.resseqs == [1, 1, 2, 2, 3, 3]
+    assert sel.chains == ["A"] * 6
+    assert not hasattr(sel, "atoms")  # columnar only — no per-atom objects
 
 
 def test_coercion_accepts_selection_string(session):

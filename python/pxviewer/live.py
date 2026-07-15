@@ -329,25 +329,51 @@ def _coords_to_f32(coords: Any, n_atoms: int) -> np.ndarray:
     return flat.reshape(n_atoms, 3)
 
 
-@dataclasses.dataclass
 class Selection:
-    """A set of atoms addressed by positional index.
+    """A set of atoms addressed by positional index (i_seq).
 
-    ``indices`` are positional (0-based) rows into the topology's _atom_site
-    table — the same stable identity the rest of the live protocol uses (see
-    ``ATOM_IDENTITY_CONTRACT``); they are kept sorted and de-duplicated. ``atoms``
-    are the corresponding ``Atom`` objects; ``ids`` and ``mask`` are derived views.
-    Build one with :meth:`LiveSession.select_by`.
+    ``indices`` are positional (0-based) rows into the topology's _atom_site table —
+    the same stable identity the whole live protocol uses (see
+    ``ATOM_IDENTITY_CONTRACT``); kept sorted and de-duplicated. Per-atom fields are
+    exposed as **columnar lists** read from the session's columns on demand
+    (``ids``, ``names``, ``resnames``, ``chains``, ``resseqs``, ``elements``) — no
+    per-atom objects are built. Construct via :meth:`LiveSession.select_by`.
     """
 
-    indices: List[int]
-    atoms: List[Atom]
-    n_total: int
+    def __init__(self, indices: Iterable[int], n_total: int, arrays: "AtomArrays"):
+        self.indices: List[int] = list(indices)
+        self.n_total = n_total
+        self._arrays = arrays  # shared reference to the session's columns (not copied)
 
     @property
     def ids(self) -> List[int]:
         """The ``_atom_site.id`` of each matched atom."""
-        return [a.id for a in self.atoms]
+        return [int(self._arrays.id[i]) for i in self.indices]
+
+    @property
+    def names(self) -> List[str]:
+        """The atom name of each matched atom."""
+        return [self._arrays.name[i] for i in self.indices]
+
+    @property
+    def resnames(self) -> List[str]:
+        """The residue name of each matched atom."""
+        return [self._arrays.resname[i] for i in self.indices]
+
+    @property
+    def chains(self) -> List[str]:
+        """The chain id of each matched atom."""
+        return [self._arrays.chain[i] for i in self.indices]
+
+    @property
+    def resseqs(self) -> List[int]:
+        """The residue number of each matched atom."""
+        return [int(self._arrays.resseq[i]) for i in self.indices]
+
+    @property
+    def elements(self) -> List[str]:
+        """The element symbol of each matched atom."""
+        return [self._arrays.element[i] for i in self.indices]
 
     @property
     def mask(self) -> np.ndarray:
@@ -882,20 +908,18 @@ class LiveSession:
         """
         return self._data.diff()
 
-    def _atom_at(self, i: int) -> Atom:
-        return self._data.atom_at(i)
-
     def _make_selection(self, indices: Iterable[int]) -> Selection:
         """Build a :class:`Selection` from indices, validating and de-duplicating.
 
-        Per-atom :class:`Atom` objects are materialised only for the matched subset
-        (usually small), never for the whole structure.
+        The Selection holds only the indices plus a reference to the session's
+        columns — per-atom fields are read columnarly on access, nothing is
+        materialised per atom.
         """
         idx = sorted({int(i) for i in indices})
         for i in idx:
             if not 0 <= i < self._n_atoms:
                 raise ValueError(f"atom index {i} out of range [0, {self._n_atoms})")
-        return Selection(idx, [self._atom_at(i) for i in idx], self._n_atoms)
+        return Selection(idx, self._n_atoms, self._data.arrays)
 
     def select_by(
         self,
@@ -1258,8 +1282,8 @@ class LiveSession:
 
     def _default_measure_options(self, kind: str, atoms: List[int]) -> dict:
         if kind == "label":
-            atom = self._data.atom_at(atoms[0])
-            return {"text": f"{atom.name}{atom.resseq}"}
+            arr, i = self._data.arrays, atoms[0]
+            return {"text": f"{arr.name[i]}{int(arr.resseq[i])}"}
         options: dict = {"label": True}
         if kind in ("angle", "dihedral"):
             options["opacity"] = 0.35
