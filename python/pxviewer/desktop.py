@@ -424,12 +424,12 @@ class ControlsWindow:
 
         layout.addWidget(QLabel("<b>Map + model demo</b>"))
         mm_blurb = QLabel(
-            "The bundled lysozyme (1AKI) with a density map computed from it by "
-            "cctbx — loaded as one map_model_manager group."
+            f"The bundled {SAMPLE_STRUCTURE[1]} with a density map computed from it "
+            "by cctbx — loaded as one map_model_manager group."
         )
         mm_blurb.setWordWrap(True)
         layout.addWidget(mm_blurb)
-        run_map_model = QPushButton("Load lysozyme (map + model)")
+        run_map_model = QPushButton(f"Load {SAMPLE_STRUCTURE[1]} (map + model)")
         run_map_model.clicked.connect(self._on_run_map_model_demo)
         layout.addWidget(run_map_model)
 
@@ -1484,7 +1484,7 @@ class DesktopApp:
         self._status(f"Volume demo: {name}")
 
     def load_map_model_demo(self, *, d_min: float = 3.0) -> str:
-        """Demo: the bundled lysozyme model + a cctbx-generated density, as one group.
+        """Demo: the bundled sample model + a cctbx-generated density, as one group.
 
         The map is computed from the model (no large file to ship, no network), and
         because it comes back as a cctbx map_model_manager it loads as a real group.
@@ -1499,14 +1499,14 @@ class DesktopApp:
 
         sample = sample_structure_path()
         if sample is None:
-            raise FileNotFoundError("the bundled lysozyme sample is missing")
+            raise FileNotFoundError("the bundled sample model is missing")
 
         dm = DataManager()
         dm.process_model_file(str(sample))
         mmm = map_model_manager(model=dm.get_model())
         mmm.generate_map(d_min=d_min)  # a density computed from the model
 
-        model_data, volumes = split_map_model_manager(mmm, name="1AKI")
+        model_data, volumes = split_map_model_manager(mmm, name=SAMPLE_STRUCTURE[1])
         # generate_map also adds a redundant 'model_map'; keep only the density.
         volumes = [v for v in volumes if v.map_id == "map_manager"] or volumes
 

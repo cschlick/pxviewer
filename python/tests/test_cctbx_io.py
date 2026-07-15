@@ -38,31 +38,31 @@ websockets = pytest.importorskip("websockets")
 
 _TAG_TOPOLOGY = 0
 # The sample model now ships as package data (pxviewer/data), not tests/data.
-LYSOZYME = Path(__file__).resolve().parents[1] / "pxviewer" / "data" / "1aki.pdb"
+UBIQUITIN = Path(__file__).resolve().parents[1] / "pxviewer" / "data" / "1ubq.pdb"
 
 
 def test_read_model_and_extract_arrays():
-    model = read_model(LYSOZYME)
+    model = read_model(UBIQUITIN)
     arrays = model_to_arrays(model)
 
-    assert len(arrays) == 1079
+    assert len(arrays) == 660
     # Columns are all aligned to the same length (AtomArrays enforces this).
     assert arrays.x.shape[0] == len(arrays) == len(arrays.resname)
-    # First atom of 1AKI is the backbone N of LYS 1, chain A.
+    # First atom of 1UBQ is the backbone N of MET 1, chain A.
     assert arrays.element[0] == "N"
     assert arrays.name[0] == "N"
-    assert arrays.resname[0] == "LYS"
+    assert arrays.resname[0] == "MET"
     assert arrays.chain[0] == "A"
     assert int(arrays.resseq[0]) == 1
     assert sorted(set(arrays.element)) == ["C", "N", "O", "S"]
 
 
 def test_polymer_and_secondary_structure():
-    model = read_model(LYSOZYME)
+    model = read_model(UBIQUITIN)
     assert model_is_polymer(model) is True
 
     ss = model_secondary_structure(model)
-    assert ss, "1AKI has HELIX/SHEET records"
+    assert ss, "1UBQ has HELIX/SHEET records"
     kinds = {row[3] for row in ss}
     assert kinds <= {"helix", "sheet"}
     assert any(k == "helix" for *_, k in ss)
@@ -76,16 +76,16 @@ def test_polymer_and_secondary_structure():
 def test_arrays_encode_to_binarycif_roundtrip():
     import ciftools.serialization as cif_io
 
-    arrays = model_to_arrays(read_model(LYSOZYME))
+    arrays = model_to_arrays(read_model(UBIQUITIN))
     block = cif_io.loads(encode_bcif_arrays(arrays, polymer=True), lazy=False)[0]
     site = block["atom_site"]
     assert site.n_rows == len(arrays)
-    assert site["label_comp_id"].get_string(0) == "LYS"
+    assert site["label_comp_id"].get_string(0) == "MET"
 
 
 def test_live_session_from_model_file_streams_topology():
-    session = LiveSession.from_model_file(LYSOZYME)
-    assert session._n_atoms == 1079
+    session = LiveSession.from_model_file(UBIQUITIN)
+    assert session._n_atoms == 660
     session.start(port=0)
     try:
 
@@ -104,32 +104,32 @@ def test_live_session_from_model_file_streams_topology():
 
 
 def test_load_model_reduces_to_streamable_bundle():
-    loaded = load_model(LYSOZYME)
-    assert len(loaded.arrays) == 1079
+    loaded = load_model(UBIQUITIN)
+    assert len(loaded.arrays) == 660
     assert loaded.polymer is True
     assert loaded.secondary_structure
     assert loaded.model is not None  # the native model is retained
 
-    session = LiveSession.from_model_file(LYSOZYME)
-    assert session._n_atoms == 1079
+    session = LiveSession.from_model_file(UBIQUITIN)
+    assert session._n_atoms == 660
     assert session.model is not None
     # metadata accessors work on cctbx-sourced atoms
     sel = session.select_by(ids=[1, 2, 3])
     assert sel.indices == [0, 1, 2]
-    assert all(r == "LYS" for r in sel.resnames)
+    assert all(r == "MET" for r in sel.resnames)
 
 
 # -- ModelData: cctbx selection + drift --------------------------------------
 
 def test_model_backed_session_uses_cctbx_selection():
-    session = LiveSession.from_model_file(LYSOZYME)
+    session = LiveSession.from_model_file(UBIQUITIN)
     sel = session.select_by(selection="chain A and resseq 5:14 and name CA")
     assert len(sel) == 10
     assert all(n == "CA" for n in sel.names)
 
 
 def test_diff_detects_model_drift():
-    loaded = load_model(LYSOZYME)
+    loaded = load_model(UBIQUITIN)
     data = ModelData(loaded.arrays, model=loaded.model)
     assert data.diff() is None  # in sync
 
@@ -141,7 +141,7 @@ def test_diff_detects_model_drift():
 
 
 def test_selection_string_requires_model():
-    data = ModelData(model_to_arrays(read_model(LYSOZYME)))  # no model attached
+    data = ModelData(model_to_arrays(read_model(UBIQUITIN)))  # no model attached
     with pytest.raises(ValueError, match="model-backed"):
         data.selection_indices("chain A")
 
@@ -253,7 +253,7 @@ def test_custom_atom_site_column_auto_exposed(tmp_path):
 
 def test_pdb_load_has_no_custom_attributes():
     # A PDB has no room for arbitrary columns, so only the built-ins are present.
-    session = LiveSession.from_model_file(LYSOZYME)
+    session = LiveSession.from_model_file(UBIQUITIN)
     assert session.attributes() == ["bfactor", "occupancy"]
 
 

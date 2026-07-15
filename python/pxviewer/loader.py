@@ -23,14 +23,14 @@ __all__ = [
     "create_volume_file_view",
 ]
 
-# Hen egg-white lysozyme (PDB 1AKI) — a small, familiar structure shipped inside
-# the package (pxviewer/data) so the desktop app always has something real to
-# open, and the map+model demo can compute a density from it.
-SAMPLE_STRUCTURE = ("1aki.pdb", "Lysozyme (1AKI)")
+# Ubiquitin (PDB 1UBQ) — a small, iconic single-chain protein shipped inside the
+# package (pxviewer/data) so the desktop app always has something real to open,
+# and the map+model demo can compute a density from it.
+SAMPLE_STRUCTURE = ("1ubq.pdb", "Ubiquitin (1UBQ)")
 
 
 def sample_structure_path() -> Path | None:
-    """Path to the bundled lysozyme model (shipped as package data), or None."""
+    """Path to the bundled sample model (shipped as package data), or None."""
     path = Path(__file__).resolve().parent / "data" / SAMPLE_STRUCTURE[0]
     return path if path.is_file() else None
 
