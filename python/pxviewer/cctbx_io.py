@@ -33,7 +33,133 @@ __all__ = [
     "model_is_polymer",
     "load_model",
     "model_from_sites",
+    "custom_atom_site_attributes",
+    "attributes_from_cif",
+    "write_model_with_attributes",
 ]
+
+# Standard _atom_site columns — everything else numeric is a custom attribute.
+# occupancy / B_iso_or_equiv are excluded because they're surfaced as the built-in
+# "occupancy" / "bfactor" attributes already.
+_STANDARD_ATOM_SITE = frozenset({
+    "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id", "label_comp_id",
+    "label_asym_id", "label_entity_id", "label_seq_id", "Cartn_x", "Cartn_y", "Cartn_z",
+    "occupancy", "B_iso_or_equiv", "auth_seq_id", "auth_asym_id", "auth_comp_id",
+    "auth_atom_id", "pdbx_PDB_model_num", "pdbx_formal_charge", "pdbx_PDB_ins_code",
+    "Cartn_x_esd", "Cartn_y_esd", "Cartn_z_esd", "occupancy_esd", "B_iso_or_equiv_esd",
+    "calc_flag", "footnote_id", "footnote", "U_iso_or_equiv", "B_equiv_geom_mean",
+})
+
+
+def _cif_block(model: Any) -> Any:
+    """The raw mmCIF block behind a cctbx model, or None (e.g. a PDB-loaded model)."""
+    return getattr(model.get_model_input(), "cif_block", None)
+
+
+def _column_to_float(col: Any) -> Optional[np.ndarray]:
+    """Cast a CIF string column to float ('.'/'?' -> nan); None if any real string."""
+    out = np.empty(len(col), dtype=float)
+    for i, s in enumerate(col):
+        s = s.strip()
+        if s in (".", "?", ""):
+            out[i] = np.nan
+        else:
+            try:
+                out[i] = float(s)
+            except ValueError:
+                return None
+    return out
+
+
+def _custom_columns_from_block(block: Any, n_expected: int) -> dict:
+    """Numeric ``_atom_site.*`` columns beyond the standard set -> {name: float array}."""
+    attrs: dict = {}
+    for key in block.keys():
+        if not key.startswith("_atom_site."):
+            continue
+        name = key[len("_atom_site."):]
+        if name in _STANDARD_ATOM_SITE:
+            continue
+        col = block[key]
+        if len(col) != n_expected:
+            continue
+        vals = _column_to_float(col)
+        if vals is not None:
+            attrs[name] = vals
+    return attrs
+
+
+def custom_atom_site_attributes(model: Any) -> dict:
+    """Custom per-atom scalar columns from a model's mmCIF, aligned by atom order.
+
+    cctbx preserves ``_atom_site`` row order into the hierarchy, so a custom column
+    maps to atoms positionally (== i_seq). Returns ``{name: float array}``; empty for
+    a PDB-loaded model (no room for custom columns). The model must not be a
+    multi-MODEL ensemble here (reduce to model 1 first).
+    """
+    block = _cif_block(model)
+    if block is None:
+        return {}
+    return _custom_columns_from_block(block, model.get_hierarchy().atoms().size())
+
+
+def _identity_keys(model: Any) -> List[tuple]:
+    """A hashable identity per atom (chain, resseq, icode, altloc, name) in atom order."""
+    return [
+        (a.chain_id.strip(), a.resseq_as_int(), a.icode.strip(), a.altloc.strip(), a.name.strip())
+        for a in model.get_hierarchy().atoms_with_labels()
+    ]
+
+
+def attributes_from_cif(path: str | Path, target_model: Any) -> dict:
+    """Read custom ``_atom_site`` columns from mmCIF ``path`` and align to a model.
+
+    The file is read with cctbx and matched to ``target_model`` **by atom identity**
+    (chain, residue number, insertion code, altloc, atom name) — so it need not be in
+    the same order, and atoms absent from the file get ``nan``. Returns
+    ``{name: float array}`` of length ``target_model``'s atom count.
+    """
+    source = first_model(read_model(path))
+    block = _cif_block(source)
+    if block is None:
+        raise ValueError(f"{path} is not mmCIF (no _atom_site cif block to read attributes from)")
+    columns = _custom_columns_from_block(block, source.get_hierarchy().atoms().size())
+    if not columns:
+        raise ValueError(f"{path} has no custom _atom_site columns")
+    source_keys = _identity_keys(source)
+    target_keys = _identity_keys(target_model)
+    result = {}
+    for name, values in columns.items():
+        by_id = dict(zip(source_keys, values))
+        result[name] = np.array([by_id.get(k, np.nan) for k in target_keys], dtype=float)
+    return result
+
+
+def write_model_with_attributes(model: Any, attributes: dict, path: str | Path) -> None:
+    """Write ``model`` plus named per-atom attribute arrays to an mmCIF file.
+
+    Each attribute becomes a custom ``_atom_site.<name>`` column, aligned to the
+    model's atom order (``nan`` -> the CIF null ``.``). Uses cctbx's mmCIF writer.
+    """
+    import iotbx.cif
+    from cctbx.array_family import flex
+
+    cif_model = iotbx.cif.reader(input_string=model.model_as_mmcif()).model()
+    block_name = list(cif_model.keys())[0]
+    block = cif_model[block_name]
+    loop = block.get_loop("_atom_site")
+    n = loop.n_rows()
+    for name, values in attributes.items():
+        arr = np.asarray(values, dtype=float).reshape(-1)
+        if arr.shape[0] != n:
+            raise ValueError(f"attribute {name!r} has {arr.shape[0]} values but the model has {n} atoms")
+        col = flex.std_string(["." if not np.isfinite(v) else "%.6g" % v for v in arr])
+        loop.add_column(f"_atom_site.{name}", col)
+    block.add_loop(loop)
+    out = iotbx.cif.model.cif()
+    out[block_name] = block
+    with open(path, "w") as f:
+        f.write(str(out))
 
 
 def _column(value: Any, n: int, default: Any) -> List[Any]:
@@ -234,27 +360,39 @@ class ModelData:
         *,
         polymer: bool = False,
         secondary_structure: Optional[List[Tuple[str, int, int, str]]] = None,
+        attributes: Optional[dict] = None,
     ):
         self.arrays = arrays
         self.model = model
         self.polymer = polymer
         self.secondary_structure = secondary_structure or []
+        # Custom per-atom scalar columns auto-detected from the model's mmCIF.
+        self.attributes: dict = attributes or {}
         self._cache: Any = None
         self._lock = threading.Lock()
 
     @classmethod
     def from_model(cls, model: Any) -> "ModelData":
-        """Build from an ``mmtbx.model.manager``: extract columns, SS and polymer flag.
+        """Build from an ``mmtbx.model.manager``: columns, SS, polymer flag, attributes.
 
-        A multi-MODEL ensemble is reduced to model 1 first, so the columns, the held
-        model and cctbx selections all stay on the same atom set.
+        A multi-MODEL ensemble is reduced to model 1 first (columns and any custom
+        ``_atom_site`` attribute columns are reduced consistently), so everything
+        stays on the same atom set.
         """
-        model = first_model(model)
+        # Extract custom columns before reducing, then apply the same reduction.
+        extras = custom_atom_site_attributes(model)
+        models = model.get_hierarchy().models()
+        if len(models) > 1:
+            sel = models[0].atoms().extract_i_seq()
+            idx = sel.as_numpy_array()
+            model = model.select(sel)
+            extras = {k: v[idx] for k, v in extras.items()}
         return cls(
             model_to_arrays(model),
             model=model,
             polymer=model_is_polymer(model),
             secondary_structure=model_secondary_structure(model),
+            attributes=extras,
         )
 
     def __len__(self) -> int:

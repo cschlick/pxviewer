@@ -287,6 +287,24 @@ session.set_attribute("pae", per_atom_error)          # any length-N array
 session.color_by("pae", palette="spectral", domain=(0, 30))
 ```
 
+Attributes can also come **from mmCIF**, since a per-atom scalar is naturally an
+extra `_atom_site` column:
+
+```python
+# custom _atom_site.* columns are auto-detected on load, ready to colour by
+session = LiveSession.from_model_file("model_with_plddt.cif")
+session.attributes()                                  # -> [... , "plddt", "bfactor", "occupancy"]
+session.color_by("plddt")
+
+session.load_attributes("scores.cif")   # merge columns from another mmCIF (by atom identity)
+session.write_cif("out.cif")            # bake the registered attributes back as columns
+```
+
+`load_attributes` matches the file to the model **by atom identity** (chain,
+residue, insertion code, altloc, atom name), so it need not be in the same order;
+missing atoms get `nan`. All of this uses cctbx's own mmCIF reader/writer — there
+is no separate parser.
+
 `palette` is a Mol\* colour-list name (`turbo`, `viridis`, `spectral`, `plasma`,
 `red-yellow-blue`, …) or an explicit list of colours; `domain` is `(min, max)`,
 taken from the finite values when omitted. Non-finite (`nan`) values render in a

@@ -494,8 +494,9 @@ class LiveSession:
         self._representations: dict = {}
         self._representation_counter = 0
         # Named per-atom scalar attributes (name -> float array of length N), for
-        # colour-by-attribute. b-factor / occupancy are seeded from the topology.
-        self._attributes: dict = {}
+        # colour-by-attribute. Custom _atom_site columns from the model's mmCIF are
+        # seeded here; b-factor / occupancy are always available from the topology.
+        self._attributes: dict = {k: np.asarray(v, dtype=float) for k, v in self._data.attributes.items()}
         # Binary payloads (wire key -> bytes) for attributes referenced by a current
         # representation; sent as binary (not JSON) and replayed to late clients.
         self._attribute_payloads: dict = {}
@@ -1034,6 +1035,43 @@ class LiveSession:
         if self._data.arrays.occ is not None:
             names.append("occupancy")
         return names
+
+    def load_attributes(self, path: Any) -> List[str]:
+        """Read custom ``_atom_site`` columns from an mmCIF file and register them.
+
+        The file is matched to this session's model **by atom identity** (chain,
+        residue, insertion code, altloc, atom name), so it need not be in the same
+        order; atoms absent from the file get ``nan``. Returns the attribute names
+        loaded. Requires a model-backed session.
+        """
+        if self._data.model is None:
+            raise ValueError("load_attributes needs a model-backed session")
+        from . import cctbx_io
+
+        loaded = cctbx_io.attributes_from_cif(path, self._data.model)
+        for name, values in loaded.items():
+            self.set_attribute(name, values)
+        return list(loaded)
+
+    def write_cif(self, path: Any, *, attributes: Any = None) -> None:
+        """Write the model, plus per-atom attributes, to an mmCIF file.
+
+        Each attribute becomes a custom ``_atom_site.<name>`` column. ``attributes``
+        is a list of attribute names (defaults to every registered custom attribute)
+        or a ``{name: values}`` mapping; ``'bfactor'`` / ``'occupancy'`` and raw
+        arrays are resolved like :meth:`color_by`. Requires a model-backed session.
+        """
+        if self._data.model is None:
+            raise ValueError("write_cif needs a model-backed session")
+        from . import cctbx_io
+
+        if attributes is None:
+            resolved = {n: self._resolve_attribute(n) for n in self._attributes}
+        elif isinstance(attributes, dict):
+            resolved = {str(n): self._resolve_attribute(v) for n, v in attributes.items()}
+        else:
+            resolved = {str(n): self._resolve_attribute(n) for n in attributes}
+        cctbx_io.write_model_with_attributes(self._data.model, resolved, path)
 
     def _resolve_attribute(self, attribute: Any) -> np.ndarray:
         """Resolve an attribute name (or a raw length-N array) to a float array."""

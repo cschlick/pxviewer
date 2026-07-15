@@ -208,3 +208,106 @@ def test_model_from_sites_roundtrips_coords_and_labels():
     # and the labels drive cctbx selection
     session = LiveSession.from_cctbx_model(model)
     assert session.select_by(selection="chain A").indices == [0, 1]
+
+
+# -- per-atom attributes from mmCIF columns ----------------------------------
+
+def _cif_with_columns(rows, extra_cols):
+    """A minimal 3-atom mmCIF (chain A, resseq per row) with extra numeric columns.
+
+    ``rows`` is a list of (resseq, {colname: value}); ``extra_cols`` names the extra
+    columns (order matters for the header).
+    """
+    header = [
+        "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+        "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
+        "Cartn_x", "Cartn_y", "Cartn_z", "occupancy", "B_iso_or_equiv",
+        *extra_cols, "auth_seq_id", "auth_asym_id", "pdbx_PDB_model_num",
+    ]
+    out = ["data_t", "loop_"] + ["_atom_site." + c for c in header]
+    for i, (rs, extra) in enumerate(rows):
+        vals = ["ATOM", str(i + 1), "C", "CA", ".", "ALA", "A", "1", str(rs),
+                "%.1f" % (3.8 * (rs - 1)), "0", "0", "1", "0",
+                *[str(extra[c]) for c in extra_cols], str(rs), "A", "1"]
+        out.append(" ".join(vals))
+    return "\n".join(out) + "\n"
+
+
+def _write(tmp_path, name, text):
+    p = tmp_path / name
+    p.write_text(text)
+    return p
+
+
+def test_custom_atom_site_column_auto_exposed(tmp_path):
+    cif = _cif_with_columns(
+        [(1, {"plddt": 88.5}), (2, {"plddt": 72.1}), (3, {"plddt": 95.0})], ["plddt"]
+    )
+    session = LiveSession.from_model_file(_write(tmp_path, "m.cif", cif))
+    assert "plddt" in session.attributes()
+    assert list(session._attributes["plddt"]) == [88.5, 72.1, 95.0]
+    # and it's usable for colouring
+    session.color_by("plddt")
+
+
+def test_pdb_load_has_no_custom_attributes():
+    # A PDB has no room for arbitrary columns, so only the built-ins are present.
+    session = LiveSession.from_model_file(LYSOZYME)
+    assert session.attributes() == ["bfactor", "occupancy"]
+
+
+def test_non_numeric_column_is_ignored(tmp_path):
+    cif = _cif_with_columns(
+        [(1, {"note": "aaa"}), (2, {"note": "bbb"}), (3, {"note": "ccc"})], ["note"]
+    )
+    session = LiveSession.from_model_file(_write(tmp_path, "m.cif", cif))
+    assert "note" not in session.attributes()
+
+
+def test_write_cif_roundtrips_attributes(tmp_path):
+    cif = _cif_with_columns(
+        [(1, {"plddt": 10.0}), (2, {"plddt": 20.0}), (3, {"plddt": 30.0})], ["plddt"]
+    )
+    session = LiveSession.from_model_file(_write(tmp_path, "m.cif", cif))
+    session.set_attribute("score", [0.1, 0.2, 0.3])
+
+    out = tmp_path / "out.cif"
+    session.write_cif(out, attributes=["plddt", "score"])
+
+    back = LiveSession.from_model_file(out)
+    assert set(back.attributes()) >= {"plddt", "score"}
+    assert [round(float(v), 3) for v in back._attributes["score"]] == [0.1, 0.2, 0.3]
+    assert list(back._attributes["plddt"]) == [10.0, 20.0, 30.0]
+
+
+def test_load_attributes_aligns_by_identity(tmp_path):
+    model_cif = _cif_with_columns(
+        [(1, {"plddt": 1.0}), (2, {"plddt": 2.0}), (3, {"plddt": 3.0})], ["plddt"]
+    )
+    session = LiveSession.from_model_file(_write(tmp_path, "m.cif", model_cif))
+
+    # External file: same atoms, DIFFERENT order, a new column.
+    ext = _cif_with_columns(
+        [(3, {"energy": -3.0}), (1, {"energy": -1.0}), (2, {"energy": -2.0})], ["energy"]
+    )
+    loaded = session.load_attributes(_write(tmp_path, "e.cif", ext))
+    assert loaded == ["energy"]
+    # aligned back to the model's atom order (resseq 1, 2, 3)
+    assert list(session._attributes["energy"]) == [-1.0, -2.0, -3.0]
+
+
+def test_load_attributes_missing_atom_is_nan(tmp_path):
+    model_cif = _cif_with_columns(
+        [(1, {"x": 0}), (2, {"x": 0}), (3, {"x": 0})], ["x"]
+    )
+    session = LiveSession.from_model_file(_write(tmp_path, "m.cif", model_cif))
+    # External file covers only residues 1 and 3.
+    ext = _cif_with_columns([(1, {"q": 5.0}), (3, {"q": 7.0})], ["q"])
+    session.load_attributes(_write(tmp_path, "e.cif", ext))
+    q = session._attributes["q"]
+    assert q[0] == 5.0 and np.isnan(q[1]) and q[2] == 7.0
+
+
+def test_attribute_ops_need_a_model():
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])  # synthetic, has a model
+    assert session._data.model is not None  # from_sites is model-backed
