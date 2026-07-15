@@ -294,7 +294,10 @@ neutral "missing" colour. `color_by` sets a single representation of `type`
 (default `ball_and_stick`, optionally limited with `on=`), like
 `set_representation`, and is replayed to viewers that connect later. Under the
 hood it drives one custom Mol\* colour theme (`pxviewer-attribute`) whose per-atom
-values are supplied from Python, indexed by positional atom identity.
+values are supplied from Python, indexed by positional atom identity. The values
+travel on a **compact binary channel** (`float32`, one per atom) rather than JSON,
+so colouring very large structures stays cheap; the representation JSON just
+references them by key.
 
 ### Non-covalent interactions
 
@@ -389,10 +392,11 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | --- | --- | --- |
 | server → client | topology | `[u32 tag=0][BinaryCIF bytes]` (sent once on connect) |
 | server → client | frame | `[u32 tag=1][u32 frameIndex][f32 × 3N]` interleaved `x,y,z` |
+| server → client | attribute | `[u32 tag=2][u32 keyLen][key utf8][pad→4][f32 × N]` per-atom colour-by values (`nan` = missing) |
 | server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
-| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?,attribute?},…]}` (`color:"attribute"` + `attribute:{values,domain,palette}` colours by a per-atom scalar) |
+| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?,attribute?},…]}` (`color:"attribute"` + `attribute:{key,domain,palette}` colours by the per-atom values sent under `key` on the attribute channel) |
 | server → client | interactions | JSON `{"type":"interactions","action":"set","contacts":[{kind,a,b,description?},…]}` or `{"type":"interactions","action":"clear"}` (explicit typed contacts) |
 | server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
 | server → client | clashes | JSON `{"type":"clashes","action":"set","pairs":[{a,b},…]}` or `{"type":"clashes","action":"clear"}` (steric clashes, drawn red) |

@@ -609,20 +609,50 @@ def test_bfactor_and_occupancy_available(session):
     session.color_by("occupancy")
 
 
-def test_color_by_attribute_message(session):
+_TAG_ATTRIBUTE = 2
+
+
+def _decode_attribute(payload):
+    """Decode a binary attribute message -> (key, values ndarray)."""
+    tag, keylen = struct.unpack("<II", payload[:8])
+    assert tag == _TAG_ATTRIBUTE
+    key = payload[8:8 + keylen].decode()
+    pad = (-keylen) % 4
+    values = np.frombuffer(payload[8 + keylen + pad:], dtype="<f4")
+    return key, values
+
+
+async def _next_json(ws, mtype, timeout=5):
+    """Read messages (skipping binary) until a JSON message of ``mtype`` arrives."""
+    while True:
+        m = await asyncio.wait_for(ws.recv(), timeout)
+        if isinstance(m, (bytes, bytearray)):
+            continue
+        d = json.loads(m)
+        if d.get("type") == mtype:
+            return d
+
+
+def test_color_by_sends_binary_values_then_representation(session):
     async def scenario():
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
             session.color_by([0.0, 1.0, 2.0, 3.0], palette="viridis", domain=(0, 3), type="cartoon")
+            # First: the per-atom values as a compact binary message.
+            attr = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert isinstance(attr, (bytes, bytearray))
+            key, values = _decode_attribute(attr)
+            assert list(values) == [0.0, 1.0, 2.0, 3.0]
+            # Then: the representation JSON referencing that key (no inline values).
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
             assert msg["type"] == "representations"
             spec = msg["reprs"][0]
-            assert spec["color"] == "attribute"
-            assert spec["type"] == "cartoon"
-            assert spec["attribute"]["values"] == [0.0, 1.0, 2.0, 3.0]
+            assert spec["color"] == "attribute" and spec["type"] == "cartoon"
+            assert spec["attribute"]["key"] == key
             assert spec["attribute"]["domain"] == [0.0, 3.0]
             assert spec["attribute"]["palette"] == "viridis"
+            assert "values" not in spec["attribute"]  # values are binary now
 
     asyncio.run(scenario())
 
@@ -639,10 +669,10 @@ def test_color_by_auto_domain_from_finite_values(session):
     assert session._representations[rid]["attribute"]["domain"] == [10.0, 40.0]
 
 
-def test_color_by_nan_becomes_null(session):
-    rid = session.color_by([float("nan"), 1.0, 2.0, 3.0])
-    vals = session._representations[rid]["attribute"]["values"]
-    assert vals[0] is None and vals[1] == 1.0
+def test_color_by_nan_preserved_in_binary(session):
+    session.color_by([float("nan"), 1.0, 2.0, 3.0])
+    _key, values = _decode_attribute(next(iter(session._attribute_payloads.values())))
+    assert np.isnan(values[0]) and values[1] == 1.0
 
 
 def test_set_attribute_wrong_length_rejected(session):
@@ -662,17 +692,35 @@ def test_color_by_replaces_representations(session):
 
 
 def test_color_by_replayed_to_late_client(session):
-    session.color_by([0.0, 1.0, 2.0, 3.0], palette="turbo")
+    session.color_by([4.0, 5.0, 6.0, 7.0], palette="turbo")
 
     async def scenario():
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
-            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert msg["type"] == "representations"
-            assert msg["reprs"][0]["color"] == "attribute"
+            # The binary attribute values are replayed before the representation.
+            saw_values = None
+            while True:
+                m = await asyncio.wait_for(ws.recv(), timeout=5)
+                if isinstance(m, (bytes, bytearray)):
+                    if struct.unpack("<I", m[:4])[0] == _TAG_ATTRIBUTE:
+                        _key, saw_values = _decode_attribute(m)
+                    continue
+                d = json.loads(m)
+                if d.get("type") == "representations":
+                    assert d["reprs"][0]["color"] == "attribute"
+                    assert saw_values is not None and list(saw_values) == [4.0, 5.0, 6.0, 7.0]
+                    return
 
     asyncio.run(scenario())
+
+
+def test_replaced_attribute_payload_is_pruned(session):
+    session.color_by([1.0, 2.0, 3.0, 4.0])
+    session.color_by([5.0, 6.0, 7.0, 8.0])   # replaces -> old payload dropped
+    assert len(session._attribute_payloads) == 1
+    session.clear_representations()
+    assert session._attribute_payloads == {}
 
 
 async def _wait_primitive(ws, action, timeout=5):

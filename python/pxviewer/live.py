@@ -81,6 +81,7 @@ _MVS_TO_MOLSTAR_REPR = {
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
+_TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
 
 ATOM_IDENTITY_CONTRACT = """\
 pxviewer atom-identity contract
@@ -495,6 +496,10 @@ class LiveSession:
         # Named per-atom scalar attributes (name -> float array of length N), for
         # colour-by-attribute. b-factor / occupancy are seeded from the topology.
         self._attributes: dict = {}
+        # Binary payloads (wire key -> bytes) for attributes referenced by a current
+        # representation; sent as binary (not JSON) and replayed to late clients.
+        self._attribute_payloads: dict = {}
+        self._attribute_counter = 0
         # Explicit, Python-supplied interaction contacts (list of dicts); replayed.
         self._interactions_contacts: List[dict] = []
         # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
@@ -1083,19 +1088,48 @@ class LiveSession:
                 hi = lo + 1.0
             domain = (lo, hi)
 
+        # The per-atom values go over the wire as a compact binary message (f32,
+        # NaN = missing), keyed so the representation JSON can stay small — this is
+        # what makes colouring very large structures cheap. See _TAG_ATTRIBUTE.
+        self._attribute_counter += 1
+        key = f"attr-{self._attribute_counter}"
+        key_bytes = key.encode("utf-8")
+        f32 = values.astype("<f4", copy=False)
+        # Pad the key so the f32 block is 4-byte aligned -> the client reads it as a
+        # zero-copy Float32Array view (header is [u32 tag][u32 keyLen][key][pad]).
+        pad = (-len(key_bytes)) % 4
+        payload = (
+            struct.pack("<II", _TAG_ATTRIBUTE, len(key_bytes))
+            + key_bytes + b"\x00" * pad + f32.tobytes()
+        )
+
         self._representations.clear()
         spec = self._make_repr_spec(type, None, None, on, None, None, id)
         spec["color"] = "attribute"
         spec["attribute"] = {
             "name": attribute if isinstance(attribute, str) else "values",
-            # NaN/inf -> null so the client paints them the missing colour.
-            "values": [float(v) if np.isfinite(v) else None for v in values],
+            "key": key,
             "domain": [float(domain[0]), float(domain[1])],
             "palette": palette,
         }
         self._representations[spec["id"]] = spec
+        self._attribute_payloads[key] = payload
+
+        # Send the values (binary) before the representation (JSON) that names them.
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast, payload)
         self._send_representations()
         return spec["id"]
+
+    def _prune_attributes(self) -> None:
+        """Drop attribute payloads no longer referenced by any representation."""
+        keys = {
+            r["attribute"]["key"]
+            for r in self._representations.values()
+            if r.get("color") == "attribute" and "attribute" in r
+        }
+        self._attribute_payloads = {k: v for k, v in self._attribute_payloads.items() if k in keys}
 
     def highlight(self, atoms: Any) -> Selection:
         """Show the selection overlay on the given atoms (:class:`Selection` or coercible)."""
@@ -1267,6 +1301,7 @@ class LiveSession:
         return spec
 
     def _send_representations(self) -> None:
+        self._prune_attributes()  # drop payloads no representation references anymore
         self._send_control({"type": "representations", "reprs": list(self._representations.values())})
 
     def _as_selection(self, spec: Any) -> Selection:
@@ -1445,6 +1480,10 @@ class LiveSession:
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
                 await self._locked_send(websocket, json.dumps(message))
+            # Attribute values (binary) must precede the representations that
+            # reference them by key, so the client has them when it colours.
+            for payload in self._attribute_payloads.values():
+                await self._locked_send(websocket, payload)
             if self._representations:
                 await self._locked_send(
                     websocket, json.dumps({"type": "representations", "reprs": list(self._representations.values())})

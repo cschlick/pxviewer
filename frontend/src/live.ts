@@ -260,15 +260,13 @@ export class LiveViewer {
                 this.reprNodes.push(comp);
             }
             const params: any = { type: spec.type };
-            if (spec.color === 'attribute' && spec.attribute) {
+            if (spec.color === 'attribute' && spec.attribute?.resolved) {
+                // Values arrive on the binary attribute channel and are attached as
+                // `resolved` (a Float32Array) by the connection before we get here.
                 const a = spec.attribute;
                 params.color = 'pxviewer-attribute';
-                params.colorParams = {
-                    values: Float32Array.from(a.values, (v: any) => (v == null ? NaN : v)),
-                    domain: a.domain,
-                    palette: resolvePalette(a.palette),
-                };
-            } else if (spec.color) {
+                params.colorParams = { values: a.resolved, domain: a.domain, palette: resolvePalette(a.palette) };
+            } else if (spec.color && spec.color !== 'attribute') {
                 params.color = spec.color;
             }
             if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
@@ -639,6 +637,7 @@ function decodeIndexSet(enc: any): number[] {
 
 const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
+const TAG_ATTRIBUTE = 2;
 
 const INTERACTIONS_TAG = 'pxviewer-interactions';
 const CLASH_COLOR = 0xee2222; // red — reads as "bad contact"
@@ -777,6 +776,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;
     let building = false;
+    // Per-atom attribute values (colour-by-attribute), received as binary and
+    // referenced by key from representation specs. Held independent of the viewer,
+    // since they may arrive while it is still building.
+    const attributeValues = new Map<string, Float32Array>();
 
     ws.onopen = () => {
         console.log('pxviewer live connected to', url);
@@ -823,7 +826,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'representations' && viewer) {
-                await viewer.setRepresentations(msg.reprs ?? []);
+                // Attach the per-atom values (received on the binary attribute
+                // channel) to any attribute-coloured spec before applying.
+                const reprs = (msg.reprs ?? []).map((r: any) =>
+                    r.color === 'attribute' && r.attribute
+                        ? { ...r, attribute: { ...r.attribute, resolved: attributeValues.get(r.attribute.key) } }
+                        : r
+                );
+                await viewer.setRepresentations(reprs);
             } else if (msg.type === 'click-mode' && viewer) {
                 viewer.setClickMode(String(msg.mode ?? 'off'));
             } else if (msg.type === 'primitive' && viewer) {
@@ -886,6 +896,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
             await viewer.update(coords);
+        } else if (tag === TAG_ATTRIBUTE) {
+            // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
+            // of viewer state (it may still be building); applied when the matching
+            // representation is processed. NaN = missing.
+            const dv = new DataView(buffer);
+            const keyLen = dv.getUint32(4, true);
+            const key = new TextDecoder().decode(new Uint8Array(buffer, 8, keyLen));
+            const valuesOffset = 8 + keyLen + ((4 - (keyLen % 4)) % 4);
+            attributeValues.set(key, new Float32Array(buffer, valuesOffset));
         }
     };
 
