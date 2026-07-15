@@ -23,18 +23,15 @@ __all__ = [
     "create_volume_file_view",
 ]
 
-# Hen egg-white lysozyme (PDB 1AKI) — a small, familiar structure kept in the test
-# data so the desktop app has something real to open without a file dialog.
+# Hen egg-white lysozyme (PDB 1AKI) — a small, familiar structure shipped inside
+# the package (pxviewer/data) so the desktop app always has something real to
+# open, and the map+model demo can compute a density from it.
 SAMPLE_STRUCTURE = ("1aki.pdb", "Lysozyme (1AKI)")
 
 
 def sample_structure_path() -> Path | None:
-    """Path to the bundled lysozyme file, or None when it isn't on disk.
-
-    It lives under ``tests/data``, which a wheel doesn't ship, so callers must
-    cope with it being absent rather than assume a checkout.
-    """
-    path = Path(__file__).resolve().parents[1] / "tests" / "data" / SAMPLE_STRUCTURE[0]
+    """Path to the bundled lysozyme model (shipped as package data), or None."""
+    path = Path(__file__).resolve().parent / "data" / SAMPLE_STRUCTURE[0]
     return path if path.is_file() else None
 
 

@@ -399,9 +399,9 @@ class ControlsWindow:
         self._sample_btn = QPushButton(f"Load {SAMPLE_STRUCTURE[1]}")
         self._sample_btn.clicked.connect(self._on_load_sample)
         if sample is None:
-            # Shipped under tests/data, so it is missing from an installed wheel.
+            # Shipped as package data, so this should not happen in practice.
             self._sample_btn.setEnabled(False)
-            self._sample_btn.setToolTip("The bundled sample is only present in a source checkout.")
+            self._sample_btn.setToolTip("The bundled sample model is missing.")
         else:
             self._sample_btn.setToolTip(str(sample))
         layout.addWidget(self._sample_btn)
@@ -422,6 +422,18 @@ class ControlsWindow:
         layout = QVBoxLayout(tab)
         layout.setSpacing(8)
 
+        layout.addWidget(QLabel("<b>Map + model demo</b>"))
+        mm_blurb = QLabel(
+            "The bundled lysozyme (1AKI) with a density map computed from it by "
+            "cctbx — loaded as one map_model_manager group."
+        )
+        mm_blurb.setWordWrap(True)
+        layout.addWidget(mm_blurb)
+        run_map_model = QPushButton("Load lysozyme (map + model)")
+        run_map_model.clicked.connect(self._on_run_map_model_demo)
+        layout.addWidget(run_map_model)
+
+        layout.addSpacing(8)
         layout.addWidget(QLabel("<b>Model demos</b>"))
         model_blurb = QLabel("Animated coordinate streams from Python.")
         model_blurb.setWordWrap(True)
@@ -669,6 +681,14 @@ class ControlsWindow:
         name = self._volume_select.currentData()
         descriptions = dict(list_volume_demos())
         self._volume_desc.setText(descriptions.get(name, ""))
+
+    def _on_run_map_model_demo(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        try:
+            self._desktop.load_map_model_demo()
+        except Exception as exc:  # generating the map can fail; don't take the app down
+            QMessageBox.warning(self._window, "Map+model demo failed", str(exc))
 
     def _on_run_model_demo(self) -> None:
         name = self._model_select.currentData()
@@ -1462,6 +1482,42 @@ class DesktopApp:
                 for i, g in enumerate(grids):
                     self._add_volume(VolumeData.from_numpy(g, name=f"{name}-{i}"), f"demo: {name} [{i}]")
         self._status(f"Volume demo: {name}")
+
+    def load_map_model_demo(self, *, d_min: float = 3.0) -> str:
+        """Demo: the bundled lysozyme model + a cctbx-generated density, as one group.
+
+        The map is computed from the model (no large file to ship, no network), and
+        because it comes back as a cctbx map_model_manager it loads as a real group.
+        """
+        self.stop_demo()
+        self._reset_interactions()
+
+        from iotbx.data_manager import DataManager
+        from iotbx.map_model_manager import map_model_manager
+
+        from .volume_io import split_map_model_manager
+
+        sample = sample_structure_path()
+        if sample is None:
+            raise FileNotFoundError("the bundled lysozyme sample is missing")
+
+        dm = DataManager()
+        dm.process_model_file(str(sample))
+        mmm = map_model_manager(model=dm.get_model())
+        mmm.generate_map(d_min=d_min)  # a density computed from the model
+
+        model_data, volumes = split_map_model_manager(mmm, name="1AKI")
+        # generate_map also adds a redundant 'model_map'; keep only the density.
+        volumes = [v for v in volumes if v.map_id == "map_manager"] or volumes
+
+        gid = self._new_group(SAMPLE_STRUCTURE[1])
+        with self._batch_load():
+            session = self._model_session(model_data.model, SAMPLE_STRUCTURE[1])
+            self._add_model(session, f"{SAMPLE_STRUCTURE[0]} (model)", group=gid)
+            for vd in volumes:
+                self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (density)", group=gid)
+        self._status(f"Loaded demo: {SAMPLE_STRUCTURE[1]} — map + model")
+        return "group"
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
         """Stream an animated model demo into the viewport."""

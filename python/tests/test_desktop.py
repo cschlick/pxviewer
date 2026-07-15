@@ -247,6 +247,31 @@ def test_volume_registry_and_grouping(qapp, tmp_path):
         app.stop()
 
 
+def test_map_model_demo_loads_bundled_lysozyme_as_group(qapp):
+    """The map+model demo: bundled model + a cctbx-generated density, as one group."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        kind = app.load_map_model_demo(d_min=4.0)  # coarser = faster to generate
+        assert kind == "group"
+        # One model + exactly one density map (the redundant model_map is dropped).
+        assert len(app._models) == 1 and len(app._volumes) == 1
+        gid = app._models[0]["group"]
+        assert gid is not None and app._volumes[0]["group"] == gid
+        assert app._models[0]["session"]._n_atoms == 1079  # lysozyme
+        # Model + map compose the viewport together.
+        assert len(app._visible_model_ws()) == 1 and app._write_volume_scene() is not None
+    finally:
+        app.stop()
+
+
 def test_console_binds_and_tracks_active_session(qapp):
     """The embedded console exposes `app`/`session`, and `session` follows active."""
     pytest.importorskip("qtconsole")

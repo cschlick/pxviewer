@@ -68,7 +68,7 @@ def test_model_files_are_rejected_here(tmp_path):
 
 def test_bundled_lysozyme_sample_is_present_and_is_a_model():
     sample = sample_structure_path()
-    assert sample is not None, "the bundled lysozyme sample is missing from tests/data"
+    assert sample is not None, "the bundled lysozyme sample is missing from pxviewer/data"
     assert sample.name == SAMPLE_STRUCTURE[0]
     assert file_kind(sample) == "model"
 

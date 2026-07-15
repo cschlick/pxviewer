@@ -37,7 +37,8 @@ def _model_from_str(text: str):
 websockets = pytest.importorskip("websockets")
 
 _TAG_TOPOLOGY = 0
-LYSOZYME = Path(__file__).parent / "data" / "1aki.pdb"
+# The sample model now ships as package data (pxviewer/data), not tests/data.
+LYSOZYME = Path(__file__).resolve().parents[1] / "pxviewer" / "data" / "1aki.pdb"
 
 
 def test_read_model_and_extract_arrays():
