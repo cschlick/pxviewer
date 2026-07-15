@@ -67,8 +67,104 @@ def _make_bridge():
         selection_changed = Signal(object)
         status_changed = Signal(str)
         interactions_changed = Signal(bool)
+        structure_changed = Signal(object)  # the newly installed LiveSession (or None)
 
     return _Bridge()
+
+
+def _runs(indices):
+    """Yield contiguous ``(start, end)`` runs over sorted, de-duplicated indices."""
+    it = iter(sorted({int(i) for i in indices}))
+    try:
+        start = prev = next(it)
+    except StopIteration:
+        return
+    for i in it:
+        if i == prev + 1:
+            prev = i
+        else:
+            yield (start, prev)
+            start = prev = i
+    yield (start, prev)
+
+
+def _make_atom_table_model():
+    """A QAbstractTableModel over a session's per-atom columns (built lazily post-Qt).
+
+    Rows are atoms (i_seq order), columns are the structure's per-atom attributes.
+    Only the numpy columns are held; values are formatted on demand for the cells the
+    view actually paints, so 100k+ atoms stay cheap (QTableView virtualises rendering).
+    """
+    from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
+    class AtomTableModel(QAbstractTableModel):
+        def __init__(self):
+            super().__init__()
+            self._headers: List[str] = []
+            self._cols: list = []  # (values_or_None, kind)  kind: idx|str|int|float
+            self._n = 0
+
+        def set_session(self, session) -> None:
+            self.beginResetModel()
+            self._headers, self._cols, self._n = [], [], 0
+            data = getattr(session, "_data", None)
+            arrays = getattr(data, "arrays", None)
+            if arrays is not None and len(arrays) > 0:
+                self._n = len(arrays)
+
+                def add(header, values, kind):
+                    self._headers.append(header)
+                    self._cols.append((values, kind))
+
+                add("#", None, "idx")
+                add("element", arrays.element, "str")
+                add("name", arrays.name, "str")
+                add("resname", arrays.resname, "str")
+                add("chain", arrays.chain, "str")
+                add("resseq", arrays.resseq, "int")
+                if arrays.altloc is not None and any(arrays.altloc):
+                    add("altloc", arrays.altloc, "str")
+                add("x", arrays.x, "float")
+                add("y", arrays.y, "float")
+                add("z", arrays.z, "float")
+                if arrays.b is not None:
+                    add("B", arrays.b, "float")
+                if arrays.occ is not None:
+                    add("occ", arrays.occ, "float")
+                for name, values in getattr(session, "_attributes", {}).items():
+                    add(name, values, "float")
+            self.endResetModel()
+
+        def rowCount(self, parent=QModelIndex()):
+            return 0 if parent.isValid() else self._n
+
+        def columnCount(self, parent=QModelIndex()):
+            return 0 if parent.isValid() else len(self._headers)
+
+        def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+            if not index.isValid():
+                return None
+            values, kind = self._cols[index.column()]
+            if role == Qt.ItemDataRole.DisplayRole:
+                if kind == "idx":
+                    return str(index.row())
+                v = values[index.row()]
+                if kind == "float":
+                    fv = float(v)
+                    return "" if fv != fv else f"{fv:.3f}"  # fv != fv -> NaN
+                if kind == "int":
+                    return str(int(v))
+                return str(v)
+            if role == Qt.ItemDataRole.TextAlignmentRole and kind in ("idx", "int", "float"):
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return None
+
+        def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+            if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+                return self._headers[section]
+            return None
+
+    return AtomTableModel()
 
 
 def _make_close_filter(on_close):
@@ -152,6 +248,7 @@ class ControlsWindow:
 
         tabs = QTabWidget()
         tabs.addTab(self._build_file_tab(), "File")
+        tabs.addTab(self._build_geometry_tab(), "Geometry")
         tabs.addTab(self._build_demos_tab(), "Demos")
         layout.addWidget(tabs, stretch=1)
 
@@ -190,6 +287,7 @@ class ControlsWindow:
         desktop.bridge.selection_changed.connect(self._on_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
+        desktop.bridge.structure_changed.connect(self._on_structure_changed)
 
     # -- tabs ------------------------------------------------------------
 
@@ -293,6 +391,51 @@ class ControlsWindow:
         layout.addStretch()
         return tab
 
+    def _build_geometry_tab(self):
+        from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        subtabs = QTabWidget()
+        subtabs.addTab(self._build_atoms_subtab(), "Atoms")
+        layout.addWidget(subtabs)
+        return tab
+
+    def _build_atoms_subtab(self):
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import QAbstractItemView, QLabel, QTableView, QVBoxLayout, QWidget
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+
+        self._atoms_count = QLabel("No structure loaded")
+        layout.addWidget(self._atoms_count)
+
+        self._atom_model = _make_atom_table_model()
+        view = QTableView()
+        self._atom_view = view
+        view.setModel(self._atom_model)
+        view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        view.verticalHeader().setVisible(False)  # the "#" column is the atom index
+        view.setAlternatingRowColors(True)
+        view.setWordWrap(False)
+        # ResizeToContents would scan all rows (O(N)); keep interactive + stretch.
+        view.horizontalHeader().setStretchLastSection(True)
+        view.selectionModel().selectionChanged.connect(lambda *_: self._on_table_selection_changed())
+        layout.addWidget(view, stretch=1)
+
+        # Table -> viewer selection is debounced so a drag doesn't flood the socket.
+        self._suppress_table_sync = False
+        self._table_sync_timer = QTimer()
+        self._table_sync_timer.setSingleShot(True)
+        self._table_sync_timer.setInterval(60)
+        self._table_sync_timer.timeout.connect(self._push_table_selection_to_viewer)
+        return tab
+
     # -- window ----------------------------------------------------------
 
     def show(self) -> None:
@@ -389,12 +532,51 @@ class ControlsWindow:
 
     def _on_selection_changed(self, selection) -> None:
         indices = list(selection.indices)
-        if not indices:
+        if indices:
+            shown = indices[:12]
+            suffix = "…" if len(indices) > len(shown) else ""
+            self._selection_label.setText(f"{len(indices)} atom(s): {shown}{suffix}")
+        else:
             self._selection_label.setText("none")
-            return
-        shown = indices[:12]
-        suffix = "…" if len(indices) > len(shown) else ""
-        self._selection_label.setText(f"{len(indices)} atom(s): {shown}{suffix}")
+        # Viewer -> table: reflect the picked atoms as selected rows.
+        self._select_table_rows(indices)
+
+    # -- geometry / atoms table ------------------------------------------
+
+    def _on_structure_changed(self, session) -> None:
+        self._atom_model.set_session(session)
+        n = self._atom_model.rowCount()
+        self._atoms_count.setText(f"{n} atoms" if n else "No structure loaded")
+
+    def _on_table_selection_changed(self) -> None:
+        if not self._suppress_table_sync:
+            self._table_sync_timer.start()  # debounce a drag-select
+
+    def _push_table_selection_to_viewer(self) -> None:
+        rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
+        self._desktop.highlight_atoms(rows)
+
+    def _select_table_rows(self, indices) -> None:
+        """Select the given atom rows in the table without echoing back to the viewer."""
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+
+        model = self._atom_model
+        view = self._atom_view
+        sm = view.selectionModel()
+        self._suppress_table_sync = True
+        try:
+            sm.clearSelection()
+            ncols = model.columnCount()
+            valid = [i for i in indices if 0 <= i < model.rowCount()]
+            if valid and ncols:
+                selection = QItemSelection()
+                last = ncols - 1
+                for start, end in _runs(valid):  # contiguous ranges keep this cheap
+                    selection.select(model.index(start, 0), model.index(end, last))
+                sm.select(selection, QItemSelectionModel.SelectionFlag.Select)
+                view.scrollTo(model.index(valid[0], 0))
+        finally:
+            self._suppress_table_sync = False
 
 
 class DesktopApp:
@@ -559,6 +741,7 @@ class DesktopApp:
         session.start(host=self._host, port=0)
         if self._selection_enabled:
             session.enable_mouse_selection(self._emit_selection)
+        self.bridge.structure_changed.emit(session)  # refresh the atoms table
         return f"ws://{self._host}:{session.port}"
 
     def _ensure_session(self, key: str, make_session) -> str:
@@ -741,6 +924,14 @@ class DesktopApp:
     def clear_selection(self) -> None:
         if self._session is not None:
             self._session.clear_selection()
+
+    def highlight_atoms(self, indices) -> None:
+        """Highlight atoms in the viewer (table -> viewer selection sync)."""
+        if self._session is not None:
+            try:
+                self._session.highlight(list(indices))
+            except Exception:  # pragma: no cover - defensive (e.g. stale indices)
+                pass
 
 
 def run_desktop(host: str = "127.0.0.1", port: int = 5173) -> int:
