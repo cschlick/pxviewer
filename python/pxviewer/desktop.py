@@ -28,17 +28,14 @@ from .demos import DEMOS, Player, list_demos
 from .loader import (
     FILE_DIALOG_FILTER,
     SAMPLE_STRUCTURE,
-    create_volume_file_view,
     file_kind,
     sample_structure_path,
 )
-from .volume_demos import create_volume_demo, list_volume_demos
+from .volume_demos import list_volume_demos
 from .webapp import Webapp
 
-# A single off-screen atom is enough to keep the LiveSession WebSocket open and
-# route click-mode / mouse-selection messages for scenes that carry no live model
-# (e.g. a volume). Built through cctbx like every other session.
-_DUMMY_KEY = "__dummy__"
+# Distinct default isosurface colours so overlaid volumes read apart.
+_VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
 
 
 def _dummy_session():
@@ -69,7 +66,7 @@ def _make_bridge():
         status_changed = Signal(str)
         interactions_changed = Signal(bool)
         structure_changed = Signal(object)  # the active LiveSession (or None)
-        models_changed = Signal(object)     # [{id, name, visible, active}] for the Models list
+        loaded_changed = Signal(object)     # {groups, items} for the Loaded tree
 
     return _Bridge()
 
@@ -347,7 +344,7 @@ class ControlsWindow:
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
-        desktop.bridge.models_changed.connect(self._on_models_changed)
+        desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
 
     # -- tabs ------------------------------------------------------------
 
@@ -375,18 +372,22 @@ class ControlsWindow:
         formats.setWordWrap(True)
         layout.addWidget(formats)
 
-        # Loaded models: check to show/hide (one -> switch, several -> overlay); the
-        # highlighted row is the active model (drives the atoms table + selection).
+        # Loaded panel: models + volumes, with a map+model group (a cctbx
+        # map_model_manager) shown as a parent node. Check = shown; a selected
+        # model row is the active model (drives the atoms table + selection).
+        from PySide6.QtWidgets import QTreeWidget
+
         layout.addSpacing(12)
-        layout.addWidget(QLabel("<b>Loaded models</b>  (check = shown, selected row = active)"))
-        self._models_list = QListWidget()
-        self._models_list.setMaximumHeight(120)
-        self._models_list.itemChanged.connect(self._on_model_item_toggled)
-        self._models_list.currentRowChanged.connect(self._on_model_active_row)
-        layout.addWidget(self._models_list)
+        layout.addWidget(QLabel("<b>Loaded</b>  (check = shown, selected model = active)"))
+        self._loaded_tree = QTreeWidget()
+        self._loaded_tree.setMaximumHeight(160)
+        self._loaded_tree.setHeaderHidden(True)
+        self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
+        self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
+        layout.addWidget(self._loaded_tree)
         row = QHBoxLayout()
         self._remove_model_btn = QPushButton("Remove selected")
-        self._remove_model_btn.clicked.connect(self._on_remove_model)
+        self._remove_model_btn.clicked.connect(self._on_remove_selected)
         row.addWidget(self._remove_model_btn)
         row.addStretch()
         layout.addLayout(row)
@@ -629,18 +630,21 @@ class ControlsWindow:
     def _on_open_file(self) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
-        path, _ = QFileDialog.getOpenFileName(
-            self._window, "Open model or volume", "", FILE_DIALOG_FILTER
+        # Select several files (a model + its map(s)) to load them as one cctbx
+        # map_model_manager group; a single file loads individually.
+        paths, _ = QFileDialog.getOpenFileNames(
+            self._window, "Open model(s) and/or map(s)", "", FILE_DIALOG_FILTER
         )
-        if not path:
+        if not paths:
             return
         try:
-            kind = self._desktop.load_file(path)
+            kind = self._desktop.load_files(paths)
         except Exception as exc:
             QMessageBox.warning(self._window, "Could not load file", str(exc))
-            self._set_status(f"Failed to load {Path(path).name}")
+            self._set_status(f"Failed to load {len(paths)} file(s)")
             return
-        self._file_label.setText(f"{Path(path).name}  ({kind})")
+        label = Path(paths[0]).name if len(paths) == 1 else f"{len(paths)} files"
+        self._file_label.setText(f"{label}  ({kind})")
 
     def _on_load_sample(self) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -781,38 +785,52 @@ class ControlsWindow:
         self._table_pinned = mid is not None and mid != active
         self._set_table_model(mid)
 
-    # -- loaded-models list ----------------------------------------------
+    # -- loaded tree (models + volumes + groups) -------------------------
 
-    def _on_models_changed(self, summary) -> None:
+    def _on_loaded_changed(self, summary) -> None:
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QListWidgetItem
+        from PySide6.QtWidgets import QTreeWidgetItem
 
-        self._models_summary = summary
+        groups = {g["id"]: g["name"] for g in summary.get("groups", [])}
+        items = summary.get("items", [])
+        model_items = [it for it in items if it["kind"] == "model"]
+        self._models_summary = model_items
+
         self._suppress_model_events = True
         try:
-            self._models_list.clear()
-            active_row = -1
-            for i, m in enumerate(summary):
-                item = QListWidgetItem(m["name"])
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                item.setCheckState(Qt.CheckState.Checked if m["visible"] else Qt.CheckState.Unchecked)
-                item.setData(Qt.ItemDataRole.UserRole, m["id"])
-                self._models_list.addItem(item)
-                if m["active"]:
-                    active_row = i
-            if active_row >= 0:
-                self._models_list.setCurrentRow(active_row)
+            self._loaded_tree.clear()
+            group_nodes: dict = {}
+            active_item = None
+            # Group parent nodes first (plain headers — membership is from cctbx).
+            for it in items:
+                gid = it["group"]
+                if gid and gid not in group_nodes:
+                    node = QTreeWidgetItem(self._loaded_tree, [f"{groups.get(gid, gid)}  (map+model group)"])
+                    node.setData(0, Qt.ItemDataRole.UserRole, ("group", gid))
+                    node.setExpanded(True)
+                    group_nodes[gid] = node
+            for it in items:
+                parent = group_nodes.get(it["group"], self._loaded_tree)
+                label = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
+                if it.get("active"):
+                    label += "   ● active"
+                node = QTreeWidgetItem(parent, [label])
+                node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
+                node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
+                if it.get("active"):
+                    active_item = node
+            if active_item is not None:
+                self._loaded_tree.setCurrentItem(active_item)
         finally:
             self._suppress_model_events = False
-        self._sync_table_model_combo(summary)
+        self._sync_table_model_combo(model_items)
         self._refresh_console_session()
 
-    def _sync_table_model_combo(self, summary) -> None:
+    def _sync_table_model_combo(self, model_items) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
-        from PySide6.QtCore import Qt
-
-        active = next((m["id"] for m in summary if m["active"]), None)
-        ids = {m["id"] for m in summary}
+        active = next((m["id"] for m in model_items if m["active"]), None)
+        ids = {m["id"] for m in model_items}
         if not self._table_pinned or self._table_model_id not in ids:
             self._table_pinned = False
             target = active
@@ -822,39 +840,49 @@ class ControlsWindow:
         self._suppress_table_model_combo = True
         try:
             self._table_model_combo.clear()
-            for m in summary:
+            for m in model_items:
                 self._table_model_combo.addItem(m["name"], m["id"])
-            idx = next((i for i, m in enumerate(summary) if m["id"] == target), -1)
+            idx = next((i for i, m in enumerate(model_items) if m["id"] == target), -1)
             if idx >= 0:
                 self._table_model_combo.setCurrentIndex(idx)
         finally:
             self._suppress_table_model_combo = False
         self._set_table_model(target)
 
-    def _on_model_item_toggled(self, item) -> None:
+    def _on_tree_item_changed(self, item, _column=0) -> None:
         from PySide6.QtCore import Qt
 
         if self._suppress_model_events:
             return
-        self._desktop.set_model_visible(
-            item.data(Qt.ItemDataRole.UserRole), item.checkState() == Qt.CheckState.Checked
-        )
+        kind, ident = item.data(0, Qt.ItemDataRole.UserRole)
+        visible = item.checkState(0) == Qt.CheckState.Checked
+        if kind == "model":
+            self._desktop.set_model_visible(ident, visible)
+        elif kind == "volume":
+            self._desktop.set_volume_visible(ident, visible)
 
-    def _on_model_active_row(self, row) -> None:
+    def _on_tree_current_changed(self, current, _previous) -> None:
         from PySide6.QtCore import Qt
 
-        if self._suppress_model_events or row < 0:
+        if self._suppress_model_events or current is None:
             return
-        item = self._models_list.item(row)
-        if item is not None:
-            self._desktop.set_active_model(item.data(Qt.ItemDataRole.UserRole))
+        kind, ident = current.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "model":  # selecting a model makes it active; volumes/groups don't
+            self._desktop.set_active_model(ident)
 
-    def _on_remove_model(self) -> None:
+    def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt
 
-        item = self._models_list.currentItem()
-        if item is not None:
-            self._desktop.remove_model(item.data(Qt.ItemDataRole.UserRole))
+        item = self._loaded_tree.currentItem()
+        if item is None:
+            return
+        kind, ident = item.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "model":
+            self._desktop.remove_model(ident)
+        elif kind == "volume":
+            self._desktop.remove_volume(ident)
+        elif kind == "group":
+            self._desktop.remove_group(ident)
 
     def _on_table_selection_changed(self) -> None:
         if not self._suppress_table_sync:
@@ -904,14 +932,26 @@ class DesktopApp:
 
         self._webapp = Webapp(host=host, port=port)
 
-        self._session: Optional[Any] = None  # the ACTIVE session (a model, or a dummy)
+        self._session: Optional[Any] = None  # the ACTIVE model session (drives the table)
         self._session_key: Optional[str] = None
-        # Loaded models: list of {id, name, session, visible}. The viewport shows the
+        # Loaded models: {id, name, session, visible, group}. The viewport shows the
         # visible ones (one -> switch, several -> simultaneous). ``_session`` points at
         # the active model (drives the atoms table + selection sync).
         self._models: List[dict] = []
         self._model_counter = 0
         self._active_model_id: Optional[str] = None
+        # Loaded volumes (a distinct category — never in the atoms table / selection):
+        # {id, name, data(VolumeData), visible, group, ref, map_url, iso, color}. Shown
+        # as an MVSJ scene composed alongside the model ws in the one viewport.
+        self._volumes: List[dict] = []
+        self._volume_counter = 0
+        # Groups (a map_model_manager loaded together): {group_id: name}. Membership
+        # is authoritative from cctbx — we never infer it.
+        self._groups: dict = {}
+        self._group_counter = 0
+        self._scene_counter = 0  # cache-buster for the composed volume MVSJ
+        self._dummy: Optional[Any] = None  # persistent control ws when no model is visible
+        self._batching = False  # defer viewport reload / signals during a group load
         # Scene-level selection: {model_id: [atom indices]}. Each model reports its
         # own picks independently (a selection may span models — e.g. protein +
         # ligand); the union across models is the scene selection. Mutated on the
@@ -950,8 +990,7 @@ class DesktopApp:
         self._arrange_windows()
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
-        ws_url = self._start_dummy()
-        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
+        self._reload_viewport()  # nothing loaded -> a dummy-backed blank viewer
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
         print("Press Ctrl-C (or close a window) to stop.", flush=True)
@@ -1023,7 +1062,7 @@ class DesktopApp:
         except Exception:  # pragma: no cover - defensive
             pass
         self.stop_demo()
-        self._clear_models()  # stops all model sessions and the active/dummy one
+        self._clear_all()  # stops all model sessions, volumes, and the dummy
         self._webapp.stop()
 
     def _arrange_windows(self) -> None:
@@ -1047,45 +1086,109 @@ class DesktopApp:
 
     # -- live session ----------------------------------------------------
 
-    # -- model registry (multi-model) ------------------------------------
+    # -- registry (models + volumes + groups) ----------------------------
 
     def _model_entry(self, mid):
         return next((m for m in self._models if m["id"] == mid), None)
 
-    def _visible_model_ws(self) -> str:
-        """Comma-separated ws URLs of the visible models (one -> switch, many -> overlay)."""
-        return ",".join(
-            f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]
-        )
+    def _volume_entry(self, vid):
+        return next((v for v in self._volumes if v["id"] == vid), None)
 
-    def _emit_models_changed(self) -> None:
-        self.bridge.models_changed.emit([
-            {"id": m["id"], "name": m["name"], "visible": m["visible"], "active": m["id"] == self._active_model_id}
-            for m in self._models
-        ])
+    @contextmanager
+    def _batch_load(self):
+        """Defer viewport reload + Loaded-tree signal until a group finishes loading."""
+        self._batching = True
+        try:
+            yield
+        finally:
+            self._batching = False
+            self._reload_viewport()
+            self._emit_loaded_changed()
+
+    def _new_group(self, name: str) -> str:
+        self._group_counter += 1
+        gid = f"group-{self._group_counter}"
+        self._groups[gid] = name
+        return gid
+
+    # -- viewport composition --
+
+    def _visible_model_ws(self) -> List[str]:
+        return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
+
+    def _ensure_dummy_ws(self) -> str:
+        """A persistent 1-atom control session: carries volume commands and keeps the
+        page non-blank when no model is visible. Nothing to pick, so no selection."""
+        if self._dummy is None:
+            self._dummy = _dummy_session()
+            self._dummy.start(host=self._host, port=0)
+        return f"ws://{self._host}:{self._dummy.port}"
+
+    def _control_session(self):
+        """The session that carries volume commands: the active model, else the dummy."""
+        active = self.active_model_session()
+        if active is not None:
+            return active
+        if self._dummy is not None:
+            return self._dummy
+        return None
+
+    def _write_volume_scene(self) -> Optional[str]:
+        """Write an MVSJ composing every visible volume; return its URL path (or None)."""
+        visible = [v for v in self._volumes if v["visible"]]
+        if not visible:
+            return None
+        from .volume import Volume, create_volume_view
+
+        focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
+        nodes = []
+        for i, v in enumerate(visible):
+            nodes.append(Volume(
+                url=v["map_url"], ref=v["ref"], format="map",
+                isosurface_kind="relative", isosurface_value=v["iso"],
+                color=v["color"], opacity=v["opacity"], style=v["style"],
+                focus=(focus_first and i == 0),
+            ))
+        self._scene_counter += 1
+        scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
+        scene_dir.mkdir(parents=True, exist_ok=True)
+        (scene_dir / "scene.mvsj").write_text(create_volume_view(volumes=nodes))
+        return f"/scene/{self._scene_counter}/scene.mvsj"
+
+    def _reload_viewport(self) -> None:
+        """Compose the visible models (ws) and volumes (MVSJ) into one viewport URL."""
+        if self._batching:
+            return
+        model_ws = self._visible_model_ws()
+        mvsj = self._write_volume_scene()
+        ws = list(model_ws)
+        if not model_ws:
+            # No model to carry volume commands / keep the page alive -> use the dummy.
+            ws.append(self._ensure_dummy_ws())
+        params = []
+        if mvsj:
+            params.append(f"mvsj={mvsj}")
+        params.append("ws=" + ",".join(ws))
+        self._viewport.load(f"{self._webapp.url}index.html?{'&'.join(params)}")
 
     def _wire_active(self, session) -> None:
         """Point the active session at ``session`` (the default table model + display target).
 
         Selection is scene-wide (enabled per model, not tied to the active one), so
-        switching the active model no longer re-wires any picking — it just moves
-        which model the atoms table defaults to.
+        switching the active model just moves which model the atoms table defaults to.
         """
         self._session = session
         self._session_key = None
         self.bridge.structure_changed.emit(session)
 
-    def _reload_model_viewport(self) -> None:
-        ws = self._visible_model_ws()
-        if ws:
-            self._viewport.load(f"{self._webapp.url}index.html?ws={ws}")
+    # -- models --
 
-    def _add_model(self, session, name: str) -> str:
+    def _add_model(self, session, name: str, *, group: Optional[str] = None) -> str:
         """Register + show a model session (visible + active); returns its id."""
         session.start(host=self._host, port=0)
         self._model_counter += 1
         mid = f"model-{self._model_counter}"
-        self._models.append({"id": mid, "name": name, "session": session, "visible": True})
+        self._models.append({"id": mid, "name": name, "session": session, "visible": True, "group": group})
         self._active_model_id = mid
         # Register this model's pick handler once (tagged with its id); the click
         # mode is what actually turns picking on/off. Registering here means a
@@ -1094,8 +1197,8 @@ class DesktopApp:
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
-        self._reload_model_viewport()
-        self._emit_models_changed()
+        self._reload_viewport()
+        self._emit_loaded_changed()
         return mid
 
     def set_active_model(self, mid: str) -> None:
@@ -1105,7 +1208,7 @@ class DesktopApp:
             return
         self._active_model_id = mid
         self._wire_active(entry["session"])  # no viewport reload: visibility is unchanged
-        self._emit_models_changed()
+        self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
         """Show or hide a loaded model in the viewport."""
@@ -1113,8 +1216,8 @@ class DesktopApp:
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._reload_model_viewport()
-        self._emit_models_changed()
+        self._reload_viewport()
+        self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
         """Unload a model: stop its session and drop it from the viewport."""
@@ -1132,39 +1235,87 @@ class DesktopApp:
             self._active_model_id = self._models[-1]["id"] if self._models else None
             active = self._model_entry(self._active_model_id) if self._active_model_id else None
             self._wire_active(active["session"] if active else None)
-        self._reload_model_viewport()
-        self._emit_models_changed()
+        self._prune_group(entry["group"])
+        self._reload_viewport()
+        self._emit_loaded_changed()
         if dropped:
             self._emit_scene_selection()
 
-    def _clear_models(self) -> None:
-        """Stop and drop every loaded model, plus the active/dummy session."""
+    # -- volumes --
+
+    def _add_volume(self, data, name: str, *, group: Optional[str] = None) -> str:
+        """Register + show a volume: write its map (via cctbx) and compose the scene."""
+        self._volume_counter += 1
+        vid = f"volume-{self._volume_counter}"
+        vols_dir = self._webapp.volume_dir / "vols"
+        vols_dir.mkdir(parents=True, exist_ok=True)
+        map_path = vols_dir / f"{vid}.map"
+        data.write_map(str(map_path))  # cctbx writes it; the browser fetches it
+        self._volumes.append({
+            "id": vid, "name": name, "data": data, "visible": True, "group": group,
+            "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
+            "iso": data.suggested_iso(), "color": _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
+            "opacity": 1.0, "style": "surface",
+        })
+        self._reload_viewport()
+        self._emit_loaded_changed()
+        return vid
+
+    def set_volume_visible(self, vid: str, visible: bool) -> None:
+        entry = self._volume_entry(vid)
+        if entry is None or entry["visible"] == bool(visible):
+            return
+        entry["visible"] = bool(visible)
+        self._reload_viewport()
+        self._emit_loaded_changed()
+
+    def remove_volume(self, vid: str) -> None:
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return
+        self._volumes.remove(entry)
+        self._prune_group(entry["group"])
+        self._reload_viewport()
+        self._emit_loaded_changed()
+
+    # -- groups --
+
+    def remove_group(self, gid: str) -> None:
+        """Unload a whole group (its model + maps) at once."""
+        with self._batch_load():
+            for m in [m for m in self._models if m["group"] == gid]:
+                self.remove_model(m["id"])
+            for v in [v for v in self._volumes if v["group"] == gid]:
+                self.remove_volume(v["id"])
+
+    def _prune_group(self, gid: Optional[str]) -> None:
+        """Drop a group's name once it has no members left."""
+        if gid is None:
+            return
+        if not any(m["group"] == gid for m in self._models) and not any(v["group"] == gid for v in self._volumes):
+            self._groups.pop(gid, None)
+
+    def _clear_all(self) -> None:
+        """Stop and drop every model, volume, group, and the dummy control session."""
         for m in list(self._models):
             try:
                 m["session"].stop()
             except Exception:  # pragma: no cover - defensive
                 pass
         self._models.clear()
+        self._volumes.clear()
+        self._groups.clear()
         self._active_model_id = None
         with self._scene_lock:
             self._scene_selection.clear()
-        if self._session is not None and self._session_key == _DUMMY_KEY:
+        if self._dummy is not None:
             try:
-                self._session.stop()
+                self._dummy.stop()
             except Exception:  # pragma: no cover - defensive
                 pass
+            self._dummy = None
         self._session = None
         self._session_key = None
-
-    def _start_dummy(self) -> str:
-        """A 1-atom session that keeps the WS channel open for a volume scene."""
-        session = _dummy_session()
-        session.start(host=self._host, port=0)
-        self._session = session
-        self._session_key = _DUMMY_KEY
-        # The dummy carries a single off-screen atom (a volume scene has no model),
-        # so there is nothing to pick — selection stays a model-only affair.
-        return f"ws://{self._host}:{session.port}"
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
@@ -1184,6 +1335,22 @@ class DesktopApp:
             snapshot = {k: list(v) for k, v in self._scene_selection.items()}
         self.bridge.scene_selection_changed.emit(snapshot)
 
+    def _emit_loaded_changed(self) -> None:
+        """Publish the Loaded tree: groups + flat items (models and volumes)."""
+        if self._batching:
+            return
+        items = [
+            {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
+             "active": m["id"] == self._active_model_id, "group": m["group"]}
+            for m in self._models
+        ] + [
+            {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
+             "active": False, "group": v["group"]}
+            for v in self._volumes
+        ]
+        groups = [{"id": gid, "name": name} for gid, name in self._groups.items()]
+        self.bridge.loaded_changed.emit({"groups": groups, "items": items})
+
     def session_for(self, mid: Optional[str]):
         """The LiveSession for a model id (or None) — used by the atoms table."""
         entry = self._model_entry(mid) if mid else None
@@ -1196,14 +1363,34 @@ class DesktopApp:
     # -- loading ---------------------------------------------------------
 
     def load_file(self, path: str) -> str:
-        """Open a local model or volume file in the viewport. Returns its kind.
+        """Open a single local model or volume file (individually). Returns its kind.
 
-        Atomic models are read by cctbx and streamed through a live session (no
-        browser parsing); volumes are still staged as an MVSJ scene.
+        Everything is read by cctbx: models stream through a live session, maps go
+        through cctbx's map_manager. To load a map + model *as a group*, use
+        :meth:`load_files` with both paths.
         """
         if file_kind(path) == "volume":
             return self._load_volume_file(path)
         return self._load_model_file(path)
+
+    def load_files(self, paths) -> str:
+        """Load one or more files. A single file loads individually; several are
+        handed to cctbx as one ``map_model_manager`` and shown as a group."""
+        paths = [str(p) for p in paths]
+        if len(paths) == 1:
+            return self.load_file(paths[0])
+        return self._load_group(paths)
+
+    def _model_session(self, model, name: str):
+        """Build (and default-style) a live session from a cctbx model."""
+        from . import cctbx_io
+        from .live import LiveSession
+
+        session = LiveSession.from_cctbx_model(model)
+        # Cartoon reads better than ball-and-stick for a polymer; replayed on connect.
+        if cctbx_io.model_is_polymer(session.model):
+            session.set_representation("cartoon", color="secondary-structure")
+        return session
 
     def _load_model_file(self, path: str) -> str:
         """Read a model with cctbx and add it to the viewport (alongside any others)."""
@@ -1213,12 +1400,7 @@ class DesktopApp:
         from . import cctbx_io
         from .live import LiveSession
 
-        # DataManager -> model -> hierarchy; the native model is retained on the
-        # session so selection uses cctbx's machinery.
         session = LiveSession.from_model_file(path)
-        # The topology BinaryCIF already carries the coordinates, so the structure
-        # appears without pushing a frame. Cartoon reads better than ball-and-stick
-        # for a polymer; the choice is replayed to the viewer when it connects.
         if cctbx_io.model_is_polymer(session.model):
             session.set_representation("cartoon", color="secondary-structure")
         self._add_model(session, Path(path).name)
@@ -1226,47 +1408,59 @@ class DesktopApp:
         return "model"
 
     def _load_volume_file(self, path: str) -> str:
-        """Stage a volume file as an MVSJ scene and load it in the viewport."""
+        """Read a map with cctbx and add it as a volume (alongside any models/maps)."""
         self.stop_demo()
         self._reset_interactions()
-        self._clear_models()  # a volume is its own view, not a model
 
-        # Each load gets a fresh directory, so a reloaded page can never pick up
-        # a cached scene or data file from the previous one.
-        self._load_counter += 1
-        out_dir = self._webapp.volume_dir / "file" / str(self._load_counter)
-        mvsj_path = create_volume_file_view(path, out_dir=out_dir)
+        from .volume_io import VolumeData
 
-        ws_url = self._start_dummy()
-        mvsj_url = f"/file/{self._load_counter}/{mvsj_path.name}"
-        self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
-        self.bridge.structure_changed.emit(None)  # no atoms table for a volume
-        self._emit_models_changed()  # empty models list
-        self._emit_scene_selection()  # dropped any prior model selection
+        self._add_volume(VolumeData.from_map_file(path), Path(path).name)
         self._status(f"Loaded volume: {Path(path).name}")
         return "volume"
 
-    def load_volume_demo(self, name: str) -> None:
-        """Generate a volume demo and load its static scene in the viewport."""
+    def _load_group(self, paths) -> str:
+        """Load several files as one cctbx map_model_manager group (model + maps)."""
         self.stop_demo()
         self._reset_interactions()
-        self._clear_models()
 
-        demo_dir = self._webapp.volume_dir / name
-        demo_dir.mkdir(parents=True, exist_ok=True)
-        create_volume_demo(
-            name,
-            mrc_path=demo_dir / "volume.mrc",
-            mvsj_path=demo_dir / "volume.mvsj",
-            shape=(32, 32, 32),
-        )
+        from .volume_io import map_model_manager_from_files, split_map_model_manager
 
-        ws_url = self._start_dummy()
-        mvsj_url = f"/demo/{name}/volume.mvsj"
-        self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
-        self.bridge.structure_changed.emit(None)
-        self._emit_models_changed()
-        self._emit_scene_selection()
+        models = [p for p in paths if file_kind(p) == "model"]
+        maps = [p for p in paths if file_kind(p) == "volume"]
+        if len(models) > 1:
+            raise ValueError("a group can contain at most one model")
+        if not maps:
+            raise ValueError("a group needs at least one map file")
+
+        group_name = Path(models[0]).name if models else Path(maps[0]).name
+        mmm = map_model_manager_from_files(model_file=models[0] if models else None, map_files=maps)
+        model_data, volumes = split_map_model_manager(mmm, name=group_name)
+
+        gid = self._new_group(group_name)
+        with self._batch_load():
+            if model_data is not None and model_data.model is not None:
+                session = self._model_session(model_data.model, group_name)
+                self._add_model(session, group_name, group=gid)
+            for vd in volumes:
+                self._add_volume(vd, vd.name, group=gid)
+        self._status(f"Loaded group: {group_name} ({len(volumes)} map(s), model={'yes' if model_data else 'no'})")
+        return "group"
+
+    def load_volume_demo(self, name: str) -> None:
+        """Generate a demo map (through cctbx) and add it as a volume."""
+        self.stop_demo()
+        self._reset_interactions()
+
+        from .volume_demos import make_demo_grids
+        from .volume_io import VolumeData
+
+        grids = make_demo_grids(name, shape=(32, 32, 32))
+        if len(grids) == 1:
+            self._add_volume(VolumeData.from_numpy(grids[0], name=name), f"demo: {name}")
+        else:
+            with self._batch_load():
+                for i, g in enumerate(grids):
+                    self._add_volume(VolumeData.from_numpy(g, name=f"{name}-{i}"), f"demo: {name} [{i}]")
         self._status(f"Volume demo: {name}")
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
@@ -1283,7 +1477,6 @@ class DesktopApp:
 
         sites, labels = demo.make_sites()
         session = LiveSession.from_cctbx_model(cctbx_io.model_from_sites(sites, **labels))
-        self._clear_models()  # a demo is a single animated model
         self._add_model(session, f"demo: {name}")
 
         base = np.asarray(sites, dtype="<f4")

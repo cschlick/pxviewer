@@ -190,6 +190,63 @@ def test_controls_table_model_dropdown_and_filter(qapp):
         app.stop()
 
 
+def test_volume_registry_and_grouping(qapp, tmp_path):
+    """Volumes are their own category; a map+model loads as a cctbx group."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    # A synthetic map + model on disk.
+    mmm = map_model_manager()
+    mmm.generate_map()
+    map_path = tmp_path / "m.mrc"
+    model_path = tmp_path / "m.pdb"
+    mmm.map_manager().write_map(str(map_path))
+    model_path.write_text(mmm.model().model_as_pdb())
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    captured = {}
+    app.bridge.loaded_changed.connect(lambda s: captured.update(s))
+    try:
+        # An individual volume: registered, visible, composed into an MVSJ, and
+        # its map written (via cctbx) where the browser can fetch it.
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        assert len(app._volumes) == 1 and app._volumes[0]["visible"]
+        assert not app._models  # volumes never enter the model registry
+        assert app._write_volume_scene() is not None
+        assert (app._webapp.volume_dir / "vols" / f"{vid}.map").exists()
+
+        app.set_volume_visible(vid, False)
+        assert app._write_volume_scene() is None  # nothing visible -> no scene
+        app.remove_volume(vid)
+        assert not app._volumes
+
+        # A map + model loaded together -> one cctbx group (model + its map).
+        kind = app.load_files([str(model_path), str(map_path)])
+        assert kind == "group"
+        assert len(app._models) == 1 and len(app._volumes) == 1
+        gid = app._models[0]["group"]
+        assert gid is not None and app._volumes[0]["group"] == gid and gid in app._groups
+        # A model + a volume coexist: the viewport has both ws and MVSJ.
+        assert len(app._visible_model_ws()) == 1 and app._write_volume_scene() is not None
+        # The Loaded summary carries the group + both items.
+        assert gid in {g["id"] for g in captured["groups"]}
+        assert {it["kind"] for it in captured["items"]} == {"model", "volume"}
+
+        app.remove_group(gid)
+        assert not app._models and not app._volumes and gid not in app._groups
+    finally:
+        app.stop()
+
+
 def test_console_binds_and_tracks_active_session(qapp):
     """The embedded console exposes `app`/`session`, and `session` follows active."""
     pytest.importorskip("qtconsole")
@@ -249,11 +306,11 @@ def test_multi_model_registry(qapp):
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0], [7, 0, 0]]), "B")
         assert len(app._models) == 2
         assert app._active_model_id == b
-        assert app._visible_model_ws().count("ws://") == 2  # both visible -> simultaneous
+        assert len(app._visible_model_ws()) == 2  # both visible -> simultaneous
         assert app._session._n_atoms == 3  # active is B
 
         app.set_model_visible(a, False)
-        assert app._visible_model_ws().count("ws://") == 1  # switch: only B shown
+        assert len(app._visible_model_ws()) == 1  # switch: only B shown
 
         app.set_active_model(a)
         assert app._session._n_atoms == 2  # table/selection follow A even while hidden

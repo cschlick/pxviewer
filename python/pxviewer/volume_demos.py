@@ -158,6 +158,15 @@ def list_volume_demos() -> List[Tuple[str, str]]:
     return [(d.name, d.description) for d in VOLUME_DEMOS.values()]
 
 
+def make_demo_grids(name: str, *, shape: Tuple[int, int, int] = (32, 32, 32)) -> List[np.ndarray]:
+    """The raw numpy grid(s) for a demo (a list; most demos have one, multi has two)."""
+    demo = VOLUME_DEMOS.get(name)
+    if demo is None:
+        raise ValueError(f"unknown volume demo '{name}'. Available: {', '.join(VOLUME_DEMOS)}")
+    data = demo.make_data(shape)
+    return data if isinstance(data, list) else [data]
+
+
 def create_volume_demo(
     name: str,
     *,
