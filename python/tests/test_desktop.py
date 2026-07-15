@@ -216,6 +216,15 @@ def test_console_binds_and_tracks_active_session(qapp):
         # Loading another model makes it active; the console's `session` rebinds.
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
         assert shell.user_ns["session"] is app.session_for(b)
+
+        # The console tab hides the Display/Selection controls so it fills the pane.
+        from PySide6.QtWidgets import QTabWidget
+
+        tabs = controls._window.findChild(QTabWidget)
+        tabs.setCurrentIndex(controls._console_tab_index)
+        assert controls._bottom_controls.isHidden()
+        tabs.setCurrentIndex(0)  # File
+        assert not controls._bottom_controls.isHidden()
     finally:
         app.stop()
 

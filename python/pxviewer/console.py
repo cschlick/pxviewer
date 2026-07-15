@@ -38,6 +38,26 @@ def console_available() -> bool:
         return False
 
 
+def _make_widget():
+    """A RichJupyterWidget that shows only our banner, not IPython's.
+
+    qtconsole appends the kernel's own banner (Python version, IPython version, a
+    random tip) after our frontend banner. That banner is a ``Unicode`` trait set
+    asynchronously from the kernel-info reply; observing it and clearing it keeps
+    the greeting to just our own lines.
+    """
+    from qtconsole.rich_jupyter_widget import RichJupyterWidget
+    from traitlets import observe
+
+    class _PxJupyterWidget(RichJupyterWidget):
+        @observe("kernel_banner")
+        def _suppress_kernel_banner(self, change):
+            if change["new"]:
+                self.kernel_banner = ""
+
+    return _PxJupyterWidget()
+
+
 class EmbeddedConsole:
     """An in-process IPython kernel wired to a ``RichJupyterWidget``.
 
@@ -48,7 +68,6 @@ class EmbeddedConsole:
 
     def __init__(self, namespace: Optional[Mapping[str, Any]] = None, banner: Optional[str] = None):
         from qtconsole.inprocess import QtInProcessKernelManager
-        from qtconsole.rich_jupyter_widget import RichJupyterWidget
 
         self._manager = QtInProcessKernelManager()
         self._manager.start_kernel(show_banner=False)
@@ -60,8 +79,8 @@ class EmbeddedConsole:
         self._client = self._manager.client()
         self._client.start_channels()
 
-        self.widget = RichJupyterWidget()
-        self.widget.set_default_style("linux")
+        self.widget = _make_widget()
+        self.widget.set_default_style("lightbg")  # white background
         # Set the banner before attaching the client, which is what triggers the
         # initial prompt (and banner) to be drawn.
         if banner:
@@ -93,10 +112,6 @@ class EmbeddedConsole:
 def default_banner() -> str:
     """The greeting shown at the top of the console."""
     return (
-        "pxviewer API console — an in-process IPython shell.\n"
-        "  session : the active model's LiveSession (follows the active model)\n"
-        "  app     : the DesktopApp (models, loading, selection)\n"
-        "  np      : numpy\n"
-        "Try:  session.select('chain A')   session.color_by('bfactor')   session?\n"
-        "Note: blocking calls (wait_for_*) run in-process and will freeze the UI.\n"
+        "pxviewer console.  session = active model · app = desktop · np = numpy\n"
+        "Type  api  for all commands · session.name? for help · session.<Tab> to explore.\n"
     )

@@ -438,13 +438,16 @@ available live against whatever is loaded — with tab-completion, `session.sele
 help, and history:
 
 ```python
+api                                # every command, grouped by topic, one-liners
+api.find("color")                  # filter to matching commands
 session.select("chain A")          # `session` is the active model's LiveSession
 session.color_by("bfactor")
 app.load_file("/path/to/other.cif") # `app` is the DesktopApp
 ```
 
-`session` tracks the active model (`app` exposes the rest). It needs the optional
-console extra:
+`api` is the "where do I start" map; `session.<name>?` gives full help and
+`session.<Tab>` explores. `session` tracks the active model (`app` exposes the
+rest). It needs the optional console extra:
 
 ```bash
 pip install 'pxviewer[console]'     # qtconsole + ipykernel

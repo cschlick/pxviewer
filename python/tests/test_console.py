@@ -44,3 +44,16 @@ def test_embedded_console_shares_live_objects(qapp):
         assert shell.user_ns["session"] == "rebound"
     finally:
         console.shutdown()
+
+
+def test_console_suppresses_kernel_banner(qapp):
+    """The widget squelches IPython's own banner so only our greeting shows."""
+    from pxviewer.console import EmbeddedConsole
+
+    console = EmbeddedConsole()
+    try:
+        # The kernel-info reply sets this trait; our observer must blank it out.
+        console.widget.kernel_banner = "Python 3.12 ... IPython 9 ... Tip: ..."
+        assert console.widget.kernel_banner == ""
+    finally:
+        console.shutdown()

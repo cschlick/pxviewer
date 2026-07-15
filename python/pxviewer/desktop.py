@@ -296,8 +296,16 @@ class ControlsWindow:
         tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(tabs, stretch=1)
 
-        # These apply to whatever is loaded, so they sit below the tabs.
-        layout.addWidget(QLabel("<b>Display</b>"))
+        # Display / Selection controls apply to whatever is loaded, so they sit
+        # below the tabs — but they are hidden on the Console tab so the console
+        # fills the whole pane.
+        self._bottom_controls = QWidget()
+        bottom = QVBoxLayout(self._bottom_controls)
+        bottom.setContentsMargins(0, 0, 0, 0)
+        bottom.setSpacing(6)
+        layout.addWidget(self._bottom_controls)
+
+        bottom.addWidget(QLabel("<b>Display</b>"))
 
         self._interactions_btn = QPushButton("Show computed interactions")
         self._interactions_btn.setCheckable(True)
@@ -307,26 +315,26 @@ class ControlsWindow:
             "user-defined contacts, use LiveSession.set_interactions() from Python."
         )
         self._interactions_btn.clicked.connect(self._on_toggle_interactions)
-        layout.addWidget(self._interactions_btn)
+        bottom.addWidget(self._interactions_btn)
 
-        layout.addWidget(QLabel("<b>Selection</b>"))
+        bottom.addWidget(QLabel("<b>Selection</b>"))
 
         self._select_btn = QPushButton("Enable selection mode")
         self._select_btn.setCheckable(True)
         self._select_btn.clicked.connect(self._on_toggle_select)
-        layout.addWidget(self._select_btn)
+        bottom.addWidget(self._select_btn)
 
         self._clear_btn = QPushButton("Clear selection")
         self._clear_btn.clicked.connect(self._on_clear_selection)
-        layout.addWidget(self._clear_btn)
+        bottom.addWidget(self._clear_btn)
 
         self._selection_label = QLabel("none")
         self._selection_label.setWordWrap(True)
-        layout.addWidget(self._selection_label)
+        bottom.addWidget(self._selection_label)
 
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(True)
-        layout.addWidget(self._status_label)
+        bottom.addWidget(self._status_label)
 
         self._suppress_model_events = False
         # Which model the atoms table shows. Defaults to the active model but the
@@ -484,7 +492,11 @@ class ControlsWindow:
         return tab
 
     def _on_tab_changed(self, index: int) -> None:
-        if index == self._console_tab_index:
+        on_console = index == self._console_tab_index
+        # Give the console the whole pane; the Display/Selection controls only
+        # make sense for the other tabs anyway.
+        self._bottom_controls.setVisible(not on_console)
+        if on_console:
             self._ensure_console()
 
     def _ensure_console(self) -> None:
@@ -507,10 +519,14 @@ class ControlsWindow:
         try:
             import numpy as np
 
+            from .api_guide import ApiGuide
+            from .live import LiveSession
+
             namespace = {
                 "app": self._desktop,
                 "session": self._desktop.active_model_session(),
                 "np": np,
+                "api": ApiGuide(LiveSession),
             }
             self._console = console_mod.EmbeddedConsole(
                 namespace, banner=console_mod.default_banner()
