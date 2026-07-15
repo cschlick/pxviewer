@@ -73,3 +73,38 @@ def test_atom_table_empty_when_no_session(qapp):
     model = _make_atom_table_model()
     model.set_session(None)
     assert model.rowCount() == 0 and model.columnCount() == 0
+
+
+def test_multi_model_registry(qapp):
+    """The desktop model registry: add (overlay), hide (switch), active, remove."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    from pxviewer.appserver import find_frontend_dir, frontend_is_built
+
+    fd = find_frontend_dir()
+    if fd is None or not frontend_is_built(fd):
+        pytest.skip("frontend not built")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0], [7, 0, 0]]), "B")
+        assert len(app._models) == 2
+        assert app._active_model_id == b
+        assert app._visible_model_ws().count("ws://") == 2  # both visible -> simultaneous
+        assert app._session._n_atoms == 3  # active is B
+
+        app.set_model_visible(a, False)
+        assert app._visible_model_ws().count("ws://") == 1  # switch: only B shown
+
+        app.set_active_model(a)
+        assert app._session._n_atoms == 2  # table/selection follow A even while hidden
+
+        app.remove_model(b)
+        assert len(app._models) == 1 and app._active_model_id == a
+    finally:
+        app.stop()

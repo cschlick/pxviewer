@@ -67,7 +67,8 @@ def _make_bridge():
         selection_changed = Signal(object)
         status_changed = Signal(str)
         interactions_changed = Signal(bool)
-        structure_changed = Signal(object)  # the newly installed LiveSession (or None)
+        structure_changed = Signal(object)  # the active LiveSession (or None)
+        models_changed = Signal(object)     # [{id, name, visible, active}] for the Models list
 
     return _Bridge()
 
@@ -284,15 +285,17 @@ class ControlsWindow:
         self._status_label.setWordWrap(True)
         layout.addWidget(self._status_label)
 
+        self._suppress_model_events = False
         desktop.bridge.selection_changed.connect(self._on_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
         desktop.bridge.structure_changed.connect(self._on_structure_changed)
+        desktop.bridge.models_changed.connect(self._on_models_changed)
 
     # -- tabs ------------------------------------------------------------
 
     def _build_file_tab(self):
-        from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout, QWidget
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -314,6 +317,22 @@ class ControlsWindow:
         formats = QLabel("Models (cctbx): .pdb .ent .cif .mmcif\nVolumes: .mrc .map .ccp4")
         formats.setWordWrap(True)
         layout.addWidget(formats)
+
+        # Loaded models: check to show/hide (one -> switch, several -> overlay); the
+        # highlighted row is the active model (drives the atoms table + selection).
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("<b>Loaded models</b>  (check = shown, selected row = active)"))
+        self._models_list = QListWidget()
+        self._models_list.setMaximumHeight(120)
+        self._models_list.itemChanged.connect(self._on_model_item_toggled)
+        self._models_list.currentRowChanged.connect(self._on_model_active_row)
+        layout.addWidget(self._models_list)
+        row = QHBoxLayout()
+        self._remove_model_btn = QPushButton("Remove selected")
+        self._remove_model_btn.clicked.connect(self._on_remove_model)
+        row.addWidget(self._remove_model_btn)
+        row.addStretch()
+        layout.addLayout(row)
 
         layout.addSpacing(12)
         layout.addWidget(QLabel("<b>Sample</b>"))
@@ -548,6 +567,54 @@ class ControlsWindow:
         n = self._atom_model.rowCount()
         self._atoms_count.setText(f"{n} atoms" if n else "No structure loaded")
 
+    # -- loaded-models list ----------------------------------------------
+
+    def _on_models_changed(self, summary) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QListWidgetItem
+
+        self._suppress_model_events = True
+        try:
+            self._models_list.clear()
+            active_row = -1
+            for i, m in enumerate(summary):
+                item = QListWidgetItem(m["name"])
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(Qt.CheckState.Checked if m["visible"] else Qt.CheckState.Unchecked)
+                item.setData(Qt.ItemDataRole.UserRole, m["id"])
+                self._models_list.addItem(item)
+                if m["active"]:
+                    active_row = i
+            if active_row >= 0:
+                self._models_list.setCurrentRow(active_row)
+        finally:
+            self._suppress_model_events = False
+
+    def _on_model_item_toggled(self, item) -> None:
+        from PySide6.QtCore import Qt
+
+        if self._suppress_model_events:
+            return
+        self._desktop.set_model_visible(
+            item.data(Qt.ItemDataRole.UserRole), item.checkState() == Qt.CheckState.Checked
+        )
+
+    def _on_model_active_row(self, row) -> None:
+        from PySide6.QtCore import Qt
+
+        if self._suppress_model_events or row < 0:
+            return
+        item = self._models_list.item(row)
+        if item is not None:
+            self._desktop.set_active_model(item.data(Qt.ItemDataRole.UserRole))
+
+    def _on_remove_model(self) -> None:
+        from PySide6.QtCore import Qt
+
+        item = self._models_list.currentItem()
+        if item is not None:
+            self._desktop.remove_model(item.data(Qt.ItemDataRole.UserRole))
+
     def _on_table_selection_changed(self) -> None:
         if not self._suppress_table_sync:
             self._table_sync_timer.start()  # debounce a drag-select
@@ -597,8 +664,14 @@ class DesktopApp:
 
         self._webapp = Webapp(host=host, port=port)
 
-        self._session: Optional[Any] = None
+        self._session: Optional[Any] = None  # the ACTIVE session (a model, or a dummy)
         self._session_key: Optional[str] = None
+        # Loaded models: list of {id, name, session, visible}. The viewport shows the
+        # visible ones (one -> switch, several -> simultaneous). ``_session`` points at
+        # the active model (drives the atoms table + selection sync).
+        self._models: List[dict] = []
+        self._model_counter = 0
+        self._active_model_id: Optional[str] = None
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
@@ -631,7 +704,7 @@ class DesktopApp:
         self._arrange_windows()
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
+        ws_url = self._start_dummy()
         self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
@@ -700,10 +773,7 @@ class DesktopApp:
             return
         self._stopped = True
         self.stop_demo()
-        if self._session is not None:
-            self._session.stop()
-            self._session = None
-            self._session_key = None
+        self._clear_models()  # stops all model sessions and the active/dummy one
         self._webapp.stop()
 
     def _arrange_windows(self) -> None:
@@ -727,32 +797,114 @@ class DesktopApp:
 
     # -- live session ----------------------------------------------------
 
-    def _install_session(self, session, key: str) -> str:
-        """Swap in a prebuilt session, start it, and return its WebSocket URL.
+    # -- model registry (multi-model) ------------------------------------
 
-        Replaces the current session (a session's atom set is fixed for life, so a
-        different model means a new session) and rewires mouse selection if it was
-        enabled.
-        """
-        if self._session is not None:
-            self._session.stop()
+    def _model_entry(self, mid):
+        return next((m for m in self._models if m["id"] == mid), None)
+
+    def _visible_model_ws(self) -> str:
+        """Comma-separated ws URLs of the visible models (one -> switch, many -> overlay)."""
+        return ",".join(
+            f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]
+        )
+
+    def _emit_models_changed(self) -> None:
+        self.bridge.models_changed.emit([
+            {"id": m["id"], "name": m["name"], "visible": m["visible"], "active": m["id"] == self._active_model_id}
+            for m in self._models
+        ])
+
+    def _wire_active(self, session) -> None:
+        """Point the active session at ``session``, moving selection + the atoms table."""
+        if self._session is not None and self._selection_enabled and self._session is not session:
+            try:
+                self._session.disable_mouse_selection()
+            except Exception:  # pragma: no cover - defensive
+                pass
         self._session = session
-        self._session_key = key
+        self._session_key = None
+        if session is not None and self._selection_enabled:
+            session.enable_mouse_selection(self._emit_selection)
+        self.bridge.structure_changed.emit(session)
+
+    def _reload_model_viewport(self) -> None:
+        ws = self._visible_model_ws()
+        if ws:
+            self._viewport.load(f"{self._webapp.url}index.html?ws={ws}")
+
+    def _add_model(self, session, name: str) -> str:
+        """Register + show a model session (visible + active); returns its id."""
         session.start(host=self._host, port=0)
+        self._model_counter += 1
+        mid = f"model-{self._model_counter}"
+        self._models.append({"id": mid, "name": name, "session": session, "visible": True})
+        self._active_model_id = mid
+        self._wire_active(session)
+        self._reload_model_viewport()
+        self._emit_models_changed()
+        return mid
+
+    def set_active_model(self, mid: str) -> None:
+        """Make a loaded model the active one (the atoms table + selection follow it)."""
+        entry = self._model_entry(mid)
+        if entry is None or self._active_model_id == mid:
+            return
+        self._active_model_id = mid
+        self._wire_active(entry["session"])  # no viewport reload: visibility is unchanged
+        self._emit_models_changed()
+
+    def set_model_visible(self, mid: str, visible: bool) -> None:
+        """Show or hide a loaded model in the viewport."""
+        entry = self._model_entry(mid)
+        if entry is None or entry["visible"] == bool(visible):
+            return
+        entry["visible"] = bool(visible)
+        self._reload_model_viewport()
+        self._emit_models_changed()
+
+    def remove_model(self, mid: str) -> None:
+        """Unload a model: stop its session and drop it from the viewport."""
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        self._models.remove(entry)
+        try:
+            entry["session"].stop()
+        except Exception:  # pragma: no cover - defensive
+            pass
+        if self._active_model_id == mid:
+            self._active_model_id = self._models[-1]["id"] if self._models else None
+            active = self._model_entry(self._active_model_id) if self._active_model_id else None
+            self._wire_active(active["session"] if active else None)
+        self._reload_model_viewport()
+        self._emit_models_changed()
+
+    def _clear_models(self) -> None:
+        """Stop and drop every loaded model, plus the active/dummy session."""
+        for m in list(self._models):
+            try:
+                m["session"].stop()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self._models.clear()
+        self._active_model_id = None
+        if self._session is not None and self._session_key == _DUMMY_KEY:
+            try:
+                self._session.stop()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self._session = None
+        self._session_key = None
+
+    def _start_dummy(self) -> str:
+        """A 1-atom session that keeps the WS channel open for a volume scene."""
+        session = _dummy_session()
+        session.start(host=self._host, port=0)
+        self._session = session
+        self._session_key = _DUMMY_KEY
         if self._selection_enabled:
             session.enable_mouse_selection(self._emit_selection)
-        self.bridge.structure_changed.emit(session)  # refresh the atoms table
         return f"ws://{self._host}:{session.port}"
-
-    def _ensure_session(self, key: str, make_session) -> str:
-        """Return the WebSocket URL for a session keyed by ``key``.
-
-        Same key -> reuse, which keeps page reloads cheap; otherwise build a new
-        session via ``make_session()`` and install it.
-        """
-        if self._session is not None and self._session_key == key:
-            return f"ws://{self._host}:{self._session.port}"
-        return self._install_session(make_session(), key)
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
@@ -774,7 +926,7 @@ class DesktopApp:
         return self._load_model_file(path)
 
     def _load_model_file(self, path: str) -> str:
-        """Read a model with cctbx and stream it through a fresh live session."""
+        """Read a model with cctbx and add it to the viewport (alongside any others)."""
         self.stop_demo()
         self._reset_interactions()
 
@@ -784,14 +936,12 @@ class DesktopApp:
         # DataManager -> model -> hierarchy; the native model is retained on the
         # session so selection uses cctbx's machinery.
         session = LiveSession.from_model_file(path)
-        self._load_counter += 1
-        ws_url = self._install_session(session, key=f"model:{self._load_counter}")
         # The topology BinaryCIF already carries the coordinates, so the structure
         # appears without pushing a frame. Cartoon reads better than ball-and-stick
         # for a polymer; the choice is replayed to the viewer when it connects.
         if cctbx_io.model_is_polymer(session.model):
             session.set_representation("cartoon", color="secondary-structure")
-        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
+        self._add_model(session, Path(path).name)
         self._status(f"Loaded model: {Path(path).name} ({session._n_atoms} atoms)")
         return "model"
 
@@ -799,6 +949,7 @@ class DesktopApp:
         """Stage a volume file as an MVSJ scene and load it in the viewport."""
         self.stop_demo()
         self._reset_interactions()
+        self._clear_models()  # a volume is its own view, not a model
 
         # Each load gets a fresh directory, so a reloaded page can never pick up
         # a cached scene or data file from the previous one.
@@ -806,9 +957,11 @@ class DesktopApp:
         out_dir = self._webapp.volume_dir / "file" / str(self._load_counter)
         mvsj_path = create_volume_file_view(path, out_dir=out_dir)
 
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
+        ws_url = self._start_dummy()
         mvsj_url = f"/file/{self._load_counter}/{mvsj_path.name}"
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
+        self.bridge.structure_changed.emit(None)  # no atoms table for a volume
+        self._emit_models_changed()  # empty models list
         self._status(f"Loaded volume: {Path(path).name}")
         return "volume"
 
@@ -816,6 +969,7 @@ class DesktopApp:
         """Generate a volume demo and load its static scene in the viewport."""
         self.stop_demo()
         self._reset_interactions()
+        self._clear_models()
 
         demo_dir = self._webapp.volume_dir / name
         demo_dir.mkdir(parents=True, exist_ok=True)
@@ -826,9 +980,11 @@ class DesktopApp:
             shape=(32, 32, 32),
         )
 
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
+        ws_url = self._start_dummy()
         mvsj_url = f"/demo/{name}/volume.mvsj"
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
+        self.bridge.structure_changed.emit(None)
+        self._emit_models_changed()
         self._status(f"Volume demo: {name}")
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
@@ -845,14 +1001,14 @@ class DesktopApp:
 
         sites, labels = demo.make_sites()
         session = LiveSession.from_cctbx_model(cctbx_io.model_from_sites(sites, **labels))
-        ws_url = self._install_session(session, key=f"demo:{name}")
+        self._clear_models()  # a demo is a single animated model
+        self._add_model(session, f"demo: {name}")
 
         base = np.asarray(sites, dtype="<f4")
         player = Player(session, base, fps=fps)
         session.on_pick(player._on_pick)
         self._player = player
 
-        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
         self._status(f"Model demo: {name} — waiting for the viewport…")
 
         self._demo_thread = threading.Thread(
