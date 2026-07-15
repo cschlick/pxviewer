@@ -11,12 +11,13 @@ def test_write_volume_round_trip(tmp_path):
     data = np.zeros((10, 12, 14), dtype=np.float32)
     data[5, 6, 7] = 5.0
     path = tmp_path / "density.mrc"
-    write_volume(data, path, voxel_size=(1.0, 2.0, 3.0), origin=(4.0, 5.0, 6.0))
+    # cctbx snaps the origin to whole voxels, so use a grid-aligned Angstrom origin.
+    write_volume(data, path, voxel_size=(1.0, 2.0, 3.0), origin=(4.0, 6.0, 6.0))
 
     read = read_volume(path)
     assert read["shape"] == (10, 12, 14)
     assert read["voxel_size"] == pytest.approx((1.0, 2.0, 3.0))
-    assert read["origin"] == pytest.approx((4.0, 5.0, 6.0))
+    assert read["origin"] == pytest.approx((4.0, 6.0, 6.0))
     assert read["data"][5, 6, 7] == pytest.approx(5.0)
 
 

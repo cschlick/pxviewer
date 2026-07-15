@@ -215,7 +215,7 @@ def test_create_volume_view_from_data_origin_and_position(tmp_path):
         mrc_path=mrc_path,
         mvsj_path=mvsj_path,
         voxel_size=2.0,
-        origin=(5.0, 0.0, 0.0),
+        origin=(4.0, 0.0, 0.0),  # grid-aligned (cctbx snaps origin to whole voxels)
         position=(1.0, 2.0, 3.0),
     )
 
@@ -225,7 +225,7 @@ def test_create_volume_view_from_data_origin_and_position(tmp_path):
     from pxviewer import read_volume
     read = read_volume(mrc_path)
     assert read["voxel_size"] == pytest.approx((2.0, 2.0, 2.0))
-    assert read["origin"] == pytest.approx((5.0, 0.0, 0.0))
+    assert read["origin"] == pytest.approx((4.0, 0.0, 0.0))
 
     state = json.loads(mvsj)
     volume = state["root"]["children"][0]["children"][0]["children"][0]

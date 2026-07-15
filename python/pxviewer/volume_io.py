@@ -62,11 +62,20 @@ class VolumeData:
         return cls.from_map_manager(dm.get_real_map(str(path)), name=Path(path).name)
 
     @classmethod
-    def from_numpy(cls, array: np.ndarray, *, spacing: float = 1.0, name: str = "map") -> "VolumeData":
-        """Wrap a numpy grid in a cctbx ``map_manager`` (P1, given voxel spacing).
+    def from_numpy(
+        cls,
+        array: np.ndarray,
+        *,
+        spacing: Any = 1.0,
+        origin: Tuple[int, int, int] = (0, 0, 0),
+        name: str = "map",
+    ) -> "VolumeData":
+        """Wrap a numpy ``[x, y, z]`` grid in a cctbx ``map_manager`` (P1).
 
         Used to bring generated grids (e.g. demos) through cctbx like everything
-        else, so nothing needs to touch ``mrcfile`` directly.
+        else, so nothing needs to touch ``mrcfile`` directly. ``spacing`` is the
+        voxel size (a scalar, or a per-axis ``(sx, sy, sz)``); ``origin`` is the
+        integer grid offset of the box (cctbx models origin in grid units).
         """
         from cctbx import crystal
         from iotbx.map_manager import map_manager
@@ -74,10 +83,12 @@ class VolumeData:
 
         arr = np.ascontiguousarray(array, dtype=np.float64)
         nx, ny, nz = arr.shape
+        sx, sy, sz = (float(spacing),) * 3 if np.isscalar(spacing) else tuple(float(s) for s in spacing)
+        ox, oy, oz = (int(round(o)) for o in origin)
         grid = flex.double(arr.reshape(-1))
-        grid.reshape(flex.grid(nx, ny, nz))
+        grid.reshape(flex.grid((ox, oy, oz), (ox + nx, oy + ny, oz + nz)))
         symmetry = crystal.symmetry(
-            unit_cell=(nx * spacing, ny * spacing, nz * spacing, 90, 90, 90),
+            unit_cell=(nx * sx, ny * sy, nz * sz, 90, 90, 90),
             space_group_symbol="P1",
         )
         mm = map_manager(

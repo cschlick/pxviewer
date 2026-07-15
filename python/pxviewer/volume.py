@@ -5,7 +5,6 @@ import json
 import os
 from typing import Any, List, Literal
 
-import mrcfile
 import numpy as np
 
 __all__ = [
@@ -58,23 +57,11 @@ class Volume:
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
-    """Convert a numpy array to a dtype Mol*/mrcfile both support."""
+    """Coerce input to a 3D float32 grid (cctbx maps are floating point)."""
     data = np.asarray(data)
     if data.ndim != 3:
         raise ValueError(f"Volume data must be 3D, got shape {data.shape}")
-
-    if np.issubdtype(data.dtype, np.floating):
-        if data.dtype == np.float32:
-            return data
-        return data.astype(np.float32, copy=False)
-
-    if data.dtype in (np.int8, np.int16, np.uint8, np.uint16):
-        return data
-
-    raise ValueError(
-        f"Unsupported volume data dtype {data.dtype!r}. "
-        "Use float32, int8, int16, uint8 or uint16."
-    )
+    return data.astype(np.float32, copy=False)
 
 
 def write_volume(
@@ -113,47 +100,55 @@ def write_volume(
     overwrite
         Whether to overwrite an existing file.
     """
+    from .volume_io import VolumeData
+
     data = _normalize_volume_data(data)
 
-    if data_order == "xyz":
-        # data[x, y, z] -> data[z, y, x]
-        data = np.transpose(data, (2, 1, 0))
-    elif data_order != "mrc":
+    # cctbx grids are indexed [x, y, z]; MRC/mrcfile order is [z, y, x].
+    if data_order == "mrc":
+        data = np.transpose(data, (2, 1, 0))  # [z, y, x] -> [x, y, z]
+    elif data_order != "xyz":
         raise ValueError(f"data_order must be 'mrc' or 'xyz', got {data_order!r}")
 
-    with mrcfile.new(str(path), overwrite=overwrite) as mrc:
-        mrc.set_data(data)
+    if not overwrite and os.path.exists(path):
+        raise FileExistsError(f"{path} exists (pass overwrite=True)")
 
-        if voxel_size is not None:
-            mrc.voxel_size = voxel_size
+    nx, ny, nz = data.shape
+    spacing = 1.0 if voxel_size is None else voxel_size
+    sx, sy, sz = (float(spacing),) * 3 if np.isscalar(spacing) else tuple(float(s) for s in spacing)
 
-        if origin is not None:
-            if origin_units == "angstrom":
-                mrc.header["origin"] = (float(origin[0]), float(origin[1]), float(origin[2]))
-            elif origin_units == "grid":
-                mrc.header["nxstart"] = int(round(origin[0]))
-                mrc.header["nystart"] = int(round(origin[1]))
-                mrc.header["nzstart"] = int(round(origin[2]))
-            else:
-                raise ValueError(f"origin_units must be 'angstrom' or 'grid', got {origin_units!r}")
+    # cctbx models the origin as an integer grid shift, so an Angstrom origin is
+    # snapped to the nearest voxel (a physical origin that is not a grid multiple
+    # cannot be represented exactly).
+    grid_origin = (0, 0, 0)
+    if origin is not None:
+        if origin_units == "grid":
+            grid_origin = tuple(int(round(o)) for o in origin)
+        elif origin_units == "angstrom":
+            grid_origin = tuple(int(round(o / s)) for o, s in zip(origin, (sx, sy, sz)))
+        else:
+            raise ValueError(f"origin_units must be 'angstrom' or 'grid', got {origin_units!r}")
+
+    VolumeData.from_numpy(data, spacing=(sx, sy, sz), origin=grid_origin).write_map(str(path))
 
 
 def read_volume(path: str | os.PathLike) -> dict:
-    """Read an MRC/MAP file and return its data plus key metadata.
+    """Read a map file (via cctbx) and return its data plus key metadata.
 
     Returns
     -------
-    dict with keys ``data`` (``nz, ny, nx``), ``voxel_size`` (tuple),
-    ``origin`` (tuple) and ``shape`` (tuple ``(nz, ny, nx)``).
+    dict with keys ``data`` (``[z, y, x]`` float32, MRC order), ``voxel_size``
+    (tuple), ``origin`` (physical, in Angstrom) and ``shape`` (``(nz, ny, nx)``).
     """
-    with mrcfile.open(str(path)) as mrc:
-        origin = mrc.header["origin"]
-        return {
-            "data": mrc.data,
-            "voxel_size": (float(mrc.voxel_size.x), float(mrc.voxel_size.y), float(mrc.voxel_size.z)),
-            "origin": (float(origin["x"]), float(origin["y"]), float(origin["z"])),
-            "shape": mrc.data.shape,
-        }
+    from .volume_io import VolumeData
+
+    vol = VolumeData.from_map_file(path)
+    map_data = vol.map_manager.map_data()
+    # as_numpy_array is [x, y, z]; transpose back to MRC's [z, y, x] convention.
+    data = np.ascontiguousarray(np.transpose(map_data.as_numpy_array(), (2, 1, 0)).astype(np.float32))
+    pixel = tuple(float(p) for p in vol.pixel_sizes)
+    origin_phys = tuple(float(o * s) for o, s in zip(map_data.origin(), pixel))
+    return {"data": data, "voxel_size": pixel, "origin": origin_phys, "shape": data.shape}
 
 
 def _normalize_volume(v: str | Volume | dict) -> Volume:
