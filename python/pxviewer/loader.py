@@ -1,31 +1,26 @@
-"""Load a structure or volume file from the user's filesystem into a scene.
+"""Classify user files and stage volumes for the browser viewer.
 
-The desktop app can only show files the frontend can fetch over HTTP, so opening
-a local file means: copy it into the served directory, write an MVSJ scene beside
-it that points at the copy, and hand the scene's URL to the viewer.
-
-This module holds the file-kind detection and scene building so both are usable
-(and testable) without Qt.
+Atomic models are read by cctbx and streamed through a live session — never
+parsed in the browser (see :mod:`pxviewer.cctbx_io`). So this module only builds a
+browser scene for *volumes*, which still load as MVSJ + MRC. It also holds the
+file-kind detection used to route a dropped file, and the bundled sample.
 """
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import List, Tuple
 
-from .api import create_view
 from .volume import Volume, create_volume_view
 
 __all__ = [
-    "STRUCTURE_FORMATS",
+    "MODEL_FORMATS",
     "VOLUME_FORMATS",
     "FILE_DIALOG_FILTER",
     "SAMPLE_STRUCTURE",
     "file_kind",
-    "structure_format",
     "sample_structure_path",
-    "create_file_view",
+    "create_volume_file_view",
 ]
 
 # Hen egg-white lysozyme (PDB 1AKI) — a small, familiar structure kept in the test
@@ -42,29 +37,21 @@ def sample_structure_path() -> Path | None:
     path = Path(__file__).resolve().parents[1] / "tests" / "data" / SAMPLE_STRUCTURE[0]
     return path if path.is_file() else None
 
-# Suffix -> the format name MolViewSpec's `parse` expects.
-STRUCTURE_FORMATS = {
+
+# Model formats cctbx's DataManager reads (streamed live, not browser-parsed).
+MODEL_FORMATS = {
     ".pdb": "pdb",
     ".ent": "pdb",
     ".cif": "mmcif",
     ".mmcif": "mmcif",
-    ".bcif": "bcif",
 }
 
-# Suffix -> the format name MolViewSpec's volume node expects.
+# Volume formats, still staged as MVSJ + MRC for the browser.
 VOLUME_FORMATS = {
     ".mrc": "map",
     ".map": "map",
     ".ccp4": "map",
 }
-
-# The default representation for an opened structure: cartoon for anything Mol*
-# classifies as polymer, ball-and-stick for the rest. A small molecule has no
-# polymer chain, so it shows up entirely through the ligand component.
-DEFAULT_COMPONENTS: List[dict] = [
-    {"selector": "polymer", "representation": "cartoon", "color": "#4577b2"},
-    {"selector": "ligand", "representation": "ball_and_stick", "color": "#cc3399"},
-]
 
 
 def _filter(label: str, suffixes) -> str:
@@ -74,8 +61,8 @@ def _filter(label: str, suffixes) -> str:
 
 FILE_DIALOG_FILTER = ";;".join(
     [
-        _filter("Structures and volumes", list(STRUCTURE_FORMATS) + list(VOLUME_FORMATS)),
-        _filter("Structures", STRUCTURE_FORMATS),
+        _filter("Models and volumes", list(MODEL_FORMATS) + list(VOLUME_FORMATS)),
+        _filter("Models", MODEL_FORMATS),
         _filter("Volumes", VOLUME_FORMATS),
         "All files (*)",
     ]
@@ -83,54 +70,38 @@ FILE_DIALOG_FILTER = ";;".join(
 
 
 def file_kind(path: str | Path) -> str:
-    """Classify a path as ``"structure"`` or ``"volume"`` by its suffix."""
+    """Classify a path as ``"model"`` or ``"volume"`` by its suffix."""
     suffix = Path(path).suffix.lower()
-    if suffix in STRUCTURE_FORMATS:
-        return "structure"
+    if suffix in MODEL_FORMATS:
+        return "model"
     if suffix in VOLUME_FORMATS:
         return "volume"
-    known = ", ".join(sorted(set(STRUCTURE_FORMATS) | set(VOLUME_FORMATS)))
+    known = ", ".join(sorted(set(MODEL_FORMATS) | set(VOLUME_FORMATS)))
     raise ValueError(f"unsupported file type '{suffix or path}'. Supported: {known}")
 
 
-def structure_format(path: str | Path) -> str:
-    """The MolViewSpec parse format for a structure path."""
-    suffix = Path(path).suffix.lower()
-    try:
-        return STRUCTURE_FORMATS[suffix]
-    except KeyError:
-        raise ValueError(f"'{suffix}' is not a structure format") from None
+def create_volume_file_view(path: str | Path, *, out_dir: str | Path) -> Path:
+    """Copy a volume file into ``out_dir`` and write an MVSJ scene that loads it.
 
-
-def create_file_view(path: str | Path, *, out_dir: str | Path) -> Tuple[Path, str]:
-    """Copy a user file into ``out_dir`` and write an MVSJ scene that loads it.
-
-    The scene refers to the copy by bare filename, so both files must be served
-    from the same directory. Returns ``(mvsj_path, kind)``.
+    The scene refers to the copy by bare filename, so both are served from the
+    same directory. Returns the MVSJ path. Models are not handled here — they load
+    through cctbx into a live session — so a non-volume path is rejected.
     """
     src = Path(path)
     if not src.is_file():
         raise FileNotFoundError(f"no such file: {src}")
-    kind = file_kind(src)
+    if file_kind(src) != "volume":
+        raise ValueError(f"{src.name} is not a volume; atomic models are loaded via cctbx")
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     copy = out / src.name
     shutil.copyfile(src, copy)
 
-    if kind == "volume":
-        mvsj = create_volume_view(
-            volumes=[Volume(url=copy.name, ref="volume-0", isosurface_kind="relative", isosurface_value=2.0)],
-            title=src.name,
-        )
-    else:
-        mvsj = create_view(
-            copy.name,
-            format=structure_format(src),
-            components=DEFAULT_COMPONENTS,
-            title=src.name,
-        )
-
+    mvsj = create_volume_view(
+        volumes=[Volume(url=copy.name, ref="volume-0", isosurface_kind="relative", isosurface_value=2.0)],
+        title=src.name,
+    )
     mvsj_path = out / "scene.mvsj"
     mvsj_path.write_text(mvsj)
-    return mvsj_path, kind
+    return mvsj_path

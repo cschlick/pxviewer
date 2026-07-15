@@ -1,13 +1,30 @@
 # pxviewer
 
-A custom molecular viewer built on top of [Mol*](https://molstar.org) with a Python-driven scene API and a **live coordinate bridge** for in-place updates.
+A [Mol*](https://molstar.org)-based viewer for **cctbx objects**: atomic models are
+read in Python with cctbx's `DataManager` into an `mmtbx.model.manager`, and
+everything the viewer shows is derived from that model's `pdb_hierarchy` and streamed
+over a **live coordinate bridge**. Nothing is parsed in the browser — all I/O goes
+through cctbx, then maps onto Mol\*'s data on the Python side.
 
 ## Structure
 
 - `frontend/` — TypeScript/React frontend using the `molstar` React plugin helpers.
-- `python/` — Python package: `molviewspec` to build MVS scenes, `ciftools` to write BinaryCIF, and a `LiveSession` WebSocket server that streams coordinates.
+- `python/` — Python package: `cctbx` for model I/O, `ciftools` to write BinaryCIF, `molviewspec` for volume scenes, and a `LiveSession` WebSocket server that streams the topology and coordinates.
 
 ## Quick start
+
+### Environment (conda)
+
+Model I/O needs **cctbx**, which ships only on conda-forge (not PyPI), so pxviewer
+installs via conda:
+
+```bash
+conda env create -f environment.yml   # python, cctbx-base, PySide6, websockets, …
+conda activate pxviewer
+pip install -e ./python                # the pxviewer package itself
+```
+
+(cctbx pins numpy ≤ 2.4, matching numba/ciftools — `environment.yml` handles this.)
 
 ### Frontend
 
@@ -18,18 +35,26 @@ npm run build
 # serve this directory over http, then open index.html
 ```
 
-### Python
+### Load a model
 
 ```bash
 cd python
-pip install -e '.[live]'      # 'live' pulls in websockets for streaming
+python -m pxviewer model /path/to/model.pdb   # cctbx reads it; prints a http:// URL
 ```
 
+Or from code:
+
 ```python
-import pxviewer
-mvsj = pxviewer.create_example_view("https://www.ebi.ac.uk/pdbe/entry-files/1cbs.bcif")
-print(mvsj)
+from pxviewer.live import LiveSession
+session = LiveSession.from_model_file("model.pdb")   # cctbx DataManager -> hierarchy
+session.start()                                       # ws://127.0.0.1:8787
+# ... open the frontend with ?ws=<that url> ...
 ```
+
+`LiveSession.from_cctbx_model(model)` builds a session from an existing
+`mmtbx.model.manager`; `pxviewer.cctbx_io.model_to_arrays(model)` exposes the
+hierarchy's vectorised columns (xyz, element, name, residue/chain labels, B, occ)
+if you want the mapping directly.
 
 ## Live coordinate updates
 

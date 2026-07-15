@@ -53,7 +53,7 @@ from typing import Any, Callable, Iterable, List, Optional, Sequence, get_args
 import numpy as np
 from molviewspec.nodes import ColorNamesT, ComponentExpression, RepresentationTypeT
 
-from .data import Atom, encode_bcif
+from .data import Atom, AtomArrays, encode_bcif, encode_bcif_arrays
 
 __all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM_IDENTITY_CONTRACT"]
 
@@ -470,11 +470,14 @@ class LiveSession:
         *,
         polymer: bool = False,
         secondary_structure: Optional[Any] = None,
+        _topology: Optional[bytes] = None,
     ):
         self.atoms: List[Atom] = list(atoms)
         if not self.atoms:
             raise ValueError("LiveSession requires at least one atom")
-        self._topology: bytes = encode_bcif(
+        # A caller that already built the BinaryCIF from bulk arrays (the cctbx
+        # path) passes it in to avoid re-encoding from the Atom list.
+        self._topology: bytes = _topology if _topology is not None else encode_bcif(
             self.atoms, polymer=polymer, secondary_structure=secondary_structure
         )
         self._n_atoms = len(self.atoms)
@@ -532,6 +535,60 @@ class LiveSession:
 
         self.host = "127.0.0.1"
         self.port = 8787
+
+    # -- construction from cctbx -----------------------------------------
+
+    @classmethod
+    def from_arrays(
+        cls,
+        arrays: "AtomArrays",
+        *,
+        polymer: bool = False,
+        secondary_structure: Optional[Any] = None,
+    ) -> "LiveSession":
+        """Build a session from bulk :class:`~pxviewer.data.AtomArrays` columns.
+
+        The topology BinaryCIF is encoded straight from the arrays (no per-atom
+        Python), and the per-atom :class:`Atom` list — used by selections, clash
+        detection and measurement labels — is materialised once from the same data.
+        """
+        topology = encode_bcif_arrays(
+            arrays, polymer=polymer, secondary_structure=secondary_structure
+        )
+        return cls(
+            arrays.to_atoms(),
+            polymer=polymer,
+            secondary_structure=secondary_structure,
+            _topology=topology,
+        )
+
+    @classmethod
+    def from_cctbx_model(cls, model: Any) -> "LiveSession":
+        """Build a session from an ``mmtbx.model.manager`` (cctbx model object).
+
+        Reads coordinates, labels and secondary structure from the model's
+        ``pdb_hierarchy`` and streams them; polymer models render as cartoon.
+        """
+        from . import cctbx_io
+
+        arrays = cctbx_io.model_to_arrays(model)
+        return cls.from_arrays(
+            arrays,
+            polymer=cctbx_io.model_is_polymer(model),
+            secondary_structure=cctbx_io.model_secondary_structure(model),
+        )
+
+    @classmethod
+    def from_model_file(cls, path: Any) -> "LiveSession":
+        """Read a model file (PDB/mmCIF) with cctbx and build a session from it."""
+        from . import cctbx_io
+
+        loaded = cctbx_io.load_model(path)
+        return cls.from_arrays(
+            loaded.arrays,
+            polymer=loaded.polymer,
+            secondary_structure=loaded.secondary_structure,
+        )
 
     # -- scene -> python -------------------------------------------------
 

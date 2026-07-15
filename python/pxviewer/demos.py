@@ -410,11 +410,11 @@ def _run_clashes(p: Player) -> None:
         p.push(positioned(12.0))
         p.hold(1.2)
         p.step(2, "Driving them together — clashes light up as vdW shells overlap.")
-        sweep(np.linspace(12.0, 0.0, 90), "closing")
+        sweep(np.linspace(12.0, 0.0, 90))
         p.step(3, "Fully overlapped — many clashes.")
         p.hold(1.0)
         p.step(4, "Pulling apart — clashes clear as they separate.")
-        sweep(np.linspace(0.0, 12.0, 90), "opening")
+        sweep(np.linspace(0.0, 12.0, 90))
         session.clear_clashes()
         p.hold(0.8)
 

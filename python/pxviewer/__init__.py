@@ -4,6 +4,7 @@ __version__ = "0.1.0"
 
 from .api import (
     Atom,
+    AtomArrays,
     Volume,
     VolumeStyle,
     create_example_view,
@@ -12,6 +13,7 @@ from .api import (
     create_volume_view,
     create_volume_view_from_data,
     encode_bcif,
+    encode_bcif_arrays,
     read_atoms,
     read_volume,
     set_volume_color,
@@ -24,6 +26,7 @@ from .live import ATOM_IDENTITY_CONTRACT, ComponentExpression, LiveSession, Prim
 
 __all__ = [
     "Atom",
+    "AtomArrays",
     "Volume",
     "VolumeStyle",
     "create_example_view",
@@ -35,6 +38,7 @@ __all__ = [
     "set_volume_opacity",
     "set_volume_style",
     "encode_bcif",
+    "encode_bcif_arrays",
     "read_atoms",
     "read_volume",
     "write_bcif",

@@ -24,6 +24,75 @@ class Atom:
     chain: str = "A"
 
 
+@dataclasses.dataclass
+class AtomArrays:
+    """A structure's atom-site data as parallel columns rather than per-atom objects.
+
+    This is the efficient hand-off from a vectorised source (e.g. a cctbx
+    hierarchy's ``extract_xyz``/``extract_element`` arrays) to BinaryCIF: the
+    columns go straight into the CIF fields with no per-atom Python. ``x/y/z`` and
+    ``resseq`` are numpy arrays; the string columns are plain lists. ``id`` defaults
+    to a 1-based serial. ``altloc``, ``b`` and ``occ`` are optional enrichments.
+    """
+
+    element: List[str]
+    name: List[str]
+    resname: List[str]
+    chain: List[str]
+    resseq: "np.ndarray"
+    x: "np.ndarray"
+    y: "np.ndarray"
+    z: "np.ndarray"
+    id: "np.ndarray | None" = None
+    altloc: "List[str] | None" = None
+    b: "np.ndarray | None" = None
+    occ: "np.ndarray | None" = None
+
+    def __post_init__(self) -> None:
+        self.resseq = np.asarray(self.resseq, dtype=np.int32)
+        self.x = np.asarray(self.x, dtype=np.float32)
+        self.y = np.asarray(self.y, dtype=np.float32)
+        self.z = np.asarray(self.z, dtype=np.float32)
+        n = len(self.element)
+        if not (len(self.name) == len(self.resname) == len(self.chain) == n
+                == self.resseq.shape[0] == self.x.shape[0] == self.y.shape[0] == self.z.shape[0]):
+            raise ValueError("AtomArrays columns must all have the same length")
+        if self.id is None:
+            self.id = np.arange(1, n + 1, dtype=np.int32)
+        else:
+            self.id = np.asarray(self.id, dtype=np.int32)
+        if self.b is not None:
+            self.b = np.asarray(self.b, dtype=np.float32)
+        if self.occ is not None:
+            self.occ = np.asarray(self.occ, dtype=np.float32)
+
+    def __len__(self) -> int:
+        return len(self.element)
+
+    @property
+    def xyz(self) -> "np.ndarray":
+        """The coordinates as an ``(N, 3)`` float32 array (streaming base frame)."""
+        return np.stack([self.x, self.y, self.z], axis=1).astype("<f4")
+
+    def to_atoms(self) -> List["Atom"]:
+        """Materialise per-atom :class:`Atom` objects (for metadata/accessors)."""
+        ids = self.id
+        return [
+            Atom(
+                id=int(ids[i]),
+                element=self.element[i],
+                x=float(self.x[i]),
+                y=float(self.y[i]),
+                z=float(self.z[i]),
+                name=self.name[i],
+                resname=self.resname[i],
+                resseq=int(self.resseq[i]),
+                chain=self.chain[i],
+            )
+            for i in range(len(self.element))
+        ]
+
+
 class AtomSiteCategory(CIFCategoryDesc):
     """CIF category for _atom_site."""
 
@@ -286,6 +355,79 @@ def _normalize_ss(secondary_structure) -> tuple:
         else:
             raise ValueError(f"unknown secondary-structure kind {kind!r}; use 'helix' or 'sheet'")
     return helices, sheets
+
+
+class AtomSiteArraysCategory(CIFCategoryDesc):
+    """_atom_site built directly from :class:`AtomArrays` columns (no per-atom loop)."""
+
+    def __init__(self, polymer: bool = False):
+        self._polymer = polymer
+
+    @property
+    def name(self) -> str:
+        return "atom_site"
+
+    @staticmethod
+    def get_row_count(arrays: "AtomArrays") -> int:
+        return len(arrays)
+
+    def get_field_descriptors(self, arrays: "AtomArrays") -> List[CIFFieldDesc]:
+        fields = [
+            CIFFieldDesc.number_array(name="id", dtype=np.int32, array=lambda a: a.id),
+            CIFFieldDesc.string_array(name="type_symbol", array=lambda a: a.element),
+            CIFFieldDesc.string_array(name="label_atom_id", array=lambda a: a.name),
+            CIFFieldDesc.string_array(name="label_comp_id", array=lambda a: a.resname),
+            CIFFieldDesc.number_array(name="label_seq_id", dtype=np.int32, array=lambda a: a.resseq),
+            CIFFieldDesc.string_array(name="label_asym_id", array=lambda a: a.chain),
+            CIFFieldDesc.string_array(name="auth_asym_id", array=lambda a: a.chain),
+            CIFFieldDesc.number_array(name="auth_seq_id", dtype=np.int32, array=lambda a: a.resseq),
+            CIFFieldDesc.number_array(name="Cartn_x", dtype=np.float32, array=lambda a: a.x),
+            CIFFieldDesc.number_array(name="Cartn_y", dtype=np.float32, array=lambda a: a.y),
+            CIFFieldDesc.number_array(name="Cartn_z", dtype=np.float32, array=lambda a: a.z),
+        ]
+        # cctbx gives these cheaply; they enable alt-conf handling and b-factor /
+        # occupancy colouring in Mol*.
+        if any(alt for alt in (arrays.altloc or [])):
+            fields.append(CIFFieldDesc.string_array(name="label_alt_id", array=lambda a: a.altloc))
+        if arrays.occ is not None:
+            fields.append(CIFFieldDesc.number_array(name="occupancy", dtype=np.float32, array=lambda a: a.occ))
+        if arrays.b is not None:
+            fields.append(CIFFieldDesc.number_array(name="B_iso_or_equiv", dtype=np.float32, array=lambda a: a.b))
+        if self._polymer:
+            fields.append(CIFFieldDesc.string_array(name="label_entity_id", array=lambda a: ["1"] * len(a)))
+        return fields
+
+
+def encode_bcif_arrays(
+    arrays: "AtomArrays",
+    *,
+    block_header: str = "PXVIEWER",
+    polymer: bool = False,
+    secondary_structure=None,
+) -> bytes:
+    """Encode :class:`AtomArrays` as BinaryCIF, mapping columns straight to CIF fields.
+
+    The efficient counterpart to :func:`encode_bcif`: nothing is iterated per atom
+    in Python — the numpy/list columns become the CIF field arrays directly. Same
+    ``polymer`` / ``secondary_structure`` semantics as :func:`encode_bcif`.
+    """
+    if secondary_structure:
+        polymer = True
+    writer = create_binary_writer()
+    writer.start_data_block(block_header)
+    writer.write_category(AtomSiteArraysCategory(polymer=polymer), [arrays])
+    if polymer:
+        writer.write_category(EntityCategory(), [[("1", "polymer")]])
+        writer.write_category(EntityPolyCategory(), [[("1", "polypeptide(L)")]])
+    if secondary_structure:
+        helices, sheets = _normalize_ss(secondary_structure)
+        if helices:
+            writer.write_category(StructConfCategory(), [helices])
+        if sheets:
+            writer.write_category(StructSheetRangeCategory(), [sheets])
+    writer.write_category(CellCategory(), [_Cell()])
+    writer.write_category(SymmetryCategory(), [_Symmetry()])
+    return writer.encode()
 
 
 def encode_bcif(

@@ -93,6 +93,16 @@ def main() -> None:
     live_vol.add_argument("--shape", type=int, nargs=3, default=[32, 32, 32], help="Volume grid shape (x y z)")
     live_vol.add_argument("--period", type=float, default=2.0, help="Seconds between color/opacity updates")
 
+    model = subparsers.add_parser(
+        "model",
+        help="Read a model file with cctbx and stream it live to the frontend",
+    )
+    model.add_argument("path", help="Path to a model file (PDB or mmCIF)")
+    model.add_argument("--host", default="127.0.0.1", help="Host to bind")
+    model.add_argument("--port", type=int, default=8787, help="WebSocket port (0 = ephemeral)")
+    model.add_argument("--http-port", type=int, default=5173, help="Port for the bundled frontend server")
+    model.add_argument("--no-frontend", action="store_true", help="Do not serve the frontend (connect manually)")
+
     webapp = subparsers.add_parser(
         "webapp",
         help="Serve the pxviewer webapp in a browser",
@@ -208,6 +218,28 @@ def main() -> None:
             shape=tuple(args.shape),
             period=args.period,
         )
+
+    elif args.command == "model":
+        from . import cctbx_io
+
+        loaded = cctbx_io.load_model(args.path)
+        session = LiveSession.from_arrays(
+            loaded.arrays, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
+        )
+        session.start(host=args.host, port=args.port)
+        if loaded.polymer:
+            session.set_representation("cartoon", color="secondary-structure")
+        url = f"ws://{args.host}:{session.port}"
+        print(f"\n{args.path}: {len(loaded.arrays)} atoms, streaming live at {url}")
+        httpd = announce_viewer(args.host, url, http_port=args.http_port, serve=not args.no_frontend)
+        print("Press Ctrl-C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print("\nstopping...")
+        finally:
+            stop_all(session.stop, lambda: stop_frontend(httpd))
 
     elif args.command == "webapp":
         run_webapp(host=args.host, port=args.port, open_browser=not args.no_browser)

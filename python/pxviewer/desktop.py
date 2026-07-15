@@ -25,7 +25,13 @@ import numpy as np
 
 from .data import Atom
 from .demos import DEMOS, Player, list_demos
-from .loader import FILE_DIALOG_FILTER, SAMPLE_STRUCTURE, create_file_view, sample_structure_path
+from .loader import (
+    FILE_DIALOG_FILTER,
+    SAMPLE_STRUCTURE,
+    create_volume_file_view,
+    file_kind,
+    sample_structure_path,
+)
 from .volume_demos import create_volume_demo, list_volume_demos
 from .webapp import Webapp
 
@@ -193,7 +199,7 @@ class ControlsWindow:
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        blurb = QLabel("Open a structure or volume from your computer.")
+        blurb = QLabel("Open a model or volume from your computer. Models are read by cctbx.")
         blurb.setWordWrap(True)
         layout.addWidget(blurb)
 
@@ -206,7 +212,7 @@ class ControlsWindow:
         self._file_label.setWordWrap(True)
         layout.addWidget(self._file_label)
 
-        formats = QLabel("Structures: .pdb .ent .cif .mmcif .bcif\nVolumes: .mrc .map .ccp4")
+        formats = QLabel("Models (cctbx): .pdb .ent .cif .mmcif\nVolumes: .mrc .map .ccp4")
         formats.setWordWrap(True)
         layout.addWidget(formats)
 
@@ -306,7 +312,7 @@ class ControlsWindow:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         path, _ = QFileDialog.getOpenFileName(
-            self._window, "Open structure or volume", "", FILE_DIALOG_FILTER
+            self._window, "Open model or volume", "", FILE_DIALOG_FILTER
         )
         if not path:
             return
@@ -548,25 +554,31 @@ class DesktopApp:
                 "pip install 'pxviewer[live]'"
             ) from exc
 
+    def _install_session(self, session, key: str) -> str:
+        """Swap in a prebuilt session, start it, and return its WebSocket URL.
+
+        Replaces the current session (a session's atom set is fixed for life, so a
+        different model means a new session) and rewires mouse selection if it was
+        enabled.
+        """
+        if self._session is not None:
+            self._session.stop()
+        self._session = session
+        self._session_key = key
+        session.start(host=self._host, port=0)
+        if self._selection_enabled:
+            session.enable_mouse_selection(self._emit_selection)
+        return f"ws://{self._host}:{session.port}"
+
     def _ensure_session(self, key: str, make_atoms) -> str:
         """Return the WebSocket URL for a session whose topology is ``key``.
 
-        A session's atom set is fixed for its lifetime (the topology is parsed
-        once and only coordinates stream after), so switching to a different model
-        means a new session. Same key -> reuse, which keeps page reloads cheap.
+        Same key -> reuse, which keeps page reloads cheap; otherwise build a new
+        session from ``make_atoms()`` and install it.
         """
         if self._session is not None and self._session_key == key:
             return f"ws://{self._host}:{self._session.port}"
-
-        if self._session is not None:
-            self._session.stop()
-
-        self._session = self._make_live_session(make_atoms())
-        self._session_key = key
-        self._session.start(host=self._host, port=0)
-        if self._selection_enabled:
-            self._session.enable_mouse_selection(self._emit_selection)
-        return f"ws://{self._host}:{self._session.port}"
+        return self._install_session(self._make_live_session(make_atoms()), key)
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
@@ -578,7 +590,42 @@ class DesktopApp:
     # -- loading ---------------------------------------------------------
 
     def load_file(self, path: str) -> str:
-        """Open a local structure or volume file in the viewport. Returns its kind."""
+        """Open a local model or volume file in the viewport. Returns its kind.
+
+        Atomic models are read by cctbx and streamed through a live session (no
+        browser parsing); volumes are still staged as an MVSJ scene.
+        """
+        if file_kind(path) == "volume":
+            return self._load_volume_file(path)
+        return self._load_model_file(path)
+
+    def _load_model_file(self, path: str) -> str:
+        """Read a model with cctbx and stream it through a fresh live session."""
+        self.stop_demo()
+        self._reset_interactions()
+
+        from . import cctbx_io
+        from .live import LiveSession
+
+        loaded = cctbx_io.load_model(path)  # DataManager -> model -> hierarchy -> arrays
+        session = LiveSession.from_arrays(
+            loaded.arrays,
+            polymer=loaded.polymer,
+            secondary_structure=loaded.secondary_structure,
+        )
+        self._load_counter += 1
+        ws_url = self._install_session(session, key=f"model:{self._load_counter}")
+        # The topology BinaryCIF already carries the coordinates, so the structure
+        # appears without pushing a frame. Cartoon reads better than ball-and-stick
+        # for a polymer; the choice is replayed to the viewer when it connects.
+        if loaded.polymer:
+            session.set_representation("cartoon", color="secondary-structure")
+        self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
+        self._status(f"Loaded model: {Path(path).name} ({len(loaded.arrays)} atoms)")
+        return "model"
+
+    def _load_volume_file(self, path: str) -> str:
+        """Stage a volume file as an MVSJ scene and load it in the viewport."""
         self.stop_demo()
         self._reset_interactions()
 
@@ -586,13 +633,13 @@ class DesktopApp:
         # a cached scene or data file from the previous one.
         self._load_counter += 1
         out_dir = self._webapp.volume_dir / "file" / str(self._load_counter)
-        mvsj_path, kind = create_file_view(path, out_dir=out_dir)
+        mvsj_path = create_volume_file_view(path, out_dir=out_dir)
 
         ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
         mvsj_url = f"/file/{self._load_counter}/{mvsj_path.name}"
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
-        self._status(f"Loaded {kind}: {Path(path).name}")
-        return kind
+        self._status(f"Loaded volume: {Path(path).name}")
+        return "volume"
 
     def load_volume_demo(self, name: str) -> None:
         """Generate a volume demo and load its static scene in the viewport."""

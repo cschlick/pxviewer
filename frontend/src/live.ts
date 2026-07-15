@@ -712,11 +712,16 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         }
     };
 
-    ws.onmessage = async (ev) => {
-        if (typeof ev.data === 'string') {
-            // Server -> client control messages (JSON text).
-            let msg: any;
-            try { msg = JSON.parse(ev.data); } catch { return; }
+    // Control messages that act on the LiveViewer. On connect the server replays
+    // state (representations, highlight, …) right after the topology, which can
+    // arrive while the viewer is still building asynchronously — so these are
+    // queued until the viewer exists, then flushed in order.
+    const VIEWER_MSG_TYPES = new Set([
+        'interactions', 'clashes', 'highlight', 'focus', 'representations', 'click-mode', 'primitive', 'select',
+    ]);
+    const pendingControl: any[] = [];
+
+    const handleControlMessage = async (msg: any) => {
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
             } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
@@ -767,6 +772,19 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 }
                 ws.send(JSON.stringify({ type: 'selection-result', reqId: msg.reqId, indices, error }));
             }
+    };
+
+    ws.onmessage = async (ev) => {
+        if (typeof ev.data === 'string') {
+            // Server -> client control messages (JSON text).
+            let msg: any;
+            try { msg = JSON.parse(ev.data); } catch { return; }
+            // Defer viewer-dependent messages that beat the (async) viewer build.
+            if (VIEWER_MSG_TYPES.has(msg.type) && !viewer) {
+                pendingControl.push(msg);
+                return;
+            }
+            await handleControlMessage(msg);
             return;
         }
         const buffer = ev.data as ArrayBuffer;
@@ -783,6 +801,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));
             building = false;
             ws.send(JSON.stringify({ type: 'ready' }));
+            // Now that the viewer exists, apply anything that arrived while building.
+            const queued = pendingControl.splice(0);
+            for (const m of queued) await handleControlMessage(m);
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);

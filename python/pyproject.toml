@@ -11,8 +11,12 @@ dependencies = [
     "molviewspec>=1.8.0",
     "ciftools>=0.2.0",
     "mrcfile>=1.5.0",
-    "numpy>=1.23",
+    # numba (via ciftools) needs numpy <= 2.4; cctbx is happy there too.
+    "numpy>=1.23,<2.5",
 ]
+# NOTE: atomic-model I/O needs cctbx (`cctbx-base`), which ships only on
+# conda-forge, not PyPI — so it can't be a dependency here. Install it with conda
+# (see environment.yml) or: conda install -c conda-forge cctbx-base
 
 [project.optional-dependencies]
 live = [

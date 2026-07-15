@@ -5,7 +5,7 @@ from typing import List
 
 import molviewspec as mvs
 
-from .data import Atom, encode_bcif, read_atoms, write_bcif
+from .data import Atom, AtomArrays, encode_bcif, encode_bcif_arrays, read_atoms, write_bcif
 from .volume import (
     Volume,
     VolumeStyle,
@@ -30,8 +30,10 @@ __all__ = [
     "Volume",
     "VolumeStyle",
     "Atom",
+    "AtomArrays",
     "write_bcif",
     "encode_bcif",
+    "encode_bcif_arrays",
     "read_atoms",
     "write_volume",
     "read_volume",
