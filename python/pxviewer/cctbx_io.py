@@ -64,14 +64,16 @@ def model_from_sites(
     a hierarchy: it writes a minimal ``_atom_site`` loop and loads it through the
     DataManager. ``sites`` is an ``(N, 3)`` array; each label argument is a scalar
     (broadcast) or a per-atom sequence. Defaults make a chain of carbons, one per
-    residue, so positional index == residue == i_seq.
+    residue (positional index == residue == i_seq), named by element and using the
+    ``UNL`` (unknown ligand) residue so cctbx treats synthetic points as
+    non-polymer rather than protein.
     """
     sites = np.asarray(sites, dtype=float).reshape(-1, 3)
     n = sites.shape[0]
     elements = _column(elements, n, "C")
-    names = _column(names, n, "CA")
+    names = list(elements) if names is None else _column(names, n, "C")
     chains = _column(chains, n, "A")
-    resnames = _column(resnames, n, "ALA")
+    resnames = _column(resnames, n, "UNL")
     resseqs = _column(resseqs, n, None)
     if resseqs[0] is None:
         resseqs = list(range(1, n + 1))
