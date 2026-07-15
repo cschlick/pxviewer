@@ -266,6 +266,36 @@ Representations **track the streamed coordinates**, and the current set is
 replayed to viewers that connect later. If you never set any, you get the default
 ball-and-stick / element-symbol.
 
+### Colouring by a per-atom attribute
+
+Colour atoms by a per-atom scalar — B-factor, occupancy, or anything you compute —
+mapped through a colour scale:
+
+```python
+session.color_by("bfactor", palette="turbo")          # from the model
+session.color_by("occupancy", palette="viridis")
+session.color_by(my_values, domain=(0, 1))            # a raw length-N array
+```
+
+`bfactor` and `occupancy` are always available from the model. For arbitrary
+attributes, register a named length-N array once and colour by name — handy when
+you colour by the same quantity repeatedly or want it listed in
+`session.attributes()`:
+
+```python
+session.set_attribute("pae", per_atom_error)          # any length-N array
+session.color_by("pae", palette="spectral", domain=(0, 30))
+```
+
+`palette` is a Mol\* colour-list name (`turbo`, `viridis`, `spectral`, `plasma`,
+`red-yellow-blue`, …) or an explicit list of colours; `domain` is `(min, max)`,
+taken from the finite values when omitted. Non-finite (`nan`) values render in a
+neutral "missing" colour. `color_by` sets a single representation of `type`
+(default `ball_and_stick`, optionally limited with `on=`), like
+`set_representation`, and is replayed to viewers that connect later. Under the
+hood it drives one custom Mol\* colour theme (`pxviewer-attribute`) whose per-atom
+values are supplied from Python, indexed by positional atom identity.
+
 ### Non-covalent interactions
 
 Two ways to draw non-covalent (non-bonded) interaction notation — dashed
@@ -362,7 +392,7 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
-| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?},…]}` |
+| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?,attribute?},…]}` (`color:"attribute"` + `attribute:{values,domain,palette}` colours by a per-atom scalar) |
 | server → client | interactions | JSON `{"type":"interactions","action":"set","contacts":[{kind,a,b,description?},…]}` or `{"type":"interactions","action":"clear"}` (explicit typed contacts) |
 | server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
 | server → client | clashes | JSON `{"type":"clashes","action":"set","pairs":[{a,b},…]}` or `{"type":"clashes","action":"clear"}` (steric clashes, drawn red) |

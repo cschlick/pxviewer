@@ -16,7 +16,9 @@ import { StateObjectSelector, StateTransformer } from 'molstar/lib/mol-state';
 import { PluginContext } from 'molstar/lib/mol-plugin/context';
 import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
-import { Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
+import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
+import { Color, ColorScale } from 'molstar/lib/mol-util/color';
+import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
 import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
@@ -94,6 +96,71 @@ function deinterleave(flat: ArrayLike<number>, n: number) {
         z[i] = flat[i * 3 + 2];
     }
     return { x, y, z };
+}
+
+// -- colour by per-atom attribute ----------------------------------------
+//
+// A custom colour theme driven by a Python-supplied per-atom scalar array
+// (indexed by i_seq == model element index == wire index). Values are mapped
+// through a Mol* ColorScale; non-finite values take the missing colour. This one
+// theme handles b-factor, occupancy and any arbitrary attribute uniformly.
+
+const ATTRIBUTE_MISSING_COLOR = Color(0x808080);
+
+const AttributeColorThemeParams = {
+    values: PD.Value<ArrayLike<number>>([], { isHidden: true }),
+    domain: PD.Interval([0, 1]),
+    palette: PD.Value<any>('turbo', { isHidden: true }),
+    missing: PD.Color(ATTRIBUTE_MISSING_COLOR),
+};
+
+function attributeColorTheme(_ctx: any, props: any) {
+    const scale = ColorScale.create({ domain: props.domain, listOrName: props.palette });
+    const values = props.values as ArrayLike<number>;
+    const missing = props.missing;
+    const pick = (i: number) => {
+        const v = values[i];
+        return v == null || Number.isNaN(v) ? missing : scale.color(v);
+    };
+    function color(location: any) {
+        if (StructureElement.Location.is(location)) return pick(location.element as unknown as number);
+        if (Bond.isLocation(location)) return pick(location.aUnit.elements[location.aIndex] as unknown as number);
+        return missing;
+    }
+    return {
+        factory: attributeColorTheme,
+        granularity: 'group' as const,
+        preferSmoothing: true,
+        color,
+        props,
+        description: 'Colour by a pxviewer per-atom attribute.',
+        legend: scale.legend,
+    };
+}
+
+const AttributeColorThemeProvider: any = {
+    name: 'pxviewer-attribute',
+    label: 'pxviewer Attribute',
+    category: ColorThemeCategory.Misc,
+    factory: attributeColorTheme,
+    getParams: () => AttributeColorThemeParams,
+    defaultValues: PD.getDefaultValues(AttributeColorThemeParams),
+    isApplicable: () => true,
+};
+
+const attributeThemeRegistered = new WeakSet<PluginContext>();
+
+/** Register the pxviewer per-atom-attribute colour theme on a plugin (once). */
+export function registerAttributeColorTheme(plugin: PluginContext) {
+    if (attributeThemeRegistered.has(plugin)) return;
+    plugin.representation.structure.themes.colorThemeRegistry.add(AttributeColorThemeProvider);
+    attributeThemeRegistered.add(plugin);
+}
+
+/** Resolve a wire palette (a Mol* colour-list name, or explicit colours) for the scale. */
+function resolvePalette(palette: any): any {
+    if (Array.isArray(palette)) return palette.map((c) => decodeColor(c));
+    return palette; // a ColorListName string
 }
 
 /**
@@ -193,7 +260,17 @@ export class LiveViewer {
                 this.reprNodes.push(comp);
             }
             const params: any = { type: spec.type };
-            if (spec.color) params.color = spec.color;
+            if (spec.color === 'attribute' && spec.attribute) {
+                const a = spec.attribute;
+                params.color = 'pxviewer-attribute';
+                params.colorParams = {
+                    values: Float32Array.from(a.values, (v: any) => (v == null ? NaN : v)),
+                    domain: a.domain,
+                    palette: resolvePalette(a.palette),
+                };
+            } else if (spec.color) {
+                params.color = spec.color;
+            }
             if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
             const typeParams: any = spec.params ? { ...spec.params } : {};
             if (spec.opacity != null) typeParams.alpha = spec.opacity;
@@ -695,6 +772,7 @@ export interface LiveConnectionHandle {
  * topology message, and drive it from streamed frames. Pick events are sent back.
  */
 export function connectLive(plugin: PluginContext, url: string): LiveConnectionHandle {
+    registerAttributeColorTheme(plugin);
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;

@@ -492,6 +492,9 @@ class LiveSession:
         # Representations (id -> spec), sent declaratively; replayed to late clients.
         self._representations: dict = {}
         self._representation_counter = 0
+        # Named per-atom scalar attributes (name -> float array of length N), for
+        # colour-by-attribute. b-factor / occupancy are seeded from the topology.
+        self._attributes: dict = {}
         # Explicit, Python-supplied interaction contacts (list of dicts); replayed.
         self._interactions_contacts: List[dict] = []
         # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
@@ -1000,6 +1003,99 @@ class LiveSession:
         """Remove all representations (restoring the default ball-and-stick). Thread-safe."""
         self._representations.clear()
         self._send_representations()
+
+    # -- colour by per-atom attribute ------------------------------------
+
+    def set_attribute(self, name: str, values: Any) -> None:
+        """Register a named per-atom scalar attribute (a length-N array).
+
+        Once registered it can be used with :meth:`color_by`. Values are floats
+        (use ``nan`` for "missing" — those atoms take the theme's missing colour).
+        ``bfactor`` and ``occupancy`` are always available from the topology and
+        need not be registered.
+        """
+        arr = np.asarray(values, dtype=float).reshape(-1)
+        if arr.shape[0] != self._n_atoms:
+            raise ValueError(
+                f"attribute {name!r} has {arr.shape[0]} values but the structure has {self._n_atoms} atoms"
+            )
+        self._attributes[str(name)] = arr
+
+    def attributes(self) -> List[str]:
+        """The attributes available to :meth:`color_by` (registered + built-in)."""
+        names = list(self._attributes)
+        if self._data.arrays.b is not None:
+            names.append("bfactor")
+        if self._data.arrays.occ is not None:
+            names.append("occupancy")
+        return names
+
+    def _resolve_attribute(self, attribute: Any) -> np.ndarray:
+        """Resolve an attribute name (or a raw length-N array) to a float array."""
+        if isinstance(attribute, str):
+            if attribute in self._attributes:
+                return self._attributes[attribute]
+            if attribute in ("bfactor", "b_factor", "b", "b_iso"):
+                if self._data.arrays.b is None:
+                    raise ValueError("this model has no B-factors")
+                return np.asarray(self._data.arrays.b, dtype=float)
+            if attribute in ("occupancy", "occ"):
+                if self._data.arrays.occ is None:
+                    raise ValueError("this model has no occupancies")
+                return np.asarray(self._data.arrays.occ, dtype=float)
+            raise ValueError(
+                f"unknown attribute {attribute!r}; register it with set_attribute() "
+                f"or use 'bfactor' / 'occupancy'"
+            )
+        arr = np.asarray(attribute, dtype=float).reshape(-1)
+        if arr.shape[0] != self._n_atoms:
+            raise ValueError(f"attribute has {arr.shape[0]} values but the structure has {self._n_atoms} atoms")
+        return arr
+
+    def color_by(
+        self,
+        attribute: Any,
+        *,
+        type: str = "ball_and_stick",
+        palette: Any = "turbo",
+        domain: Optional[tuple] = None,
+        on: Any = None,
+        id: Optional[str] = None,
+    ) -> str:
+        """Colour atoms by a per-atom attribute, mapped through a colour scale.
+
+        ``attribute`` is ``'bfactor'``, ``'occupancy'``, the name of an attribute
+        registered with :meth:`set_attribute`, or a raw length-N array of values.
+        The values are mapped onto ``palette`` (a Mol* colour-list name such as
+        ``'turbo'``, ``'viridis'``, ``'spectral'``, or an explicit list of colours)
+        over ``domain`` (``(min, max)``; taken from the finite values when omitted).
+        Non-finite values render in the theme's missing colour.
+
+        This sets a single representation of ``type`` (optionally limited to ``on``),
+        replacing any current ones — like :meth:`set_representation`. Returns the
+        representation id. The colouring is replayed to viewers that connect later.
+        """
+        values = self._resolve_attribute(attribute)
+        if domain is None:
+            finite = values[np.isfinite(values)]
+            lo, hi = (float(finite.min()), float(finite.max())) if finite.size else (0.0, 1.0)
+            if lo == hi:
+                hi = lo + 1.0
+            domain = (lo, hi)
+
+        self._representations.clear()
+        spec = self._make_repr_spec(type, None, None, on, None, None, id)
+        spec["color"] = "attribute"
+        spec["attribute"] = {
+            "name": attribute if isinstance(attribute, str) else "values",
+            # NaN/inf -> null so the client paints them the missing colour.
+            "values": [float(v) if np.isfinite(v) else None for v in values],
+            "domain": [float(domain[0]), float(domain[1])],
+            "palette": palette,
+        }
+        self._representations[spec["id"]] = spec
+        self._send_representations()
+        return spec["id"]
 
     def highlight(self, atoms: Any) -> Selection:
         """Show the selection overlay on the given atoms (:class:`Selection` or coercible)."""

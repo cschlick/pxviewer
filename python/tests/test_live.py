@@ -600,6 +600,81 @@ def test_representations_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
+# -- colour by per-atom attribute --------------------------------------------
+
+def test_bfactor_and_occupancy_available(session):
+    # from_sites writes occupancy 1.0 / B 0.0, so both attributes exist.
+    assert set(session.attributes()) >= {"bfactor", "occupancy"}
+    session.color_by("bfactor")
+    session.color_by("occupancy")
+
+
+def test_color_by_attribute_message(session):
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.color_by([0.0, 1.0, 2.0, 3.0], palette="viridis", domain=(0, 3), type="cartoon")
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert msg["type"] == "representations"
+            spec = msg["reprs"][0]
+            assert spec["color"] == "attribute"
+            assert spec["type"] == "cartoon"
+            assert spec["attribute"]["values"] == [0.0, 1.0, 2.0, 3.0]
+            assert spec["attribute"]["domain"] == [0.0, 3.0]
+            assert spec["attribute"]["palette"] == "viridis"
+
+    asyncio.run(scenario())
+
+
+def test_set_attribute_and_color_by_name(session):
+    session.set_attribute("score", [0.1, 0.2, 0.3, 0.4])
+    assert "score" in session.attributes()
+    rid = session.color_by("score", domain=(0, 1))
+    assert session._representations[rid]["attribute"]["name"] == "score"
+
+
+def test_color_by_auto_domain_from_finite_values(session):
+    rid = session.color_by([10.0, 20.0, 30.0, 40.0])
+    assert session._representations[rid]["attribute"]["domain"] == [10.0, 40.0]
+
+
+def test_color_by_nan_becomes_null(session):
+    rid = session.color_by([float("nan"), 1.0, 2.0, 3.0])
+    vals = session._representations[rid]["attribute"]["values"]
+    assert vals[0] is None and vals[1] == 1.0
+
+
+def test_set_attribute_wrong_length_rejected(session):
+    with pytest.raises(ValueError, match="4 atoms"):
+        session.set_attribute("bad", [1, 2, 3])
+
+
+def test_color_by_unknown_attribute_rejected(session):
+    with pytest.raises(ValueError, match="unknown attribute"):
+        session.color_by("nonsense")
+
+
+def test_color_by_replaces_representations(session):
+    session.add_representation("spacefill", color="chain-id")
+    session.color_by([0.0, 1.0, 2.0, 3.0])
+    assert len(session._representations) == 1  # like set_representation
+
+
+def test_color_by_replayed_to_late_client(session):
+    session.color_by([0.0, 1.0, 2.0, 3.0], palette="turbo")
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert msg["type"] == "representations"
+            assert msg["reprs"][0]["color"] == "attribute"
+
+    asyncio.run(scenario())
+
+
 async def _wait_primitive(ws, action, timeout=5):
     """Read messages until a primitive message with the given action arrives.
 
