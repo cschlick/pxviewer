@@ -16,7 +16,6 @@ and the rest of the package works without cctbx installed.
 
 from __future__ import annotations
 
-import dataclasses
 import threading
 from pathlib import Path
 from typing import Any, List, Optional, Tuple
@@ -27,7 +26,6 @@ from .data import AtomArrays
 
 __all__ = [
     "ModelData",
-    "CctbxModel",
     "read_model",
     "first_model",
     "model_to_arrays",
@@ -222,13 +220,40 @@ class ModelData:
     rather than any reimplementation, and `diff()` catches the cached columns
     drifting from the model. cctbx calls are serialised under a lock, since the
     session may touch the model from its WebSocket thread.
+
+    ``polymer`` and ``secondary_structure`` are carried alongside — they're read
+    once, when the session encodes the topology (to enable cartoon rendering).
     """
 
-    def __init__(self, arrays: AtomArrays, model: Any = None):
+    def __init__(
+        self,
+        arrays: AtomArrays,
+        model: Any = None,
+        *,
+        polymer: bool = False,
+        secondary_structure: Optional[List[Tuple[str, int, int, str]]] = None,
+    ):
         self.arrays = arrays
         self.model = model
+        self.polymer = polymer
+        self.secondary_structure = secondary_structure or []
         self._cache: Any = None
         self._lock = threading.Lock()
+
+    @classmethod
+    def from_model(cls, model: Any) -> "ModelData":
+        """Build from an ``mmtbx.model.manager``: extract columns, SS and polymer flag.
+
+        A multi-MODEL ensemble is reduced to model 1 first, so the columns, the held
+        model and cctbx selections all stay on the same atom set.
+        """
+        model = first_model(model)
+        return cls(
+            model_to_arrays(model),
+            model=model,
+            polymer=model_is_polymer(model),
+            secondary_structure=model_secondary_structure(model),
+        )
 
     def __len__(self) -> int:
         return len(self.arrays)
@@ -284,22 +309,6 @@ class ModelData:
         return None if dev <= tol else f"coordinate drift: max |delta| = {dev:.4f} A"
 
 
-@dataclasses.dataclass
-class CctbxModel:
-    """A model reduced to what pxviewer streams: columns, polymer flag, SS, model."""
-
-    arrays: AtomArrays
-    polymer: bool
-    secondary_structure: List[Tuple[str, int, int, str]]
-    model: Any
-
-
-def load_model(path: str | Path) -> CctbxModel:
-    """Read a model file, reduce to model 1, and bundle it for streaming."""
-    model = first_model(read_model(path))
-    return CctbxModel(
-        arrays=model_to_arrays(model),
-        polymer=model_is_polymer(model),
-        secondary_structure=model_secondary_structure(model),
-        model=model,
-    )
+def load_model(path: str | Path) -> ModelData:
+    """Read a model file (reduced to model 1) into a :class:`ModelData`."""
+    return ModelData.from_model(read_model(path))

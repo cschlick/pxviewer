@@ -440,19 +440,12 @@ class LiveSession:
             session.push(frame)
     """
 
-    def __init__(
-        self,
-        data: ModelData,
-        *,
-        polymer: bool = False,
-        secondary_structure: Optional[Any] = None,
-        topology: Optional[bytes] = None,
-    ):
+    def __init__(self, data: ModelData, *, topology: Optional[bytes] = None):
         # The session's atom source is a columnar :class:`ModelData` (numpy columns
-        # plus, for cctbx-loaded data, the native model). Build sessions via the
-        # classmethods — from_model_file / from_cctbx_model / from_sites — which
-        # always route through cctbx; this low-level constructor just wires up a
-        # ModelData that has already been prepared.
+        # plus the native cctbx model, carrying its own polymer/secondary-structure
+        # flags). Build sessions via the classmethods — from_model_file /
+        # from_cctbx_model / from_sites — which always route through cctbx; this
+        # low-level constructor just wires up a prepared ModelData.
         if not isinstance(data, ModelData):
             raise TypeError(
                 "LiveSession(data) takes a ModelData; build a session via "
@@ -462,7 +455,7 @@ class LiveSession:
         if self._data.n_atoms == 0:
             raise ValueError("LiveSession requires at least one atom")
         self._topology: bytes = topology if topology is not None else encode_bcif_arrays(
-            self._data.arrays, polymer=polymer, secondary_structure=secondary_structure
+            data.arrays, polymer=data.polymer, secondary_structure=data.secondary_structure
         )
         self._n_atoms = self._data.n_atoms
 
@@ -532,26 +525,14 @@ class LiveSession:
         model is retained, so selection uses cctbx's own machinery and polymer
         models render as cartoon.
         """
-        from . import cctbx_io
-
-        model = cctbx_io.first_model(model)
-        data = ModelData(cctbx_io.model_to_arrays(model), model=model)
-        return cls(
-            data,
-            polymer=cctbx_io.model_is_polymer(model),
-            secondary_structure=cctbx_io.model_secondary_structure(model),
-        )
+        return cls(ModelData.from_model(model))
 
     @classmethod
     def from_model_file(cls, path: Any) -> "LiveSession":
         """Read a model file (PDB/mmCIF) with cctbx and build a session from it."""
         from . import cctbx_io
 
-        loaded = cctbx_io.load_model(path)
-        data = ModelData(loaded.arrays, model=loaded.model)
-        return cls(
-            data, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
-        )
+        return cls(cctbx_io.load_model(path))
 
     @classmethod
     def from_sites(cls, sites: Any, **labels: Any) -> "LiveSession":
