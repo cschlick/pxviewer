@@ -533,6 +533,14 @@ export class LiveViewer {
         this.pickHandler = onPick;
         this.plugin.behaviors.interaction.click.subscribe((e) => {
             const loci = e.current.loci;
+            // The click behaviour is plugin-global, so in a multi-structure scene
+            // every viewer is notified. A click that landed on an atom belongs to
+            // exactly one structure — only that structure's viewer responds. (An
+            // empty-space click has no structure, so all viewers see it.)
+            if (StructureElement.Loci.is(loci)) {
+                const own = this.currentStructure();
+                if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return;
+            }
             const location = StructureElement.Loci.is(loci)
                 ? StructureElement.Loci.getFirstLocation(loci)
                 : undefined;

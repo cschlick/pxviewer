@@ -25,13 +25,15 @@ function App() {
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         // `?ws=ws://host:port` streams live coordinates from a Python LiveSession
-        // and can also drive per-volume color/opacity commands.
-        // `?mvsj=path/to/scene.mvsj` loads a static MVSJ scene (e.g. a volume demo).
-        // With no `ws` or `mvsj` param we fall back to a static PDB so the page is never blank.
+        // and can also drive per-volume color/opacity commands. Several may be given
+        // comma-separated — each becomes an independent structure in the one plugin
+        // (multi-model). `?mvsj=path/to/scene.mvsj` loads a static MVSJ scene (e.g. a
+        // volume demo). With no `ws`/`mvsj` we fall back to a static PDB so the page
+        // is never blank.
         const mvsjParam = params.get('mvsj');
         const wsParam = params.get('ws');
 
-        let liveHandle: ReturnType<typeof connectLive> | undefined;
+        let liveHandles: ReturnType<typeof connectLive>[] = [];
 
         const setup = async () => {
             if (mvsjParam !== null) {
@@ -39,8 +41,8 @@ function App() {
                 await loadMVSFromUrl(model.plugin, url, 'mvsj');
             }
             if (wsParam !== null) {
-                const url = wsParam === '' ? DEFAULT_WS : wsParam;
-                liveHandle = connectLive(model.plugin, url);
+                const urls = wsParam.split(',').map((u) => u.trim()).filter(Boolean);
+                liveHandles = (urls.length ? urls : [DEFAULT_WS]).map((url) => connectLive(model.plugin, url));
             }
             if (mvsjParam === null && wsParam === null) {
                 loadPdb(model.plugin, '1tqn');
@@ -50,7 +52,7 @@ function App() {
         setup();
 
         return () => {
-            liveHandle?.close();
+            liveHandles.forEach((h) => h.close());
         };
     }, [model]);
 
