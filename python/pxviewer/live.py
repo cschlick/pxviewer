@@ -212,6 +212,31 @@ def _normalize_interactions(interactions: Any, n_atoms: int) -> List[dict]:
     return contacts
 
 
+_MISSING_TOKENS = {"", ".", "nan", "na", "n/a", "none", "null"}
+
+
+def _read_value_column(path: Any) -> np.ndarray:
+    """Read a one-value-per-line text file into a float array.
+
+    Blank lines and ``#`` comments are ignored; ``nan``/``.``/``na`` (any case) become
+    NaN. Raises ``ValueError`` on a line that isn't a single number.
+    """
+    values: List[float] = []
+    with open(path) as f:
+        for lineno, line in enumerate(f, 1):
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            if s.lower() in _MISSING_TOKENS:
+                values.append(float("nan"))
+                continue
+            try:
+                values.append(float(s))
+            except ValueError:
+                raise ValueError(f"{path}:{lineno}: expected one number per line, got {s!r}") from None
+    return np.array(values, dtype=float)
+
+
 # Bondi van der Waals radii (Angstrom), for steric-clash detection. Fallback below.
 _VDW_RADII = {
     "H": 1.20, "HE": 1.40, "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47, "NE": 1.54,
@@ -1052,6 +1077,23 @@ class LiveSession:
         for name, values in loaded.items():
             self.set_attribute(name, values)
         return list(loaded)
+
+    def load_attribute_text(self, name: str, path: Any) -> str:
+        """Register a per-atom attribute from a plain one-value-per-line text file.
+
+        Values align to atoms **by position** — line *i* is atom *i* (i_seq order) —
+        so the file must have exactly one value per atom (blank lines and ``#``
+        comments are ignored; ``nan``/``.``/``na`` mark missing). Simpler than an
+        mmCIF column when you just have a column of numbers in atom order. Returns
+        the attribute name.
+        """
+        values = _read_value_column(path)
+        if values.shape[0] != self._n_atoms:
+            raise ValueError(
+                f"{path} has {values.shape[0]} values but the structure has {self._n_atoms} atoms"
+            )
+        self.set_attribute(name, values)
+        return str(name)
 
     def write_cif(self, path: Any, *, attributes: Any = None) -> None:
         """Write the model, plus per-atom attributes, to an mmCIF file.

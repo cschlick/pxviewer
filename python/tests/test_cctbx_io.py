@@ -311,3 +311,29 @@ def test_load_attributes_missing_atom_is_nan(tmp_path):
 def test_attribute_ops_need_a_model():
     session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])  # synthetic, has a model
     assert session._data.model is not None  # from_sites is model-backed
+
+
+def test_load_attribute_text_positional(tmp_path):
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+    txt = "# scores, one per atom\n0.5\n\n1.5\nnan\n2.5\n"  # comment + blank + missing
+    p = tmp_path / "scores.txt"
+    p.write_text(txt)
+    assert session.load_attribute_text("score", p) == "score"
+    v = session._attributes["score"]
+    assert v[0] == 0.5 and v[1] == 1.5 and np.isnan(v[2]) and v[3] == 2.5
+
+
+def test_load_attribute_text_wrong_length(tmp_path):
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0], [2, 0, 0], [3, 0, 0]])
+    p = tmp_path / "short.txt"
+    p.write_text("1\n2\n3\n")  # 3 values, 4 atoms
+    with pytest.raises(ValueError, match="4 atoms"):
+        session.load_attribute_text("bad", p)
+
+
+def test_load_attribute_text_bad_line(tmp_path):
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
+    p = tmp_path / "bad.txt"
+    p.write_text("1\ntwo\n")
+    with pytest.raises(ValueError, match="one number per line"):
+        session.load_attribute_text("bad", p)

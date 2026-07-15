@@ -298,7 +298,13 @@ session.color_by("plddt")
 
 session.load_attributes("scores.cif")   # merge columns from another mmCIF (by atom identity)
 session.write_cif("out.cif")            # bake the registered attributes back as columns
+
+session.load_attribute_text("score", "scores.txt")  # one value per line, in atom order
 ```
+
+`load_attribute_text` is the simplest option when you just have a column of
+numbers: one value per atom in i_seq order (blank/`#` lines ignored, `nan`/`.`
+mark missing), aligned by position.
 
 `load_attributes` matches the file to the model **by atom identity** (chain,
 residue, insertion code, altloc, atom name), so it need not be in the same order;
