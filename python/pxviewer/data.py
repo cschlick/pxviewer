@@ -74,23 +74,36 @@ class AtomArrays:
         """The coordinates as an ``(N, 3)`` float32 array (streaming base frame)."""
         return np.stack([self.x, self.y, self.z], axis=1).astype("<f4")
 
-    def to_atoms(self) -> List["Atom"]:
-        """Materialise per-atom :class:`Atom` objects (for metadata/accessors)."""
-        ids = self.id
-        return [
-            Atom(
-                id=int(ids[i]),
-                element=self.element[i],
-                x=float(self.x[i]),
-                y=float(self.y[i]),
-                z=float(self.z[i]),
-                name=self.name[i],
-                resname=self.resname[i],
-                resseq=int(self.resseq[i]),
-                chain=self.chain[i],
-            )
-            for i in range(len(self.element))
-        ]
+    def atom_at(self, i: int) -> "Atom":
+        """Build a single :class:`Atom` from column ``i`` (for a selection result)."""
+        return Atom(
+            id=int(self.id[i]),
+            element=self.element[i],
+            x=float(self.x[i]),
+            y=float(self.y[i]),
+            z=float(self.z[i]),
+            name=self.name[i],
+            resname=self.resname[i],
+            resseq=int(self.resseq[i]),
+            chain=self.chain[i],
+        )
+
+    @classmethod
+    def from_atoms(cls, atoms: List["Atom"]) -> "AtomArrays":
+        """Columnar view of an :class:`Atom` list (the non-cctbx / convenience path)."""
+        atoms = list(atoms)
+        n = len(atoms)
+        return cls(
+            element=[a.element for a in atoms],
+            name=[a.name for a in atoms],
+            resname=[a.resname for a in atoms],
+            chain=[a.chain for a in atoms],
+            resseq=np.fromiter((a.resseq for a in atoms), dtype=np.int32, count=n),
+            x=np.fromiter((a.x for a in atoms), dtype=np.float32, count=n),
+            y=np.fromiter((a.y for a in atoms), dtype=np.float32, count=n),
+            z=np.fromiter((a.z for a in atoms), dtype=np.float32, count=n),
+            id=np.fromiter((a.id for a in atoms), dtype=np.int32, count=n),
+        )
 
 
 class AtomSiteCategory(CIFCategoryDesc):

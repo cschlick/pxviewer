@@ -131,10 +131,11 @@ def test_coercion_rejects_bool(session):
         session.add_label(True, "nope")
 
 
-def test_str_spec_rejected(session):
-    # Strings are not a selection language any more — indices only.
-    with pytest.raises(TypeError):
-        session.add_angle("resi 1", 1, 2)
+def test_str_spec_needs_a_model(session):
+    # A string is a cctbx selection now, but this session has no model attached,
+    # so it can't be resolved — a clear error, not a silent miss.
+    with pytest.raises(ValueError, match="model-backed"):
+        session.add_angle("resseq 1", 1, 2)
 
 
 def test_select_by_mask(session):

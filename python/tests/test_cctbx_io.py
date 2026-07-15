@@ -13,8 +13,14 @@ import pytest
 
 pytest.importorskip("iotbx.data_manager")
 
+import numpy as np  # noqa: E402
+from iotbx.data_manager import DataManager  # noqa: E402
+
 from pxviewer.cctbx_io import (  # noqa: E402
+    ModelData,
+    first_model,
     load_model,
+    model_from_sites,
     model_is_polymer,
     model_secondary_structure,
     model_to_arrays,
@@ -22,6 +28,11 @@ from pxviewer.cctbx_io import (  # noqa: E402
 )
 from pxviewer.data import encode_bcif_arrays, read_atoms  # noqa: E402
 from pxviewer.live import LiveSession  # noqa: E402
+
+
+def _model_from_str(text: str):
+    dm = DataManager()
+    return dm.get_model(dm.process_model_str("t", text))
 
 websockets = pytest.importorskip("websockets")
 
@@ -107,13 +118,104 @@ def test_load_model_reduces_to_streamable_bundle():
     assert len(loaded.arrays) == 1079
     assert loaded.polymer is True
     assert loaded.secondary_structure
+    assert loaded.model is not None  # the native model is retained
 
-    # A polymer session built from it renders cartoon by secondary structure.
-    session = LiveSession.from_arrays(
-        loaded.arrays, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
-    )
+    session = LiveSession.from_model_file(LYSOZYME)
     assert session._n_atoms == 1079
+    assert session.model is not None
     # metadata accessors work on cctbx-sourced atoms
     sel = session.select_by(ids=[1, 2, 3])
     assert sel.indices == [0, 1, 2]
     assert all(a.resname == "LYS" for a in sel.atoms)
+
+
+# -- ModelData: cctbx selection + drift --------------------------------------
+
+def test_model_backed_session_uses_cctbx_selection():
+    session = LiveSession.from_model_file(LYSOZYME)
+    sel = session.select_by(selection="chain A and resseq 5:14 and name CA")
+    assert len(sel) == 10
+    assert all(a.name == "CA" for a in sel.atoms)
+
+
+def test_diff_detects_model_drift():
+    loaded = load_model(LYSOZYME)
+    data = ModelData(loaded.arrays, model=loaded.model)
+    assert data.diff() is None  # in sync
+
+    sites = loaded.model.get_sites_cart()
+    sites[0] = (sites[0][0] + 5.0, sites[0][1], sites[0][2])
+    loaded.model.set_sites_cart(sites)
+    msg = data.diff()
+    assert msg is not None and "drift" in msg
+
+
+def test_selection_string_requires_model():
+    data = ModelData(model_to_arrays(read_model(LYSOZYME)))  # no model attached
+    with pytest.raises(ValueError, match="model-backed"):
+        data.selection_indices("chain A")
+
+
+# -- altloc: both conformers survive with distinct i_seq ---------------------
+
+_ALTLOC_PDB = """\
+ATOM      1  N   SER A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  SER A   1       1.500   0.000   0.000  1.00  0.00           C
+ATOM      3  CB  SER A   1       2.100   1.400   0.000  1.00  0.00           C
+ATOM      4  OG ASER A   1       3.500   1.400   0.000  0.50  0.00           O
+ATOM      5  OG BSER A   1       2.100   2.800   0.000  0.50  0.00           O
+"""
+
+
+def test_altlocs_kept_as_distinct_atoms():
+    arrays = model_to_arrays(_model_from_str(_ALTLOC_PDB))
+    assert len(arrays) == 5  # nothing flattened
+    og = [i for i, nm in enumerate(arrays.name) if nm == "OG"]
+    assert len(og) == 2
+    assert sorted(arrays.altloc[i] for i in og) == ["A", "B"]  # distinct labels, own i_seq
+
+
+def test_altloc_topology_writes_label_alt_id():
+    session = LiveSession.from_cctbx_model(_model_from_str(_ALTLOC_PDB))
+    assert session._n_atoms == 5
+    # both conformers select
+    assert len(session.select_by(selection="name OG")) == 2
+    assert len(session.select_by(selection="altloc A")) == 1
+
+
+# -- multi-MODEL reduced to model 1 ------------------------------------------
+
+_NMR_PDB = """\
+MODEL        1
+ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C
+ATOM      2  CA  ALA A   2       3.800   0.000   0.000  1.00  0.00           C
+ENDMDL
+MODEL        2
+ATOM      1  CA  ALA A   1       0.500   0.000   0.000  1.00  0.00           C
+ATOM      2  CA  ALA A   2       4.300   0.000   0.000  1.00  0.00           C
+ENDMDL
+"""
+
+
+def test_multi_model_reduced_to_first():
+    model = _model_from_str(_NMR_PDB)
+    assert model.get_number_of_atoms() == 4  # both models
+    reduced = first_model(model)
+    assert reduced.get_number_of_atoms() == 2  # model 1 only
+
+    session = LiveSession.from_cctbx_model(model)
+    assert session._n_atoms == 2  # session took model 1
+
+
+# -- model_from_sites helper -------------------------------------------------
+
+def test_model_from_sites_roundtrips_coords_and_labels():
+    sites = np.array([[0, 0, 0], [1.4, 0, 0], [2.8, 0, 0]], dtype=float)
+    model = model_from_sites(sites, chains=["A", "A", "B"], resseqs=[1, 2, 3])
+    arrays = model_to_arrays(model)
+    assert len(arrays) == 3
+    assert np.allclose(arrays.xyz, sites, atol=1e-3)
+    assert arrays.chain == ["A", "A", "B"]
+    # and the labels drive cctbx selection
+    session = LiveSession.from_cctbx_model(model)
+    assert session.select_by(selection="chain A").indices == [0, 1]

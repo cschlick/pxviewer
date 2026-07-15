@@ -92,10 +92,11 @@ class _StubSession:
 @pytest.mark.parametrize("name", list(DEMOS))
 def test_demo_streams_valid_frames_and_stops(name):
     demo = DEMOS[name]
-    atoms = demo.make_atoms()
-    assert len(atoms) >= 2
+    sites, _labels = demo.make_sites()
+    n = len(sites)
+    assert n >= 2
 
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    base = np.asarray(sites, dtype="<f4")
     stub = _StubSession()
     player = Player(stub, base, fps=240)  # fast so a short run covers several steps
 
@@ -108,14 +109,14 @@ def test_demo_streams_valid_frames_and_stops(name):
     assert not thread.is_alive(), f"demo '{name}' did not stop"
     assert stub.frames, f"demo '{name}' produced no frames"
     for frame in stub.frames[:10]:
-        assert frame.shape == (len(atoms), 3)
+        assert frame.shape == (n, 3)
         assert np.isfinite(frame).all()
 
 
 def test_pick_demo_reacts_to_pick():
     demo = DEMOS["pick"]
-    atoms = demo.make_atoms()
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    sites, _labels = demo.make_sites()
+    base = np.asarray(sites, dtype="<f4")
     stub = _StubSession()
     player = Player(stub, base, fps=240)
 
@@ -134,8 +135,8 @@ def test_pick_demo_reacts_to_pick():
 
 def test_select_demo_issues_selections():
     demo = DEMOS["select"]
-    atoms = demo.make_atoms()
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    sites, _labels = demo.make_sites()
+    base = np.asarray(sites, dtype="<f4")
     stub = _StubSession()
     player = Player(stub, base, fps=240)
 
@@ -151,8 +152,8 @@ def test_select_demo_issues_selections():
 
 def test_primitives_demo_draws_measurements():
     demo = DEMOS["primitives"]
-    atoms = demo.make_atoms()
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    sites, _labels = demo.make_sites()
+    base = np.asarray(sites, dtype="<f4")
     stub = _StubSession()
     player = Player(stub, base, fps=240)
 
@@ -168,8 +169,8 @@ def test_primitives_demo_draws_measurements():
 
 def test_measure_demo_enables_measure_modes():
     demo = DEMOS["measure"]
-    atoms = demo.make_atoms()
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+    sites, _labels = demo.make_sites()
+    base = np.asarray(sites, dtype="<f4")
     stub = _StubSession()
     player = Player(stub, base, fps=240)
 

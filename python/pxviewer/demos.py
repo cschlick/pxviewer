@@ -17,12 +17,12 @@ import dataclasses
 import math
 import threading
 import time
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Tuple
 
 import numpy as np
 
 from .appserver import announce_viewer, stop_all, stop_frontend
-from .data import Atom
+from .cctbx_io import model_from_sites
 from .live import LiveSession
 
 __all__ = ["DEMOS", "Player", "run_demo", "list_demos"]
@@ -64,21 +64,13 @@ def _helix(n: int, radius: float = 4.0, pitch: float = 6.0, turns: float = 2.0) 
     return coords.astype("<f4")
 
 
-def _atoms(coords: np.ndarray, element: str = "C") -> List[Atom]:
-    return [
-        Atom(
-            id=i + 1,
-            element=element,
-            name=element,
-            resname="UNL",
-            resseq=1,
-            chain="A",
-            x=float(c[0]),
-            y=float(c[1]),
-            z=float(c[2]),
-        )
-        for i, c in enumerate(coords)
-    ]
+# A demo declares its geometry as (sites, labels): an (N, 3) coordinate array plus
+# keyword label overrides for `model_from_sites`. The topology is built from a
+# generated mmCIF -> cctbx model at run time (no per-atom Atom construction), while
+# tests can read the sites directly without needing cctbx. Defaults give a chain of
+# carbons, one per residue, so positional index == i_seq.
+def _plain(sites: np.ndarray) -> "Tuple[np.ndarray, dict]":
+    return sites, {}
 
 
 # -- playback ------------------------------------------------------------
@@ -241,7 +233,7 @@ def _run_pick(p: Player) -> None:
         time.sleep(dt)
 
 
-def _labeled_chain(per_chain: int = 10, chains: int = 3, spacing: float = 1.4) -> List[Atom]:
+def _labeled_chain(per_chain: int = 10, chains: int = 3, spacing: float = 1.4):
     """A straight run of atoms split into named chains, one residue per atom.
 
     The distinct chain/residue labels just make the highlighted index ranges read
@@ -250,20 +242,8 @@ def _labeled_chain(per_chain: int = 10, chains: int = 3, spacing: float = 1.4) -
     n = per_chain * chains
     coords = _line(n, spacing)
     letters = "ABCDEFGH"
-    return [
-        Atom(
-            id=i + 1,
-            element="C",
-            name="CA",
-            resname="ALA",
-            resseq=i + 1,
-            chain=letters[i // per_chain],
-            x=float(c[0]),
-            y=float(c[1]),
-            z=float(c[2]),
-        )
-        for i, c in enumerate(coords)
-    ]
+    chain_ids = [letters[i // per_chain] for i in range(n)]
+    return coords, {"chains": chain_ids, "resseqs": list(range(1, n + 1))}
 
 
 def _run_select(p: Player) -> None:
@@ -290,13 +270,13 @@ def _run_select(p: Player) -> None:
         p.hold(1.5)
 
 
-def _bent_chain() -> List[Atom]:
+def _bent_chain():
     """A short zig-zag chain — enough elbows for a visible angle and dihedral."""
     pts = np.array(
         [[-5, 0, 0], [-3, 0, 0], [-1, 1.5, 0], [1, 1.5, 0], [3, 0, 0], [5, 0, 0]],
         dtype="<f4",
     )
-    return _atoms(pts)
+    return _plain(pts)
 
 
 def _run_primitives(p: Player) -> None:
@@ -337,11 +317,11 @@ def _run_primitives(p: Player) -> None:
         p.hold(1.2)
 
 
-def _interaction_pair() -> List[Atom]:
+def _interaction_pair():
     """Two short parallel strands whose facing atoms make a few contacts."""
     top = np.stack([np.linspace(-4, 4, 5), np.full(5, 1.6), np.zeros(5)], axis=1)
     bot = np.stack([np.linspace(-4, 4, 5), np.full(5, -1.6), np.zeros(5)], axis=1)
-    return _atoms(np.concatenate([top, bot]).astype("<f4"))
+    return _plain(np.concatenate([top, bot]).astype("<f4"))
 
 
 def _run_interactions(p: Player) -> None:
@@ -372,12 +352,12 @@ def _run_interactions(p: Player) -> None:
         p.hold(1.0)
 
 
-def _two_clusters() -> List[Atom]:
+def _two_clusters():
     """Two small clusters of atoms, offset along x so they start well separated."""
     grid = np.array([[dx, dy, 0.0] for dx in (-0.7, 0.7) for dy in (-0.7, 0.7)], dtype="<f4")
     left = grid + np.array([-6.0, 0, 0], dtype="<f4")
     right = grid + np.array([6.0, 0, 0], dtype="<f4")
-    return _atoms(np.concatenate([left, right]).astype("<f4"))
+    return _plain(np.concatenate([left, right]).astype("<f4"))
 
 
 def _run_clashes(p: Player) -> None:
@@ -475,23 +455,23 @@ def _run_measure(p: Player) -> None:
 class Demo:
     name: str
     description: str
-    make_atoms: Callable[[], List[Atom]]
+    make_sites: Callable[[], "Tuple[np.ndarray, dict]"]
     run: Callable[[Player], None]
 
 
 DEMOS: dict[str, Demo] = {
     d.name: d
     for d in [
-        Demo("wave", "A chain rippling with a growing travelling wave.", lambda: _atoms(_line(24)), _run_wave),
-        Demo("breathe", "A sphere of atoms expanding and contracting.", lambda: _atoms(_sphere(64)), _run_breathe),
-        Demo("orbit", "A rigid body gliding around a square path.", lambda: _atoms(_helix(20, radius=2.5, pitch=3.0)), _run_orbit),
-        Demo("morph", "A chain folding into a helix and back.", lambda: _atoms(_line(30, spacing=1.2)), _run_morph),
-        Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _atoms(_ring(16)), _run_pick),
+        Demo("wave", "A chain rippling with a growing travelling wave.", lambda: _plain(_line(24)), _run_wave),
+        Demo("breathe", "A sphere of atoms expanding and contracting.", lambda: _plain(_sphere(64)), _run_breathe),
+        Demo("orbit", "A rigid body gliding around a square path.", lambda: _plain(_helix(20, radius=2.5, pitch=3.0)), _run_orbit),
+        Demo("morph", "A chain folding into a helix and back.", lambda: _plain(_line(30, spacing=1.2)), _run_morph),
+        Demo("pick", "Interactive: click atoms to make them pulse (scene → Python).", lambda: _plain(_ring(16)), _run_pick),
         Demo("select", "Highlight atoms by index, cycling through subsets.", _labeled_chain, _run_select),
         Demo("primitives", "Angle/distance/dihedral/label measurements that track motion.", _bent_chain, _run_primitives),
         Demo("interactions", "Explicit typed non-covalent contacts that track motion.", _interaction_pair, _run_interactions),
         Demo("clashes", "Steric clashes (vdW overlaps) lighting up red as clusters interpenetrate.", _two_clusters, _run_clashes),
-        Demo("measure", "Interactive: click atoms to measure distances/angles/dihedrals (scene → Python).", lambda: _atoms(_helix(12, radius=4.0, pitch=3.0)), _run_measure),
+        Demo("measure", "Interactive: click atoms to measure distances/angles/dihedrals (scene → Python).", lambda: _plain(_helix(12, radius=4.0, pitch=3.0)), _run_measure),
     ]
 }
 
@@ -527,9 +507,9 @@ def run_demo(
         available = ", ".join(DEMOS)
         raise SystemExit(f"unknown demo '{name}'. Available: {available}")
 
-    atoms = demo.make_atoms()
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
-    session = LiveSession(atoms)
+    sites, labels = demo.make_sites()
+    base = np.asarray(sites, dtype="<f4")
+    session = LiveSession.from_cctbx_model(model_from_sites(sites, **labels))
     player = Player(session, base, fps=fps)
     session.on_pick(player._on_pick)
     session.start(host=host, port=port)

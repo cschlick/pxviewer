@@ -17,21 +17,86 @@ and the rest of the package works without cctbx installed.
 from __future__ import annotations
 
 import dataclasses
+import threading
 from pathlib import Path
-from typing import Any, List, Tuple
+from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-from .data import AtomArrays
+from .data import Atom, AtomArrays
 
 __all__ = [
+    "ModelData",
     "CctbxModel",
     "read_model",
+    "first_model",
     "model_to_arrays",
     "model_secondary_structure",
     "model_is_polymer",
     "load_model",
+    "model_from_sites",
 ]
+
+
+def _column(value: Any, n: int, default: Any) -> List[Any]:
+    """Broadcast a scalar to length ``n``, or pass a per-atom sequence through."""
+    if value is None:
+        return [default] * n
+    if isinstance(value, str) or not hasattr(value, "__len__"):
+        return [value] * n
+    seq = list(value)
+    if len(seq) != n:
+        raise ValueError(f"column length {len(seq)} does not match {n} atoms")
+    return seq
+
+
+def model_from_sites(
+    sites: Any,
+    *,
+    elements: Any = None,
+    names: Any = None,
+    chains: Any = None,
+    resseqs: Any = None,
+    resnames: Any = None,
+    label: str = "pxviewer",
+) -> Any:
+    """Build a cctbx model from coordinate + label arrays via a generated mmCIF.
+
+    This is the string route the demos and tests use instead of hand-constructing
+    a hierarchy: it writes a minimal ``_atom_site`` loop and loads it through the
+    DataManager. ``sites`` is an ``(N, 3)`` array; each label argument is a scalar
+    (broadcast) or a per-atom sequence. Defaults make a chain of carbons, one per
+    residue, so positional index == residue == i_seq.
+    """
+    sites = np.asarray(sites, dtype=float).reshape(-1, 3)
+    n = sites.shape[0]
+    elements = _column(elements, n, "C")
+    names = _column(names, n, "CA")
+    chains = _column(chains, n, "A")
+    resnames = _column(resnames, n, "ALA")
+    resseqs = _column(resseqs, n, None)
+    if resseqs[0] is None:
+        resseqs = list(range(1, n + 1))
+
+    cols = [
+        "group_PDB", "id", "type_symbol", "label_atom_id", "label_alt_id",
+        "label_comp_id", "label_asym_id", "label_entity_id", "label_seq_id",
+        "Cartn_x", "Cartn_y", "Cartn_z", "occupancy", "B_iso_or_equiv",
+        "auth_seq_id", "auth_asym_id", "pdbx_PDB_model_num",
+    ]
+    out = ["data_" + label, "loop_"] + ["_atom_site." + c for c in cols]
+    for i in range(n):
+        x, y, z = sites[i]
+        out.append(
+            "ATOM %d %s %s . %s %s 1 %d %.3f %.3f %.3f 1.00 0.00 %d %s 1"
+            % (i + 1, elements[i], names[i], resnames[i], chains[i], int(resseqs[i]),
+               x, y, z, int(resseqs[i]), chains[i])
+        )
+    cif = "\n".join(out) + "\n"
+
+    DataManager = _require_data_manager()
+    dm = DataManager()
+    return dm.get_model(dm.process_model_str(label, cif))
 
 
 def _require_data_manager():
@@ -51,6 +116,21 @@ def read_model(path: str | Path) -> Any:
     dm = DataManager()
     dm.process_model_file(str(path))
     return dm.get_model()
+
+
+def first_model(model: Any) -> Any:
+    """Reduce a multi-MODEL (NMR ensemble) to its first model; else return as-is.
+
+    We stream a single fixed topology, so a file with several MODEL records is
+    collapsed to model 1 (the common expectation). The reduced model's atoms keep
+    a contiguous i_seq order, so it stays consistent with the extracted columns and
+    with cctbx selections. (Treating the models as trajectory frames is a possible
+    future opt-in — they share a topology.)
+    """
+    models = model.get_hierarchy().models()
+    if len(models) <= 1:
+        return model
+    return model.select(models[0].atoms().extract_i_seq())
 
 
 def model_to_arrays(model: Any) -> AtomArrays:
@@ -133,20 +213,96 @@ def model_is_polymer(model: Any) -> bool:
         return False
 
 
+class ModelData:
+    """The session's atom source: numpy columns plus (optionally) the native model.
+
+    The columns (:class:`AtomArrays`) are kept so we never re-derive them from flex
+    on every access. When present, ``model`` is the authority for **identity and
+    selection**: `select("...")` goes through cctbx's own atom-selection machinery
+    rather than any reimplementation, and `diff()` catches the cached columns
+    drifting from the model. cctbx calls are serialised under a lock, since the
+    session may touch the model from its WebSocket thread.
+    """
+
+    def __init__(self, arrays: AtomArrays, model: Any = None):
+        self.arrays = arrays
+        self.model = model
+        self._cache: Any = None
+        self._lock = threading.Lock()
+
+    def __len__(self) -> int:
+        return len(self.arrays)
+
+    @property
+    def n_atoms(self) -> int:
+        return len(self.arrays)
+
+    @property
+    def elements(self) -> List[str]:
+        return self.arrays.element
+
+    @property
+    def coords(self) -> np.ndarray:
+        """Base coordinates as ``(N, 3)`` float32 (topology frame)."""
+        return self.arrays.xyz
+
+    def atom_at(self, i: int) -> Atom:
+        return self.arrays.atom_at(i)
+
+    def has_model(self) -> bool:
+        return self.model is not None
+
+    def selection_indices(self, expression: str) -> np.ndarray:
+        """Resolve a cctbx atom-selection string to positional (i_seq) indices.
+
+        Uses `hierarchy.atom_selection_cache()` — the full Phenix selection language
+        — so nothing is reimplemented here. i_seq == our positional/wire index.
+        """
+        if self.model is None:
+            raise ValueError(
+                "cctbx selection strings require a model-backed session "
+                "(build it via LiveSession.from_model_file / from_cctbx_model)"
+            )
+        with self._lock:
+            if self._cache is None:
+                self._cache = self.model.get_hierarchy().atom_selection_cache()
+            bsel = self._cache.selection(expression)  # flex.bool
+        return bsel.iselection().as_numpy_array()
+
+    def diff(self, tol: float = 1e-3) -> Optional[str]:
+        """None if the cached columns still match the model, else a drift message.
+
+        Guards against the held model being mutated underneath the cache (e.g. a
+        refinement step moved atoms): compares atom count and coordinates against
+        ``model.get_sites_cart()``. Cheap enough to call before relying on the cache.
+        """
+        if self.model is None:
+            return None
+        with self._lock:
+            sites = self.model.get_sites_cart().as_numpy_array()
+        if sites.shape[0] != self.n_atoms:
+            return f"atom-count drift: model has {sites.shape[0]}, cache has {self.n_atoms}"
+        cached = np.stack([self.arrays.x, self.arrays.y, self.arrays.z], axis=1)
+        dev = float(np.abs(sites - cached).max())
+        return None if dev <= tol else f"coordinate drift: max |delta| = {dev:.4f} A"
+
+
 @dataclasses.dataclass
 class CctbxModel:
-    """A model reduced to what pxviewer streams: columns, polymer flag, and SS."""
+    """A model reduced to what pxviewer streams: columns, polymer flag, SS, model."""
 
     arrays: AtomArrays
     polymer: bool
     secondary_structure: List[Tuple[str, int, int, str]]
+    model: Any
 
 
 def load_model(path: str | Path) -> CctbxModel:
-    """Read a model file and reduce it to a :class:`CctbxModel` for streaming."""
-    model = read_model(path)
+    """Read a model file, reduce to model 1, and bundle it for streaming."""
+    model = first_model(read_model(path))
     return CctbxModel(
         arrays=model_to_arrays(model),
         polymer=model_is_polymer(model),
         secondary_structure=model_secondary_structure(model),
+        model=model,
     )

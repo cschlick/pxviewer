@@ -669,11 +669,14 @@ class DesktopApp:
         self.stop_demo()
         self._reset_interactions()
 
-        atoms = demo.make_atoms()
-        ws_url = self._ensure_session(f"demo:{name}", lambda: atoms)
-        session = self._session
+        from . import cctbx_io
+        from .live import LiveSession
 
-        base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
+        sites, labels = demo.make_sites()
+        session = LiveSession.from_cctbx_model(cctbx_io.model_from_sites(sites, **labels))
+        ws_url = self._install_session(session, key=f"demo:{name}")
+
+        base = np.asarray(sites, dtype="<f4")
         player = Player(session, base, fps=fps)
         session.on_pick(player._on_pick)
         self._player = player

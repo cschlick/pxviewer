@@ -151,21 +151,23 @@ wire carries only indices, run-length-encoded for large contiguous selections.
 Highlights re-map onto each streamed frame in O(selected), and are replayed to
 viewers that connect later.
 
-`Selection` is built on **MolViewSpec**'s `ComponentExpression` — you can select
-by chemical identity (chain, residue, atom name, element, ranges, `atom_index`,
-`atom_id`) using the same type MVS uses, and pxviewer resolves it to indices:
+For a **model-backed session** (loaded via cctbx), select by chemical identity with
+a **cctbx atom-selection string** — the full Phenix selection language, resolved by
+cctbx's own machinery (nothing reimplemented), and `i_seq` maps straight onto the
+positional wire index:
 
 ```python
-from pxviewer import ComponentExpression as CE
-
-sel = session.select_by(expression=CE(label_asym_id="A", beg_label_seq_id=1, end_label_seq_id=20))
-sel = session.select_by(expression=[CE(label_asym_id="B"), CE(type_symbol="N")])   # a union
-session.highlight(CE(label_atom_id="CA"))                                          # coerced like any spec
-sel.to_component_expression()                                                       # -> [ComponentExpression, …]
+sel = session.select_by(selection="chain A and resseq 1:20 and name CA")
+sel = session.select_by(selection="element N or (chain B within 5 of resname LIG)")
+session.highlight("chain A")            # a string is coerced like any spec
+session.add_representation("cartoon", on="chain A and helix")
 ```
 
-The index/id/mask constructors are sugar on top; `ComponentExpression` is the
-shared Mol\*/MVS vocabulary.
+Selection strings need a model, so they're available on sessions from
+`from_model_file` / `from_cctbx_model` (not a raw `Atom`-list session). Geometry
+predicates like `within(...)` resolve against the **loaded** conformation, not the
+live-streamed one. `session.model` exposes the native `mmtbx.model.manager`, and
+`session.diff()` reports if the cached columns have drifted from it.
 
 ### Selecting atoms with the mouse
 

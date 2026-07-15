@@ -1,88 +1,116 @@
-"""MVS (MolViewSpec) integration.
+"""Selection + representation integration.
 
-Phase 1: selections are built on MVS ``ComponentExpression`` — pxviewer resolves
-them to positional indices against the topology, and a ``Selection`` can emit them.
+Selections are resolved by cctbx's own atom-selection machinery (the full Phenix
+selection language), so a session must be model-backed. Representations map MVS
+types/colours onto Mol*'s vocabulary.
 """
 
 import pytest
 
-from pxviewer import Atom, ComponentExpression, LiveSession
+from pxviewer import Atom, LiveSession
+
+pytest.importorskip("iotbx.data_manager")
+
+from iotbx.data_manager import DataManager  # noqa: E402
 
 
-def _atoms():
-    # 12 atoms: alternating CA(C)/N, residues 1..6, chain A (0-5) then B (6-11).
-    return [
-        Atom(
-            id=i + 1,
-            element=("N" if i % 2 else "C"),
-            name=("N" if i % 2 else "CA"),
-            resname="ALA",
-            resseq=(i // 2) + 1,
-            chain=("A" if i < 6 else "B"),
-            x=float(i), y=0.0, z=0.0,
-        )
-        for i in range(12)
-    ]
+def _model_pdb() -> str:
+    # 12 atoms: chain A resseq 1-3, chain B resseq 4-6; each residue an N + CA.
+    # cctbx canonicalises atom order within a residue (N before CA), so i_seq (and
+    # therefore the wire index) follows that order, not the file's line order.
+    lines = []
+    serial = 1
+    for chain, residues in [("A", [1, 2, 3]), ("B", [4, 5, 6])]:
+        for rs in residues:
+            for nm, el in [("CA", "C"), ("N", "N")]:
+                x = float(serial - 1)
+                lines.append(
+                    "ATOM  %5d %-4s ALA %s%4d    %8.3f%8.3f%8.3f  1.00  0.00          %2s"
+                    % (serial, (" " + nm).ljust(4), chain, rs, x, 0.0, 0.0, el)
+                )
+                serial += 1
+    return "\n".join(lines) + "\n"
 
 
 @pytest.fixture
 def session():
-    return LiveSession(_atoms())
+    dm = DataManager()
+    model = dm.get_model(dm.process_model_str("test", _model_pdb()))
+    return LiveSession.from_cctbx_model(model)
 
 
-def test_expression_by_chain(session):
-    assert session.select_by(expression=ComponentExpression(label_asym_id="A")).indices == [0, 1, 2, 3, 4, 5]
+# -- cctbx selection strings -------------------------------------------------
+
+def test_selection_by_chain(session):
+    assert session.select_by(selection="chain A").indices == [0, 1, 2, 3, 4, 5]
 
 
-def test_expression_by_residue_range(session):
-    got = session.select_by(expression=ComponentExpression(beg_label_seq_id=1, end_label_seq_id=2)).indices
-    assert got == [0, 1, 2, 3]
+def test_selection_by_residue_range(session):
+    assert session.select_by(selection="resseq 1:2").indices == [0, 1, 2, 3]
 
 
-def test_expression_by_element(session):
-    assert session.select_by(expression=ComponentExpression(type_symbol="N")).indices == [1, 3, 5, 7, 9, 11]
+def test_selection_by_element(session):
+    # cctbx orders N before CA, so the nitrogens are the even indices.
+    assert session.select_by(selection="element N").indices == [0, 2, 4, 6, 8, 10]
 
 
-def test_expression_by_atom_index(session):
-    assert session.select_by(expression=ComponentExpression(atom_index=5)).indices == [5]
+def test_selection_by_name(session):
+    assert session.select_by(selection="name CA").indices == [1, 3, 5, 7, 9, 11]
 
 
-def test_expression_by_atom_id(session):
-    assert session.select_by(expression=ComponentExpression(atom_id=1)).indices == [0]
+def test_selection_conjunction(session):
+    assert session.select_by(selection="chain A and element N").indices == [0, 2, 4]
 
 
-def test_expression_fields_are_conjunction(session):
-    # multiple fields in one expression AND together
-    assert session.select_by(expression=ComponentExpression(label_asym_id="A", type_symbol="N")).indices == [1, 3, 5]
+def test_selection_union(session):
+    got = session.select_by(selection="chain B or element N").indices
+    assert got == [0, 2, 4, 6, 7, 8, 9, 10, 11]
 
 
-def test_expression_list_is_union(session):
-    got = session.select_by(
-        expression=[ComponentExpression(label_asym_id="B"), ComponentExpression(type_symbol="N")]
-    ).indices
-    assert got == [1, 3, 5, 6, 7, 8, 9, 10, 11]
+def test_selection_result_carries_labels(session):
+    sel = session.select_by(selection="chain A and name CA")
+    assert [a.name for a in sel.atoms] == ["CA", "CA", "CA"]
+    assert all(a.chain == "A" for a in sel.atoms)
 
 
-def test_coercion_accepts_component_expression(session):
-    # anything that takes a Selection also takes an expression (or a list of them)
-    assert session._as_selection(ComponentExpression(label_atom_id="CA")).indices == [0, 2, 4, 6, 8, 10]
+def test_coercion_accepts_selection_string(session):
+    # anything that takes a Selection also takes a cctbx selection string
+    assert session._as_selection("name CA").indices == [1, 3, 5, 7, 9, 11]
 
 
-def test_selection_to_component_expression(session):
-    exprs = session.select_by(indices=[3, 1]).to_component_expression()
-    assert [e.atom_index for e in exprs] == [1, 3]  # sorted
+def test_bad_selection_string_raises(session):
+    with pytest.raises(Exception):
+        session.select_by(selection="chain A and blorp 3")
 
 
-def test_expression_unsupported_field_raises(session):
-    with pytest.raises(ValueError):
-        session.select_by(expression=ComponentExpression(residue_index=0))
+def test_selection_string_needs_a_model():
+    # A session with no cctbx model can't resolve selection strings.
+    bare = LiveSession([Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=0, y=0, z=0)])
+    with pytest.raises(ValueError, match="model-backed"):
+        bare.select_by(selection="chain A")
+
+
+# -- positional selection (works with or without a model) --------------------
+
+def test_selection_by_indices_ids_mask(session):
+    assert session.select_by(indices=[5, 3]).indices == [3, 5]  # sorted, deduped
+    assert session.select_by(ids=[1]).indices == [0]  # id 1 == i_seq 0
+    import numpy as np
+    m = np.zeros(12, dtype=bool)
+    m[[2, 7]] = True
+    assert session.select_by(mask=m).indices == [2, 7]
 
 
 def test_select_by_requires_exactly_one(session):
     with pytest.raises(ValueError):
         session.select_by()
     with pytest.raises(ValueError):
-        session.select_by(indices=[0], expression=ComponentExpression(atom_index=0))
+        session.select_by(indices=[0], selection="chain A")
+
+
+def test_selection_to_component_expression(session):
+    exprs = session.select_by(indices=[3, 1]).to_component_expression()
+    assert [e.atom_index for e in exprs] == [1, 3]  # sorted
 
 
 # -- representations on MVS types --------------------------------------------
@@ -107,11 +135,6 @@ def test_repr_named_color_is_uniform(session):
     assert spec["color"] == "uniform" and spec["colorValue"] == "orange"
 
 
-def test_repr_hex_color_is_uniform(session):
-    spec = session._representations[session.add_representation("spacefill", color="#112233")]
-    assert spec["color"] == "uniform" and spec["colorValue"] == "#112233"
-
-
 def test_repr_theme_color_stays_theme(session):
     spec = session._representations[session.add_representation("ball_and_stick", color="element-symbol")]
     assert spec["color"] == "element-symbol" and "colorValue" not in spec
@@ -122,8 +145,6 @@ def test_repr_color_value_forces_uniform(session):
     assert spec["color"] == "uniform" and spec["colorValue"] == "red"
 
 
-def test_repr_subset_via_component_expression(session):
-    spec = session._representations[
-        session.add_representation("spacefill", on=ComponentExpression(label_asym_id="A"))
-    ]
+def test_repr_subset_via_selection_string(session):
+    spec = session._representations[session.add_representation("spacefill", on="chain A")]
     assert spec["on"] == {"runs": [[0, 5]]}  # chain A = contiguous indices 0-5

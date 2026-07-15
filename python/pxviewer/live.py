@@ -53,12 +53,10 @@ from typing import Any, Callable, Iterable, List, Optional, Sequence, get_args
 import numpy as np
 from molviewspec.nodes import ColorNamesT, ComponentExpression, RepresentationTypeT
 
-from .data import Atom, AtomArrays, encode_bcif, encode_bcif_arrays
+from .data import Atom, AtomArrays, encode_bcif_arrays
+from .cctbx_io import ModelData
 
 __all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM_IDENTITY_CONTRACT"]
-
-# ComponentExpression fields pxviewer's minimal per-atom topology cannot resolve.
-_UNSUPPORTED_EXPR_FIELDS = ("residue_index", "instance_id", "pdbx_PDB_ins_code", "label_entity_id")
 
 # Representation vocabulary is MVS's RepresentationTypeT (structure subset), mapped
 # to Mol*'s internal representation names. Colours are MVS ColorNamesT (uniform)
@@ -80,53 +78,6 @@ _MVS_TO_MOLSTAR_REPR = {
     "carbohydrate": "carbohydrate",
 }
 
-
-def _atom_matches(atom: Atom, index: int, e: ComponentExpression) -> bool:
-    """Whether ``atom`` (at positional ``index``) satisfies an MVS ComponentExpression.
-
-    label_* and auth_* share our single field (the writer mirrors them).
-    """
-    if e.label_asym_id is not None and atom.chain != e.label_asym_id:
-        return False
-    if e.auth_asym_id is not None and atom.chain != e.auth_asym_id:
-        return False
-    if e.label_seq_id is not None and atom.resseq != e.label_seq_id:
-        return False
-    if e.auth_seq_id is not None and atom.resseq != e.auth_seq_id:
-        return False
-    if e.beg_label_seq_id is not None and atom.resseq < e.beg_label_seq_id:
-        return False
-    if e.end_label_seq_id is not None and atom.resseq > e.end_label_seq_id:
-        return False
-    if e.beg_auth_seq_id is not None and atom.resseq < e.beg_auth_seq_id:
-        return False
-    if e.end_auth_seq_id is not None and atom.resseq > e.end_auth_seq_id:
-        return False
-    if e.label_comp_id is not None and atom.resname != e.label_comp_id:
-        return False
-    if e.auth_comp_id is not None and atom.resname != e.auth_comp_id:
-        return False
-    if e.label_atom_id is not None and atom.name != e.label_atom_id:
-        return False
-    if e.auth_atom_id is not None and atom.name != e.auth_atom_id:
-        return False
-    if e.type_symbol is not None and atom.element != e.type_symbol:
-        return False
-    if e.atom_id is not None and atom.id != e.atom_id:
-        return False
-    if e.atom_index is not None and index != e.atom_index:
-        return False
-    return True
-
-
-def _resolve_expressions(atoms: List[Atom], expression) -> List[int]:
-    """Resolve an MVS ComponentExpression (or list, unioned) to positional indices."""
-    exprs = list(expression) if isinstance(expression, (list, tuple)) else [expression]
-    for e in exprs:
-        for field in _UNSUPPORTED_EXPR_FIELDS:
-            if getattr(e, field) is not None:
-                raise ValueError(f"ComponentExpression field {field!r} is not supported by pxviewer's topology")
-    return [i for i, atom in enumerate(atoms) if any(_atom_matches(atom, i, e) for e in exprs)]
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
@@ -470,17 +421,26 @@ class LiveSession:
         *,
         polymer: bool = False,
         secondary_structure: Optional[Any] = None,
+        _data: Optional[ModelData] = None,
         _topology: Optional[bytes] = None,
     ):
-        self.atoms: List[Atom] = list(atoms)
-        if not self.atoms:
+        # The session's atom source is columnar (:class:`ModelData`); an Atom list
+        # is just a convenience input, columnarised immediately rather than kept as
+        # N Python objects. The cctbx constructors pass ``_data`` (with the native
+        # model) and a prebuilt topology directly.
+        if _data is not None:
+            self._data = _data
+        else:
+            atoms = list(atoms)
+            if not atoms:
+                raise ValueError("LiveSession requires at least one atom")
+            self._data = ModelData(AtomArrays.from_atoms(atoms))
+        if self._data.n_atoms == 0:
             raise ValueError("LiveSession requires at least one atom")
-        # A caller that already built the BinaryCIF from bulk arrays (the cctbx
-        # path) passes it in to avoid re-encoding from the Atom list.
-        self._topology: bytes = _topology if _topology is not None else encode_bcif(
-            self.atoms, polymer=polymer, secondary_structure=secondary_structure
+        self._topology: bytes = _topology if _topology is not None else encode_bcif_arrays(
+            self._data.arrays, polymer=polymer, secondary_structure=secondary_structure
         )
-        self._n_atoms = len(self.atoms)
+        self._n_atoms = self._data.n_atoms
 
         self._frame_index = 0
         self._last_frame: Optional[bytes] = None
@@ -497,8 +457,9 @@ class LiveSession:
 
         self._lock = threading.Lock()  # guards the primitive counter
 
-        # Atom-id -> positional index, for building selections by id.
-        self._id_to_index = {atom.id: i for i, atom in enumerate(self.atoms)}
+        # Atom-id -> positional index, for building selections by id. Built from the
+        # id column (no per-atom objects). Identity is otherwise i_seq (positional).
+        self._id_to_index = {int(v): i for i, v in enumerate(self._data.arrays.id)}
         # Active highlight (positional indices), replayed to clients that connect later.
         self._last_highlight_indices: List[int] = []
         # Active highlight (PyMOL expression), replayed to clients that connect later.
@@ -539,6 +500,25 @@ class LiveSession:
     # -- construction from cctbx -----------------------------------------
 
     @classmethod
+    def _from_data(
+        cls,
+        data: ModelData,
+        *,
+        polymer: bool = False,
+        secondary_structure: Optional[Any] = None,
+    ) -> "LiveSession":
+        topology = encode_bcif_arrays(
+            data.arrays, polymer=polymer, secondary_structure=secondary_structure
+        )
+        return cls(
+            [],
+            polymer=polymer,
+            secondary_structure=secondary_structure,
+            _data=data,
+            _topology=topology,
+        )
+
+    @classmethod
     def from_arrays(
         cls,
         arrays: "AtomArrays",
@@ -548,18 +528,12 @@ class LiveSession:
     ) -> "LiveSession":
         """Build a session from bulk :class:`~pxviewer.data.AtomArrays` columns.
 
-        The topology BinaryCIF is encoded straight from the arrays (no per-atom
-        Python), and the per-atom :class:`Atom` list — used by selections, clash
-        detection and measurement labels — is materialised once from the same data.
+        The topology BinaryCIF is encoded straight from the columns (no per-atom
+        Python). No cctbx model is attached, so selection is positional only; use
+        :meth:`from_cctbx_model` for the cctbx selection language.
         """
-        topology = encode_bcif_arrays(
-            arrays, polymer=polymer, secondary_structure=secondary_structure
-        )
-        return cls(
-            arrays.to_atoms(),
-            polymer=polymer,
-            secondary_structure=secondary_structure,
-            _topology=topology,
+        return cls._from_data(
+            ModelData(arrays), polymer=polymer, secondary_structure=secondary_structure
         )
 
     @classmethod
@@ -567,13 +541,16 @@ class LiveSession:
         """Build a session from an ``mmtbx.model.manager`` (cctbx model object).
 
         Reads coordinates, labels and secondary structure from the model's
-        ``pdb_hierarchy`` and streams them; polymer models render as cartoon.
+        ``pdb_hierarchy``; a multi-MODEL ensemble is reduced to model 1. The native
+        model is retained, so selection uses cctbx's own machinery and polymer
+        models render as cartoon.
         """
         from . import cctbx_io
 
-        arrays = cctbx_io.model_to_arrays(model)
-        return cls.from_arrays(
-            arrays,
+        model = cctbx_io.first_model(model)
+        data = ModelData(cctbx_io.model_to_arrays(model), model=model)
+        return cls._from_data(
+            data,
             polymer=cctbx_io.model_is_polymer(model),
             secondary_structure=cctbx_io.model_secondary_structure(model),
         )
@@ -584,10 +561,9 @@ class LiveSession:
         from . import cctbx_io
 
         loaded = cctbx_io.load_model(path)
-        return cls.from_arrays(
-            loaded.arrays,
-            polymer=loaded.polymer,
-            secondary_structure=loaded.secondary_structure,
+        data = ModelData(loaded.arrays, model=loaded.model)
+        return cls._from_data(
+            data, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
         )
 
     # -- scene -> python -------------------------------------------------
@@ -779,8 +755,7 @@ class LiveSession:
         :meth:`show_clashes` to do both.
         """
         pts = self._current_coords() if coords is None else _coords_to_f32(coords, self._n_atoms).astype(float)
-        elements = [a.element for a in self.atoms]
-        return _detect_clashes(pts, elements, tolerance=tolerance, bond_tolerance=bond_tolerance)
+        return _detect_clashes(pts, self._data.elements, tolerance=tolerance, bond_tolerance=bond_tolerance)
 
     def set_clashes(self, pairs: Any) -> List[tuple]:
         """Draw steric clashes between the given atom-index pairs.
@@ -892,25 +867,56 @@ class LiveSession:
             self.focus(sel)
         return sel
 
+    @property
+    def model(self) -> Any:
+        """The native cctbx ``mmtbx.model.manager`` backing this session, or ``None``.
+
+        Present when built via :meth:`from_model_file` / :meth:`from_cctbx_model`.
+        """
+        return self._data.model
+
+    def diff(self) -> Optional[str]:
+        """Check the cached columns still match the cctbx model; see ``ModelData.diff``.
+
+        Returns ``None`` when in sync (or no model is attached), else a drift message.
+        """
+        return self._data.diff()
+
+    def _atom_at(self, i: int) -> Atom:
+        return self._data.atom_at(i)
+
+    def _make_selection(self, indices: Iterable[int]) -> Selection:
+        """Build a :class:`Selection` from indices, validating and de-duplicating.
+
+        Per-atom :class:`Atom` objects are materialised only for the matched subset
+        (usually small), never for the whole structure.
+        """
+        idx = sorted({int(i) for i in indices})
+        for i in idx:
+            if not 0 <= i < self._n_atoms:
+                raise ValueError(f"atom index {i} out of range [0, {self._n_atoms})")
+        return Selection(idx, [self._atom_at(i) for i in idx], self._n_atoms)
+
     def select_by(
         self,
         *,
         indices: Optional[Iterable[int]] = None,
         ids: Optional[Iterable[int]] = None,
         mask: Optional[Any] = None,
-        expression: Optional[Any] = None,
+        selection: Optional[str] = None,
     ) -> Selection:
-        """Build a :class:`Selection` from positional indices, atom ids, a mask, or
-        an MVS ``ComponentExpression`` (or list of them, unioned).
+        """Build a :class:`Selection` from positional indices, atom ids, a mask, or a
+        cctbx atom-selection string.
 
-        Pure Python; no viewer needed. Pass exactly one of ``indices``, ``ids``,
-        ``mask`` (a boolean array of length N), or ``expression``. The resulting
-        indices are stored sorted and de-duplicated.
+        Pass exactly one of ``indices``, ``ids``, ``mask`` (a boolean array of length
+        N), or ``selection`` (a cctbx/Phenix selection string, e.g.
+        ``"chain A and resseq 5:14 and name CA"``, resolved by cctbx's own machinery —
+        requires a model-backed session). Pure Python; no viewer needed.
         """
-        if sum(x is not None for x in (indices, ids, mask, expression)) != 1:
-            raise ValueError("pass exactly one of indices=, ids=, mask=, or expression=")
-        if expression is not None:
-            idx = _resolve_expressions(self.atoms, expression)
+        if sum(x is not None for x in (indices, ids, mask, selection)) != 1:
+            raise ValueError("pass exactly one of indices=, ids=, mask=, or selection=")
+        if selection is not None:
+            idx = [int(i) for i in self._data.selection_indices(selection)]
         elif mask is not None:
             m = np.asarray(mask, dtype=bool)
             if m.shape != (self._n_atoms,):
@@ -923,11 +929,7 @@ class LiveSession:
                 raise ValueError(f"unknown atom id {exc.args[0]}") from None
         else:
             idx = [int(i) for i in indices]  # type: ignore[union-attr]
-        for i in idx:
-            if not 0 <= i < self._n_atoms:
-                raise ValueError(f"atom index {i} out of range [0, {self._n_atoms})")
-        idx = sorted(set(idx))
-        return Selection(idx, [self.atoms[i] for i in idx], self._n_atoms)
+        return self._make_selection(idx)
 
     # -- graphics primitives ---------------------------------------------
 
@@ -1074,7 +1076,7 @@ class LiveSession:
             raise ValueError(f"invalid selection {expression!r}: {slot['error']}")
         raw = slot["indices"] or []
         indices = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
-        return Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
+        return self._make_selection(indices)
 
     # -- click interaction (scene -> python) -----------------------------
 
@@ -1128,8 +1130,7 @@ class LiveSession:
     @property
     def mouse_selection(self) -> Selection:
         """The current mouse selection — the atoms the user has clicked in the viewer."""
-        idx = list(self._mouse_selection_indices)
-        return Selection(idx, [self.atoms[i] for i in idx], self._n_atoms)
+        return self._make_selection(self._mouse_selection_indices)
 
     def wait_for_selection(self, timeout: Optional[float] = None) -> Optional[Selection]:
         """Block until the mouse selection next changes, then return it.
@@ -1193,13 +1194,11 @@ class LiveSession:
         self._send_control({"type": "representations", "reprs": list(self._representations.values())})
 
     def _as_selection(self, spec: Any) -> Selection:
-        """Coerce a Selection / index / indices / mask / ComponentExpression to a Selection."""
+        """Coerce a Selection / index / indices / mask / cctbx string to a Selection."""
         if isinstance(spec, Selection):
             return spec
-        if isinstance(spec, ComponentExpression):
-            return self.select_by(expression=spec)
-        if isinstance(spec, (list, tuple)) and spec and all(isinstance(x, ComponentExpression) for x in spec):
-            return self.select_by(expression=list(spec))
+        if isinstance(spec, str):
+            return self.select_by(selection=spec)
         if isinstance(spec, bool):  # bool is an int subclass; reject to avoid surprises
             raise TypeError("bool is not a valid atom specifier")
         if isinstance(spec, (int, np.integer)):
@@ -1259,7 +1258,7 @@ class LiveSession:
 
     def _default_measure_options(self, kind: str, atoms: List[int]) -> dict:
         if kind == "label":
-            atom = self.atoms[atoms[0]]
+            atom = self._data.atom_at(atoms[0])
             return {"text": f"{atom.name}{atom.resseq}"}
         options: dict = {"label": True}
         if kind in ("angle", "dihedral"):
@@ -1271,7 +1270,7 @@ class LiveSession:
         if self._last_frame is not None:
             arr = np.frombuffer(self._last_frame[8:], dtype="<f4")
             return arr.reshape(self._n_atoms, 3).astype(float)
-        return np.array([[a.x, a.y, a.z] for a in self.atoms], dtype=float)
+        return self._data.coords.astype(float)
 
     def _measure(self, kind: str, groups: List[List[int]]) -> Optional[float]:
         if kind == "label":
@@ -1416,7 +1415,7 @@ class LiveSession:
             raw = event.get("indices") or []
             indices = sorted({i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms})
             self._mouse_selection_indices = indices
-            selection = Selection(indices, [self.atoms[i] for i in indices], self._n_atoms)
+            selection = self._make_selection(indices)
             self._selection_changed.set()
             for handler in self._selection_handlers:
                 try:
