@@ -75,6 +75,121 @@ def test_atom_table_empty_when_no_session(qapp):
     assert model.rowCount() == 0 and model.columnCount() == 0
 
 
+def test_atom_table_filter_to_selection(qapp):
+    """Filtering restricts the visible rows to a selected subset (show-only-selected)."""
+    model = _make_atom_table_model()
+    model.set_session(_Session(_arrays(), {"score": [0.1, 0.2, 0.3]}))
+    headers = [model.headerData(i, Qt.Orientation.Horizontal) for i in range(model.columnCount())]
+
+    assert not model.is_filtered() and model.rowCount() == 3
+
+    model.set_filter([2, 0])  # unordered + not the full set -> sorted, deduped
+    assert model.is_filtered() and model.rowCount() == 2
+    # Row 0 -> atom 0, row 1 -> atom 2; the "#" column shows the real atom index.
+    assert model.data(model.index(0, 0)) == "0"
+    assert model.data(model.index(1, 0)) == "2"
+    assert model.data(model.index(1, headers.index("B"))) == "30.000"  # atom 2's B-factor
+    assert model.row_atom(1) == 2
+    assert model.atom_row(2) == 1
+    assert model.atom_row(1) == -1  # atom 1 is filtered out
+
+    model.set_filter(None)
+    assert not model.is_filtered() and model.rowCount() == 3
+    assert model.row_atom(1) == 1 and model.atom_row(1) == 1
+
+
+def test_scene_selection_aggregation(qapp):
+    """Each model reports its own picks; the desktop unions them into a scene selection."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    from pxviewer.appserver import find_frontend_dir, frontend_is_built
+
+    fd = find_frontend_dir()
+    if fd is None or not frontend_is_built(fd):
+        pytest.skip("frontend not built")
+
+    from types import SimpleNamespace
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0], [7, 0, 0]]), "B")
+
+        # A selection spanning two models is the union of each model's picks.
+        app._on_model_selection(a, SimpleNamespace(indices=[0, 1]))
+        app._on_model_selection(b, SimpleNamespace(indices=[2]))
+        assert app._scene_selection == {a: [0, 1], b: [2]}
+
+        assert app.session_for(a)._n_atoms == 2
+        assert app.session_for(b)._n_atoms == 3
+        assert app.session_for("nope") is None
+
+        # An empty report drops that model's slice; Clear drops everything.
+        app._on_model_selection(a, SimpleNamespace(indices=[]))
+        assert app._scene_selection == {b: [2]}
+        app.clear_selection()
+        assert app._scene_selection == {}
+    finally:
+        app.stop()
+
+
+def test_controls_table_model_dropdown_and_filter(qapp):
+    """The atoms table's model dropdown follows the active model but can be pinned,
+    and the filter checkbox collapses the table to the selected atoms."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    from pxviewer.appserver import find_frontend_dir, frontend_is_built
+
+    fd = find_frontend_dir()
+    if fd is None or not frontend_is_built(fd):
+        pytest.skip("frontend not built")
+
+    from types import SimpleNamespace
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        controls = app._controls
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0], [7, 0, 0]]), "B")
+
+        # Dropdown lists both models and follows the active one (B, added last).
+        assert controls._table_model_combo.count() == 2
+        assert controls._table_model_id == b
+        assert controls._atom_model.rowCount() == 3  # B's atoms
+
+        # A pick in B shows up as selected rows in the table.
+        app._on_model_selection(b, SimpleNamespace(indices=[0, 2]))
+        assert controls._table_selection_indices() == [0, 2]
+        selected = {i.row() for i in controls._atom_view.selectionModel().selectedRows()}
+        assert selected == {0, 2}
+
+        # Filtering collapses the table to just those atoms.
+        controls._filter_selection_check.setChecked(True)
+        assert controls._atom_model.is_filtered()
+        assert controls._atom_model.rowCount() == 2
+        controls._filter_selection_check.setChecked(False)
+        assert not controls._atom_model.is_filtered()
+
+        # Pinning the dropdown to A keeps the table on A even though B is active.
+        controls._table_model_combo.setCurrentIndex(0)  # A
+        assert controls._table_pinned and controls._table_model_id == a
+        assert controls._atom_model.rowCount() == 2  # A's atoms
+
+        # Picking the active model (B) again resumes auto-follow.
+        controls._table_model_combo.setCurrentIndex(1)  # B == active
+        assert not controls._table_pinned and controls._table_model_id == b
+    finally:
+        app.stop()
+
+
 def test_multi_model_registry(qapp):
     """The desktop model registry: add (overlay), hide (switch), active, remove."""
     pytest.importorskip("iotbx.data_manager")

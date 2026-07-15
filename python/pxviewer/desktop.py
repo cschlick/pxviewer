@@ -18,6 +18,7 @@ import signal
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -64,7 +65,7 @@ def _make_bridge():
     from PySide6.QtCore import QObject, Signal
 
     class _Bridge(QObject):
-        selection_changed = Signal(object)
+        scene_selection_changed = Signal(object)  # {model_id: [atom indices]} across all models
         status_changed = Signal(str)
         interactions_changed = Signal(bool)
         structure_changed = Signal(object)  # the active LiveSession (or None)
@@ -104,9 +105,11 @@ def _make_atom_table_model():
             self._headers: List[str] = []
             self._cols: list = []  # (values_or_None, kind)  kind: idx|str|int|float
             self._n = 0
+            self._filter: Optional[list] = None  # None = all rows; else visible atom indices
 
         def set_session(self, session) -> None:
             self.beginResetModel()
+            self._filter = None
             self._headers, self._cols, self._n = [], [], 0
             data = getattr(session, "_data", None)
             arrays = getattr(data, "arrays", None)
@@ -136,8 +139,39 @@ def _make_atom_table_model():
                     add(name, values, "float")
             self.endResetModel()
 
+        def set_filter(self, indices) -> None:
+            """Restrict the visible rows to ``indices`` (atom order preserved); None = all.
+
+            Backs the "show only selected" mode. Only the small selected subset is
+            materialised, so the view stays cheap even against 100k+ atoms.
+            """
+            self.beginResetModel()
+            if indices is None:
+                self._filter = None
+            else:
+                self._filter = [i for i in sorted({int(i) for i in indices}) if 0 <= i < self._n]
+            self.endResetModel()
+
+        def is_filtered(self) -> bool:
+            return self._filter is not None
+
+        def row_atom(self, row: int) -> int:
+            """The underlying atom index for a view row (identity unless filtered)."""
+            return row if self._filter is None else self._filter[row]
+
+        def atom_row(self, atom: int) -> int:
+            """The view row showing a given atom index, or -1 if not visible."""
+            if self._filter is None:
+                return atom if 0 <= atom < self._n else -1
+            try:
+                return self._filter.index(atom)
+            except ValueError:
+                return -1
+
         def rowCount(self, parent=QModelIndex()):
-            return 0 if parent.isValid() else self._n
+            if parent.isValid():
+                return 0
+            return self._n if self._filter is None else len(self._filter)
 
         def columnCount(self, parent=QModelIndex()):
             return 0 if parent.isValid() else len(self._headers)
@@ -146,10 +180,11 @@ def _make_atom_table_model():
             if not index.isValid():
                 return None
             values, kind = self._cols[index.column()]
+            atom = self.row_atom(index.row())
             if role == Qt.ItemDataRole.DisplayRole:
                 if kind == "idx":
-                    return str(index.row())
-                v = values[index.row()]
+                    return str(atom)
+                v = values[atom]
                 if kind == "float":
                     fv = float(v)
                     return "" if fv != fv else f"{fv:.3f}"  # fv != fv -> NaN
@@ -286,10 +321,16 @@ class ControlsWindow:
         layout.addWidget(self._status_label)
 
         self._suppress_model_events = False
-        desktop.bridge.selection_changed.connect(self._on_selection_changed)
+        # Which model the atoms table shows. Defaults to the active model but the
+        # user can pin it to a secondary one via the table's model dropdown.
+        self._table_model_id: Optional[str] = None
+        self._table_pinned = False
+        self._scene_selection: dict = {}  # last {model_id: [indices]} snapshot
+        self._models_summary: list = []
+        self._suppress_table_model_combo = False
+        desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
-        desktop.bridge.structure_changed.connect(self._on_structure_changed)
         desktop.bridge.models_changed.connect(self._on_models_changed)
 
     # -- tabs ------------------------------------------------------------
@@ -423,11 +464,41 @@ class ControlsWindow:
 
     def _build_atoms_subtab(self):
         from PySide6.QtCore import QTimer
-        from PySide6.QtWidgets import QAbstractItemView, QLabel, QTableView, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QAbstractItemView,
+            QCheckBox,
+            QComboBox,
+            QHBoxLayout,
+            QLabel,
+            QTableView,
+            QVBoxLayout,
+            QWidget,
+        )
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(6)
+
+        # A selection can span models; the table shows one model at a time. The
+        # dropdown picks which — it follows the active model until the user pins it.
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("Model:"))
+        self._table_model_combo = QComboBox()
+        self._table_model_combo.setToolTip(
+            "Which model's atoms this table shows. Follows the active model until you "
+            "change it; pick the active model again to resume following."
+        )
+        self._table_model_combo.currentIndexChanged.connect(self._on_table_model_combo_changed)
+        model_row.addWidget(self._table_model_combo, stretch=1)
+        layout.addLayout(model_row)
+
+        self._filter_selection_check = QCheckBox("Show only selected atoms")
+        self._filter_selection_check.setToolTip(
+            "Collapse the table to just the atoms selected in this model — handy when "
+            "the selection is scattered across chains."
+        )
+        self._filter_selection_check.toggled.connect(self._on_filter_toggled)
+        layout.addWidget(self._filter_selection_check)
 
         self._atoms_count = QLabel("No structure loaded")
         layout.addWidget(self._atoms_count)
@@ -547,25 +618,84 @@ class ControlsWindow:
 
     def _on_clear_selection(self) -> None:
         self._desktop.clear_selection()
-        self._selection_label.setText("none")
 
-    def _on_selection_changed(self, selection) -> None:
-        indices = list(selection.indices)
-        if indices:
-            shown = indices[:12]
-            suffix = "…" if len(indices) > len(shown) else ""
-            self._selection_label.setText(f"{len(indices)} atom(s): {shown}{suffix}")
+    def _on_scene_selection_changed(self, scene) -> None:
+        """A model's picks changed. Refresh the aggregate label + the atoms table."""
+        self._scene_selection = scene or {}
+        total = sum(len(v) for v in self._scene_selection.values())
+        n_models = len(self._scene_selection)
+        if total:
+            across = f" across {n_models} models" if n_models > 1 else ""
+            self._selection_label.setText(f"{total} atom(s){across}")
         else:
             self._selection_label.setText("none")
-        # Viewer -> table: reflect the picked atoms as selected rows.
-        self._select_table_rows(indices)
+        # Viewer -> table: reflect the picks belonging to the table's model.
+        self._apply_table_selection()
+
+    @contextmanager
+    def _table_sync_suppressed(self):
+        """Suppress table -> viewer echo while we mutate the model programmatically.
+
+        Resetting the model (set_session/set_filter) or setting rows emits
+        selectionChanged; without this guard that would bounce straight back to the
+        viewer as a spurious highlight.
+        """
+        prev = self._suppress_table_sync
+        self._suppress_table_sync = True
+        try:
+            yield
+        finally:
+            self._suppress_table_sync = prev
+
+    def _table_selection_indices(self):
+        """The current selection restricted to the model the table is showing."""
+        return self._scene_selection.get(self._table_model_id, [])
+
+    def _apply_table_selection(self) -> None:
+        """Reflect the table model's selection: filter the rows, or highlight them."""
+        indices = self._table_selection_indices()
+        if self._filter_selection_check.isChecked():
+            with self._table_sync_suppressed():
+                self._atom_model.set_filter(indices)
+            self._update_atoms_count()
+        else:
+            if self._atom_model.is_filtered():
+                with self._table_sync_suppressed():
+                    self._atom_model.set_filter(None)
+                self._update_atoms_count()
+            self._select_table_rows(indices)
+
+    def _on_filter_toggled(self, _checked: bool) -> None:
+        self._apply_table_selection()
+
+    def _update_atoms_count(self) -> None:
+        n = self._atom_model.rowCount()
+        if self._atom_model.is_filtered():
+            self._atoms_count.setText(f"{n} selected atom(s)")
+        else:
+            self._atoms_count.setText(f"{n} atoms" if n else "No structure loaded")
 
     # -- geometry / atoms table ------------------------------------------
 
-    def _on_structure_changed(self, session) -> None:
-        self._atom_model.set_session(session)
-        n = self._atom_model.rowCount()
-        self._atoms_count.setText(f"{n} atoms" if n else "No structure loaded")
+    def _set_table_model(self, mid) -> None:
+        """Point the atoms table at model ``mid`` (or None) and reflect its selection."""
+        self._table_model_id = mid
+        session = self._desktop.session_for(mid)
+        with self._table_sync_suppressed():
+            self._atom_model.set_session(session)  # clears any filter
+        self._update_atoms_count()
+        self._apply_table_selection()
+
+    def _on_table_model_combo_changed(self, _index: int) -> None:
+        if self._suppress_table_model_combo:
+            return
+        from PySide6.QtCore import Qt
+
+        mid = self._table_model_combo.currentData(Qt.ItemDataRole.UserRole)
+        # Picking the active model again resumes auto-follow; any other choice pins.
+        active = next((m["id"] for m in self._models_summary if m["active"]), None)
+        self._table_pinned = mid is not None and mid != active
+        self._set_table_model(mid)
 
     # -- loaded-models list ----------------------------------------------
 
@@ -573,6 +703,7 @@ class ControlsWindow:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QListWidgetItem
 
+        self._models_summary = summary
         self._suppress_model_events = True
         try:
             self._models_list.clear()
@@ -589,6 +720,31 @@ class ControlsWindow:
                 self._models_list.setCurrentRow(active_row)
         finally:
             self._suppress_model_events = False
+        self._sync_table_model_combo(summary)
+
+    def _sync_table_model_combo(self, summary) -> None:
+        """Rebuild the table's model dropdown, following the active model unless pinned."""
+        from PySide6.QtCore import Qt
+
+        active = next((m["id"] for m in summary if m["active"]), None)
+        ids = {m["id"] for m in summary}
+        if not self._table_pinned or self._table_model_id not in ids:
+            self._table_pinned = False
+            target = active
+        else:
+            target = self._table_model_id
+
+        self._suppress_table_model_combo = True
+        try:
+            self._table_model_combo.clear()
+            for m in summary:
+                self._table_model_combo.addItem(m["name"], m["id"])
+            idx = next((i for i, m in enumerate(summary) if m["id"] == target), -1)
+            if idx >= 0:
+                self._table_model_combo.setCurrentIndex(idx)
+        finally:
+            self._suppress_table_model_combo = False
+        self._set_table_model(target)
 
     def _on_model_item_toggled(self, item) -> None:
         from PySide6.QtCore import Qt
@@ -621,7 +777,8 @@ class ControlsWindow:
 
     def _push_table_selection_to_viewer(self) -> None:
         rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
-        self._desktop.highlight_atoms(rows)
+        atoms = [self._atom_model.row_atom(r) for r in rows]
+        self._desktop.highlight_atoms_in(self._table_model_id, atoms)
 
     def _select_table_rows(self, indices) -> None:
         """Select the given atom rows in the table without echoing back to the viewer."""
@@ -630,20 +787,18 @@ class ControlsWindow:
         model = self._atom_model
         view = self._atom_view
         sm = view.selectionModel()
-        self._suppress_table_sync = True
-        try:
+        with self._table_sync_suppressed():
             sm.clearSelection()
             ncols = model.columnCount()
-            valid = [i for i in indices if 0 <= i < model.rowCount()]
-            if valid and ncols:
+            # Map atom indices to view rows (identity unless the table is filtered).
+            rows = sorted(r for r in (model.atom_row(int(i)) for i in indices) if r >= 0)
+            if rows and ncols:
                 selection = QItemSelection()
                 last = ncols - 1
-                for start, end in _runs(valid):  # contiguous ranges keep this cheap
+                for start, end in _runs(rows):  # contiguous ranges keep this cheap
                     selection.select(model.index(start, 0), model.index(end, last))
                 sm.select(selection, QItemSelectionModel.SelectionFlag.Select)
-                view.scrollTo(model.index(valid[0], 0))
-        finally:
-            self._suppress_table_sync = False
+                view.scrollTo(model.index(rows[0], 0))
 
 
 class DesktopApp:
@@ -672,6 +827,12 @@ class DesktopApp:
         self._models: List[dict] = []
         self._model_counter = 0
         self._active_model_id: Optional[str] = None
+        # Scene-level selection: {model_id: [atom indices]}. Each model reports its
+        # own picks independently (a selection may span models — e.g. protein +
+        # ligand); the union across models is the scene selection. Mutated on the
+        # WebSocket threads, read on the GUI thread, so guard it.
+        self._scene_selection: dict = {}
+        self._scene_lock = threading.Lock()
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
@@ -815,16 +976,14 @@ class DesktopApp:
         ])
 
     def _wire_active(self, session) -> None:
-        """Point the active session at ``session``, moving selection + the atoms table."""
-        if self._session is not None and self._selection_enabled and self._session is not session:
-            try:
-                self._session.disable_mouse_selection()
-            except Exception:  # pragma: no cover - defensive
-                pass
+        """Point the active session at ``session`` (the default table model + display target).
+
+        Selection is scene-wide (enabled per model, not tied to the active one), so
+        switching the active model no longer re-wires any picking — it just moves
+        which model the atoms table defaults to.
+        """
         self._session = session
         self._session_key = None
-        if session is not None and self._selection_enabled:
-            session.enable_mouse_selection(self._emit_selection)
         self.bridge.structure_changed.emit(session)
 
     def _reload_model_viewport(self) -> None:
@@ -839,6 +998,12 @@ class DesktopApp:
         mid = f"model-{self._model_counter}"
         self._models.append({"id": mid, "name": name, "session": session, "visible": True})
         self._active_model_id = mid
+        # Register this model's pick handler once (tagged with its id); the click
+        # mode is what actually turns picking on/off. Registering here means a
+        # selection can be built in any loaded model, not just the active one.
+        session.on_selection(lambda sel, mid=mid: self._on_model_selection(mid, sel))
+        if self._selection_enabled:
+            session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
         self._reload_model_viewport()
         self._emit_models_changed()
@@ -872,12 +1037,16 @@ class DesktopApp:
             entry["session"].stop()
         except Exception:  # pragma: no cover - defensive
             pass
+        with self._scene_lock:
+            dropped = self._scene_selection.pop(mid, None) is not None
         if self._active_model_id == mid:
             self._active_model_id = self._models[-1]["id"] if self._models else None
             active = self._model_entry(self._active_model_id) if self._active_model_id else None
             self._wire_active(active["session"] if active else None)
         self._reload_model_viewport()
         self._emit_models_changed()
+        if dropped:
+            self._emit_scene_selection()
 
     def _clear_models(self) -> None:
         """Stop and drop every loaded model, plus the active/dummy session."""
@@ -888,6 +1057,8 @@ class DesktopApp:
                 pass
         self._models.clear()
         self._active_model_id = None
+        with self._scene_lock:
+            self._scene_selection.clear()
         if self._session is not None and self._session_key == _DUMMY_KEY:
             try:
                 self._session.stop()
@@ -902,16 +1073,32 @@ class DesktopApp:
         session.start(host=self._host, port=0)
         self._session = session
         self._session_key = _DUMMY_KEY
-        if self._selection_enabled:
-            session.enable_mouse_selection(self._emit_selection)
+        # The dummy carries a single off-screen atom (a volume scene has no model),
+        # so there is nothing to pick — selection stays a model-only affair.
         return f"ws://{self._host}:{session.port}"
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
 
-    def _emit_selection(self, selection) -> None:
-        # Called on the WebSocket thread; hop to the GUI thread via the bridge.
-        self.bridge.selection_changed.emit(selection)
+    def _on_model_selection(self, mid: str, selection) -> None:
+        """A model reported its picked atoms (WS thread). Fold into the scene selection."""
+        with self._scene_lock:
+            indices = list(selection.indices)
+            if indices:
+                self._scene_selection[mid] = indices
+            else:
+                self._scene_selection.pop(mid, None)
+        self._emit_scene_selection()
+
+    def _emit_scene_selection(self) -> None:
+        with self._scene_lock:
+            snapshot = {k: list(v) for k, v in self._scene_selection.items()}
+        self.bridge.scene_selection_changed.emit(snapshot)
+
+    def session_for(self, mid: Optional[str]):
+        """The LiveSession for a model id (or None) — used by the atoms table."""
+        entry = self._model_entry(mid) if mid else None
+        return entry["session"] if entry else None
 
     # -- loading ---------------------------------------------------------
 
@@ -962,6 +1149,7 @@ class DesktopApp:
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
         self.bridge.structure_changed.emit(None)  # no atoms table for a volume
         self._emit_models_changed()  # empty models list
+        self._emit_scene_selection()  # dropped any prior model selection
         self._status(f"Loaded volume: {Path(path).name}")
         return "volume"
 
@@ -985,6 +1173,7 @@ class DesktopApp:
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
         self.bridge.structure_changed.emit(None)
         self._emit_models_changed()
+        self._emit_scene_selection()
         self._status(f"Volume demo: {name}")
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
@@ -1068,24 +1257,38 @@ class DesktopApp:
     # -- selection -------------------------------------------------------
 
     def enable_mouse_selection(self) -> None:
+        # Selection is scene-wide: arm click mode on every loaded model, so picks
+        # can be made in any of them (each already has its pick handler registered).
         self._selection_enabled = True
-        if self._session is not None:
-            self._session.enable_mouse_selection(self._emit_selection)
+        for m in self._models:
+            m["session"].enable_mouse_selection()
 
     def disable_mouse_selection(self) -> None:
         self._selection_enabled = False
-        if self._session is not None:
-            self._session.disable_mouse_selection()
+        for m in self._models:
+            try:
+                m["session"].disable_mouse_selection()
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def clear_selection(self) -> None:
-        if self._session is not None:
-            self._session.clear_selection()
-
-    def highlight_atoms(self, indices) -> None:
-        """Highlight atoms in the viewer (table -> viewer selection sync)."""
-        if self._session is not None:
+        for m in self._models:
             try:
-                self._session.highlight(list(indices))
+                m["session"].clear_selection()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        with self._scene_lock:
+            had = bool(self._scene_selection)
+            self._scene_selection.clear()
+        if had:
+            self._emit_scene_selection()
+
+    def highlight_atoms_in(self, mid: Optional[str], indices) -> None:
+        """Highlight atoms in one model's viewer (table -> viewer selection sync)."""
+        session = self.session_for(mid)
+        if session is not None:
+            try:
+                session.highlight(list(indices))
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
 

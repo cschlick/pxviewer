@@ -302,9 +302,23 @@ export class LiveViewer {
             return;
         }
         this.highlightLoci = lociFromElementIndices(structure, indices);
+        this.applyOwnSelection(this.highlightLoci);
+    }
+
+    /**
+     * Apply `loci` as *this structure's* contribution to the plugin-global
+     * selection, leaving other structures (other models in a multi-model scene)
+     * untouched. We remove this structure's whole loci first — that clears only
+     * our previous highlight, and since the current selection here is just that
+     * small highlight, 'remove' is O(selected), not O(atoms) — then add the new
+     * one. Using 'set' instead would wipe every other model's selection too.
+     */
+    private applyOwnSelection(loci: StructureElement.Loci | undefined) {
+        const structure = this.currentStructure();
+        if (!structure) return;
         const selection = this.plugin.managers.structure.selection;
-        selection.clear();
-        selection.fromLoci('set', this.highlightLoci);
+        selection.fromLoci('remove', Structure.toStructureElementLoci(structure));
+        if (loci) selection.fromLoci('add', loci);
     }
 
     /** Zoom the camera to the given positional atom indices. */
@@ -334,9 +348,7 @@ export class LiveViewer {
         if (opts.highlight) {
             this.highlightIndices = indices;
             this.highlightLoci = loci;
-            const sel = this.plugin.managers.structure.selection;
-            sel.clear();
-            if (indices.length) sel.fromLoci('set', loci);
+            this.applyOwnSelection(indices.length ? loci : undefined);
         }
         if (opts.focus && indices.length) {
             this.plugin.managers.camera.focusLoci(loci);
@@ -348,7 +360,7 @@ export class LiveViewer {
     clearSelection() {
         this.highlightIndices = [];
         this.highlightLoci = undefined;
-        this.plugin.managers.structure.selection.clear();
+        this.applyOwnSelection(undefined);
     }
 
     private currentStructure(): Structure | undefined {
@@ -362,9 +374,7 @@ export class LiveViewer {
         const structure = this.currentStructure();
         if (!structure) return;
         this.highlightLoci = StructureElement.Loci.remap(this.highlightLoci, structure);
-        const selection = this.plugin.managers.structure.selection;
-        selection.clear();
-        selection.fromLoci('set', this.highlightLoci);
+        this.applyOwnSelection(this.highlightLoci);
     }
 
     /**
