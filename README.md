@@ -408,6 +408,48 @@ session.set_representation("cartoon", color="secondary-structure")
 on its own). It's topology-time — sent once with the structure; to change SS,
 start a new session.
 
+## Desktop app
+
+```bash
+python -m pxviewer desktop
+```
+
+Opens two windows — a **viewport** (the Mol\* viewer) and a native **controls**
+window with tabs:
+
+- **File** — open a model (read by cctbx) or a volume, and manage *loaded models*.
+  Several models can be shown at once (check to show/hide) or switched between; the
+  selected row is the *active* model.
+- **Geometry ▸ Atoms** — a virtualised table of every per-atom attribute (fast at
+  100k+ atoms). A **Model** dropdown picks which model's atoms it shows (it follows
+  the active model, or pin it to another); **Show only selected atoms** collapses it
+  to the current selection. Selecting rows highlights those atoms in the viewport,
+  and picking atoms in the viewport selects their rows.
+- **Console** — a live IPython shell (see below).
+- **Demos** — the built-in model and volume demos.
+
+Selection is scene-wide: a selection can span models (e.g. a protein model and a
+ligand model), and each model reports its own picks.
+
+### API console
+
+The **Console** tab embeds an in-process IPython shell, so the whole Python API is
+available live against whatever is loaded — with tab-completion, `session.select?`
+help, and history:
+
+```python
+session.select("chain A")          # `session` is the active model's LiveSession
+session.color_by("bfactor")
+app.load_file("/path/to/other.cif") # `app` is the DesktopApp
+```
+
+`session` tracks the active model (`app` exposes the rest). It needs the optional
+console extra:
+
+```bash
+pip install 'pxviewer[console]'     # qtconsole + ipykernel
+```
+
 ## Live wire protocol (`pxviewer-live/1`)
 
 WebSocket; binary messages are little-endian and begin with a `uint32` tag.

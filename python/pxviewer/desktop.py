@@ -282,10 +282,18 @@ class ControlsWindow:
 
         layout.addWidget(QLabel("<h2>pxviewer</h2>"))
 
+        self._console = None  # EmbeddedConsole, created lazily on first tab view
+        self._console_started = False
+
         tabs = QTabWidget()
         tabs.addTab(self._build_file_tab(), "File")
         tabs.addTab(self._build_geometry_tab(), "Geometry")
+        console_tab = self._build_console_tab()
+        self._console_tab_index = tabs.addTab(console_tab, "Console")
         tabs.addTab(self._build_demos_tab(), "Demos")
+        # The console spins up an IPython kernel, so defer that cost until the tab
+        # is actually opened.
+        tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(tabs, stretch=1)
 
         # These apply to whatever is loaded, so they sit below the tabs.
@@ -461,6 +469,66 @@ class ControlsWindow:
         subtabs.addTab(self._build_atoms_subtab(), "Atoms")
         layout.addWidget(subtabs)
         return tab
+
+    def _build_console_tab(self):
+        """A live IPython console bound to the API (created on first view)."""
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+
+        tab = QWidget()
+        self._console_layout = QVBoxLayout(tab)
+        self._console_layout.setContentsMargins(0, 0, 0, 0)
+        self._console_placeholder = QLabel("Opening the API console…")
+        self._console_placeholder.setWordWrap(True)
+        self._console_placeholder.setContentsMargins(12, 12, 12, 12)
+        self._console_layout.addWidget(self._console_placeholder)
+        return tab
+
+    def _on_tab_changed(self, index: int) -> None:
+        if index == self._console_tab_index:
+            self._ensure_console()
+
+    def _ensure_console(self) -> None:
+        """Build the embedded console the first time its tab is opened."""
+        if self._console_started:
+            return
+        self._console_started = True
+
+        from PySide6.QtWidgets import QLabel
+
+        from . import console as console_mod
+
+        if self._console_placeholder is not None:
+            self._console_placeholder.setParent(None)
+            self._console_placeholder = None
+
+        if not console_mod.console_available():
+            self._console_layout.addWidget(QLabel(console_mod.CONSOLE_MISSING_MESSAGE))
+            return
+        try:
+            import numpy as np
+
+            namespace = {
+                "app": self._desktop,
+                "session": self._desktop.active_model_session(),
+                "np": np,
+            }
+            self._console = console_mod.EmbeddedConsole(
+                namespace, banner=console_mod.default_banner()
+            )
+            self._console_layout.addWidget(self._console.widget)
+        except Exception as exc:  # a broken console must not take the app down
+            self._console_layout.addWidget(QLabel(f"Console failed to start:\n{exc}"))
+
+    def _refresh_console_session(self) -> None:
+        """Keep the console's ``session`` bound to the active model."""
+        if self._console is not None:
+            self._console.push({"session": self._desktop.active_model_session()})
+
+    def shutdown_console(self) -> None:
+        """Tear down the embedded kernel (called on app quit)."""
+        if self._console is not None:
+            self._console.shutdown()
+            self._console = None
 
     def _build_atoms_subtab(self):
         from PySide6.QtCore import QTimer
@@ -721,6 +789,7 @@ class ControlsWindow:
         finally:
             self._suppress_model_events = False
         self._sync_table_model_combo(summary)
+        self._refresh_console_session()
 
     def _sync_table_model_combo(self, summary) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
@@ -933,6 +1002,10 @@ class DesktopApp:
         if self._stopped:
             return
         self._stopped = True
+        try:
+            self._controls.shutdown_console()
+        except Exception:  # pragma: no cover - defensive
+            pass
         self.stop_demo()
         self._clear_models()  # stops all model sessions and the active/dummy one
         self._webapp.stop()
@@ -1099,6 +1172,10 @@ class DesktopApp:
         """The LiveSession for a model id (or None) — used by the atoms table."""
         entry = self._model_entry(mid) if mid else None
         return entry["session"] if entry else None
+
+    def active_model_session(self):
+        """The active model's LiveSession, or None (e.g. a volume scene)."""
+        return self.session_for(self._active_model_id)
 
     # -- loading ---------------------------------------------------------
 

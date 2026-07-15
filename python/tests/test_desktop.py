@@ -190,6 +190,36 @@ def test_controls_table_model_dropdown_and_filter(qapp):
         app.stop()
 
 
+def test_console_binds_and_tracks_active_session(qapp):
+    """The embedded console exposes `app`/`session`, and `session` follows active."""
+    pytest.importorskip("qtconsole")
+    pytest.importorskip("ipykernel")
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        controls = app._controls
+        controls._ensure_console()
+        assert controls._console is not None
+
+        shell = controls._console._manager.kernel.shell
+        assert shell.user_ns["app"] is app
+        assert shell.user_ns["session"] is app.session_for(a)
+
+        # Loading another model makes it active; the console's `session` rebinds.
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert shell.user_ns["session"] is app.session_for(b)
+    finally:
+        app.stop()
+
+
 def test_multi_model_registry(qapp):
     """The desktop model registry: add (overlay), hide (switch), active, remove."""
     pytest.importorskip("iotbx.data_manager")
