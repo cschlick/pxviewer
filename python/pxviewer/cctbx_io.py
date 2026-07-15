@@ -23,7 +23,7 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-from .data import Atom, AtomArrays
+from .data import AtomArrays
 
 __all__ = [
     "ModelData",

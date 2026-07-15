@@ -21,7 +21,6 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .data import Atom
 from .live import LiveSession
 from .volume import Volume, create_volume_view, write_volume
 
@@ -393,8 +392,7 @@ def run_live_volume_demo(
             f.write(mvsj)
 
         # A single off-screen atom is enough to keep the LiveSession WebSocket open.
-        dummy_atom = Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=100.0, y=0.0, z=0.0)
-        session = LiveSession([dummy_atom])
+        session = LiveSession.from_sites([[100.0, 0.0, 0.0]])
         session.start(host=host, port=ws_port)
         ws_url = f"ws://{host}:{session.port}"
 

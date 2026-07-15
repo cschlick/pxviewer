@@ -7,7 +7,7 @@ types/colours onto Mol*'s vocabulary.
 
 import pytest
 
-from pxviewer import Atom, LiveSession
+from pxviewer import LiveSession
 
 pytest.importorskip("iotbx.data_manager")
 
@@ -95,14 +95,7 @@ def test_bad_selection_string_raises(session):
         session.select_by(selection="chain A and blorp 3")
 
 
-def test_selection_string_needs_a_model():
-    # A session with no cctbx model can't resolve selection strings.
-    bare = LiveSession([Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=0, y=0, z=0)])
-    with pytest.raises(ValueError, match="model-backed"):
-        bare.select_by(selection="chain A")
-
-
-# -- positional selection (works with or without a model) --------------------
+# -- positional selection --------------------
 
 def test_selection_by_indices_ids_mask(session):
     assert session.select_by(indices=[5, 3]).indices == [3, 5]  # sorted, deduped

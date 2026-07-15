@@ -8,19 +8,15 @@ import numpy as np
 
 from .api import create_example_view, create_volume_view_from_data
 from .appserver import announce_viewer, stop_all, stop_frontend
-from .data import Atom
 from .demos import DEMOS, list_demos, run_demo
 from .live import LiveSession, oscillating_frames
 from .volume_demos import create_volume_demo, list_volume_demos, run_live_volume_demo, run_volume_demo
 from .webapp import run_webapp
 
 
-def _demo_atoms(n: int) -> list[Atom]:
+def _demo_sites(n: int) -> np.ndarray:
     """A simple linear chain of carbons, one per angstrom along +x."""
-    return [
-        Atom(id=i + 1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=float(i), y=0.0, z=0.0)
-        for i in range(n)
-    ]
+    return np.stack([np.arange(n, dtype=float), np.zeros(n), np.zeros(n)], axis=1)
 
 
 def main() -> None:
@@ -143,8 +139,8 @@ def main() -> None:
         print(f"Wrote {args.output_mrc} and {args.output_mvsj}")
 
     elif args.command == "serve-demo":
-        atoms = _demo_atoms(args.atoms)
-        session = LiveSession(atoms)
+        sites = _demo_sites(args.atoms)
+        session = LiveSession.from_sites(sites)
         session.on_pick(lambda info: print(f"picked: {info}"))
         session.start(host=args.host, port=args.port)
         url = f"ws://{args.host}:{session.port}"
@@ -153,7 +149,7 @@ def main() -> None:
         print("Press Ctrl-C to stop.")
         delay = 1.0 / args.fps if args.fps > 0 else 0.0
         try:
-            for frame in oscillating_frames(atoms):
+            for frame in oscillating_frames(sites):
                 session.push(frame)
                 time.sleep(delay)
         except KeyboardInterrupt:
@@ -222,15 +218,12 @@ def main() -> None:
     elif args.command == "model":
         from . import cctbx_io
 
-        loaded = cctbx_io.load_model(args.path)
-        session = LiveSession.from_arrays(
-            loaded.arrays, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
-        )
+        session = LiveSession.from_model_file(args.path)
         session.start(host=args.host, port=args.port)
-        if loaded.polymer:
+        if cctbx_io.model_is_polymer(session.model):
             session.set_representation("cartoon", color="secondary-structure")
         url = f"ws://{args.host}:{session.port}"
-        print(f"\n{args.path}: {len(loaded.arrays)} atoms, streaming live at {url}")
+        print(f"\n{args.path}: {session._n_atoms} atoms, streaming live at {url}")
         httpd = announce_viewer(args.host, url, http_port=args.http_port, serve=not args.no_frontend)
         print("Press Ctrl-C to stop.")
         try:

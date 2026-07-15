@@ -26,7 +26,7 @@ from pxviewer.cctbx_io import (  # noqa: E402
     model_to_arrays,
     read_model,
 )
-from pxviewer.data import encode_bcif_arrays, read_atoms  # noqa: E402
+from pxviewer.data import encode_bcif_arrays  # noqa: E402
 from pxviewer.live import LiveSession  # noqa: E402
 
 
@@ -73,24 +73,13 @@ def test_polymer_and_secondary_structure():
 
 
 def test_arrays_encode_to_binarycif_roundtrip():
+    import ciftools.serialization as cif_io
+
     arrays = model_to_arrays(read_model(LYSOZYME))
-    data = encode_bcif_arrays(arrays, polymer=True)
-    atoms = read_atoms_from_bytes(data)
-    assert len(atoms) == len(arrays)
-    assert atoms[0].resname == "LYS"
-
-
-def read_atoms_from_bytes(data: bytes):
-    import tempfile
-    import os
-
-    with tempfile.NamedTemporaryFile(suffix=".bcif", delete=False) as f:
-        f.write(data)
-        path = f.name
-    try:
-        return read_atoms(path)
-    finally:
-        os.unlink(path)
+    block = cif_io.loads(encode_bcif_arrays(arrays, polymer=True), lazy=False)[0]
+    site = block["atom_site"]
+    assert site.n_rows == len(arrays)
+    assert site["label_comp_id"].get_string(0) == "LYS"
 
 
 def test_live_session_from_model_file_streams_topology():

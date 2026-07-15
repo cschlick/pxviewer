@@ -5,10 +5,8 @@ import json
 import pytest
 
 from pxviewer import (
-    Atom,
     Volume,
     create_example_view,
-    create_fragment_view,
     create_view,
     create_volume_view,
     create_volume_view_from_data,
@@ -48,30 +46,6 @@ def test_create_example_view_has_polymer_and_ligand():
     selectors = [c["params"]["selector"] for c in structure["children"]]
     assert "polymer" in selectors
     assert "ligand" in selectors
-
-
-def test_create_fragment_view_round_trip(tmp_path):
-    """Example of writing a small atom model and building an MVSJ for it."""
-    atoms = [
-        Atom(id=1, element="N", name="N", resname="ALA", resseq=1, chain="A", x=0.0, y=0.0, z=0.0),
-        Atom(id=2, element="C", name="CA", resname="ALA", resseq=1, chain="A", x=1.5, y=0.0, z=0.0),
-    ]
-    bcif_path = tmp_path / "model.bcif"
-    mvsj_path = tmp_path / "model.mvsj"
-
-    mvsj = create_fragment_view(
-        atoms,
-        bcif_path=bcif_path,
-        mvsj_path=mvsj_path,
-        title="Fragment test",
-    )
-
-    assert bcif_path.exists()
-    assert mvsj_path.exists()
-
-    state = json.loads(mvsj)
-    assert state["metadata"]["title"] == "Fragment test"
-    assert "model.bcif" in state["root"]["children"][0]["params"]["url"]
 
 
 def test_create_volume_view_builds_map_node():

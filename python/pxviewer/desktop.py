@@ -23,7 +23,6 @@ from typing import Any, List, Optional
 
 import numpy as np
 
-from .data import Atom
 from .demos import DEMOS, Player, list_demos
 from .loader import (
     FILE_DIALOG_FILTER,
@@ -36,12 +35,14 @@ from .volume_demos import create_volume_demo, list_volume_demos
 from .webapp import Webapp
 
 # A single off-screen atom is enough to keep the LiveSession WebSocket open and
-# route click-mode / mouse-selection messages for scenes that carry no live model.
+# route click-mode / mouse-selection messages for scenes that carry no live model
+# (e.g. a volume). Built through cctbx like every other session.
 _DUMMY_KEY = "__dummy__"
 
 
-def _dummy_atoms() -> List[Atom]:
-    return [Atom(id=1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=100.0, y=0.0, z=0.0)]
+def _dummy_session():
+    from .live import LiveSession
+    return LiveSession.from_sites([[100.0, 0.0, 0.0]])
 
 
 def _check_qt() -> None:
@@ -448,7 +449,7 @@ class DesktopApp:
         self._arrange_windows()
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
         self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
@@ -544,16 +545,6 @@ class DesktopApp:
 
     # -- live session ----------------------------------------------------
 
-    def _make_live_session(self, atoms):
-        try:
-            from .live import LiveSession
-            return LiveSession(atoms)
-        except Exception as exc:  # pragma: no cover - missing websockets
-            raise ImportError(
-                "The desktop viewer needs websockets. Install it with: "
-                "pip install 'pxviewer[live]'"
-            ) from exc
-
     def _install_session(self, session, key: str) -> str:
         """Swap in a prebuilt session, start it, and return its WebSocket URL.
 
@@ -570,15 +561,15 @@ class DesktopApp:
             session.enable_mouse_selection(self._emit_selection)
         return f"ws://{self._host}:{session.port}"
 
-    def _ensure_session(self, key: str, make_atoms) -> str:
-        """Return the WebSocket URL for a session whose topology is ``key``.
+    def _ensure_session(self, key: str, make_session) -> str:
+        """Return the WebSocket URL for a session keyed by ``key``.
 
         Same key -> reuse, which keeps page reloads cheap; otherwise build a new
-        session from ``make_atoms()`` and install it.
+        session via ``make_session()`` and install it.
         """
         if self._session is not None and self._session_key == key:
             return f"ws://{self._host}:{self._session.port}"
-        return self._install_session(self._make_live_session(make_atoms()), key)
+        return self._install_session(make_session(), key)
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
@@ -607,21 +598,18 @@ class DesktopApp:
         from . import cctbx_io
         from .live import LiveSession
 
-        loaded = cctbx_io.load_model(path)  # DataManager -> model -> hierarchy -> arrays
-        session = LiveSession.from_arrays(
-            loaded.arrays,
-            polymer=loaded.polymer,
-            secondary_structure=loaded.secondary_structure,
-        )
+        # DataManager -> model -> hierarchy; the native model is retained on the
+        # session so selection uses cctbx's machinery.
+        session = LiveSession.from_model_file(path)
         self._load_counter += 1
         ws_url = self._install_session(session, key=f"model:{self._load_counter}")
         # The topology BinaryCIF already carries the coordinates, so the structure
         # appears without pushing a frame. Cartoon reads better than ball-and-stick
         # for a polymer; the choice is replayed to the viewer when it connects.
-        if loaded.polymer:
+        if cctbx_io.model_is_polymer(session.model):
             session.set_representation("cartoon", color="secondary-structure")
         self._viewport.load(f"{self._webapp.url}index.html?ws={ws_url}")
-        self._status(f"Loaded model: {Path(path).name} ({len(loaded.arrays)} atoms)")
+        self._status(f"Loaded model: {Path(path).name} ({session._n_atoms} atoms)")
         return "model"
 
     def _load_volume_file(self, path: str) -> str:
@@ -635,7 +623,7 @@ class DesktopApp:
         out_dir = self._webapp.volume_dir / "file" / str(self._load_counter)
         mvsj_path = create_volume_file_view(path, out_dir=out_dir)
 
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
         mvsj_url = f"/file/{self._load_counter}/{mvsj_path.name}"
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
         self._status(f"Loaded volume: {Path(path).name}")
@@ -655,7 +643,7 @@ class DesktopApp:
             shape=(32, 32, 32),
         )
 
-        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_atoms)
+        ws_url = self._ensure_session(_DUMMY_KEY, _dummy_session)
         mvsj_url = f"/demo/{name}/volume.mvsj"
         self._viewport.load(f"{self._webapp.url}index.html?mvsj={mvsj_url}&ws={ws_url}")
         self._status(f"Volume demo: {name}")

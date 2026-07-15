@@ -8,22 +8,17 @@ import math
 import numpy as np
 import pytest
 
-from pxviewer import Atom, LiveSession, Primitive, Selection
+from pxviewer import LiveSession, Primitive, Selection
 
 
-def _atoms(coords, ids=None):
-    ids = ids or list(range(1, len(coords) + 1))
-    return [
-        Atom(id=ids[i], element="C", name="C", resname="UNL", resseq=i + 1, chain="A",
-             x=float(c[0]), y=float(c[1]), z=float(c[2]))
-        for i, c in enumerate(coords)
-    ]
+def _session(coords):
+    return LiveSession.from_sites(coords)
 
 
 @pytest.fixture
 def session():
     # A right-angle "L" plus a fourth atom lifted in +z for a clean 90° dihedral.
-    return LiveSession(_atoms([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, 1)]))
+    return _session([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, 1)])
 
 
 # -- measured values -----------------------------------------------------
@@ -47,9 +42,9 @@ def test_angle_right(session):
 @pytest.mark.parametrize("deg", [30.0, 60.0, 120.0, 150.0])
 def test_angle_arbitrary(deg):
     r = math.radians(deg)
-    atoms = _atoms([(1, 0, 0), (0, 0, 0), (math.cos(r), math.sin(r), 0)])
-    s = LiveSession(atoms)
-    assert s.add_angle(0, 1, 2).value == pytest.approx(deg)
+    s = _session([(1, 0, 0), (0, 0, 0), (math.cos(r), math.sin(r), 0)])
+    # Coordinates round-trip through cctbx as float32, so allow that precision.
+    assert s.add_angle(0, 1, 2).value == pytest.approx(deg, abs=0.01)
 
 
 def test_dihedral_right(session):
@@ -58,8 +53,8 @@ def test_dihedral_right(session):
 
 def test_dihedral_sign():
     # Mirror the fourth atom through the plane -> the dihedral flips sign.
-    pos = LiveSession(_atoms([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, 1)]))
-    neg = LiveSession(_atoms([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, -1)]))
+    pos = _session([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, 1)])
+    neg = _session([(0, 0, 0), (1, 0, 0), (1, 1, 0), (1, 1, -1)])
     assert pos.add_dihedral(0, 1, 2, 3).value == pytest.approx(90.0)
     assert neg.add_dihedral(0, 1, 2, 3).value == pytest.approx(-90.0)
 
@@ -73,7 +68,7 @@ def test_label_has_no_value(session):
 
 def test_angle_degenerate_returns_none():
     # Two coincident points make the angle undefined.
-    s = LiveSession(_atoms([(0, 0, 0), (0, 0, 0), (1, 0, 0)]))
+    s = _session([(0, 0, 0), (0, 0, 0), (1, 0, 0)])
     assert s.add_angle(0, 1, 2).value is None
 
 
@@ -131,11 +126,10 @@ def test_coercion_rejects_bool(session):
         session.add_label(True, "nope")
 
 
-def test_str_spec_needs_a_model(session):
-    # A string is a cctbx selection now, but this session has no model attached,
-    # so it can't be resolved — a clear error, not a silent miss.
-    with pytest.raises(ValueError, match="model-backed"):
-        session.add_angle("resseq 1", 1, 2)
+def test_str_spec_resolved_via_cctbx(session):
+    # A string is a cctbx selection; the fixture is model-backed, so it resolves.
+    a = session.add_distance("resseq 1", "resseq 2")  # one atom per residue
+    assert session._primitives[a.id]["groups"] == [[0], [1]]
 
 
 def test_select_by_mask(session):

@@ -1,11 +1,10 @@
 """High-level Python API for building pxviewer scenes and data."""
 
-import os
 from typing import List
 
 import molviewspec as mvs
 
-from .data import Atom, AtomArrays, encode_bcif, encode_bcif_arrays, read_atoms, write_bcif
+from .data import AtomArrays, encode_bcif_arrays
 from .volume import (
     Volume,
     VolumeStyle,
@@ -21,7 +20,6 @@ from .volume import (
 __all__ = [
     "create_view",
     "create_example_view",
-    "create_fragment_view",
     "create_volume_view",
     "create_volume_view_from_data",
     "set_volume_color",
@@ -29,12 +27,8 @@ __all__ = [
     "set_volume_style",
     "Volume",
     "VolumeStyle",
-    "Atom",
     "AtomArrays",
-    "write_bcif",
-    "encode_bcif",
     "encode_bcif_arrays",
-    "read_atoms",
     "write_volume",
     "read_volume",
 ]
@@ -81,22 +75,3 @@ def create_example_view(
     )
 
 
-def create_fragment_view(
-    atoms: List[Atom],
-    *,
-    bcif_path: str | os.PathLike,
-    mvsj_path: str | os.PathLike | None = None,
-    title: str | None = None,
-) -> str:
-    """Write a small atom model to BCIF and return an MVSJ scene that loads it.
-
-    The MVSJ uses the BCIF filename as a relative URL, so both files should be
-    served from the same directory.
-    """
-    write_bcif(atoms, bcif_path)
-    bcif_url = os.path.basename(str(bcif_path))
-    mvsj = create_view(bcif_url, title=title)
-    if mvsj_path is not None:
-        with open(mvsj_path, "w") as f:
-            f.write(mvsj)
-    return mvsj

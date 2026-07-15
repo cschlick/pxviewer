@@ -11,7 +11,7 @@ import struct
 import numpy as np
 import pytest
 
-from pxviewer import Atom, LiveSession
+from pxviewer import LiveSession
 from pxviewer.live import _encode_index_set
 
 websockets = pytest.importorskip("websockets")
@@ -20,16 +20,13 @@ _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
 
 
-def _atoms(n=4):
-    return [
-        Atom(id=i + 1, element="C", name="C", resname="UNL", resseq=1, chain="A", x=float(i), y=0.0, z=0.0)
-        for i in range(n)
-    ]
+def _sites(n=4):
+    return [[float(i), 0.0, 0.0] for i in range(n)]
 
 
 @pytest.fixture
 def session():
-    s = LiveSession(_atoms())
+    s = LiveSession.from_sites(_sites())
     s.start(port=0)
     try:
         yield s
@@ -208,30 +205,22 @@ def test_computed_interactions_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
-def _carbons(points):
-    return [
-        Atom(id=i + 1, element="C", name="C", resname="UNL", resseq=1, chain="A",
-             x=float(p[0]), y=float(p[1]), z=float(p[2]))
-        for i, p in enumerate(points)
-    ]
-
-
 def test_detect_clashes_flags_overlap():
     # Two carbons 2.5 A apart overlap in vdW space (sum 3.4) but aren't bonded; a
     # third sits far away.
-    s = LiveSession(_carbons([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)]))
+    s = LiveSession.from_sites([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)])
     assert s.detect_clashes() == [(0, 1)]
 
 
 def test_detect_clashes_excludes_bonded_and_distant():
-    bonded = LiveSession(_carbons([(0, 0, 0), (1.5, 0, 0)]))   # covalent distance
+    bonded = LiveSession.from_sites([(0, 0, 0), (1.5, 0, 0)])   # covalent distance
     assert bonded.detect_clashes() == []
-    distant = LiveSession(_carbons([(0, 0, 0), (5.0, 0, 0)]))  # no vdW overlap
+    distant = LiveSession.from_sites([(0, 0, 0), (5.0, 0, 0)])  # no vdW overlap
     assert distant.detect_clashes() == []
 
 
 def test_detect_clashes_accepts_explicit_coords():
-    s = LiveSession(_carbons([(0, 0, 0), (10, 0, 0)]))  # far apart as built
+    s = LiveSession.from_sites([(0, 0, 0), (10, 0, 0)])  # far apart as built
     moved = np.array([[0, 0, 0], [2.5, 0, 0]], dtype="<f4")  # but test them close
     assert s.detect_clashes(coords=moved) == [(0, 1)]
 

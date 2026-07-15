@@ -1,27 +1,16 @@
-"""Create and read BinaryCIF files for small atom models."""
+"""Encode BinaryCIF topology from columnar atom data.
+
+Atom data is always columnar (:class:`AtomArrays`) — there is no per-atom object.
+The columns come from a cctbx model (see :mod:`pxviewer.cctbx_io`); this module
+maps them straight onto a minimal BinaryCIF ``_atom_site`` for the browser.
+"""
 
 import dataclasses
-import os
-from typing import Any, List
+from typing import List
 
 import numpy as np
 from ciftools.models.writer import CIFCategoryDesc, CIFFieldDesc
 from ciftools.serialization import create_binary_writer
-
-
-@dataclasses.dataclass
-class Atom:
-    """A single atom for a minimal atom-site table."""
-
-    id: int
-    element: str
-    x: float
-    y: float
-    z: float
-    name: str = "C"
-    resname: str = "UNL"
-    resseq: int = 1
-    chain: str = "A"
 
 
 @dataclasses.dataclass
@@ -73,116 +62,6 @@ class AtomArrays:
     def xyz(self) -> "np.ndarray":
         """The coordinates as an ``(N, 3)`` float32 array (streaming base frame)."""
         return np.stack([self.x, self.y, self.z], axis=1).astype("<f4")
-
-    def atom_at(self, i: int) -> "Atom":
-        """Build a single :class:`Atom` from column ``i`` (for a selection result)."""
-        return Atom(
-            id=int(self.id[i]),
-            element=self.element[i],
-            x=float(self.x[i]),
-            y=float(self.y[i]),
-            z=float(self.z[i]),
-            name=self.name[i],
-            resname=self.resname[i],
-            resseq=int(self.resseq[i]),
-            chain=self.chain[i],
-        )
-
-    @classmethod
-    def from_atoms(cls, atoms: List["Atom"]) -> "AtomArrays":
-        """Columnar view of an :class:`Atom` list (the non-cctbx / convenience path)."""
-        atoms = list(atoms)
-        n = len(atoms)
-        return cls(
-            element=[a.element for a in atoms],
-            name=[a.name for a in atoms],
-            resname=[a.resname for a in atoms],
-            chain=[a.chain for a in atoms],
-            resseq=np.fromiter((a.resseq for a in atoms), dtype=np.int32, count=n),
-            x=np.fromiter((a.x for a in atoms), dtype=np.float32, count=n),
-            y=np.fromiter((a.y for a in atoms), dtype=np.float32, count=n),
-            z=np.fromiter((a.z for a in atoms), dtype=np.float32, count=n),
-            id=np.fromiter((a.id for a in atoms), dtype=np.int32, count=n),
-        )
-
-
-class AtomSiteCategory(CIFCategoryDesc):
-    """CIF category for _atom_site."""
-
-    def __init__(self, polymer: bool = False):
-        # When polymer, atoms are linked to entity "1" so Mol* classifies the
-        # chain as a polymer (enabling cartoon/secondary-structure code paths).
-        self._polymer = polymer
-
-    @property
-    def name(self) -> str:
-        return "atom_site"
-
-    @staticmethod
-    def get_row_count(atoms: List[Atom]) -> int:
-        return len(atoms)
-
-    def get_field_descriptors(self, atoms: List[Atom]) -> List[CIFFieldDesc]:
-        fields = [
-            CIFFieldDesc.number_array(
-                name="id",
-                dtype=np.int32,
-                array=lambda a: np.array([atom.id for atom in a], dtype=np.int32),
-            ),
-            CIFFieldDesc.string_array(
-                name="type_symbol",
-                array=lambda a: [atom.element for atom in a],
-            ),
-            CIFFieldDesc.string_array(
-                name="label_atom_id",
-                array=lambda a: [atom.name for atom in a],
-            ),
-            CIFFieldDesc.string_array(
-                name="label_comp_id",
-                array=lambda a: [atom.resname for atom in a],
-            ),
-            CIFFieldDesc.number_array(
-                name="label_seq_id",
-                dtype=np.int32,
-                array=lambda a: np.array([atom.resseq for atom in a], dtype=np.int32),
-            ),
-            CIFFieldDesc.string_array(
-                name="label_asym_id",
-                array=lambda a: [atom.chain for atom in a],
-            ),
-            # Author fields mirror the label fields. A canonical _atom_site has
-            # both; Mol* prefers auth_* for chain/residue labels and tooltips,
-            # falling back to label_* only when they are absent.
-            CIFFieldDesc.string_array(
-                name="auth_asym_id",
-                array=lambda a: [atom.chain for atom in a],
-            ),
-            CIFFieldDesc.number_array(
-                name="auth_seq_id",
-                dtype=np.int32,
-                array=lambda a: np.array([atom.resseq for atom in a], dtype=np.int32),
-            ),
-            CIFFieldDesc.number_array(
-                name="Cartn_x",
-                dtype=np.float32,
-                array=lambda a: np.array([atom.x for atom in a], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="Cartn_y",
-                dtype=np.float32,
-                array=lambda a: np.array([atom.y for atom in a], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="Cartn_z",
-                dtype=np.float32,
-                array=lambda a: np.array([atom.z for atom in a], dtype=np.float32),
-            ),
-        ]
-        if self._polymer:
-            fields.append(
-                CIFFieldDesc.string_array(name="label_entity_id", array=lambda a: ["1" for _ in a])
-            )
-        return fields
 
 
 @dataclasses.dataclass
@@ -420,9 +299,12 @@ def encode_bcif_arrays(
 ) -> bytes:
     """Encode :class:`AtomArrays` as BinaryCIF, mapping columns straight to CIF fields.
 
-    The efficient counterpart to :func:`encode_bcif`: nothing is iterated per atom
-    in Python — the numpy/list columns become the CIF field arrays directly. Same
-    ``polymer`` / ``secondary_structure`` semantics as :func:`encode_bcif`.
+    Nothing is iterated per atom in Python — the numpy/list columns become the CIF
+    field arrays directly. With ``polymer=True`` (implied when
+    ``secondary_structure`` is given) the atoms are declared a polypeptide entity so
+    Mol* enables cartoon / secondary-structure rendering; ``secondary_structure`` is
+    a list of ``(chain, beg_resseq, end_resseq, kind)`` with ``kind`` ``"helix"`` or
+    ``"sheet"``.
     """
     if secondary_structure:
         polymer = True
@@ -441,80 +323,3 @@ def encode_bcif_arrays(
     writer.write_category(CellCategory(), [_Cell()])
     writer.write_category(SymmetryCategory(), [_Symmetry()])
     return writer.encode()
-
-
-def encode_bcif(
-    atoms: List[Atom],
-    *,
-    block_header: str = "PXVIEWER",
-    polymer: bool = False,
-    secondary_structure=None,
-) -> bytes:
-    """Encode a list of atoms as a minimal BinaryCIF document and return the bytes.
-
-    With ``polymer=True`` (implied when ``secondary_structure`` is given) the atoms
-    are declared as a polypeptide entity so Mol* enables cartoon / secondary-structure
-    rendering. ``secondary_structure`` is a list of ``(chain, beg_resseq, end_resseq,
-    kind)`` where ``kind`` is ``"helix"`` or ``"sheet"``.
-    """
-    if secondary_structure:
-        polymer = True
-    writer = create_binary_writer()
-    writer.start_data_block(block_header)
-    writer.write_category(AtomSiteCategory(polymer=polymer), [atoms])
-    if polymer:
-        writer.write_category(EntityCategory(), [[("1", "polymer")]])
-        writer.write_category(EntityPolyCategory(), [[("1", "polypeptide(L)")]])
-    if secondary_structure:
-        helices, sheets = _normalize_ss(secondary_structure)
-        if helices:
-            writer.write_category(StructConfCategory(), [helices])
-        if sheets:
-            writer.write_category(StructSheetRangeCategory(), [sheets])
-    writer.write_category(CellCategory(), [_Cell()])
-    writer.write_category(SymmetryCategory(), [_Symmetry()])
-    return writer.encode()
-
-
-def write_bcif(atoms: List[Atom], path: str | os.PathLike, *, block_header: str = "PXVIEWER") -> None:
-    """Write a minimal BinaryCIF file from a list of atoms."""
-    with open(path, "wb") as f:
-        f.write(encode_bcif(atoms, block_header=block_header))
-
-
-def read_atoms(path: str | os.PathLike) -> List[Atom]:
-    """Read atoms back from a BinaryCIF file."""
-    import ciftools.serialization as cif_io
-
-    with open(path, "rb") as f:
-        data = f.read()
-
-    file = cif_io.loads(data, lazy=False)
-    block = file[0]
-    cat = block["atom_site"]
-    n = cat.n_rows
-
-    ids = cat["id"].as_ndarray().astype(int)
-    elements = cat["type_symbol"].as_ndarray()
-    names = cat["label_atom_id"].as_ndarray()
-    resnames = cat["label_comp_id"].as_ndarray()
-    resseqs = cat["label_seq_id"].as_ndarray().astype(int)
-    chains = cat["label_asym_id"].as_ndarray()
-    xs = cat["Cartn_x"].as_ndarray().astype(float)
-    ys = cat["Cartn_y"].as_ndarray().astype(float)
-    zs = cat["Cartn_z"].as_ndarray().astype(float)
-
-    return [
-        Atom(
-            id=int(ids[i]),
-            element=str(elements[i]),
-            x=float(xs[i]),
-            y=float(ys[i]),
-            z=float(zs[i]),
-            name=str(names[i]),
-            resname=str(resnames[i]),
-            resseq=int(resseqs[i]),
-            chain=str(chains[i]),
-        )
-        for i in range(n)
-    ]

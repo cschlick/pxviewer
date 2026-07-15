@@ -53,7 +53,7 @@ from typing import Any, Callable, Iterable, List, Optional, Sequence, get_args
 import numpy as np
 from molviewspec.nodes import ColorNamesT, ComponentExpression, RepresentationTypeT
 
-from .data import Atom, AtomArrays, encode_bcif_arrays
+from .data import AtomArrays, encode_bcif_arrays
 from .cctbx_io import ModelData
 
 __all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM_IDENTITY_CONTRACT"]
@@ -433,8 +433,7 @@ class LiveSession:
     """Serve a fixed topology and stream coordinate frames to Mol* clients.
 
     Example:
-        atoms = [Atom(id=1, element="C", x=0, y=0, z=0), ...]
-        session = LiveSession(atoms)
+        session = LiveSession.from_model_file("model.pdb")   # or from_cctbx_model / from_sites
         session.on_pick(lambda info: print("picked", info))
         session.start()                       # background thread, ws://127.0.0.1:8787
         for frame in trajectory:              # frame: (N,3) array-like
@@ -443,27 +442,26 @@ class LiveSession:
 
     def __init__(
         self,
-        atoms: Iterable[Atom],
+        data: ModelData,
         *,
         polymer: bool = False,
         secondary_structure: Optional[Any] = None,
-        _data: Optional[ModelData] = None,
-        _topology: Optional[bytes] = None,
+        topology: Optional[bytes] = None,
     ):
-        # The session's atom source is columnar (:class:`ModelData`); an Atom list
-        # is just a convenience input, columnarised immediately rather than kept as
-        # N Python objects. The cctbx constructors pass ``_data`` (with the native
-        # model) and a prebuilt topology directly.
-        if _data is not None:
-            self._data = _data
-        else:
-            atoms = list(atoms)
-            if not atoms:
-                raise ValueError("LiveSession requires at least one atom")
-            self._data = ModelData(AtomArrays.from_atoms(atoms))
+        # The session's atom source is a columnar :class:`ModelData` (numpy columns
+        # plus, for cctbx-loaded data, the native model). Build sessions via the
+        # classmethods — from_model_file / from_cctbx_model / from_sites — which
+        # always route through cctbx; this low-level constructor just wires up a
+        # ModelData that has already been prepared.
+        if not isinstance(data, ModelData):
+            raise TypeError(
+                "LiveSession(data) takes a ModelData; build a session via "
+                "LiveSession.from_model_file / from_cctbx_model / from_sites"
+            )
+        self._data = data
         if self._data.n_atoms == 0:
             raise ValueError("LiveSession requires at least one atom")
-        self._topology: bytes = _topology if _topology is not None else encode_bcif_arrays(
+        self._topology: bytes = topology if topology is not None else encode_bcif_arrays(
             self._data.arrays, polymer=polymer, secondary_structure=secondary_structure
         )
         self._n_atoms = self._data.n_atoms
@@ -523,44 +521,7 @@ class LiveSession:
         self.host = "127.0.0.1"
         self.port = 8787
 
-    # -- construction from cctbx -----------------------------------------
-
-    @classmethod
-    def _from_data(
-        cls,
-        data: ModelData,
-        *,
-        polymer: bool = False,
-        secondary_structure: Optional[Any] = None,
-    ) -> "LiveSession":
-        topology = encode_bcif_arrays(
-            data.arrays, polymer=polymer, secondary_structure=secondary_structure
-        )
-        return cls(
-            [],
-            polymer=polymer,
-            secondary_structure=secondary_structure,
-            _data=data,
-            _topology=topology,
-        )
-
-    @classmethod
-    def from_arrays(
-        cls,
-        arrays: "AtomArrays",
-        *,
-        polymer: bool = False,
-        secondary_structure: Optional[Any] = None,
-    ) -> "LiveSession":
-        """Build a session from bulk :class:`~pxviewer.data.AtomArrays` columns.
-
-        The topology BinaryCIF is encoded straight from the columns (no per-atom
-        Python). No cctbx model is attached, so selection is positional only; use
-        :meth:`from_cctbx_model` for the cctbx selection language.
-        """
-        return cls._from_data(
-            ModelData(arrays), polymer=polymer, secondary_structure=secondary_structure
-        )
+    # -- construction (everything routes through cctbx) ------------------
 
     @classmethod
     def from_cctbx_model(cls, model: Any) -> "LiveSession":
@@ -575,7 +536,7 @@ class LiveSession:
 
         model = cctbx_io.first_model(model)
         data = ModelData(cctbx_io.model_to_arrays(model), model=model)
-        return cls._from_data(
+        return cls(
             data,
             polymer=cctbx_io.model_is_polymer(model),
             secondary_structure=cctbx_io.model_secondary_structure(model),
@@ -588,9 +549,23 @@ class LiveSession:
 
         loaded = cctbx_io.load_model(path)
         data = ModelData(loaded.arrays, model=loaded.model)
-        return cls._from_data(
+        return cls(
             data, polymer=loaded.polymer, secondary_structure=loaded.secondary_structure
         )
+
+    @classmethod
+    def from_sites(cls, sites: Any, **labels: Any) -> "LiveSession":
+        """Build a session from raw coordinates (+ optional label columns), via cctbx.
+
+        The synthetic-data counterpart to :meth:`from_model_file`: ``sites`` is an
+        ``(N, 3)`` array and ``labels`` are the ``model_from_sites`` overrides
+        (``elements``, ``names``, ``chains``, ``resseqs``, ``resnames``); it builds
+        a real cctbx model so identity and selection go through cctbx like any other
+        session. Defaults give a chain of carbons, one per residue.
+        """
+        from . import cctbx_io
+
+        return cls.from_cctbx_model(cctbx_io.model_from_sites(sites, **labels))
 
     # -- scene -> python -------------------------------------------------
 
@@ -1492,7 +1467,7 @@ class LiveSession:
 
 
 def oscillating_frames(
-    atoms: Sequence[Atom],
+    sites: Any,
     *,
     steps: int = 240,
     amplitude: float = 3.0,
@@ -1500,11 +1475,11 @@ def oscillating_frames(
 ) -> Iterable[np.ndarray]:
     """Yield a looping demo trajectory: a travelling sine wave along +y.
 
-    Topology is unchanged; only y is displaced per frame. Useful for exercising
-    the live path without a real simulation.
+    ``sites`` is the base ``(N, 3)`` coordinates. Topology is unchanged; only y is
+    displaced per frame. Useful for exercising the live path without a simulation.
     """
-    base = np.array([[a.x, a.y, a.z] for a in atoms], dtype="<f4")
-    n = len(atoms)
+    base = np.asarray(sites, dtype="<f4").reshape(-1, 3)
+    n = base.shape[0]
     step = 0
     while True:
         phase = 2.0 * np.pi * (step / steps)

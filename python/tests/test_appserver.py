@@ -5,7 +5,7 @@ import urllib.request
 
 import pytest
 
-from pxviewer import Atom, LiveSession
+from pxviewer import LiveSession
 from pxviewer import appserver
 
 websockets = pytest.importorskip("websockets")
@@ -67,7 +67,7 @@ def test_stop_all_survives_repeated_interrupt():
 
 
 def test_ws_port_answers_plain_http_without_crashing():
-    session = LiveSession([Atom(id=1, element="C", x=0, y=0, z=0), Atom(id=2, element="C", x=1, y=0, z=0)])
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
     session.start(port=0)
     try:
         with pytest.raises(urllib.error.HTTPError) as exc:

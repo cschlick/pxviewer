@@ -110,11 +110,16 @@ motion, or `--no-frontend` to connect a page you're serving yourself.
 
 ### From your own code
 
-```python
-from pxviewer import Atom, LiveSession
+Every session is backed by a cctbx model. Build one from a file, an existing
+`mmtbx.model.manager`, or — for synthetic data — raw coordinates (which pxviewer
+turns into a model too):
 
-atoms = [Atom(id=i + 1, element="C", x=float(i), y=0.0, z=0.0) for i in range(10)]
-session = LiveSession(atoms)
+```python
+from pxviewer import LiveSession
+
+session = LiveSession.from_model_file("model.pdb")   # or from_cctbx_model(model)
+# synthetic: coordinates (+ optional label columns) -> a real cctbx model
+# session = LiveSession.from_sites([[float(i), 0.0, 0.0] for i in range(10)])
 session.on_pick(lambda info: print("picked", info))
 session.start()                          # background thread, ws://127.0.0.1:8787
 
@@ -134,7 +139,7 @@ needed), then show it:
 
 ```python
 sel = session.select_by(indices=range(20))       # positional rows 0..19
-sel = session.select_by(ids=[10, 12, 14])         # by Atom.id
+sel = session.select_by(ids=[10, 12, 14])         # by _atom_site.id
 sel = session.select_by(mask=my_bool_array)       # numpy mask of length N
 sel.indices   # [0, 1, 2, ...]   columnar views: sel.ids sel.names sel.resnames sel.chains sel.resseqs sel.elements   sel.mask
 
@@ -164,7 +169,7 @@ session.add_representation("cartoon", on="chain A and helix")
 ```
 
 Selection strings need a model, so they're available on sessions from
-`from_model_file` / `from_cctbx_model` (not a raw `Atom`-list session). Geometry
+`from_model_file` / `from_cctbx_model` / `from_sites` (all model-backed). Geometry
 predicates like `within(...)` resolve against the **loaded** conformation, not the
 live-streamed one. `session.model` exposes the native `mmtbx.model.manager`, and
 `session.diff()` reports if the cached columns have drifted from it.
