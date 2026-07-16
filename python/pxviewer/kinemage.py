@@ -12,9 +12,11 @@ Kinemage point syntax (one or more points per physical line)::
                                   separated and come AFTER the {label} (labels can
                                   themselves contain numbers).
 
-A primitive is a dict: always ``kind`` + ``color`` ([r,g,b]); geometry per kind:
-``vectors``->``segments`` [[p,p],..], ``dots``->``points`` [p,..],
-``balls``->``balls`` [[p,radius],..], ``triangles``->``triangles`` [[p,p,p],..].
+A primitive is a dict: always ``kind``, ``name`` (the kinemage list's name, so callers
+can pick lists out) and ``color`` ([r,g,b]); geometry per kind: ``vectors``->
+``segments`` [[p,p],..], ``dots``->``points`` [p,..], ``balls``->``balls``
+[[p,radius],..], ``triangles``->``triangles`` [[p,p,p],..]. A list with per-point
+colours yields one primitive per colour.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ _LIST_KINDS = {
 }
 
 _COLOR_RE = re.compile(r"color=\s*(\w+)")
+_NAME_RE = re.compile(r"^@\w+list\s*\{([^}]*)\}")  # the list's name: @vectorlist {name} …
 _POINT_RE = re.compile(r"\{[^}]*\}([^{]*)")  # capture the text after each {label}
 
 
@@ -130,6 +133,7 @@ def parse_kinemage(text: str) -> List[dict]:
     """Parse kinemage ``text`` into a list of drawable primitive dicts."""
     prims: List[dict] = []
     kind = None
+    name = ""
     color = _DEFAULT_COLOR
     points: List[tuple] = []
 
@@ -143,19 +147,19 @@ def parse_kinemage(text: str) -> List[dict]:
             for _f, xyz, _r, c in resolved:
                 by.setdefault(c, []).append(list(xyz))
             for c, pts in by.items():
-                prims.append({"kind": "dots", "color": list(c), "points": pts})
+                prims.append({"kind": "dots", "name": name, "color": list(c), "points": pts})
         elif kind == "balls":
             by = {}
             for _f, xyz, r, c in resolved:
                 by.setdefault(c, []).append([list(xyz), r if r is not None else _DEFAULT_BALL_RADIUS])
             for c, balls in by.items():
-                prims.append({"kind": "balls", "color": list(c), "balls": balls})
+                prims.append({"kind": "balls", "name": name, "color": list(c), "balls": balls})
         elif kind == "vectors":
             for c, segs in _segments(resolved).items():
-                prims.append({"kind": "vectors", "color": list(c), "segments": segs})
+                prims.append({"kind": "vectors", "name": name, "color": list(c), "segments": segs})
         elif kind == "triangles":
             for c, tris in _triangles(resolved).items():
-                prims.append({"kind": "triangles", "color": list(c), "triangles": tris})
+                prims.append({"kind": "triangles", "name": name, "color": list(c), "triangles": tris})
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -169,6 +173,8 @@ def parse_kinemage(text: str) -> List[dict]:
                 points = []
                 m = _COLOR_RE.search(line)
                 color = _KIN_COLORS.get(m.group(1).lower(), _DEFAULT_COLOR) if m else _DEFAULT_COLOR
+                m = _NAME_RE.match(line)
+                name = m.group(1) if m else ""
             else:  # @subgroup / @group / @master etc. end the current list
                 flush()
                 kind = None

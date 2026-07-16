@@ -10,7 +10,7 @@ def test_balllist_with_radius():
         "{cb lys A  33   0.322 -103.46} r=0.322  38.432, 32.849, 8.581"
     )
     prims = parse_kinemage(text)
-    assert prims == [{"kind": "balls", "color": [255, 0, 255],
+    assert prims == [{"kind": "balls", "name": "CB dev Ball", "color": [255, 0, 255],
                       "balls": [[[38.432, 32.849, 8.581], 0.322]]}]
 
 
@@ -21,7 +21,7 @@ def test_vectorlist_segments():
         "{a} P 1.0 2.0 3.0 {b} L 4.0 5.0 6.0"
     )
     prims = parse_kinemage(text)
-    assert prims == [{"kind": "vectors", "color": [255, 215, 0],
+    assert prims == [{"kind": "vectors", "name": "chain A", "color": [255, 215, 0],
                       "segments": [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]}]
 
 
@@ -42,8 +42,18 @@ def test_trianglelist_strip():
 def test_dotlist_points():
     text = "@dotlist {s} color= white\n{x} 1 2 3 {y} 4 5 6"
     prims = parse_kinemage(text)
-    assert prims == [{"kind": "dots", "color": [255, 255, 255],
+    assert prims == [{"kind": "dots", "name": "s", "color": [255, 255, 255],
                       "points": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}]
+
+
+def test_list_name_is_kept():
+    """Callers pick lists out by name — CaBLAM drops its wheel outlines that way."""
+    text = (
+        "@trianglelist {cablam_wheels} alpha=0.75\n"
+        "{} P X magenta 0 0 0\n{} magenta 1 0 0\n{} magenta 1 1 0\n"
+        "@vectorlist {cablam_wheels_lines} color=deadblack width= 1\n{} P 0 0 0 {} 1 1 1"
+    )
+    assert [p["name"] for p in parse_kinemage(text)] == ["cablam_wheels", "cablam_wheels_lines"]
 
 
 def test_per_point_colour_splits_primitives():
@@ -71,5 +81,6 @@ def test_per_point_colour_persists():
 def test_unknown_color_and_empty():
     assert parse_kinemage("") == []
     assert parse_kinemage("@vectorlist {v} color= chartreuse\n{a} P 0 0 0 {b} 1 1 1") == [
-        {"kind": "vectors", "color": [255, 255, 255], "segments": [[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]]}
+        {"kind": "vectors", "name": "v", "color": [255, 255, 255],
+         "segments": [[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]]}
     ]
