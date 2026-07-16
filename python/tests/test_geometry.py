@@ -61,6 +61,20 @@ def test_bond_row_values_are_physical():
 
 
 @needs_monlib
+def test_indices_within_selection():
+    geo = GeometryRestraints(_model())
+    selected = set(geo.row("bond", 0)[0])  # the two atoms of the first bond
+
+    idx = geo.indices_within("bond", selected)
+    assert 0 in idx  # that bond is within its own atoms
+    # every returned restraint has all its atoms in the selection
+    for i in idx:
+        assert all(s in selected for s in geo.row("bond", i)[0])
+    # an empty selection matches nothing
+    assert geo.indices_within("bond", set()) == []
+
+
+@needs_monlib
 def test_row_arities_match_restraint_type():
     geo = GeometryRestraints(_model())
     assert len(geo.row("angle", 0)[0]) == 3

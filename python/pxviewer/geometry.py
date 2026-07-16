@@ -152,6 +152,22 @@ class GeometryRestraints:
         proxy = self._proxies(category)[index]
         return _ROW_FUNCS[category](gr, self.sites, proxy)
 
+    def indices_within(self, category: str, selected) -> List[int]:
+        """Indices of restraints whose atoms are all in ``selected`` (a set of i_seqs).
+
+        Reads each proxy's ``i_seqs`` directly — no value objects built — so it's a
+        cheap O(restraints) scan used to filter a category to the current selection.
+        """
+        proxies = self._proxies(category)
+        if proxies is None or not selected:
+            return []
+        selected = set(selected)
+        out: List[int] = []
+        for i in range(proxies.size()):
+            if all(s in selected for s in proxies[i].i_seqs):
+                out.append(i)
+        return out
+
 
 def build_geometry(model: Any) -> Optional[GeometryRestraints]:
     """Build restraints for a cctbx model, or None if the monomer library is absent."""

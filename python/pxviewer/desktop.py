@@ -231,8 +231,9 @@ def _make_restraint_table_model():
             self._columns: List[str] = []
             self._label = None
             self._n = 0
-            self._memo_row = -1
-            self._memo = None  # (i_seqs, values)
+            self._filter: Optional[list] = None  # None = all rows; else restraint indices
+            self._memo_key = -1
+            self._memo = None  # (i_seqs, values) for _memo_key (a restraint index)
 
         def set_source(self, geo, category, columns, label_fn) -> None:
             self.beginResetModel()
@@ -240,20 +241,37 @@ def _make_restraint_table_model():
             self._columns = list(columns)
             self._label = label_fn
             self._n = geo.count(category) if geo is not None else 0
-            self._memo_row, self._memo = -1, None
+            self._filter = None
+            self._memo_key, self._memo = -1, None
             self.endResetModel()
 
+        def set_filter(self, indices) -> None:
+            """Restrict visible rows to ``indices`` (restraint order); None = all."""
+            self.beginResetModel()
+            self._filter = None if indices is None else list(indices)
+            self._memo_key, self._memo = -1, None
+            self.endResetModel()
+
+        def is_filtered(self) -> bool:
+            return self._filter is not None
+
+        def _restraint_index(self, row: int) -> int:
+            return row if self._filter is None else self._filter[row]
+
         def _rowdata(self, row: int):
-            if row != self._memo_row:
-                self._memo = self._geo.row(self._category, row)
-                self._memo_row = row
+            key = self._restraint_index(row)
+            if key != self._memo_key:
+                self._memo = self._geo.row(self._category, key)
+                self._memo_key = key
             return self._memo
 
         def i_seqs_for_row(self, row: int):
             return self._rowdata(row)[0]
 
         def rowCount(self, parent=QModelIndex()):
-            return 0 if parent.isValid() else self._n
+            if parent.isValid():
+                return 0
+            return self._n if self._filter is None else len(self._filter)
 
         def columnCount(self, parent=QModelIndex()):
             if parent.isValid() or not self._columns:
@@ -593,7 +611,7 @@ class ControlsWindow:
         return tab
 
     def _build_geometry_tab(self):
-        from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import QCheckBox, QTabWidget, QVBoxLayout, QWidget
 
         from .geometry import CATEGORIES
 
@@ -606,6 +624,17 @@ class ControlsWindow:
         self._geo_cache: dict = {}        # model_id -> GeometryRestraints
         self._restraints_model_id = None  # model the restraint tables currently show
         self._suppress_restraint_sync = False
+
+        # Shared across every Geometry table: collapse each to the current selection
+        # (atoms -> selected atoms; each restraint -> restraints within the selection).
+        self._filter_selection_check = QCheckBox("Show only the selection")
+        self._filter_selection_check.setToolTip(
+            "Collapse every Geometry table to the current selection: the Atoms table "
+            "to the selected atoms, and each restraint table to the restraints whose "
+            "atoms are all selected."
+        )
+        self._filter_selection_check.toggled.connect(self._on_filter_toggled)
+        layout.addWidget(self._filter_selection_check)
 
         subtabs = QTabWidget()
         self._geo_subtabs = subtabs
@@ -727,6 +756,7 @@ class ControlsWindow:
         finally:
             self._suppress_restraint_sync = False
         self._restraints_model_id = mid
+        self._apply_restraint_filter()  # respect the shared filter on a fresh build
 
     def _on_restraint_selection(self, category: str) -> None:
         """Restraint row -> highlight the atoms it involves in the viewer."""
@@ -835,14 +865,6 @@ class ControlsWindow:
         self._table_model_combo.currentIndexChanged.connect(self._on_table_model_combo_changed)
         model_row.addWidget(self._table_model_combo, stretch=1)
         layout.addLayout(model_row)
-
-        self._filter_selection_check = QCheckBox("Show only selected atoms")
-        self._filter_selection_check.setToolTip(
-            "Collapse the table to just the atoms selected in this model — handy when "
-            "the selection is scattered across chains."
-        )
-        self._filter_selection_check.toggled.connect(self._on_filter_toggled)
-        layout.addWidget(self._filter_selection_check)
 
         self._atoms_count = QLabel("No structure loaded")
         layout.addWidget(self._atoms_count)
@@ -996,8 +1018,8 @@ class ControlsWindow:
             self._selection_label.setText(f"{total} atom(s){across}")
         else:
             self._selection_label.setText("none")
-        # Viewer -> table: reflect the picks belonging to the table's model.
-        self._apply_table_selection()
+        # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
+        self._apply_geometry_filter()
 
     @contextmanager
     def _table_sync_suppressed(self):
@@ -1033,7 +1055,28 @@ class ControlsWindow:
             self._select_table_rows(indices)
 
     def _on_filter_toggled(self, _checked: bool) -> None:
-        self._apply_table_selection()
+        self._apply_geometry_filter()
+
+    def _apply_geometry_filter(self) -> None:
+        """Apply the shared 'show only the selection' state to every Geometry table."""
+        self._apply_table_selection()   # the Atoms table
+        self._apply_restraint_filter()  # Bonds / Angles / Dihedrals / Chirality / Planarity
+
+    def _apply_restraint_filter(self) -> None:
+        """Filter each built restraint table to restraints within the selection (or all)."""
+        if self._restraints_model_id is None:
+            return  # restraints not built yet — _ensure_restraints will apply on build
+        geo = self._geo_cache.get(self._restraints_model_id)
+        if geo is None:
+            return
+        on = self._filter_selection_check.isChecked()
+        selected = set(self._table_selection_indices()) if on else None
+        self._suppress_restraint_sync = True
+        try:
+            for cat, info in self._restraint_tabs.items():
+                info["model"].set_filter(geo.indices_within(cat, selected) if on else None)
+        finally:
+            self._suppress_restraint_sync = False
 
     def _update_atoms_count(self) -> None:
         n = self._atom_model.rowCount()

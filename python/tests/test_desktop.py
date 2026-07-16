@@ -349,6 +349,22 @@ def test_restraint_table_model(qapp):
     assert model.rowCount() == 0
 
 
+def test_restraint_table_filter(qapp):
+    cols = ["ideal", "model", "delta", "sigma", "residual"]
+    rows = [((0, 1), {}), ((2, 3), {}), ((4, 5), {})]
+    model = _make_restraint_table_model()
+    model.set_source(_FakeGeo(rows), "bond", cols, lambda i: f"a{i}")
+    assert model.rowCount() == 3 and not model.is_filtered()
+
+    model.set_filter([2])  # show only restraint index 2
+    assert model.is_filtered() and model.rowCount() == 1
+    assert model.i_seqs_for_row(0) == (4, 5)  # view row 0 -> restraint 2
+    assert model.data(model.index(0, 0)) == "a4  a5"
+
+    model.set_filter(None)
+    assert not model.is_filtered() and model.rowCount() == 3
+
+
 def test_geometry_shows_setup_message_without_monomer_library(qapp, monkeypatch):
     """With no monomer library, the restraint tabs show the geostd setup message."""
     pytest.importorskip("iotbx.data_manager")
@@ -435,6 +451,48 @@ def test_select_by_expression(qapp):
         # Invalid syntax raises (the UI catches and reports it).
         with pytest.raises(Exception):
             app.select_by_expression("chain @@@ bogus (")
+    finally:
+        app.stop()
+
+
+def test_geometry_filter_applies_to_restraint_tables(qapp):
+    """'Show only the selection' collapses every restraint table, not just Atoms."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB to a geostd checkout)")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        controls = app._controls
+        controls._ensure_restraints()
+        bond = controls._restraint_tabs["bond"]
+        full = bond["model"].rowCount()
+        assert full > 500 and not bond["model"].is_filtered()
+
+        # Select one residue, then turn the shared filter on.
+        app.select_by_expression("resseq 1")
+        controls._filter_selection_check.setChecked(True)
+
+        filtered = bond["model"].rowCount()
+        assert 0 < filtered < full  # only the residue's own bonds remain
+        sel = set(app._scene_selection[app._active_model_id])
+        for r in range(filtered):
+            assert all(i in sel for i in bond["model"].i_seqs_for_row(r))
+        # angles filtered the same way
+        assert controls._restraint_tabs["angle"]["model"].is_filtered()
+
+        controls._filter_selection_check.setChecked(False)
+        assert bond["model"].rowCount() == full
     finally:
         app.stop()
 
