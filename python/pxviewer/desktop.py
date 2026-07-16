@@ -702,7 +702,12 @@ class ControlsWindow:
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # controls
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # name
         self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
-        self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
+        # A per-row radio marks (and sets) the active model — exclusive across rows.
+        from PySide6.QtWidgets import QButtonGroup
+
+        self._active_group = QButtonGroup(self._window)
+        self._active_group.setExclusive(True)
+        self._active_group.buttonClicked.connect(self._on_active_radio)
         layout.addWidget(self._loaded_tree)
         row = QHBoxLayout()
         self._remove_model_btn = QPushButton("Remove selected")
@@ -1343,6 +1348,8 @@ class ControlsWindow:
         self._suppress_model_events = True
         try:
             self._loaded_tree.clear()
+            for button in self._active_group.buttons():
+                self._active_group.removeButton(button)  # radios are rebuilt below
             group_nodes: dict = {}
             active_item = None
             # Group parent nodes first (plain headers — membership is from cctbx).
@@ -1363,7 +1370,7 @@ class ControlsWindow:
                 node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
                 self._loaded_tree.setItemWidget(node, 1, self._make_rep_combo(it))
                 name = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
-                node.setText(2, ("● " + name) if it.get("active") else name)
+                node.setText(2, name)
                 node.setToolTip(2, it["name"])  # full name on hover when elided
                 if it.get("active"):
                     active_item = node
@@ -1375,14 +1382,24 @@ class ControlsWindow:
         self._refresh_console_session()
 
     def _make_rep_combo(self, it):
-        """Inline per-object controls: a representation dropdown, plus a structure-type
-        show/hide menu for models (maps have no structure types)."""
-        from PySide6.QtWidgets import QComboBox, QHBoxLayout, QWidget
+        """Inline per-object controls: an active radio (models) + representation
+        dropdown + a structure-type show/hide menu (models with >1 type)."""
+        from PySide6.QtWidgets import QComboBox, QHBoxLayout, QRadioButton, QWidget
 
         container = QWidget()
         row = QHBoxLayout(container)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(6)
+
+        kind, ident = it["kind"], it["id"]
+        if kind == "model":
+            # A radio (ring / ring-with-dot) marks the active model; click to activate.
+            radio = QRadioButton()
+            radio.setToolTip("Active model — drives the atoms table, geometry and selection.")
+            radio.setProperty("mid", ident)
+            self._active_group.addButton(radio)
+            radio.setChecked(bool(it.get("active")))  # programmatic; won't fire buttonClicked
+            row.addWidget(radio)
 
         combo = QComboBox()
         if it["kind"] == "model":
@@ -1394,7 +1411,6 @@ class ControlsWindow:
         idx = combo.findData(current)
         if idx >= 0:
             combo.setCurrentIndex(idx)  # set before connecting, so no spurious change
-        kind, ident = it["kind"], it["id"]
         combo.currentIndexChanged.connect(
             lambda _i, c=combo, k=kind, d=ident: self._on_rep_changed(k, d, c.currentData())
         )
@@ -1465,14 +1481,13 @@ class ControlsWindow:
         elif kind == "volume":
             self._desktop.set_volume_visible(ident, visible)
 
-    def _on_tree_current_changed(self, current, _previous) -> None:
-        from PySide6.QtCore import Qt
-
-        if self._suppress_model_events or current is None:
+    def _on_active_radio(self, button) -> None:
+        """A model's active radio was clicked -> make it the active model."""
+        if self._suppress_model_events:
             return
-        kind, ident = current.data(0, Qt.ItemDataRole.UserRole)
-        if kind == "model":  # selecting a model makes it active; volumes/groups don't
-            self._desktop.set_active_model(ident)
+        mid = button.property("mid")
+        if mid:
+            self._desktop.set_active_model(mid)
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt

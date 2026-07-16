@@ -631,6 +631,39 @@ def test_model_rep_options_are_valid(qapp):
         session.set_representation(value)  # must not raise (regression: 'line' did)
 
 
+def test_active_model_radio(qapp):
+    """A per-row radio marks the active model and activates it on click."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QRadioButton
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert app._active_model_id == b  # last added is active
+
+        tree = app._controls._loaded_tree
+        radios = {r.property("mid"): r for r in tree.findChildren(QRadioButton)}
+        assert set(radios) == {a, b}  # one radio per model, tagged with its id
+        assert radios[b].isChecked() and not radios[a].isChecked()  # ring-with-dot = active
+
+        # Clicking A's radio activates A (without touching row selection).
+        app._controls._on_active_radio(radios[a])
+        assert app._active_model_id == a
+        # After the rebuild, A's radio is now the checked one.
+        radios = {r.property("mid"): r for r in tree.findChildren(QRadioButton)}
+        assert radios[a].isChecked() and not radios[b].isChecked()
+    finally:
+        app.stop()
+
+
 def test_checkable_combo_requires_click_inside_popup(qapp):
     """The click that opens the dropdown must not toggle the item under the cursor."""
     from PySide6.QtCore import QEvent, QPointF, Qt
