@@ -841,11 +841,11 @@ class ControlsWindow:
         return menu
 
     def _build_tools_tab(self):
-        """Geometry-focused tools: measure from the selection, clashes, display helpers."""
+        """Geometry-focused tools: measure from the selection. (Clash/contact analysis
+        lives in the Validation tab, alongside the other MolProbity checks.)"""
         from PySide6.QtWidgets import (
             QGridLayout,
             QGroupBox,
-            QHBoxLayout,
             QLabel,
             QPushButton,
             QVBoxLayout,
@@ -873,10 +873,18 @@ class ControlsWindow:
         mg.addWidget(clear_m)
         layout.addWidget(measure)
 
+        layout.addStretch()
+        return tab
+
+    def _build_clashes_group(self):
+        """All-atom contacts: add hydrogens with reduce2, then run probe2. Its two
+        overlays toggle independently once an analysis has produced dots."""
+        from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
         from .live import PROBE_CLASHES, PROBE_CONTACTS
 
-        analysis = QGroupBox("Clashes && contacts")
-        ag = QVBoxLayout(analysis)
+        box = QGroupBox("Clashes && contacts (probe2)")
+        ag = QVBoxLayout(box)
         ag.addWidget(QLabel("Add hydrogens, then run MolProbity probe2:"))
         analyze = QPushButton("Add H + analyze")
         analyze.setToolTip(
@@ -885,7 +893,6 @@ class ControlsWindow:
         analyze.clicked.connect(self._on_analyze)
         ag.addWidget(analyze)
 
-        # Independently toggleable overlays; enabled once an analysis has produced dots.
         toggles = QHBoxLayout()
         self._contacts_toggle = QPushButton("Contacts")
         self._contacts_toggle.setToolTip("Show/hide the full probe2 contact-dot surface.")
@@ -903,16 +910,14 @@ class ControlsWindow:
         toggles.addWidget(self._clashes_toggle)
         toggles.addStretch()
         ag.addLayout(toggles)
-        layout.addWidget(analysis)
-
-        layout.addStretch()
-        return tab
+        return box
 
     def _build_validation_tab(self):
-        """MolProbity validation. Data-driven from the validation registry: one
-        "Run validation" button runs every registered validator on the active model,
-        and each result becomes its own sub-tab — so new validators appear here
-        automatically with no changes to this tab."""
+        """MolProbity validation: the hydrogen-based all-atom contact analysis, plus
+        the per-residue validators. The latter is data-driven from the validation
+        registry — one "Run validation" button runs every registered validator on the
+        active model and each result becomes its own sub-tab, so new validators appear
+        here automatically with no changes to this tab."""
         from PySide6.QtWidgets import (
             QLabel,
             QPushButton,
@@ -924,6 +929,8 @@ class ControlsWindow:
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
+
+        layout.addWidget(self._build_clashes_group())
 
         run_btn = QPushButton("Run validation")
         run_btn.setToolTip("Run every MolProbity validator on the active model (background thread).")
@@ -2323,7 +2330,7 @@ class DesktopApp:
                 self._status(f"adding hydrogens to {name} (reduce2)…")
                 hmodel = add_hydrogens(model)
             except Exception as exc:  # pragma: no cover - reduce2/runtime errors
-                self._status(f"hydrogenate failed: {exc}")
+                self._status(f"reduce2 failed: {exc}")
                 return
 
             box: dict = {}
@@ -2357,8 +2364,8 @@ class DesktopApp:
             self._status(f"{name} + H: {len(clashes)} clashes, {len(contacts)} contact dots")
             self.bridge.analysis_ready.emit(hmid)
 
-        threading.Thread(target=work, name="pxviewer-hydrogenate", daemon=True).start()
-        self._status("hydrogenating…")
+        threading.Thread(target=work, name="pxviewer-reduce2", daemon=True).start()
+        self._status("adding hydrogens with reduce2…")
 
     def set_probe_channel(self, channel: int, visible: bool) -> None:
         """Toggle a probe overlay (contacts/clashes) on the active model, redrawing

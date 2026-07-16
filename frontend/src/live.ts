@@ -193,6 +193,10 @@ type ProbeDotsLines = typeof ProbeDotsLines;
 // into one Mesh — spheres for balls/dots, cylinders for vectors, filled triangles —
 // coloured per primitive via its group id.
 
+// Markup vector thickness (A). Must exceed a ball-and-stick bond's radius, or the
+// rotamer markup — which runs along the side-chain bonds — renders inside them.
+const MARKUP_VECTOR_RADIUS = 0.22;
+
 interface MarkupPrimitive {
     kind: string;
     color: [number, number, number];
@@ -209,15 +213,21 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
         state.currentGroup = i;
         colors[i] = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
         if (prim.kind === 'balls' && prim.balls) {
+            // Cbeta's ball radius is the deviation itself (~0.3 A) — floor it so a
+            // small deviation is still findable.
             for (const [c, r] of prim.balls) {
-                addSphere(state, Vec3.create(c[0], c[1], c[2]), Math.max(r, 0.25), 2);
+                addSphere(state, Vec3.create(c[0], c[1], c[2]), Math.max(r, 0.3), 2);
             }
         } else if (prim.kind === 'dots' && prim.points) {
-            for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.08, 0);
+            for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.1, 0);
         } else if (prim.kind === 'vectors' && prim.segments) {
+            // Deliberately fatter than a ball-and-stick bond: MolProbity draws these
+            // as wide screen-space lines *over* the model, and rotamer markup runs
+            // along the side-chain bonds — a thinner cylinder hides inside them.
             for (const [a, b] of prim.segments) {
                 addSimpleCylinder(state, Vec3.create(a[0], a[1], a[2]), Vec3.create(b[0], b[1], b[2]),
-                    { radiusTop: 0.07, radiusBottom: 0.07, topCap: true, bottomCap: true });
+                    { radiusTop: MARKUP_VECTOR_RADIUS, radiusBottom: MARKUP_VECTOR_RADIUS,
+                      topCap: true, bottomCap: true });
             }
         } else if (prim.kind === 'triangles' && prim.triangles) {
             for (const [a, b, c] of prim.triangles) {

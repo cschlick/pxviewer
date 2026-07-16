@@ -40,6 +40,9 @@ def add_hydrogens(model: Any, *, flip: bool = True) -> Any:
         fh.write(model.model_as_pdb())
 
     args = [in_path, "approach=add", "n_terminal_charge=no_charge",
+            # Ions and other het residues have no hydrogens (so no H restraints);
+            # without this reduce2 stops with "Restraints were not found for: NA CA".
+            "ignore_missing_restraints=True",
             f"output.filename={out_path}", "output.overwrite=True"]
     if flip:
         args.append("add_flip_movers=True")
