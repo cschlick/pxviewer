@@ -1,17 +1,15 @@
 """MolProbity validation: a registry of validators over a cctbx model.
 
 Each validator lives in its own submodule and defines a ``run(model)`` that
-returns a :class:`ValidationResult` — a table (columns + rows) plus a set of
-3-D :data:`Marker` s to draw in the viewport. Validators announce themselves
-with the :func:`register` decorator, so adding a validator is just dropping a
-new submodule in this package; the desktop's Validation tab is data-driven from
-the registry and picks it up with no tab-code changes.
+returns a :class:`ValidationResult` — a table (columns + rows) plus MolProbity
+markup primitives (see :mod:`pxviewer.kinemage`) to draw in the viewport.
+Validators announce themselves with the :func:`register` decorator, so adding a
+validator is just dropping a new submodule in this package; the desktop's
+Validation tab is data-driven from the registry and picks it up with no tab-code
+changes.
 
-Markers reuse the probe-dot wire (``LiveSession.show_probe_dots(dots,
-channel=N)``): a marker is a ``(loc, spike, rgb)`` tuple, drawn as a POINT when
-``loc == spike`` and as a LINE (``loc`` -> ``spike``) otherwise. Each validator
-gets its own stable channel via :func:`channel_for` so overlays toggle
-independently and never collide with the probe2 contact/clash channels (0/1).
+Each validator gets its own stable markup channel via :func:`channel_for` so
+overlays toggle independently.
 
 See :mod:`pxviewer.validation.ramachandran` for the reference validator; mirror
 its structure when writing a new one.
@@ -22,22 +20,20 @@ from __future__ import annotations
 import importlib
 import pkgutil
 from dataclasses import dataclass
-from typing import Any, Callable, List, NamedTuple, Tuple
-
-# A drawable marker: (loc_xyz, spike_xyz, rgb). POINT when loc == spike, else a
-# LINE from loc to spike. Same shape as a probe dot, so it rides the probe-dot wire.
-Marker = Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[int, int, int]]
+from typing import Any, Callable, List, NamedTuple
 
 
 @dataclass
 class ValidationResult:
-    """One validator's output: a labelled table plus 3-D markers.
+    """One validator's output: a labelled table plus 3-D markup.
 
     ``key``      stable id of the validator (matches its :func:`register` key).
     ``title``    human-readable name, shown as the section/group-box title.
     ``columns``  table column headers.
     ``rows``     one ``list`` of cell values per row (len == len(columns)).
-    ``markers``  :data:`Marker` s to draw, typically one per flagged residue.
+    ``markup``   MolProbity markup primitives (see :mod:`pxviewer.kinemage`): each is
+                 a dict with ``kind`` (vectors/dots/balls/triangles), ``color`` and
+                 the geometry for that kind. Empty for whole-model metrics.
     ``summary``  a one-line summary string (counts / percentages).
     """
 
@@ -45,7 +41,7 @@ class ValidationResult:
     title: str
     columns: List[str]
     rows: List[list]
-    markers: List[Marker]
+    markup: List[dict]
     summary: str
 
 

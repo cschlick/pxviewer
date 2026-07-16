@@ -10,9 +10,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from . import ValidationResult, register
-
-# MolProbity magenta — the outlier displacement vector (a LINE, ideal -> obs).
-_MAGENTA = (0xFF, 0x00, 0xFF)
+from ..kinemage import parse_kinemage
 
 COLUMNS = ["chain", "resid", "res", "deviation", "dihedral"]
 
@@ -29,7 +27,6 @@ def run(model: Any) -> ValidationResult:
     result = cbetadev(pdb_hierarchy=model.get_hierarchy(), outliers_only=False)
 
     rows = []
-    markers = []
     for res in result.results:
         rows.append([
             res.chain_id,
@@ -38,10 +35,6 @@ def run(model: Any) -> ValidationResult:
             _fmt(res.deviation, 3),
             _fmt(res.dihedral_NABB, 1),
         ])
-        if res.outlier and res.ideal_xyz is not None and res.xyz is not None:
-            loc = tuple(res.ideal_xyz)
-            spike = tuple(res.xyz)
-            markers.append((loc, spike, _MAGENTA))  # LINE: ideal -> observed
 
     summary = f"{result.n_outliers} outliers > 0.25 A"
     return ValidationResult(
@@ -49,6 +42,6 @@ def run(model: Any) -> ValidationResult:
         title="Cbeta deviation",
         columns=COLUMNS,
         rows=rows,
-        markers=markers,
+        markup=parse_kinemage(result.as_kinemage()),  # magenta ball + dot scatter
         summary=summary,
     )

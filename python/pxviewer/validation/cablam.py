@@ -11,11 +11,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from . import ValidationResult, register
-
-# One distinct POINT colour (loc == spike) per flag category.
-_OUTLIER = (0xFF, 0x33, 0x33)      # red   — CaBLAM outlier
-_DISFAVORED = (0xFF, 0xAA, 0x33)   # gold  — CaBLAM disfavored
-_CA_GEOM = (0xCC, 0x44, 0xFF)      # violet — CA-geometry outlier
+from ..kinemage import parse_kinemage
 
 COLUMNS = ["chain", "resid", "res", "cablam", "ca_geom", "type"]
 
@@ -56,7 +52,6 @@ def run(model: Any) -> ValidationResult:
     )
 
     rows = []
-    markers = []
     n_outlier = n_disfavored = n_geom = 0
     for res in result.results:
         fb = res.feedback
@@ -68,19 +63,9 @@ def run(model: Any) -> ValidationResult:
             _fmt(res.scores.c_alpha_geom, 3),
             _classify(fb),
         ])
-        xyz = tuple(res.xyz) if res.xyz is not None else None
-        if fb.cablam_outlier:
-            n_outlier += 1
-            if xyz is not None:
-                markers.append((xyz, xyz, _OUTLIER))  # POINT: loc == spike
-        if fb.cablam_disfavored:
-            n_disfavored += 1
-            if xyz is not None:
-                markers.append((xyz, xyz, _DISFAVORED))
-        if fb.c_alpha_geom_outlier:
-            n_geom += 1
-            if xyz is not None:
-                markers.append((xyz, xyz, _CA_GEOM))
+        n_outlier += bool(fb.cablam_outlier)
+        n_disfavored += bool(fb.cablam_disfavored)
+        n_geom += bool(fb.c_alpha_geom_outlier)
 
     summary = (
         f"{n_outlier} CaBLAM outliers, {n_disfavored} disfavored, "
@@ -91,6 +76,6 @@ def run(model: Any) -> ValidationResult:
         title="CaBLAM",
         columns=COLUMNS,
         rows=rows,
-        markers=markers,
+        markup=parse_kinemage(result.as_kinemage()),  # outlier/disfavored/CA-geom vectors + wheels
         summary=summary,
     )

@@ -10,9 +10,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from . import ValidationResult, register
-
-# MolProbity green — the outlier marker colour (a POINT, loc == spike).
-_GREEN = (0x33, 0xDD, 0x33)
+from ..kinemage import parse_kinemage
 
 COLUMNS = ["chain", "resid", "res", "phi", "psi", "type", "score"]
 
@@ -29,7 +27,6 @@ def run(model: Any) -> ValidationResult:
     result = ramalyze(pdb_hierarchy=model.get_hierarchy(), outliers_only=False)
 
     rows = []
-    markers = []
     for res in result.results:
         rows.append([
             res.chain_id,
@@ -40,9 +37,6 @@ def run(model: Any) -> ValidationResult:
             res.ramalyze_type(),
             _fmt(res.score, 2),
         ])
-        if res.outlier and res.xyz is not None:
-            xyz = tuple(res.xyz)
-            markers.append((xyz, xyz, _GREEN))  # POINT: loc == spike
 
     summary = (
         f"{result.n_outliers} outliers, {result.percent_favored:.1f}% favored "
@@ -53,6 +47,6 @@ def run(model: Any) -> ValidationResult:
         title="Ramachandran",
         columns=COLUMNS,
         rows=rows,
-        markers=markers,
+        markup=parse_kinemage(result.as_kinemage()),  # green Ca outlier vectors
         summary=summary,
     )

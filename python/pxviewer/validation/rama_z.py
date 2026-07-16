@@ -45,6 +45,6 @@ def run(model: Any) -> ValidationResult:
         title="Rama-Z",
         columns=COLUMNS,
         rows=rows,
-        markers=[],  # whole-model metric: nothing to anchor per residue
+        markup=[],  # whole-model metric: nothing to anchor per residue
         summary=summary,
     )

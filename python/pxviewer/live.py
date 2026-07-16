@@ -776,6 +776,21 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def show_markup(self, channel: int, primitives: Any) -> int:
+        """Draw MolProbity validation markup on ``channel``: ``primitives`` is a list
+        of kinemage primitives (see :mod:`pxviewer.kinemage`) — vectors/dots/balls/
+        triangles — rendered as a Mesh. Pass an empty list to clear. Thread-safe."""
+        primitives = list(primitives)
+        message = json.dumps({"type": "markup", "channel": int(channel), "primitives": primitives})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+        return len(primitives)
+
+    def clear_markup(self, channel: int) -> None:
+        """Remove a validation markup overlay. See :meth:`show_markup`."""
+        self.show_markup(channel, [])
+
     def set_volume_color(self, ref: str, color: str) -> None:
         """Broadcast a command to change the color of a volume by reference.
 

@@ -968,7 +968,7 @@ class ControlsWindow:
 
         markers = QPushButton("Markers")
         markers.setCheckable(True)
-        markers.setEnabled(bool(result.markers))
+        markers.setEnabled(bool(result.markup))
         markers.setToolTip("Show/hide this validator's markers in the viewport.")
         markers.toggled.connect(
             lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
@@ -2387,7 +2387,7 @@ class DesktopApp:
             ventry = self._model_entry(mid)
             if ventry is not None:  # cache so marker toggles redraw without re-running
                 ventry["validation"] = {r.key: r for r in results}
-            total = sum(len(r.markers) for r in results)
+            total = sum(len(r.markup) for r in results)
             self._status(f"{name}: {len(results)} validators, {total} markers")
             self.bridge.validation_ready.emit((mid, results))
 
@@ -2395,9 +2395,9 @@ class DesktopApp:
         self._status("validating…")
 
     def set_validation_markers(self, key: str, visible: bool) -> None:
-        """Toggle a validator's markers on the active model, redrawing from the results
-        cached by the last :meth:`run_validation` (no re-run). Each validator draws on
-        its own probe-dot channel (:func:`validation.channel_for`)."""
+        """Toggle a validator's MolProbity markup on the active model, redrawing from
+        the results cached by the last :meth:`run_validation` (no re-run). Each
+        validator draws on its own channel (:func:`validation.channel_for`)."""
         from . import validation
 
         entry = self._model_entry(self._active_model_id)
@@ -2406,10 +2406,10 @@ class DesktopApp:
         session = entry["session"]
         channel = validation.channel_for(key)
         result = (entry.get("validation") or {}).get(key)
-        if visible and result is not None and result.markers:
-            session.show_probe_dots(result.markers, channel=channel)
+        if visible and result is not None and result.markup:
+            session.show_markup(channel, result.markup)
         else:
-            session.clear_probe_dots(channel=channel)
+            session.clear_markup(channel)
 
     def set_axis(self, visible: bool) -> None:
         control = self._control_session()

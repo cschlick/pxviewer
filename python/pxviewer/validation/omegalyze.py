@@ -11,11 +11,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from . import ValidationResult, register
-
-# Distinct marker colours (POINTs, loc == spike) per non-trans classification.
-_CIS_PRO = (0x33, 0x99, 0xFF)     # blue    — cis-proline
-_CIS_NONPRO = (0xFF, 0x66, 0x33)  # orange  — cis-nonproline
-_TWISTED = (0xFF, 0xDD, 0x33)     # yellow  — twisted
+from ..kinemage import parse_kinemage
 
 COLUMNS = ["chain", "resid", "res", "omega", "type"]
 
@@ -34,18 +30,14 @@ def run(model: Any) -> ValidationResult:
     )
 
     rows = []
-    markers = []
     for res in result.results:
         # omega_type: OMEGALYZE_TRANS=0, OMEGALYZE_CIS=1, OMEGALYZE_TWISTED=2.
         if res.omega_type == omegalyze.OMEGALYZE_TWISTED:
-            kind, color = "twisted", _TWISTED
+            kind = "twisted"
         elif res.omega_type == omegalyze.OMEGALYZE_CIS:
-            if res.resname.strip() == "PRO":
-                kind, color = "cis-Pro", _CIS_PRO
-            else:
-                kind, color = "cis-nonPro", _CIS_NONPRO
+            kind = "cis-Pro" if res.resname.strip() == "PRO" else "cis-nonPro"
         else:
-            kind, color = "trans", None
+            kind = "trans"
 
         rows.append([
             res.chain_id,
@@ -54,9 +46,6 @@ def run(model: Any) -> ValidationResult:
             _fmt(res.omega, 1),
             kind,
         ])
-        if res.is_nontrans and res.xyz is not None:
-            xyz = tuple(res.xyz)
-            markers.append((xyz, xyz, color))  # POINT: loc == spike
 
     summary = (
         f"{result.n_cis_proline()} cis-Pro, "
@@ -68,6 +57,6 @@ def run(model: Any) -> ValidationResult:
         title="Cis/twisted peptides",
         columns=COLUMNS,
         rows=rows,
-        markers=markers,
+        markup=parse_kinemage(result.as_kinemage()),  # filled cis/twisted triangles
         summary=summary,
     )

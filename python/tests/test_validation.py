@@ -74,7 +74,10 @@ def _smoke(key: str) -> validation.ValidationResult:
     assert result.title == spec.title
     assert result.columns  # a non-empty header
     assert all(len(row) == len(result.columns) for row in result.rows)
-    assert all(len(m) == 3 for m in result.markers)
+    # Markup is a list of kinemage primitives, each a dict with kind + color.
+    assert isinstance(result.markup, list)
+    assert all(m["kind"] in {"vectors", "dots", "balls", "triangles"} and len(m["color"]) == 3
+               for m in result.markup)
     assert isinstance(result.summary, str) and result.summary
     return result
 
@@ -117,7 +120,7 @@ def test_cablam_on_ubiquitin():
 def test_rama_z_on_ubiquitin():
     pytest.importorskip("mmtbx.validation.rama_z")
     result = _smoke("rama_z")
-    # Whole-model metric: the four fixed regions, and no per-residue markers.
+    # Whole-model metric: the four fixed regions, and no per-residue markup.
     assert result.columns == ["region", "z_score", "std_err"]
+    assert result.markup == []
     assert [row[0] for row in result.rows] == ["Helix", "Sheet", "Loop", "Whole"]
-    assert result.markers == []

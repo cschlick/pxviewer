@@ -904,7 +904,7 @@ def test_validation_subtabs_and_row_focus(qapp):
         res = ValidationResult(
             key="ramachandran", title="Ramachandran",
             columns=["chain", "resid", "res"], rows=[["A", "  13 ", "ILE"]],
-            markers=[], summary="1 residue",
+            markup=[], summary="1 residue",
         )
         app._controls._on_validation_ready((mid, [res]))
         tabs = app._controls._validation_subtabs

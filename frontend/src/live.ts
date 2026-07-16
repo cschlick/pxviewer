@@ -33,6 +33,10 @@ import { Points } from 'molstar/lib/mol-geo/geometry/points/points';
 import { PointsBuilder } from 'molstar/lib/mol-geo/geometry/points/points-builder';
 import { Lines } from 'molstar/lib/mol-geo/geometry/lines/lines';
 import { LinesBuilder } from 'molstar/lib/mol-geo/geometry/lines/lines-builder';
+import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh';
+import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder';
+import { addSphere } from 'molstar/lib/mol-geo/geometry/mesh/builder/sphere';
+import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder';
 
 export interface AtomInfo {
     id: number;
@@ -183,6 +187,74 @@ const ProbeDotsLines = PluginStateTransform.BuiltIn({
 });
 type ProbeDotsLines = typeof ProbeDotsLines;
 
+// ---- MolProbity validation markup (parsed kinemage primitives) -------------
+// A validator's markup is a list of primitives (see pxviewer/kinemage.py): each is
+// {kind: vectors|dots|balls|triangles, color:[r,g,b], + geometry}. We render them all
+// into one Mesh — spheres for balls/dots, cylinders for vectors, filled triangles —
+// coloured per primitive via its group id.
+
+interface MarkupPrimitive {
+    kind: string;
+    color: [number, number, number];
+    segments?: number[][][];   // vectors: [[a,b], ...]
+    points?: number[][];       // dots
+    balls?: [number[], number][];  // [[center, radius], ...]
+    triangles?: number[][][];  // [[a,b,c], ...]
+}
+
+function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
+    const state = MeshBuilder.createState(512, 256);
+    const colors: number[] = [];
+    primitives.forEach((prim, i) => {
+        state.currentGroup = i;
+        colors[i] = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
+        if (prim.kind === 'balls' && prim.balls) {
+            for (const [c, r] of prim.balls) {
+                addSphere(state, Vec3.create(c[0], c[1], c[2]), Math.max(r, 0.25), 2);
+            }
+        } else if (prim.kind === 'dots' && prim.points) {
+            for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.08, 0);
+        } else if (prim.kind === 'vectors' && prim.segments) {
+            for (const [a, b] of prim.segments) {
+                addSimpleCylinder(state, Vec3.create(a[0], a[1], a[2]), Vec3.create(b[0], b[1], b[2]),
+                    { radiusTop: 0.07, radiusBottom: 0.07, topCap: true, bottomCap: true });
+            }
+        } else if (prim.kind === 'triangles' && prim.triangles) {
+            for (const [a, b, c] of prim.triangles) {
+                const va = Vec3.create(a[0], a[1], a[2]);
+                const vb = Vec3.create(b[0], b[1], b[2]);
+                const vc = Vec3.create(c[0], c[1], c[2]);
+                MeshBuilder.addTriangle(state, va, vb, vc);
+                MeshBuilder.addTriangle(state, va, vc, vb);  // back face — double-sided
+            }
+        }
+    });
+    return Shape.create(
+        'validation-markup', {}, MeshBuilder.getMesh(state),
+        (g) => colors[g] ?? Color(0xffffff), () => 1, () => 'validation markup',
+    );
+}
+
+const MarkupMesh = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-markup',
+    display: { name: 'Validation Markup' },
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: { primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }) },
+})({
+    apply({ params }) {
+        const p = params as { primitives: MarkupPrimitive[] };
+        return new SO.Shape.Provider({
+            label: 'Validation Markup',
+            data: p,
+            params: PD.withDefaults(Mesh.Params, {}),
+            getShape: (_ctx, data) => buildMarkupMesh(data.primitives),
+            geometryUtils: Mesh.Utils,
+        }, { label: 'Validation Markup' });
+    },
+});
+type MarkupMesh = typeof MarkupMesh;
+
 function deinterleave(flat: ArrayLike<number>, n: number) {
     const x = new Float32Array(n);
     const y = new Float32Array(n);
@@ -276,6 +348,7 @@ export class LiveViewer {
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
     private probeChannels: Map<number, StateObjectSelector[]> = new Map();
+    private markupChannels: Map<number, StateObjectSelector> = new Map();
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -712,6 +785,27 @@ export class LiveViewer {
     }
 
     /**
+     * Draw a validator's MolProbity markup on `channel` (spheres/cylinders/triangles
+     * in one Mesh). Empty `primitives` clears the channel.
+     */
+    async setMarkup(channel: number, primitives: MarkupPrimitive[]) {
+        await this.clearMarkup(channel);
+        if (!primitives || primitives.length === 0) return;
+        const node = this.plugin.state.data.build().toRoot()
+            .apply(MarkupMesh, { primitives }).apply(ShapeRepresentation3D);
+        await node.commit();
+        this.markupChannels.set(channel, node.selector);
+    }
+
+    /** Remove a validator's markup overlay. */
+    async clearMarkup(channel: number) {
+        const node = this.markupChannels.get(channel);
+        if (!node) return;
+        this.markupChannels.delete(channel);
+        if (node.ref) await this.plugin.state.data.build().delete(node.ref).commit();
+    }
+
+    /**
      * Set the click interaction mode. `'select'` builds a selection reported to
      * Python; `'distance'|'angle'|'dihedral'|'label'` collect N clicks then draw
      * that measurement; `'off'` does neither. Modes are mutually exclusive.
@@ -1003,7 +1097,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
@@ -1037,6 +1131,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'orient' && viewer) {
                 viewer.orient(msg.target, msg.up, msg.direction, msg.radius);
+            } else if (msg.type === 'markup' && viewer) {
+                await viewer.setMarkup(msg.channel, msg.primitives ?? []);
             } else if (msg.type === 'representations' && viewer) {
                 // Attach the per-atom values (received on the binary attribute
                 // channel) to any attribute-coloured spec before applying.
