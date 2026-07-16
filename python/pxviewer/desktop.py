@@ -648,12 +648,13 @@ class ControlsWindow:
 
         # -- Open bar -----------------------------------------------------
         open_row = QHBoxLayout()
-        self._open_btn = QPushButton("Open structure or map…")
+        self._open_btn = QPushButton("Open…")
+        self._open_btn.setToolTip("Open a structure or map (models via cctbx; maps as .mrc/.map/.ccp4)")
         self._open_btn.setMinimumHeight(38)
         self._open_btn.clicked.connect(self._on_open_file)
         open_row.addWidget(self._open_btn, stretch=1)
-        self._sample_btn = QPushButton(SAMPLE_STRUCTURE[1])
-        self._sample_btn.setToolTip("Load the bundled sample model")
+        self._sample_btn = QPushButton("Sample")
+        self._sample_btn.setToolTip(f"Load the bundled sample ({SAMPLE_STRUCTURE[1]})")
         self._sample_btn.clicked.connect(self._on_load_sample)
         if sample_structure_path() is None:
             self._sample_btn.setEnabled(False)
@@ -715,7 +716,7 @@ class ControlsWindow:
         sl = QVBoxLayout(sel_box)
         sl.setSpacing(6)
         pick_row = QHBoxLayout()
-        self._pick_btn = QPushButton("Pick atoms in the viewer")
+        self._pick_btn = QPushButton("Pick atoms")
         self._pick_btn.setCheckable(True)
         self._pick_btn.setToolTip("Click atoms in the 3D view to build a selection.")
         self._pick_btn.toggled.connect(self._on_toggle_select)
@@ -736,16 +737,19 @@ class ControlsWindow:
         expr_row.addWidget(self._select_expr_btn)
         sl.addLayout(expr_row)
 
-        chips = QHBoxLayout()
+        from PySide6.QtWidgets import QGridLayout, QSizePolicy
+
+        sl.addWidget(QLabel("Quick select:"))
+        chips = QGridLayout()
         chips.setSpacing(4)
-        chips.addWidget(QLabel("Quick:"))
-        for label, expr in (("Protein", "protein"), ("Ligands", "hetero and not water"),
-                            ("Water", "water"), ("Backbone", "protein and name CA")):
+        specs = [("Protein", "protein"), ("Ligands", "hetero and not water"),
+                 ("Water", "water"), ("Backbone", "protein and name CA")]
+        for i, (label, expr) in enumerate(specs):
             chip = QPushButton(label)
             chip.setToolTip(expr)
+            chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
             chip.clicked.connect(lambda _c=False, e=expr: self._run_selection(e))
-            chips.addWidget(chip)
-        chips.addStretch()
+            chips.addWidget(chip, i // 2, i % 2)  # two columns
         sl.addLayout(chips)
 
         self._selection_label = QLabel("none selected")
@@ -800,7 +804,7 @@ class ControlsWindow:
         grid.setSpacing(6)
         specs = [("Distance", "distance", 2), ("Angle", "angle", 3), ("Dihedral", "dihedral", 4)]
         for i, (label, kind, n) in enumerate(specs):
-            btn = QPushButton(f"{label} ({n})")
+            btn = QPushButton(label)
             btn.setToolTip(f"Measure a {kind} from {n} selected atoms.")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             grid.addWidget(btn, 0, i)
@@ -878,9 +882,13 @@ class ControlsWindow:
         def add_combo(label, options, current, on_pick):
             r = QHBoxLayout()
             lab = QLabel(label)
-            lab.setMinimumWidth(90)
+            lab.setMinimumWidth(80)
             r.addWidget(lab)
             combo = QComboBox()
+            # Let the combo shrink and elide instead of forcing a wide panel from a
+            # long item like "By secondary structure".
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(6)
             for text, value in options:
                 combo.addItem(text, value)
             idx = combo.findData(current)
@@ -901,11 +909,12 @@ class ControlsWindow:
             if len(types) > 1:
                 r = QHBoxLayout()
                 lab = QLabel("Show")
-                lab.setMinimumWidth(90)
+                lab.setMinimumWidth(80)
                 r.addWidget(lab)
                 r.addWidget(self._make_type_combo(mid, types, set(it.get("hidden_types") or [])), stretch=1)
                 self._appearance_layout.addLayout(r)
-            inter = QCheckBox("Computed interactions (H-bonds, salt bridges, …)")
+            inter = QCheckBox("Computed interactions")
+            inter.setToolTip("Overlay Mol*-computed non-covalent contacts (H-bonds, salt bridges, …).")
             inter.setChecked(bool(it.get("interactions")))
             inter.toggled.connect(lambda on, d=mid: self._desktop.set_model_interactions(d, on))
             self._appearance_layout.addWidget(inter)
