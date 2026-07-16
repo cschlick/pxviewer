@@ -121,6 +121,16 @@ def _check_qt() -> None:
         ) from exc
 
 
+_ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+
+
+def _app_icon():
+    """The pxviewer window/dock icon as a QIcon, or None if the asset is missing."""
+    from PySide6.QtGui import QIcon
+
+    return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
+
+
 def _make_bridge():
     """A QObject that marshals background-thread events onto the Qt GUI thread.
 
@@ -541,6 +551,9 @@ class ViewportWindow:
 
         self._window = QWidget()
         self._window.setWindowTitle(title)
+        icon = _app_icon()
+        if icon is not None:
+            self._window.setWindowIcon(icon)
         self._window.setMinimumSize(640, 480)
 
         layout = QVBoxLayout(self._window)
@@ -583,6 +596,9 @@ class ControlsWindow:
         self._desktop = desktop
         self._window = QWidget()
         self._window.setWindowTitle(title)
+        icon = _app_icon()
+        if icon is not None:
+            self._window.setWindowIcon(icon)
         self._window.setMinimumSize(300, 480)  # compact — the viewer takes the space
 
         layout = QVBoxLayout(self._window)
@@ -1695,6 +1711,9 @@ class DesktopApp:
         self._app = QApplication.instance()
         if self._app is None:
             self._app = QApplication(sys.argv[:1])
+        icon = _app_icon()  # dock/taskbar icon for the whole app
+        if icon is not None:
+            self._app.setWindowIcon(icon)
 
         self._webapp = Webapp(host=host, port=port)
 
