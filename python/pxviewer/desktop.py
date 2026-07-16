@@ -1998,14 +1998,18 @@ class DesktopApp:
         model = getattr(session, "model", None)
         return "cartoon" if model is not None and cctbx_io.model_is_polymer(model) else "ball-and-stick"
 
-    def _add_model(self, session, name: str, *, group: Optional[str] = None) -> str:
-        """Register + show a model session (visible + active); returns its id."""
+    def _add_model(self, session, name: str, *, group: Optional[str] = None,
+                   rep: Optional[str] = None) -> str:
+        """Register + show a model session (visible + active); returns its id.
+
+        ``rep`` overrides the representation; otherwise cartoon reads better for a
+        polymer and ball-and-stick otherwise. The choice is replayed to the viewer
+        when it connects and shown in the inline dropdown.
+        """
         session.start(host=self._host, port=0)
         self._model_counter += 1
         mid = f"model-{self._model_counter}"
-        # Cartoon reads better for a polymer, ball-and-stick otherwise; the choice
-        # is replayed to the viewer when it connects and shown in the inline dropdown.
-        rep = self._default_model_rep(session)
+        rep = rep or self._default_model_rep(session)
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
                  "rep": rep, "color": None, "hidden_types": set(), "type_groups": None,
                  "interactions": False}
@@ -2131,7 +2135,9 @@ class DesktopApp:
 
             def add_on_main():
                 hsession = LiveSession.from_cctbx_model(hmodel)
-                box["mid"] = self._add_model(hsession, f"{name} + H")
+                # Ball-and-stick so the placed hydrogens and the clash spikes are
+                # actually visible (a cartoon ribbon would hide both).
+                box["mid"] = self._add_model(hsession, f"{name} + H", rep="ball-and-stick")
                 box["session"] = hsession
                 self.set_model_visible(src_mid, False)  # hide the H-less original
                 ready.set()
