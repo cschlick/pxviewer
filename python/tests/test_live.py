@@ -349,6 +349,59 @@ def test_set_volume_style_command_reaches_client(session):
     asyncio.run(scenario())
 
 
+def test_set_volume_iso_command_reaches_client(session):
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_volume_iso("vol5", 2.5)
+            message = await asyncio.wait_for(ws.recv(), timeout=5)
+            event = json.loads(message)
+            assert event == {"type": "volume_iso", "ref": "vol5", "value": 2.5}
+
+    asyncio.run(scenario())
+
+
+def test_volume_scroll_target_is_replayed_to_late_clients(session):
+    """A volume's style/colour/level survive a viewport reload because the scene
+    carries them. The scroll target is not part of the scene, so it must be replayed
+    on connect — otherwise shift+scroll goes dead after any scene change."""
+    async def scenario():
+        import json
+
+        session.set_volume_scroll_target("vol6")
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "volume_scroll_target", "ref": "vol6"}
+
+    asyncio.run(scenario())
+
+
+def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
+    """Shift+scroll contouring is applied in the viewer and echoed back, which is how
+    the controls hear about a level they did not set."""
+    async def scenario():
+        import json
+
+        seen = []
+        session.on_volume_iso(lambda ref, value: seen.append((ref, value)))
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            await ws.send(json.dumps({"type": "volume-iso-changed", "ref": "vol7", "value": 3.25}))
+            for _ in range(50):
+                if seen:
+                    break
+                await asyncio.sleep(0.05)
+        assert seen == [("vol7", 3.25)]
+
+    asyncio.run(scenario())
+
+
 def test_set_volume_position_command_reaches_client(session):
     async def scenario():
         import json

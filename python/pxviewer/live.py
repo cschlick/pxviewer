@@ -32,6 +32,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
+  - {"type": "volume-iso-changed", "ref": str, "value": float}  shift+scroll contouring
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -490,6 +491,11 @@ class LiveSession:
         # measure mode they click N atoms and the primitive is drawn.
         self._click_mode = "off"
         self._mouse_selection_indices: List[int] = []
+        self._volume_iso_handlers: List[Callable[[str, float], None]] = []
+        # Which volume shift+scroll contours. Not part of the MVSJ scene (unlike a
+        # volume's style/colour/level, which a rebuild restores), so it has to be
+        # replayed to late clients or the wheel goes dead after every scene reload.
+        self._volume_scroll_target: Optional[str] = None
         self._selection_handlers: List[Callable[[Selection], None]] = []
         self._measure_handlers: List[Callable[[Primitive], None]] = []
         self._selection_changed = threading.Event()
@@ -822,6 +828,40 @@ class LiveSession:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_iso(self, ref: str, value: float) -> None:
+        """Broadcast a command to set a volume's contour level, in sigma.
+
+        The level is relative (sigma), so it means the same thing for any map — the
+        viewer never has to know a map's absolute scale to contour it sensibly.
+        Thread-safe: may be called from any thread.
+        """
+        message = json.dumps({"type": "volume_iso", "ref": str(ref), "value": float(value)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_scroll_target(self, ref: Optional[str]) -> None:
+        """Name the volume that shift+scroll in the viewport adjusts (None = nothing).
+
+        The wheel is a shortcut for the contour control the user is looking at, so the
+        target is whichever volume the controls are pointing at rather than anything the
+        viewport decides for itself. Thread-safe: may be called from any thread.
+        """
+        self._volume_scroll_target = None if ref is None else str(ref)
+        message = json.dumps(
+            {"type": "volume_scroll_target", "ref": self._volume_scroll_target})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def on_volume_iso(self, handler: Callable[[str, float], None]) -> None:
+        """Register a callback for contour levels changed in the viewport (shift+scroll).
+
+        Called with ``(ref, value)``. The viewer applies the change itself; this is how
+        the controls hear about it, so the slider keeps telling the truth.
+        """
+        self._volume_iso_handlers.append(handler)
 
     def set_volume_position(self, ref: str, position: Any) -> None:
         """Broadcast a command to translate a volume by reference.
@@ -1567,6 +1607,11 @@ class LiveSession:
                 )
             if self._computed_interactions_visible:
                 await self._locked_send(websocket, json.dumps({"type": "computed-interactions", "visible": True}))
+            if self._volume_scroll_target is not None:
+                await self._locked_send(
+                    websocket,
+                    json.dumps({"type": "volume_scroll_target", "ref": self._volume_scroll_target}),
+                )
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
@@ -1613,6 +1658,14 @@ class LiveSession:
                     pass
         elif etype == "measure":
             self._on_measure(event)
+        elif etype == "volume-iso-changed":
+            ref, value = event.get("ref"), event.get("value")
+            if isinstance(ref, str) and isinstance(value, (int, float)):
+                for handler in self._volume_iso_handlers:
+                    try:
+                        handler(ref, float(value))
+                    except Exception:  # pragma: no cover - user callback errors
+                        pass
         elif etype == "selection-result":
             req_id = event.get("reqId")
             with self._pending_lock:

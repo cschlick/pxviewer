@@ -443,6 +443,83 @@ def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
         app.stop()
 
 
+def test_volume_appearance_controls(qapp, tmp_path):
+    """A focused volume gets style, colour, opacity and a contour level. Each is kept
+    on the entry (so a scene rebuild restores it) and pushed live (so nothing reloads)."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import DEFAULT_ISO_SIGMA, VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        entry = app._volume_entry(vid)
+        assert entry["iso"] == DEFAULT_ISO_SIGMA
+
+        app.set_volume_color(vid, "salmon")
+        app.set_volume_opacity(vid, 0.4)
+        app.set_volume_iso(vid, 3.25)
+        assert (entry["color"], entry["opacity"], entry["iso"]) == ("salmon", 0.4, 3.25)
+
+        # The scene composes from the entry, so a reload restores all of it.
+        assert app._write_volume_scene() is not None
+
+        # Focusing the volume builds the controls and points shift+scroll at it.
+        ctl = app._controls
+        ctl._update_appearance("volume", vid)
+        assert ctl._iso_row is not None
+        assert ctl._iso_row["spin"].value() == 3.25
+        assert app._volume_scroll_target == vid
+
+        # The spinbox and slider drive each other and the backend.
+        ctl._iso_row["spin"].setValue(5.0)
+        assert entry["iso"] == 5.0
+        assert ctl._iso_row["slider"].value() == 500  # 5.0 sigma at 0.01 resolution
+
+        # Focusing something that is not a volume takes the wheel target away.
+        ctl._update_appearance(None, None)
+        assert ctl._iso_row is None
+        assert app._volume_scroll_target is None
+    finally:
+        app.stop()
+
+
+def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
+    """Shift+scroll is applied in the viewer, so the level arrives here after the fact.
+    The widgets must follow it without writing it back — that would fight the scroll."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        entry = app._volume_entry(vid)
+        ctl = app._controls
+        ctl._update_appearance("volume", vid)
+
+        sent = []
+        app._volume_command = lambda *a, **k: sent.append(a)  # nothing may go back out
+        app._on_volume_iso_changed(entry["ref"], 4.5)
+
+        assert entry["iso"] == 4.5
+        assert ctl._iso_row["spin"].value() == 4.5
+        assert ctl._iso_row["slider"].value() == 450
+        assert sent == []  # the viewer already applied it; echoing would fight the user
+    finally:
+        app.stop()
+
+
 def test_console_binds_and_tracks_active_session(qapp):
     """The embedded console exposes `app`/`session`, and `session` follows active."""
     pytest.importorskip("qtconsole")

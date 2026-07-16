@@ -38,6 +38,15 @@ from .webapp import Webapp
 
 # Distinct default isosurface colours so overlaid volumes read apart.
 _VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
+_VOLUME_COLOR_OPTIONS = [(c.capitalize(), c) for c in _VOLUME_COLORS]
+
+# Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
+# for any map and one fixed slider range serves all of them. The slider covers the range
+# people actually work in; the spinbox goes past it, since cryo-EM maps are often
+# contoured well above 10 sigma.
+_ISO_SLIDER_MAX = 10.0
+_ISO_SPIN_MAX = 100.0
+_ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in steps of this
 
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
 # The model values must be types the LiveSession API accepts (see live.py's
@@ -150,6 +159,7 @@ def _make_bridge():
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
+        volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
 
     return _Bridge()
 
@@ -659,6 +669,7 @@ class ControlsWindow:
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
+        desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
         self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
         self._update_pair_button()
         self._update_appearance()  # empty-state placeholder
@@ -1137,10 +1148,12 @@ class ControlsWindow:
         self._clear_layout(self._appearance_layout)
         it = self._find_item(kind, ident) if ident else None
         self._focused = (kind, ident) if it else (None, None)
+        self._iso_row = None  # rebuilt below only when a volume is focused
         if it is None:
             hint = QLabel("Select an object above to edit how it looks.")
             hint.setStyleSheet("color: #999;")
             self._appearance_layout.addWidget(hint)
+            self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
 
         self._appearance_box.setTitle(f"Appearance · {it['name']}")
@@ -1193,8 +1206,148 @@ class ControlsWindow:
             self._appearance_layout.addWidget(inter)
         else:  # volume
             vid = it["id"]
-            add_combo("Style", _VOLUME_STYLE_OPTIONS, it.get("style"),
-                      lambda v: self._desktop.set_volume_style(vid, v))
+            # Read the live values, not this snapshot: the level in particular can have
+            # moved since (shift+scroll, or the console) without a new summary.
+            live = {**it, **self._desktop.volume_appearance(vid)}
+
+            def _set_style(v, it=it):
+                it["style"] = v
+                self._safe(lambda: self._desktop.set_volume_style(vid, v))
+
+            def _set_color(v, it=it):
+                it["color"] = v
+                self._safe(lambda: self._desktop.set_volume_color(vid, v))
+
+            add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
+            add_combo("Colour", _VOLUME_COLOR_OPTIONS, live.get("color"), _set_color)
+
+            def _set_opacity(v, it=it):
+                it["opacity"] = v
+                self._safe(lambda: self._desktop.set_volume_opacity(vid, v))
+
+            self._add_opacity_row(live.get("opacity"), _set_opacity)
+
+            def _set_iso(v, it=it):
+                it["iso"] = v
+                self._safe(lambda: self._desktop.set_volume_iso(vid, v))
+
+            self._iso_row = self._add_iso_row(live.get("iso"), _set_iso)
+
+        # Shift+scroll contours whatever the Level slider above is showing, so the
+        # target follows the focused object (and is cleared when it is not a volume).
+        self._safe(lambda: self._desktop.set_volume_scroll_target(
+            it["id"] if it["kind"] == "volume" else None))
+
+    def _on_volume_iso_changed(self, payload) -> None:
+        """A contour level was changed in the viewport (shift+scroll): show it here.
+
+        The viewer already applied it, so the widgets are moved with their signals
+        suppressed — writing it back would round-trip the user's own scroll.
+        """
+        vid, value = payload
+        if self._iso_row is None or self._focused != ("volume", vid):
+            return
+        row = self._iso_row
+        row["syncing"]["on"] = True
+        try:
+            row["slider"].setValue(
+                min(row["slider"].maximum(), int(round(value / _ISO_RESOLUTION))))
+            row["spin"].setValue(value)
+        finally:
+            row["syncing"]["on"] = False
+        item = self._find_item("volume", vid)
+        if item is not None:
+            item["iso"] = value
+
+    def _add_opacity_row(self, current, on_change):
+        """Opacity as a slider with its value beside it (QSlider is integer-only)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider
+
+        value = 1.0 if current is None else float(current)
+        row = QHBoxLayout()
+        lab = QLabel("Opacity")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(int(round(value * 100)))
+        readout = QLabel(f"{value:.2f}")
+        readout.setMinimumWidth(34)
+
+        def moved(v):
+            readout.setText(f"{v / 100:.2f}")
+            on_change(v / 100)
+
+        slider.valueChanged.connect(moved)
+        row.addWidget(slider, stretch=1)
+        row.addWidget(readout)
+        self._appearance_layout.addLayout(row)
+        return slider
+
+    def _add_iso_row(self, current, on_change):
+        """Contour level: a slider to hunt with, a spinbox for the exact value.
+
+        Both are wanted. The slider is how you actually find a level — you watch the map,
+        not the number — and updates are live, so dragging is the point. The spinbox
+        makes a level reproducible ("contour at 1.5 sigma") and reaches past the slider's
+        range for maps that need it.
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QSlider
+
+        from .volume_io import DEFAULT_ISO_SIGMA
+
+        value = DEFAULT_ISO_SIGMA if current is None else float(current)
+        row = QHBoxLayout()
+        lab = QLabel("Level")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(0, int(round(_ISO_SLIDER_MAX / _ISO_RESOLUTION)))
+        slider.setValue(min(slider.maximum(), int(round(value / _ISO_RESOLUTION))))
+        spin = QDoubleSpinBox()
+        spin.setRange(0.0, _ISO_SPIN_MAX)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.05)
+        spin.setSuffix(" σ")
+        spin.setValue(value)
+        spin.setToolTip(
+            "Contour level in sigma. Shift+scroll over the viewport steps this too.")
+
+        # The two drive each other, so guard against the echo coming back.
+        syncing = {"on": False}
+
+        def apply(v):
+            on_change(v)
+
+        def from_slider(step):
+            if syncing["on"]:
+                return
+            syncing["on"] = True
+            try:
+                spin.setValue(step * _ISO_RESOLUTION)
+            finally:
+                syncing["on"] = False
+            apply(step * _ISO_RESOLUTION)
+
+        def from_spin(v):
+            if syncing["on"]:
+                return
+            syncing["on"] = True
+            try:
+                slider.setValue(min(slider.maximum(), int(round(v / _ISO_RESOLUTION))))
+            finally:
+                syncing["on"] = False
+            apply(v)
+
+        slider.valueChanged.connect(from_slider)
+        spin.valueChanged.connect(from_spin)
+        row.addWidget(slider, stretch=1)
+        row.addWidget(spin)
+        self._appearance_layout.addLayout(row)
+        return {"slider": slider, "spin": spin, "syncing": syncing}
 
     def _safe(self, fn):
         try:
@@ -2038,6 +2191,7 @@ class DesktopApp:
         self._sigint_installed = False
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
+        self._volume_scroll_target: Optional[str] = None  # volume shift+scroll contours
 
         self.bridge = _make_bridge()
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
@@ -2269,6 +2423,7 @@ class DesktopApp:
         if self._dummy is None:
             self._dummy = _dummy_session()
             self._dummy.start(host=self._host, port=0)
+            self._dummy.on_volume_iso(self._on_volume_iso_changed)
             # Render nothing: an empty `on` set draws no atoms, so an empty scene
             # is truly empty (the dummy only keeps the ws channel open).
             try:
@@ -2394,6 +2549,9 @@ class DesktopApp:
         # mode is what actually turns picking on/off. Registering here means a
         # selection can be built in any loaded model, not just the active one.
         session.on_selection(lambda sel, mid=mid: self._on_model_selection(mid, sel))
+        # Volume commands ride whichever session is the control session, so contour
+        # changes made in the viewport can come back on any of them.
+        session.on_volume_iso(self._on_volume_iso_changed)
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
@@ -2729,18 +2887,85 @@ class DesktopApp:
         else:
             raise ValueError("nothing to write")
 
-    def set_volume_style(self, vid: str, style: str) -> None:
-        """Change a volume's isosurface style (surface/wireframe/mesh) live."""
+    def _volume_command(self, vid: str, key: str, value, send) -> None:
+        """Record a volume appearance change and push it to the viewport live.
+
+        The value is kept on the entry so it survives a scene rebuild (which composes
+        the MVSJ from these), and sent as a command so nothing has to reload — that is
+        what lets a slider drive it while being dragged.
+        """
         entry = self._volume_entry(vid)
-        if entry is None or entry.get("style") == style:
+        if entry is None or entry.get(key) == value:
             return
-        entry["style"] = style
+        entry[key] = value
         control = self._control_session()
         if control is not None:
             try:
-                control.set_volume_style(entry["ref"], style)
+                send(control, entry["ref"], value)
             except Exception:  # pragma: no cover - defensive
                 pass
+
+    def set_volume_style(self, vid: str, style: str) -> None:
+        """Change a volume's isosurface style (surface/wireframe/mesh) live."""
+        self._volume_command(vid, "style", style,
+                             lambda c, ref, v: c.set_volume_style(ref, v))
+
+    def set_volume_iso(self, vid: str, value: float) -> None:
+        """Set a volume's contour level, in sigma, live."""
+        self._volume_command(vid, "iso", float(value),
+                             lambda c, ref, v: c.set_volume_iso(ref, v))
+
+    def set_volume_opacity(self, vid: str, value: float) -> None:
+        """Set a volume's opacity (0-1) live."""
+        self._volume_command(vid, "opacity", float(value),
+                             lambda c, ref, v: c.set_volume_opacity(ref, v))
+
+    def set_volume_color(self, vid: str, color: str) -> None:
+        """Set a volume's colour live."""
+        self._volume_command(vid, "color", color,
+                             lambda c, ref, v: c.set_volume_color(ref, v))
+
+    def volume_appearance(self, vid: str) -> dict:
+        """A volume's current style/colour/opacity/level.
+
+        The Loaded summary is a snapshot taken when it was emitted, and these can change
+        without one — from the console, or by shift+scroll in the viewport — so the
+        Appearance pane reads them from the entry rather than trusting the snapshot.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return {}
+        return {key: entry.get(key) for key in ("style", "color", "opacity", "iso")}
+
+    def set_volume_scroll_target(self, vid: Optional[str]) -> None:
+        """Point shift+scroll contouring at a volume (None = nothing).
+
+        The wheel adjusts whatever the Appearance pane's Level slider is showing, so
+        this follows the focused object rather than the viewport picking for itself.
+        """
+        entry = self._volume_entry(vid) if vid else None
+        # Always re-assert: the viewport reloads on any scene change, and the session
+        # carrying volume commands can switch (dummy <-> active model), so the target
+        # has to be told to whoever is carrying them now.
+        self._volume_scroll_target = entry["id"] if entry else None
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_scroll_target(entry["ref"] if entry else None)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def _on_volume_iso_changed(self, ref: str, value: float) -> None:
+        """A contour level changed in the viewport (shift+scroll): follow it here.
+
+        The viewer has already applied it, so this only records the value and lets the
+        controls catch up — sending it back would fight the user's next scroll.
+        """
+        entry = next((v for v in self._volumes if v["ref"] == ref), None)
+        if entry is None:
+            return
+        entry["iso"] = float(value)
+        self.bridge.volume_iso_changed.emit((entry["id"], float(value)))
 
     def set_active_model(self, mid: str) -> None:
         """Make a loaded model the active one (the atoms table + selection follow it)."""
@@ -2897,7 +3122,8 @@ class DesktopApp:
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
-             "active": False, "group": v["group"], "style": v.get("style")}
+             "active": False, "group": v["group"], "style": v.get("style"),
+             "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso")}
             for v in self._volumes
         ]
         groups = [{"id": gid, "name": g["name"]} for gid, g in self._groups.items()]

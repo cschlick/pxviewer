@@ -1064,23 +1064,9 @@ async function setAxis(plugin: PluginContext, visible: boolean) {
     });
 }
 
-async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (!repr) return;
-    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
-        old.colorTheme = { name: 'uniform', params: { value: decodeColor(color) } };
-    }).commit();
-}
-
-async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (!repr) return;
-    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
-        if (old.type?.name === 'isosurface') {
-            old.type.params.alpha = opacity;
-        }
-    }).commit();
-}
+/** Contour level step per wheel notch, and the ceiling shared with the controls. */
+const ISO_WHEEL_STEP = 0.1;
+const ISO_MAX_SIGMA = 100;
 
 const STYLE_VISUALS: Record<string, string[]> = {
     surface: ['solid'],
@@ -1088,19 +1074,59 @@ const STYLE_VISUALS: Record<string, string[]> = {
     mesh: ['solid', 'wireframe'],
 };
 
-async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
+/** Update a volume's representation params in place — no scene rebuild, so this is
+ *  cheap enough to drive from a slider being dragged. */
+async function updateVolumeRepr(plugin: PluginContext, ref: string, mutate: (old: any) => void) {
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
+    await plugin.state.data.build().to(repr.transform.ref).update(mutate).commit();
+}
+
+async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
     const visuals = STYLE_VISUALS[style.toLowerCase()];
     if (!visuals) {
         console.warn('Unknown volume style:', style);
         return;
     }
-    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+    await updateVolumeRepr(plugin, ref, (old: any) => {
         if (old.type?.name === 'isosurface') {
             old.type.params.visuals = visuals;
         }
-    }).commit();
+    });
+}
+
+/** Contour level, in sigma. Mol* does the sigma scaling, so the value means the same
+ *  thing for any map — which is why a fixed slider range works. */
+async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
+    await updateVolumeRepr(plugin, ref, (old: any) => {
+        if (old.type?.name === 'isosurface') {
+            old.type.params.isoValue = { kind: 'relative', relativeValue: value };
+        }
+    });
+}
+
+async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
+    await updateVolumeRepr(plugin, ref, (old: any) => {
+        if (old.type?.name === 'isosurface') old.type.params.alpha = opacity;
+    });
+}
+
+async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
+    const decoded = decodeColor(color);
+    if (decoded === undefined) {
+        console.warn('Unknown volume colour:', color);
+        return;
+    }
+    await updateVolumeRepr(plugin, ref, (old: any) => {
+        old.colorTheme = { name: 'uniform', params: { value: decoded } };
+    });
+}
+
+/** Read a volume's current contour level back out of the Mol* state. */
+async function readVolumeIso(plugin: PluginContext, ref: string): Promise<number | undefined> {
+    const repr = await findVolumeReprCell(plugin, ref);
+    const iso = (repr?.transform.params as any)?.type?.params?.isoValue;
+    return iso?.kind === 'relative' ? iso.relativeValue : undefined;
 }
 
 async function setVolumePosition(plugin: PluginContext, ref: string, position: [number, number, number]) {
@@ -1163,6 +1189,43 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // since they may arrive while it is still building.
     const attributeValues = new Map<string, Float32Array>();
 
+    // Shift+scroll steps the contour level of whichever volume the controls are
+    // pointing at — the wheel is a shortcut for the Level slider you can see, so the
+    // server names the target and we echo every change back to keep the two in step.
+    let isoScrollTarget: string | null = null;
+    let isoScrollValue: number | null = null;
+    let isoPending: number | null = null;
+    let isoFlushing = false;
+
+    async function flushIso() {
+        if (isoFlushing) return;
+        isoFlushing = true;
+        try {
+            // Coalesce: the wheel fires far faster than a state update commits.
+            while (isoPending !== null && isoScrollTarget) {
+                const value = isoPending;
+                isoPending = null;
+                await setVolumeIso(plugin, isoScrollTarget, value);
+                ws.send(JSON.stringify({ type: 'volume-iso-changed', ref: isoScrollTarget, value }));
+            }
+        } finally {
+            isoFlushing = false;
+        }
+    }
+
+    const onWheel = (ev: WheelEvent) => {
+        if (!ev.shiftKey || !isoScrollTarget || isoScrollValue === null) return;
+        // Capture phase + stopPropagation so this never reaches Mol*'s zoom handler:
+        // plain scroll must keep zooming the camera.
+        ev.preventDefault();
+        ev.stopPropagation();
+        const next = isoScrollValue - Math.sign(ev.deltaY) * ISO_WHEEL_STEP;
+        isoScrollValue = Math.min(ISO_MAX_SIGMA, Math.max(0, Math.round(next * 100) / 100));
+        isoPending = isoScrollValue;
+        void flushIso();
+    };
+    window.addEventListener('wheel', onWheel, { capture: true, passive: false });
+
     ws.onopen = () => {
         console.log('pxviewer live connected to', url);
     };
@@ -1206,6 +1269,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'volume_iso' && typeof msg.ref === 'string' && typeof msg.value === 'number') {
+                await setVolumeIso(plugin, msg.ref, msg.value);
+                if (msg.ref === isoScrollTarget) isoScrollValue = msg.value;
+            } else if (msg.type === 'volume_scroll_target') {
+                isoScrollTarget = typeof msg.ref === 'string' ? msg.ref : null;
+                isoScrollValue = isoScrollTarget ? (await readVolumeIso(plugin, isoScrollTarget)) ?? null : null;
             } else if (msg.type === 'volume_position' && typeof msg.ref === 'string' && Array.isArray(msg.position) && msg.position.length === 3) {
                 await setVolumePosition(plugin, msg.ref, msg.position);
             } else if (msg.type === 'highlight' && viewer) {
@@ -1306,5 +1375,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         }
     };
 
-    return { close: () => ws.close() };
+    return {
+        close: () => {
+            window.removeEventListener('wheel', onWheel, { capture: true });
+            ws.close();
+        },
+    };
 }
