@@ -1396,6 +1396,17 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'screenshot') {
+                // The scene only exists here, so the picture is taken here and sent
+                // back — which works for a remote viewer as much as the desktop one.
+                let dataUri: string | undefined;
+                let error: string | undefined;
+                try {
+                    dataUri = await plugin.helpers.viewportScreenshot?.getImageDataUri();
+                } catch (e) {
+                    error = String(e);
+                }
+                ws.send(JSON.stringify({ type: 'screenshot-result', reqId: msg.reqId, dataUri, error }));
             } else if (msg.type === 'clip') {
                 const slab: Slab = { front: msg.front ?? 0, back: msg.back ?? 1 };
                 if (typeof msg.ref === 'string') {

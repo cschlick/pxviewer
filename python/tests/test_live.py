@@ -7,6 +7,7 @@ topology, receives streamed frames, and sends a pick event back.
 import asyncio
 import json
 import struct
+import threading
 
 import numpy as np
 import pytest
@@ -400,6 +401,41 @@ def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
         assert seen == [("vol7", 3.25)]
 
     asyncio.run(scenario())
+
+
+def test_screenshot_round_trips(session):
+    """The scene only exists in the browser, so the picture is taken there and comes
+    back over the wire — which is what makes this work for a remote viewer too."""
+    import base64
+
+    png = base64.b64encode(b"\x89PNG\r\n\x1a\n fake").decode()
+    result = {}
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+
+            def ask():
+                result["png"] = session.screenshot(timeout=5)
+
+            caller = threading.Thread(target=ask)
+            caller.start()
+            request = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert request["type"] == "screenshot" and "reqId" in request
+            await ws.send(json.dumps({
+                "type": "screenshot-result", "reqId": request["reqId"],
+                "dataUri": f"data:image/png;base64,{png}",
+            }))
+            caller.join(timeout=5)
+
+    asyncio.run(scenario())
+    assert result["png"] == b"\x89PNG\r\n\x1a\n fake"  # decoded from the data URI
+
+
+def test_screenshot_returns_none_when_nobody_answers(session):
+    """No viewer connected -> no picture, rather than hanging forever."""
+    assert session.screenshot(timeout=0.3) is None
 
 
 def test_set_clip_command_reaches_client(session):

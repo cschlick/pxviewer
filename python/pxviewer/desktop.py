@@ -837,10 +837,14 @@ class ControlsWindow:
         ol.addLayout(open_row)
 
         reset_row = QHBoxLayout()
+        picture_btn = QPushButton("Save picture…")
+        picture_btn.setToolTip("Render the viewport to a PNG.")
+        picture_btn.clicked.connect(self._on_save_picture)
         reset_btn = QPushButton("Reset view")
         reset_btn.setToolTip("Reframe the camera to fit the whole scene.")
         reset_btn.clicked.connect(lambda: self._desktop.reset_view())
         reset_row.addWidget(reset_btn)
+        reset_row.addWidget(picture_btn)
         reset_row.addStretch()
         ol.addLayout(reset_row)
 
@@ -1896,6 +1900,22 @@ class ControlsWindow:
             return
         label = Path(paths[0]).name if len(paths) == 1 else f"{len(paths)} files"
         self._file_label.setText(f"{label}  ({kind})")
+
+    def _on_save_picture(self) -> None:
+        """Ask where to put it first, then photograph: the capture is a round trip to
+        the viewer, and a file dialog in the middle of it would be a strange pause."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save picture", "pxviewer.png", "PNG image (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        try:
+            self._desktop.save_screenshot(path)
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not save picture", str(exc))
 
     def _on_load_sample(self, filename: Optional[str] = None) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -3147,6 +3167,37 @@ class DesktopApp:
         """Set a volume's colour live."""
         self._volume_command(vid, "color", color,
                              lambda c, ref, v: c.set_volume_color(ref, v))
+
+    def save_screenshot(self, path: str) -> None:
+        """Render the viewport and write it to ``path`` as a PNG.
+
+        The picture is taken in the browser (see LiveSession.screenshot), so this waits
+        on a round trip and runs on a background thread. Any connected session can take
+        it — the scene is the page's, not one model's.
+        """
+        session = self._control_session()
+        if session is None:
+            raise ValueError("nothing is loaded to photograph")
+        name = Path(path).name
+
+        def work():
+            try:
+                png = session.screenshot()
+            except Exception as exc:  # pragma: no cover - viewer-side errors
+                self._status(f"screenshot failed: {exc}")
+                return
+            if not png:
+                self._status("screenshot failed: the viewport did not answer")
+                return
+            try:
+                Path(path).write_bytes(png)
+            except OSError as exc:
+                self._status(f"could not write {name}: {exc}")
+                return
+            self._status(f"Saved {name} ({len(png) // 1024} kB)")
+
+        threading.Thread(target=work, name="pxviewer-screenshot", daemon=True).start()
+        self._status("taking a picture…")
 
     def volume_appearance(self, vid: str) -> dict:
         """A volume's current style/colour/opacity/level.

@@ -33,6 +33,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
   - {"type": "volume-iso-changed", "ref": str, "value": float}  shift+scroll contouring
+  - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -44,6 +45,7 @@ with an empty set clears the selection.
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import json
 import struct
@@ -840,6 +842,30 @@ class LiveSession:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def screenshot(self, *, timeout: float = 20.0) -> Optional[bytes]:
+        """Render the viewport and return the PNG bytes (None if nobody answers).
+
+        The picture is taken in the browser, which is the only place the scene exists,
+        and comes back over the wire — so this works for a remote viewer as much as the
+        desktop one. Blocks until the image arrives; call it off the GUI thread.
+        """
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "uri": None, "error": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        self._send_control({"type": "screenshot", "reqId": req_id})
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        if not answered:
+            return None
+        if slot["error"]:
+            raise RuntimeError(f"screenshot failed: {slot['error']}")
+        uri = slot["uri"] or ""
+        if "," not in uri:
+            return None
+        return base64.b64decode(uri.split(",", 1)[1])
 
     def set_clip(self, front: float, back: float, *, ref: Optional[str] = None) -> None:
         """Clip a representation to a front/rear slab.
@@ -1683,6 +1709,14 @@ class LiveSession:
                         handler(ref, float(value))
                     except Exception:  # pragma: no cover - user callback errors
                         pass
+        elif etype == "screenshot-result":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                slot["uri"] = event.get("dataUri")
+                slot["error"] = event.get("error")
+                slot["event"].set()
         elif etype == "selection-result":
             req_id = event.get("reqId")
             with self._pending_lock:
