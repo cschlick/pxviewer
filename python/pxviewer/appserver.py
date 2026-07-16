@@ -42,6 +42,13 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
             return
         super().do_GET()
 
+    def end_headers(self) -> None:
+        # Never cache: the frontend bundle is rebuilt in place during development, and
+        # SimpleHTTPRequestHandler's Last-Modified otherwise lets a viewer keep running
+        # a stale build/index.js after a rebuild.
+        self.send_header("Cache-Control", "no-store, must-revalidate")
+        super().end_headers()
+
     def log_message(self, *args) -> None:  # keep the console focused on the demo
         pass
 
