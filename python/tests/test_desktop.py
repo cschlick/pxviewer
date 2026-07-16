@@ -302,15 +302,6 @@ def test_console_binds_and_tracks_active_session(qapp):
         # Loading another model makes it active; the console's `session` rebinds.
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
         assert shell.user_ns["session"] is app.session_for(b)
-
-        # The console tab hides the Display/Selection controls so it fills the pane.
-        from PySide6.QtWidgets import QTabWidget
-
-        tabs = controls._window.findChild(QTabWidget)
-        tabs.setCurrentIndex(controls._console_tab_index)
-        assert controls._bottom_controls.isHidden()
-        tabs.setCurrentIndex(0)  # File
-        assert not controls._bottom_controls.isHidden()
     finally:
         app.stop()
 
@@ -600,20 +591,16 @@ def test_representation_dropdowns(qapp):
         app.set_volume_style(vid, "wireframe")
         assert v["style"] == "wireframe"
 
-        # The Loaded tree shows an inline rep combo (column 1) on every model/volume row.
-        tree = app._controls._loaded_tree
-        combos = []
+        # Focusing the model shows its appearance controls (representation, colour,
+        # structure-type show/hide) in the Appearance pane.
+        controls = app._controls
+        controls._update_appearance("model", mid)
+        assert controls._appearance_box.title().endswith("1ubq")
+        assert len(controls._appearance_box.findChildren(QComboBox)) >= 2  # rep + colour (+ show)
 
-        def walk(node):
-            for i in range(node.childCount()):
-                child = node.child(i)
-                w = tree.itemWidget(child, 1)
-                if w is not None:
-                    combos.extend(w.findChildren(QComboBox))
-                walk(child)
-
-        walk(tree.invisibleRootItem())
-        assert len(combos) >= 3 and all(isinstance(c, QComboBox) for c in combos)
+        # Focusing the volume shows a style dropdown.
+        controls._update_appearance("volume", vid)
+        assert controls._appearance_box.findChildren(QComboBox)
     finally:
         app.stop()
 
@@ -629,6 +616,45 @@ def test_model_rep_options_are_valid(qapp):
     session = LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]])
     for _label, value in _MODEL_REP_OPTIONS:
         session.set_representation(value)  # must not raise (regression: 'line' did)
+
+
+def test_tools_and_appearance_setters(qapp):
+    """Measure-from-selection, colour/interactions setters, clashes and axis."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from types import SimpleNamespace
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]]), "m")
+
+        # Measure a distance from exactly two selected atoms.
+        app._on_model_selection(mid, SimpleNamespace(indices=[0, 1]))
+        assert "distance" in app.measure_selection("distance")
+        # Wrong atom count is a clear error, not a crash.
+        app._on_model_selection(mid, SimpleNamespace(indices=[0]))
+        with pytest.raises(ValueError):
+            app.measure_selection("distance")
+
+        # Appearance setters update the model entry.
+        app.set_model_color(mid, "chain-id")
+        assert app._model_entry(mid)["color"] == "chain-id"
+        app.set_model_interactions(mid, True)
+        assert app._model_entry(mid)["interactions"] is True
+
+        # Tools that just broadcast must not raise.
+        app.show_clashes()
+        app.clear_clashes()
+        app.clear_measurements()
+        app.set_axis(True)
+    finally:
+        app.stop()
 
 
 def test_active_model_radio(qapp):
@@ -752,20 +778,26 @@ def test_hide_structure_types(qapp):
         assert entry["hidden_types"] == set()
         assert all("on" not in r for r in session._representations.values())
 
-        # The model row carries two dropdowns (representation + structure-type
-        # checklist) since 1UBQ has >1 type present.
-        tree = app._controls._loaded_tree
-        item0 = tree.topLevelItem(0)
-        w = tree.itemWidget(item0, 1)
-        assert w is not None and len(w.findChildren(QComboBox)) == 2
+        # The Appearance pane exposes a structure-type checklist (>1 type present).
+        from PySide6.QtWidgets import QRadioButton
 
-        # Layout: [check] col 0, [controls] col 1, [name] col 2 (widgets on the left).
+        controls = app._controls
+        controls._update_appearance("model", mid)
+        checkables = [
+            c for c in controls._appearance_box.findChildren(QComboBox)
+            if c.model().rowCount() and c.model().item(0).isCheckable()
+        ]
+        assert checkables, "expected a checkable structure-type combo in Appearance"
+
+        # Tree row layout: [visible check] col 0, [active radio] col 1, [name] col 2.
         from PySide6.QtCore import Qt
 
+        tree = controls._loaded_tree
+        item0 = tree.topLevelItem(0)
         assert tree.columnCount() == 3
         assert item0.checkState(0) in (Qt.CheckState.Checked, Qt.CheckState.Unchecked)
-        assert item0.text(0) == "" and item0.text(1) == ""  # no text left of the name
-        assert "1ubq" in item0.text(2)
+        assert isinstance(tree.itemWidget(item0, 1), QRadioButton)
+        assert item0.text(0) == "" and "1ubq" in item0.text(2)
     finally:
         app.stop()
 

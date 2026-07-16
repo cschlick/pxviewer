@@ -52,6 +52,14 @@ _VOLUME_STYLE_OPTIONS = [
     ("Wireframe", "wireframe"),
     ("Mesh", "mesh"),
 ]
+_MODEL_COLOR_OPTIONS = [
+    ("Default", None),
+    ("By element", "element-symbol"),
+    ("By chain", "chain-id"),
+    ("By secondary structure", "secondary-structure"),
+    ("By residue", "residue-name"),
+    ("By hydrophobicity", "hydrophobicity"),
+]
 
 
 def _model_rep_color(rep: str) -> str:
@@ -579,61 +587,27 @@ class ControlsWindow:
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        layout.addWidget(QLabel("<h2>pxviewer</h2>"))
-
         self._console = None  # EmbeddedConsole, created lazily on first tab view
         self._console_started = False
+        self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
+        self._focused: tuple = (None, None)  # (kind, id) currently shown in Appearance
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_file_tab(), "File")
+        tabs.addTab(self._build_scene_tab(), "Scene")
         tabs.addTab(self._build_geometry_tab(), "Geometry")
+        tabs.addTab(self._build_tools_tab(), "Tools")
         console_tab = self._build_console_tab()
         self._console_tab_index = tabs.addTab(console_tab, "Console")
-        tabs.addTab(self._build_demos_tab(), "Demos")
         # The console spins up an IPython kernel, so defer that cost until the tab
         # is actually opened.
         tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(tabs, stretch=1)
 
-        # Display / Selection controls apply to whatever is loaded, so they sit
-        # below the tabs — but they are hidden on the Console tab so the console
-        # fills the whole pane.
-        self._bottom_controls = QWidget()
-        bottom = QVBoxLayout(self._bottom_controls)
-        bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(6)
-        layout.addWidget(self._bottom_controls)
-
-        bottom.addWidget(QLabel("<b>Display</b>"))
-
-        self._interactions_btn = QPushButton("Show computed interactions")
-        self._interactions_btn.setCheckable(True)
-        self._interactions_btn.setToolTip(
-            "Overlay Mol*-computed non-covalent contacts (hydrogen bonds, salt "
-            "bridges, pi-stacking, hydrophobic) as dashed cylinders. For explicit, "
-            "user-defined contacts, use LiveSession.set_interactions() from Python."
-        )
-        self._interactions_btn.clicked.connect(self._on_toggle_interactions)
-        bottom.addWidget(self._interactions_btn)
-
-        bottom.addWidget(QLabel("<b>Selection</b>"))
-
-        self._select_btn = QPushButton("Enable selection mode")
-        self._select_btn.setCheckable(True)
-        self._select_btn.clicked.connect(self._on_toggle_select)
-        bottom.addWidget(self._select_btn)
-
-        self._clear_btn = QPushButton("Clear selection")
-        self._clear_btn.clicked.connect(self._on_clear_selection)
-        bottom.addWidget(self._clear_btn)
-
-        self._selection_label = QLabel("none")
-        self._selection_label.setWordWrap(True)
-        bottom.addWidget(self._selection_label)
-
+        # A slim, always-visible status line.
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(True)
-        bottom.addWidget(self._status_label)
+        self._status_label.setStyleSheet("color: #666;")
+        layout.addWidget(self._status_label)
 
         self._suppress_model_events = False
         # Which model the atoms table shows. Defaults to the active model but the
@@ -645,17 +619,169 @@ class ControlsWindow:
         self._suppress_table_model_combo = False
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
-        desktop.bridge.interactions_changed.connect(self._on_interactions_reset)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
+        self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
 
-    def _build_file_tab(self):
+    def _build_scene_tab(self):
+        """Home: open files, the object list, appearance of the focused object, selection."""
         from PySide6.QtWidgets import (
+            QButtonGroup,
+            QGroupBox,
             QHBoxLayout,
+            QHeaderView,
             QLabel,
             QLineEdit,
-            QListWidget,
+            QPushButton,
+            QScrollArea,
+            QToolButton,
+            QTreeWidget,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        outer = QWidget()
+        ol = QVBoxLayout(outer)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(8)
+
+        # -- Open bar -----------------------------------------------------
+        open_row = QHBoxLayout()
+        self._open_btn = QPushButton("Open structure or map…")
+        self._open_btn.setMinimumHeight(38)
+        self._open_btn.clicked.connect(self._on_open_file)
+        open_row.addWidget(self._open_btn, stretch=1)
+        self._sample_btn = QPushButton(SAMPLE_STRUCTURE[1])
+        self._sample_btn.setToolTip("Load the bundled sample model")
+        self._sample_btn.clicked.connect(self._on_load_sample)
+        if sample_structure_path() is None:
+            self._sample_btn.setEnabled(False)
+        open_row.addWidget(self._sample_btn)
+        demos_btn = QToolButton()
+        demos_btn.setText("Demos ▾")
+        demos_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        demos_btn.setMenu(self._build_demos_menu())
+        open_row.addWidget(demos_btn)
+        ol.addLayout(open_row)
+
+        self._file_label = QLabel("")
+        self._file_label.setWordWrap(True)
+        self._file_label.setStyleSheet("color: #888;")
+        ol.addWidget(self._file_label)
+
+        # Everything below scrolls, so a busy scene never clips the controls.
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setSpacing(10)
+
+        # -- Objects (the spine) -----------------------------------------
+        layout.addWidget(QLabel("<b>Objects</b>"))
+        self._loaded_tree = QTreeWidget()
+        self._loaded_tree.setMinimumHeight(90)
+        self._loaded_tree.setMaximumHeight(200)
+        # Columns: [visible] [active] [name]. Toggles on the left; name last, elides.
+        self._loaded_tree.setColumnCount(3)
+        self._loaded_tree.setHeaderHidden(True)
+        header = self._loaded_tree.header()
+        header.setStretchLastSection(True)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
+        self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
+        self._active_group = QButtonGroup(self._window)  # exclusive active-model radios
+        self._active_group.setExclusive(True)
+        self._active_group.buttonClicked.connect(self._on_active_radio)
+        layout.addWidget(self._loaded_tree)
+        self._remove_model_btn = QPushButton("Remove")
+        self._remove_model_btn.setToolTip("Remove the highlighted object")
+        self._remove_model_btn.clicked.connect(self._on_remove_selected)
+        remove_row = QHBoxLayout()
+        remove_row.addStretch()
+        remove_row.addWidget(self._remove_model_btn)
+        layout.addLayout(remove_row)
+
+        # -- Appearance of the focused object ----------------------------
+        self._appearance_box = QGroupBox("Appearance")
+        self._appearance_layout = QVBoxLayout(self._appearance_box)
+        self._appearance_layout.setSpacing(6)
+        layout.addWidget(self._appearance_box)
+
+        # -- Selection ---------------------------------------------------
+        sel_box = QGroupBox("Selection")
+        sl = QVBoxLayout(sel_box)
+        sl.setSpacing(6)
+        pick_row = QHBoxLayout()
+        self._pick_btn = QPushButton("Pick atoms in the viewer")
+        self._pick_btn.setCheckable(True)
+        self._pick_btn.setToolTip("Click atoms in the 3D view to build a selection.")
+        self._pick_btn.toggled.connect(self._on_toggle_select)
+        pick_row.addWidget(self._pick_btn, stretch=1)
+        self._clear_btn = QPushButton("Clear")
+        self._clear_btn.clicked.connect(self._on_clear_selection)
+        pick_row.addWidget(self._clear_btn)
+        sl.addLayout(pick_row)
+
+        expr_row = QHBoxLayout()
+        self._select_expr = QLineEdit()
+        self._select_expr.setPlaceholderText("selection, e.g. chain A and resseq 5:14")
+        self._select_expr.setToolTip("A cctbx / Phenix selection string on the active model.")
+        self._select_expr.returnPressed.connect(self._on_select_expression)
+        expr_row.addWidget(self._select_expr, stretch=1)
+        self._select_expr_btn = QPushButton("Select")
+        self._select_expr_btn.clicked.connect(self._on_select_expression)
+        expr_row.addWidget(self._select_expr_btn)
+        sl.addLayout(expr_row)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(4)
+        chips.addWidget(QLabel("Quick:"))
+        for label, expr in (("Protein", "protein"), ("Ligands", "hetero and not water"),
+                            ("Water", "water"), ("Backbone", "protein and name CA")):
+            chip = QPushButton(label)
+            chip.setToolTip(expr)
+            chip.clicked.connect(lambda _c=False, e=expr: self._run_selection(e))
+            chips.addWidget(chip)
+        chips.addStretch()
+        sl.addLayout(chips)
+
+        self._selection_label = QLabel("none selected")
+        self._selection_label.setWordWrap(True)
+        self._selection_label.setStyleSheet("color: #666;")
+        sl.addWidget(self._selection_label)
+        layout.addWidget(sel_box)
+
+        layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(body)
+        ol.addWidget(scroll, stretch=1)
+        return outer
+
+    def _build_demos_menu(self):
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self._window)
+        menu.addAction(f"{SAMPLE_STRUCTURE[1]} — map + model", self._on_run_map_model_demo)
+        model_menu = menu.addMenu("Model demos (animated)")
+        for name, _ in list_demos():
+            model_menu.addAction(name, lambda _c=False, n=name: self._desktop.load_model_demo(n))
+        vol_menu = menu.addMenu("Volume demos")
+        for name, _ in list_volume_demos():
+            vol_menu.addAction(name, lambda _c=False, n=name: self._desktop.load_volume_demo(n))
+        menu.addSeparator()
+        menu.addAction("Stop demo", self._on_stop_demo)
+        return menu
+
+    def _build_tools_tab(self):
+        """Geometry-focused tools: measure from the selection, clashes, display helpers."""
+        from PySide6.QtWidgets import (
+            QGridLayout,
+            QGroupBox,
+            QHBoxLayout,
+            QLabel,
             QPushButton,
             QVBoxLayout,
             QWidget,
@@ -665,164 +791,122 @@ class ControlsWindow:
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        blurb = QLabel("Open a model or volume from your computer. Models are read by cctbx.")
-        blurb.setWordWrap(True)
-        layout.addWidget(blurb)
+        measure = QGroupBox("Measure")
+        mg = QVBoxLayout(measure)
+        mg.addWidget(QLabel("Select the atoms, then measure:"))
+        grid = QGridLayout()
+        grid.setSpacing(6)
+        specs = [("Distance", "distance", 2), ("Angle", "angle", 3), ("Dihedral", "dihedral", 4)]
+        for i, (label, kind, n) in enumerate(specs):
+            btn = QPushButton(f"{label} ({n})")
+            btn.setToolTip(f"Measure a {kind} from {n} selected atoms.")
+            btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
+            grid.addWidget(btn, 0, i)
+        mg.addLayout(grid)
+        clear_m = QPushButton("Clear measurements")
+        clear_m.clicked.connect(self._on_clear_measurements)
+        mg.addWidget(clear_m)
+        layout.addWidget(measure)
 
-        self._open_btn = QPushButton("Load file…")
-        self._open_btn.setMinimumHeight(44)
-        self._open_btn.clicked.connect(self._on_open_file)
-        layout.addWidget(self._open_btn)
+        analysis = QGroupBox("Analysis")
+        ag = QVBoxLayout(analysis)
+        clash_row = QHBoxLayout()
+        detect = QPushButton("Detect clashes")
+        detect.setToolTip("Find and mark steric clashes on the active model.")
+        detect.clicked.connect(self._on_detect_clashes)
+        clash_row.addWidget(detect)
+        clear_c = QPushButton("Clear")
+        clear_c.clicked.connect(lambda: self._desktop.clear_clashes())
+        clash_row.addWidget(clear_c)
+        clash_row.addStretch()
+        ag.addLayout(clash_row)
+        layout.addWidget(analysis)
 
-        self._file_label = QLabel("No file loaded")
-        self._file_label.setWordWrap(True)
-        layout.addWidget(self._file_label)
+        display = QGroupBox("Display")
+        dg = QVBoxLayout(display)
+        from PySide6.QtWidgets import QCheckBox
 
-        formats = QLabel("Models (cctbx): .pdb .ent .cif .mmcif\nVolumes: .mrc .map .ccp4")
-        formats.setWordWrap(True)
-        layout.addWidget(formats)
-
-        # Loaded panel: models + volumes, with a map+model group (a cctbx
-        # map_model_manager) shown as a parent node. Check = shown; a selected
-        # model row is the active model (drives the atoms table + selection).
-        from PySide6.QtWidgets import QHeaderView, QTreeWidget
-
-        layout.addSpacing(12)
-        layout.addWidget(QLabel("<b>Loaded</b>  (check = shown, selected model = active)"))
-        self._loaded_tree = QTreeWidget()
-        self._loaded_tree.setMaximumHeight(180)
-        # Columns: [check] [controls] [name]. Controls sit on the left so they're
-        # always visible; the name is last and stretches (elides on overflow), so a
-        # long name is clipped rather than pushing the widgets off-screen.
-        self._loaded_tree.setColumnCount(3)
-        self._loaded_tree.setHeaderHidden(True)
-        header = self._loaded_tree.header()
-        header.setStretchLastSection(True)  # the name column
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # checkbox
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # controls
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # name
-        self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
-        # A per-row radio marks (and sets) the active model — exclusive across rows.
-        from PySide6.QtWidgets import QButtonGroup
-
-        self._active_group = QButtonGroup(self._window)
-        self._active_group.setExclusive(True)
-        self._active_group.buttonClicked.connect(self._on_active_radio)
-        layout.addWidget(self._loaded_tree)
-        row = QHBoxLayout()
-        self._remove_model_btn = QPushButton("Remove selected")
-        self._remove_model_btn.clicked.connect(self._on_remove_selected)
-        row.addWidget(self._remove_model_btn)
-        row.addStretch()
-        layout.addLayout(row)
-
-        # Select atoms on the active model by a cctbx/Phenix selection string.
-        layout.addSpacing(12)
-        layout.addWidget(QLabel("<b>Select atoms</b>  (cctbx / Phenix selection)"))
-        sel_row = QHBoxLayout()
-        self._select_expr = QLineEdit()
-        self._select_expr.setPlaceholderText("e.g. chain A and resseq 5:14 and name CA")
-        self._select_expr.setToolTip(
-            "A cctbx atom-selection string, resolved on the active model. "
-            "Press Enter or Select to highlight the matched atoms."
-        )
-        self._select_expr.returnPressed.connect(self._on_select_expression)
-        sel_row.addWidget(self._select_expr, stretch=1)
-        self._select_expr_btn = QPushButton("Select")
-        self._select_expr_btn.clicked.connect(self._on_select_expression)
-        sel_row.addWidget(self._select_expr_btn)
-        layout.addLayout(sel_row)
-        self._select_expr_status = QLabel("")
-        self._select_expr_status.setWordWrap(True)
-        layout.addWidget(self._select_expr_status)
-
-        layout.addSpacing(12)
-        layout.addWidget(QLabel("<b>Sample</b>"))
-
-        sample = sample_structure_path()
-        self._sample_btn = QPushButton(f"Load {SAMPLE_STRUCTURE[1]}")
-        self._sample_btn.clicked.connect(self._on_load_sample)
-        if sample is None:
-            # Shipped as package data, so this should not happen in practice.
-            self._sample_btn.setEnabled(False)
-            self._sample_btn.setToolTip("The bundled sample model is missing.")
-        else:
-            self._sample_btn.setToolTip(str(sample))
-        layout.addWidget(self._sample_btn)
+        self._axis_check = QCheckBox("Show XYZ axes")
+        self._axis_check.toggled.connect(lambda on: self._desktop.set_axis(on))
+        dg.addWidget(self._axis_check)
+        layout.addWidget(display)
 
         layout.addStretch()
         return tab
 
-    def _build_demos_tab(self):
-        from PySide6.QtWidgets import (
-            QComboBox,
-            QLabel,
-            QPushButton,
-            QVBoxLayout,
-            QWidget,
-        )
+    # -- appearance (focused object) -------------------------------------
 
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        layout.setSpacing(8)
+    def _find_item(self, kind, ident):
+        return next((it for it in self._items if it["kind"] == kind and it["id"] == ident), None)
 
-        layout.addWidget(QLabel("<b>Map + model demo</b>"))
-        mm_blurb = QLabel(
-            f"The bundled {SAMPLE_STRUCTURE[1]} with a density map computed from it "
-            "by cctbx — loaded as one map_model_manager group."
-        )
-        mm_blurb.setWordWrap(True)
-        layout.addWidget(mm_blurb)
-        run_map_model = QPushButton(f"Load {SAMPLE_STRUCTURE[1]} (map + model)")
-        run_map_model.clicked.connect(self._on_run_map_model_demo)
-        layout.addWidget(run_map_model)
+    def _clear_layout(self, layout):
+        while layout.count():
+            child = layout.takeAt(0)
+            widget = child.widget()
+            if widget is not None:
+                widget.setParent(None)
+            elif child.layout() is not None:
+                self._clear_layout(child.layout())
 
-        layout.addSpacing(8)
-        layout.addWidget(QLabel("<b>Model demos</b>"))
-        model_blurb = QLabel("Animated coordinate streams from Python.")
-        model_blurb.setWordWrap(True)
-        layout.addWidget(model_blurb)
+    def _update_appearance(self, kind=None, ident=None):
+        """Rebuild the Appearance box for the focused object (or an empty-state hint)."""
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel
 
-        self._model_select = QComboBox()
-        for name, _ in list_demos():
-            self._model_select.addItem(name, name)
-        layout.addWidget(self._model_select)
+        self._clear_layout(self._appearance_layout)
+        it = self._find_item(kind, ident) if ident else None
+        self._focused = (kind, ident) if it else (None, None)
+        if it is None:
+            hint = QLabel("Select an object above to edit how it looks.")
+            hint.setStyleSheet("color: #999;")
+            self._appearance_layout.addWidget(hint)
+            return
 
-        self._model_desc = QLabel("")
-        self._model_desc.setWordWrap(True)
-        layout.addWidget(self._model_desc)
-        self._model_select.currentIndexChanged.connect(self._on_model_demo_changed)
-        self._on_model_demo_changed()
+        self._appearance_box.setTitle(f"Appearance · {it['name']}")
 
-        run_model = QPushButton("Run model demo")
-        run_model.clicked.connect(self._on_run_model_demo)
-        layout.addWidget(run_model)
+        def add_combo(label, options, current, on_pick):
+            r = QHBoxLayout()
+            lab = QLabel(label)
+            lab.setMinimumWidth(90)
+            r.addWidget(lab)
+            combo = QComboBox()
+            for text, value in options:
+                combo.addItem(text, value)
+            idx = combo.findData(current)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.currentIndexChanged.connect(lambda _i, c=combo: on_pick(c.currentData()))
+            r.addWidget(combo, stretch=1)
+            self._appearance_layout.addLayout(r)
+            return combo
 
-        layout.addSpacing(8)
-        layout.addWidget(QLabel("<b>Volume demos</b>"))
+        if it["kind"] == "model":
+            mid = it["id"]
+            add_combo("Representation", _MODEL_REP_OPTIONS, it.get("rep"),
+                      lambda v: self._safe(lambda: self._desktop.set_model_representation(mid, v)))
+            add_combo("Colour", _MODEL_COLOR_OPTIONS, it.get("color"),
+                      lambda v: self._safe(lambda: self._desktop.set_model_color(mid, v)))
+            types = it.get("types") or []
+            if len(types) > 1:
+                r = QHBoxLayout()
+                lab = QLabel("Show")
+                lab.setMinimumWidth(90)
+                r.addWidget(lab)
+                r.addWidget(self._make_type_combo(mid, types, set(it.get("hidden_types") or [])), stretch=1)
+                self._appearance_layout.addLayout(r)
+            inter = QCheckBox("Computed interactions (H-bonds, salt bridges, …)")
+            inter.setChecked(bool(it.get("interactions")))
+            inter.toggled.connect(lambda on, d=mid: self._desktop.set_model_interactions(d, on))
+            self._appearance_layout.addWidget(inter)
+        else:  # volume
+            vid = it["id"]
+            add_combo("Style", _VOLUME_STYLE_OPTIONS, it.get("style"),
+                      lambda v: self._desktop.set_volume_style(vid, v))
 
-        self._volume_select = QComboBox()
-        for name, _ in list_volume_demos():
-            self._volume_select.addItem(name, name)
-        layout.addWidget(self._volume_select)
-
-        self._volume_desc = QLabel("")
-        self._volume_desc.setWordWrap(True)
-        layout.addWidget(self._volume_desc)
-        self._volume_select.currentIndexChanged.connect(self._on_volume_demo_changed)
-        self._on_volume_demo_changed()
-
-        run_volume = QPushButton("Run volume demo")
-        run_volume.clicked.connect(self._on_run_volume_demo)
-        layout.addWidget(run_volume)
-
-        layout.addSpacing(8)
-        self._stop_btn = QPushButton("Stop demo")
-        self._stop_btn.clicked.connect(self._on_stop_demo)
-        layout.addWidget(self._stop_btn)
-
-        layout.addStretch()
-        return tab
+    def _safe(self, fn):
+        try:
+            fn()
+        except Exception as exc:  # pragma: no cover - defensive
+            self._set_status(str(exc))
 
     def _build_geometry_tab(self):
         from PySide6.QtWidgets import QCheckBox, QTabWidget, QVBoxLayout, QWidget
@@ -1008,11 +1092,7 @@ class ControlsWindow:
         return tab
 
     def _on_tab_changed(self, index: int) -> None:
-        on_console = index == self._console_tab_index
-        # Give the console the whole pane; the Display/Selection controls only
-        # make sense for the other tabs anyway.
-        self._bottom_controls.setVisible(not on_console)
-        if on_console:
+        if index == self._console_tab_index:
             self._ensure_console()
 
     def _ensure_console(self) -> None:
@@ -1168,26 +1248,16 @@ class ControlsWindow:
         self._file_label.setText(f"{sample.name}  ({kind})")
 
     def _on_select_expression(self) -> None:
-        text = self._select_expr.text()
+        self._run_selection(self._select_expr.text())
+
+    def _run_selection(self, expr: str) -> None:
+        self._select_expr.setText(expr)
         try:
-            n = self._desktop.select_by_expression(text)
-        except Exception as exc:  # invalid syntax / no model — report inline
-            self._select_expr_status.setText(f"<span style='color:#c0392b'>{exc}</span>")
+            n = self._desktop.select_by_expression(expr)
+        except Exception as exc:  # invalid syntax / no model
+            self._selection_label.setText(f"<span style='color:#c0392b'>{exc}</span>")
             return
-        if not text.strip():
-            self._select_expr_status.setText("selection cleared")
-        else:
-            self._select_expr_status.setText(f"{n} atom(s) selected")
-
-    def _on_model_demo_changed(self) -> None:
-        name = self._model_select.currentData()
-        demo = DEMOS.get(name)
-        self._model_desc.setText(demo.description if demo else "")
-
-    def _on_volume_demo_changed(self) -> None:
-        name = self._volume_select.currentData()
-        descriptions = dict(list_volume_demos())
-        self._volume_desc.setText(descriptions.get(name, ""))
+        self._selection_label.setText("selection cleared" if not expr.strip() else f"{n} atom(s) selected")
 
     def _on_run_map_model_demo(self) -> None:
         from PySide6.QtWidgets import QMessageBox
@@ -1197,42 +1267,33 @@ class ControlsWindow:
         except Exception as exc:  # generating the map can fail; don't take the app down
             QMessageBox.warning(self._window, "Map+model demo failed", str(exc))
 
-    def _on_run_model_demo(self) -> None:
-        name = self._model_select.currentData()
-        if name:
-            self._desktop.load_model_demo(name)
-
-    def _on_run_volume_demo(self) -> None:
-        name = self._volume_select.currentData()
-        if name:
-            self._desktop.load_volume_demo(name)
-
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
-
-    def _on_toggle_interactions(self, checked: bool) -> None:
-        self._desktop.set_computed_interactions(checked)
-        self._interactions_btn.setText(
-            "Hide computed interactions" if checked else "Show computed interactions"
-        )
-
-    def _on_interactions_reset(self, visible: bool) -> None:
-        # A fresh load clears the overlay; keep the button in sync with that.
-        self._interactions_btn.setChecked(visible)
-        self._interactions_btn.setText(
-            "Hide computed interactions" if visible else "Show computed interactions"
-        )
 
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
             self._desktop.enable_mouse_selection()
-            self._select_btn.setText("Disable selection mode")
         else:
             self._desktop.disable_mouse_selection()
-            self._select_btn.setText("Enable selection mode")
 
     def _on_clear_selection(self) -> None:
         self._desktop.clear_selection()
+
+    def _on_measure(self, kind: str) -> None:
+        try:
+            self._set_status(self._desktop.measure_selection(kind))
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_clear_measurements(self) -> None:
+        self._desktop.clear_measurements()
+
+    def _on_detect_clashes(self) -> None:
+        try:
+            n = self._desktop.show_clashes()
+            self._set_status(f"{n} clash(es) found" if n else "no clashes found")
+        except Exception as exc:
+            self._set_status(str(exc))
 
     def _on_scene_selection_changed(self, scene) -> None:
         """A model's picks changed. Refresh the aggregate label + the atoms table."""
@@ -1241,9 +1302,9 @@ class ControlsWindow:
         n_models = len(self._scene_selection)
         if total:
             across = f" across {n_models} models" if n_models > 1 else ""
-            self._selection_label.setText(f"{total} atom(s){across}")
+            self._selection_label.setText(f"{total} atom(s) selected{across}")
         else:
-            self._selection_label.setText("none")
+            self._selection_label.setText("none selected")
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
@@ -1338,10 +1399,11 @@ class ControlsWindow:
 
     def _on_loaded_changed(self, summary) -> None:
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QTreeWidgetItem
+        from PySide6.QtWidgets import QRadioButton, QTreeWidgetItem
 
         groups = {g["id"]: g["name"] for g in summary.get("groups", [])}
         items = summary.get("items", [])
+        self._items = items
         model_items = [it for it in items if it["kind"] == "model"]
         self._models_summary = model_items
 
@@ -1363,12 +1425,19 @@ class ControlsWindow:
                     group_nodes[gid] = node
             for it in items:
                 parent = group_nodes.get(it["group"], self._loaded_tree)
-                # [check] in col 0, [controls] in col 1, [name] in col 2 (last, elides).
+                # [visible check] col 0, [active radio] col 1, [name] col 2 (elides).
                 node = QTreeWidgetItem(parent)
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                node.setToolTip(0, "Visible")
                 node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
-                self._loaded_tree.setItemWidget(node, 1, self._make_rep_combo(it))
+                if it["kind"] == "model":
+                    radio = QRadioButton()
+                    radio.setToolTip("Active model — drives the atoms table, geometry and selection.")
+                    radio.setProperty("mid", it["id"])
+                    self._active_group.addButton(radio)
+                    radio.setChecked(bool(it.get("active")))  # won't fire buttonClicked
+                    self._loaded_tree.setItemWidget(node, 1, radio)
                 name = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
                 node.setText(2, name)
                 node.setToolTip(2, it["name"])  # full name on hover when elided
@@ -1380,47 +1449,25 @@ class ControlsWindow:
             self._suppress_model_events = False
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
+        # Keep the Appearance pane pointed at the focused object (or the active model).
+        kind, ident = self._focused
+        if self._find_item(kind, ident) is None:
+            act = next((m for m in model_items if m["active"]), None)
+            kind, ident = ("model", act["id"]) if act else (None, None)
+        self._update_appearance(kind, ident)
 
-    def _make_rep_combo(self, it):
-        """Inline per-object controls: an active radio (models) + representation
-        dropdown + a structure-type show/hide menu (models with >1 type)."""
-        from PySide6.QtWidgets import QComboBox, QHBoxLayout, QRadioButton, QWidget
+    def _on_tree_current_changed(self, current, _previous) -> None:
+        if self._suppress_model_events or current is None:
+            return
+        from PySide6.QtCore import Qt
 
-        container = QWidget()
-        row = QHBoxLayout(container)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-
-        kind, ident = it["kind"], it["id"]
+        kind, ident = current.data(0, Qt.ItemDataRole.UserRole)
+        if kind == "group":
+            self._update_appearance()  # a group header has nothing to edit
+            return
+        self._update_appearance(kind, ident)  # master -> detail
         if kind == "model":
-            # A radio (ring / ring-with-dot) marks the active model; click to activate.
-            radio = QRadioButton()
-            radio.setToolTip("Active model — drives the atoms table, geometry and selection.")
-            radio.setProperty("mid", ident)
-            self._active_group.addButton(radio)
-            radio.setChecked(bool(it.get("active")))  # programmatic; won't fire buttonClicked
-            row.addWidget(radio)
-
-        combo = QComboBox()
-        if it["kind"] == "model":
-            options, current = _MODEL_REP_OPTIONS, it.get("rep")
-        else:
-            options, current = _VOLUME_STYLE_OPTIONS, it.get("style")
-        for text, value in options:
-            combo.addItem(text, value)
-        idx = combo.findData(current)
-        if idx >= 0:
-            combo.setCurrentIndex(idx)  # set before connecting, so no spurious change
-        combo.currentIndexChanged.connect(
-            lambda _i, c=combo, k=kind, d=ident: self._on_rep_changed(k, d, c.currentData())
-        )
-        row.addWidget(combo)
-
-        types = it.get("types") or []
-        if it["kind"] == "model" and len(types) > 1:  # only useful with >1 type present
-            row.addWidget(self._make_type_combo(ident, types, set(it.get("hidden_types") or [])))
-
-        return container
+            self._desktop.set_active_model(ident)  # focusing a model activates it
 
     def _make_type_combo(self, mid, types, hidden):
         """A checkable dropdown of structure types (checked = shown)."""
@@ -1430,17 +1477,6 @@ class ControlsWindow:
             combo.add_checkable(label, label not in hidden, label)  # before on_change
         combo.on_change = lambda label, shown, d=mid: self._on_type_toggle(d, label, shown)
         return combo
-
-    def _on_rep_changed(self, kind: str, ident: str, value) -> None:
-        if self._suppress_model_events:
-            return
-        try:
-            if kind == "model":
-                self._desktop.set_model_representation(ident, value)
-            elif kind == "volume":
-                self._desktop.set_volume_style(ident, value)
-        except Exception as exc:  # a bad type must not crash the GUI slot
-            self._set_status(f"Could not set representation: {exc}")
 
     def _on_type_toggle(self, mid: str, label: str, shown: bool) -> None:
         if self._suppress_model_events:
@@ -1825,7 +1861,7 @@ class DesktopApp:
 
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
-        color = _model_rep_color(rep)
+        color = entry.get("color") or _model_rep_color(rep)  # explicit colour overrides the default
         on = self._shown_indices(entry)  # restrict to shown structure types
         if on is not None:
             session.set_representation(rep, color=color, on=on)
@@ -1847,7 +1883,8 @@ class DesktopApp:
         # is replayed to the viewer when it connects and shown in the inline dropdown.
         rep = self._default_model_rep(session)
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
-                 "rep": rep, "hidden_types": set(), "type_groups": None}
+                 "rep": rep, "color": None, "hidden_types": set(), "type_groups": None,
+                 "interactions": False}
         self._models.append(entry)
         self._apply_model_rep(entry)
         self._active_model_id = mid
@@ -1885,6 +1922,69 @@ class DesktopApp:
         """The structure types present in a model (for the show/hide menu)."""
         entry = self._model_entry(mid)
         return list(self._type_groups(entry).keys()) if entry else []
+
+    def set_model_color(self, mid: str, color: Optional[str]) -> None:
+        """Set a model's colour theme (None = the representation's default)."""
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("color") == color:
+            return
+        entry["color"] = color
+        self._apply_model_rep(entry)
+
+    def set_model_interactions(self, mid: str, visible: bool) -> None:
+        """Show/hide the computed non-covalent interactions overlay for a model."""
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("interactions", False) == bool(visible):
+            return
+        entry["interactions"] = bool(visible)
+        try:
+            entry["session"].set_computed_interactions(bool(visible))
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    # -- tools (measure / clashes / display) -----------------------------
+
+    _MEASURE_ARITY = {"distance": 2, "angle": 3, "dihedral": 4}
+
+    def measure_selection(self, kind: str) -> str:
+        """Draw a distance/angle/dihedral from the active model's selected atoms."""
+        session = self.active_model_session()
+        if session is None:
+            raise ValueError("load a model first")
+        need = self._MEASURE_ARITY[kind]
+        with self._scene_lock:
+            atoms = list(self._scene_selection.get(self._active_model_id, []))
+        if len(atoms) != need:
+            raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
+        if kind == "distance":
+            session.add_distance(atoms[0], atoms[1])
+        elif kind == "angle":
+            session.add_angle(atoms[0], atoms[1], atoms[2])
+        else:
+            session.add_dihedral(atoms[0], atoms[1], atoms[2], atoms[3])
+        return f"drew {kind} on {need} atoms"
+
+    def clear_measurements(self) -> None:
+        session = self.active_model_session()
+        if session is not None:
+            session.clear_primitives()
+
+    def show_clashes(self) -> int:
+        """Detect and draw steric clashes on the active model; returns the count."""
+        session = self.active_model_session()
+        if session is None:
+            raise ValueError("load a model first")
+        return len(session.show_clashes())
+
+    def clear_clashes(self) -> None:
+        session = self.active_model_session()
+        if session is not None:
+            session.clear_clashes()
+
+    def set_axis(self, visible: bool) -> None:
+        control = self._control_session()
+        if control is not None:
+            control.set_axis(bool(visible))
 
     def set_volume_style(self, vid: str, style: str) -> None:
         """Change a volume's isosurface style (surface/wireframe/mesh) live."""
@@ -2040,6 +2140,7 @@ class DesktopApp:
         items = [
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
+             "color": m.get("color"), "interactions": m.get("interactions", False),
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or [])}
             for m in self._models
         ] + [
