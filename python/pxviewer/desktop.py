@@ -742,14 +742,18 @@ class ControlsWindow:
         sl.addWidget(QLabel("Quick select:"))
         chips = QGridLayout()
         chips.setSpacing(4)
+        self._sel_chips = []  # (button, expr); checkable, highlighted when active
+        self._chip_selecting = False
         specs = [("Protein", "protein"), ("Ligands", "hetero and not water"),
                  ("Water", "water"), ("Backbone", "protein and name CA")]
         for i, (label, expr) in enumerate(specs):
             chip = QPushButton(label)
+            chip.setCheckable(True)  # native checked state (accent tint), no stylesheet
             chip.setToolTip(expr)
             chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            chip.clicked.connect(lambda _c=False, e=expr: self._run_selection(e))
+            chip.clicked.connect(lambda _c=False, b=chip, e=expr: self._on_chip(b, e))
             chips.addWidget(chip, i // 2, i % 2)  # two columns
+            self._sel_chips.append((chip, expr))
         sl.addLayout(chips)
 
         self._selection_label = QLabel("none selected")
@@ -1290,6 +1294,20 @@ class ControlsWindow:
         except Exception as exc:
             QMessageBox.warning(self._window, "Write failed", str(exc))
 
+    def _on_chip(self, button, expr: str) -> None:
+        for other, _ in self._sel_chips:
+            if other is not button:
+                other.setChecked(False)
+        self._chip_selecting = True  # so the resulting change doesn't clear this chip
+        try:
+            if button.isChecked():
+                self._run_selection(expr)
+            else:  # clicking the active chip again clears the selection
+                self._desktop.clear_selection()
+                self._selection_label.setText("none selected")
+        finally:
+            self._chip_selecting = False
+
     def _on_select_expression(self) -> None:
         self._run_selection(self._select_expr.text())
 
@@ -1340,6 +1358,10 @@ class ControlsWindow:
 
     def _on_scene_selection_changed(self, scene) -> None:
         """A model's picks changed. Refresh the aggregate label + the atoms table."""
+        # A selection from anywhere but a chip click no longer matches a preset.
+        if not self._chip_selecting:
+            for chip, _ in getattr(self, "_sel_chips", []):
+                chip.setChecked(False)
         self._scene_selection = scene or {}
         total = sum(len(v) for v in self._scene_selection.values())
         n_models = len(self._scene_selection)

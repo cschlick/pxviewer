@@ -650,6 +650,40 @@ def test_write_object(qapp, tmp_path):
         app.stop()
 
 
+def test_selection_chip_highlight(qapp):
+    """A quick-select chip highlights while active and clears when selection changes."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        controls = app._controls
+        protein = {b.text(): b for b, _ in controls._sel_chips}["Protein"]
+
+        protein.click()  # toggles on + runs the preset
+        assert protein.isChecked()
+        assert len(app._scene_selection[mid]) == 602  # protein atoms
+
+        # A selection from elsewhere no longer matches the preset -> chip clears.
+        controls._run_selection("water")
+        assert not protein.isChecked()
+
+        # Clicking the active chip again clears the selection.
+        protein.click()
+        assert protein.isChecked()
+        protein.click()
+        assert not protein.isChecked() and mid not in app._scene_selection
+    finally:
+        app.stop()
+
+
 def test_tools_and_appearance_setters(qapp):
     """Measure-from-selection, colour/interactions setters, clashes and axis."""
     pytest.importorskip("iotbx.data_manager")
