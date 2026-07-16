@@ -433,6 +433,39 @@ def test_screenshot_round_trips(session):
     assert result["png"] == b"\x89PNG\r\n\x1a\n fake"  # decoded from the data URI
 
 
+def test_screenshot_survives_a_large_image(session):
+    """A real screenshot is megabytes: a 1640x1280 PNG is ~700 kB, and base64 in JSON
+    inflates it by a third. The websockets default caps a message at 1 MiB and answers
+    an oversized one by closing the connection (1009) — which killed the whole live
+    session, not just the picture."""
+    import base64
+
+    big = base64.b64encode(b"\x89PNG" + b"\x00" * (3 * 1024 * 1024)).decode()
+    result = {}
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url, max_size=None) as ws:
+            await ws.recv()  # topology
+
+            def ask():
+                result["png"] = session.screenshot(timeout=15)
+
+            caller = threading.Thread(target=ask)
+            caller.start()
+            request = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            await ws.send(json.dumps({
+                "type": "screenshot-result", "reqId": request["reqId"],
+                "dataUri": f"data:image/png;base64,{big}",
+            }))
+            caller.join(timeout=15)
+            # The connection must still be usable afterwards.
+            assert ws.state.name == "OPEN"
+
+    asyncio.run(scenario())
+    assert result["png"] is not None and len(result["png"]) > 3 * 1024 * 1024
+
+
 def test_screenshot_returns_none_when_nobody_answers(session):
     """No viewer connected -> no picture, rather than hanging forever."""
     assert session.screenshot(timeout=0.3) is None

@@ -82,6 +82,11 @@ _MVS_TO_MOLSTAR_REPR = {
 }
 
 
+# Cap on an inbound message. Everything the viewer sends back is small except a
+# screenshot, which scales with the window: generous enough for any real one, but still
+# a bound rather than None.
+_MAX_MESSAGE_BYTES = 64 * 1024 * 1024
+
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
 _TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
@@ -1576,7 +1581,12 @@ class LiveSession:
         import websockets
 
         self._server = await websockets.serve(
-            self._handler, self.host, self.port, process_request=self._process_request
+            self._handler, self.host, self.port, process_request=self._process_request,
+            # Screenshots come back this way and are genuinely large — a 1640x1280 PNG
+            # is ~700 kB before base64 adds a third. The default 1 MiB cap does not just
+            # drop an oversized message, it closes the connection (1009), so one picture
+            # would take the whole live session down with it.
+            max_size=_MAX_MESSAGE_BYTES,
         )
         # Resolve the actual bound port (matters when port=0 was requested).
         for sock in self._server.sockets or []:
