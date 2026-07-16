@@ -497,6 +497,65 @@ def test_geometry_filter_applies_to_restraint_tables(qapp):
         app.stop()
 
 
+def test_representation_dropdowns(qapp):
+    """Each loaded object gets an inline rep dropdown; changes update the registry."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+    from PySide6.QtWidgets import QComboBox
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    captured = {}
+    app.bridge.loaded_changed.connect(lambda s: captured.update(s))
+    try:
+        # A polymer defaults to cartoon; the summary carries it.
+        mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        m = app._model_entry(mid)
+        assert m["rep"] == "cartoon"
+        item = next(it for it in captured["items"] if it["id"] == mid)
+        assert item["rep"] == "cartoon"
+
+        # A non-polymer defaults to ball-and-stick.
+        mid2 = app._add_model(LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]]), "x")
+        assert app._model_entry(mid2)["rep"] == "ball-and-stick"
+
+        # Changing the model representation updates the entry (and the session).
+        app.set_model_representation(mid, "spacefill")
+        assert m["rep"] == "spacefill"
+
+        # A volume gets an isosurface style, changeable.
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        v = app._volume_entry(vid)
+        assert v["style"] == "surface"
+        app.set_volume_style(vid, "wireframe")
+        assert v["style"] == "wireframe"
+
+        # The Loaded tree shows an inline combo (column 1) on every model/volume row.
+        tree = app._controls._loaded_tree
+        combos = []
+
+        def walk(node):
+            for i in range(node.childCount()):
+                child = node.child(i)
+                w = tree.itemWidget(child, 1)
+                if w is not None:
+                    combos.append(w)
+                walk(child)
+
+        walk(tree.invisibleRootItem())
+        assert len(combos) >= 3 and all(isinstance(c, QComboBox) for c in combos)
+    finally:
+        app.stop()
+
+
 def test_multi_model_registry(qapp):
     """The desktop model registry: add (overlay), hide (switch), active, remove."""
     pytest.importorskip("iotbx.data_manager")

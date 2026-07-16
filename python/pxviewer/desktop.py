@@ -37,6 +37,25 @@ from .webapp import Webapp
 # Distinct default isosurface colours so overlaid volumes read apart.
 _VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
 
+# Inline representation dropdowns in the Loaded tree (models vs maps differ).
+_MODEL_REP_OPTIONS = [
+    ("Cartoon", "cartoon"),
+    ("Ball & stick", "ball-and-stick"),
+    ("Spacefill", "spacefill"),
+    ("Surface", "gaussian-surface"),
+    ("Line", "line"),
+]
+_VOLUME_STYLE_OPTIONS = [
+    ("Surface", "surface"),
+    ("Wireframe", "wireframe"),
+    ("Mesh", "mesh"),
+]
+
+
+def _model_rep_color(rep: str) -> str:
+    """A sensible default colour theme for a representation type."""
+    return "secondary-structure" if rep == "cartoon" else "element-symbol"
+
 
 def _dummy_session():
     from .live import LiveSession
@@ -485,13 +504,18 @@ class ControlsWindow:
         # Loaded panel: models + volumes, with a map+model group (a cctbx
         # map_model_manager) shown as a parent node. Check = shown; a selected
         # model row is the active model (drives the atoms table + selection).
-        from PySide6.QtWidgets import QTreeWidget
+        from PySide6.QtWidgets import QHeaderView, QTreeWidget
 
         layout.addSpacing(12)
         layout.addWidget(QLabel("<b>Loaded</b>  (check = shown, selected model = active)"))
         self._loaded_tree = QTreeWidget()
-        self._loaded_tree.setMaximumHeight(160)
+        self._loaded_tree.setMaximumHeight(180)
+        self._loaded_tree.setColumnCount(2)  # name + inline representation dropdown
         self._loaded_tree.setHeaderHidden(True)
+        header = self._loaded_tree.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         layout.addWidget(self._loaded_tree)
@@ -1141,6 +1165,8 @@ class ControlsWindow:
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
+                # An inline representation dropdown (models and maps differ).
+                self._loaded_tree.setItemWidget(node, 1, self._make_rep_combo(it))
                 if it.get("active"):
                     active_item = node
             if active_item is not None:
@@ -1149,6 +1175,34 @@ class ControlsWindow:
             self._suppress_model_events = False
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
+
+    def _make_rep_combo(self, it):
+        """The inline representation dropdown for one loaded item (model or map)."""
+        from PySide6.QtWidgets import QComboBox
+
+        combo = QComboBox()
+        if it["kind"] == "model":
+            options, current = _MODEL_REP_OPTIONS, it.get("rep")
+        else:
+            options, current = _VOLUME_STYLE_OPTIONS, it.get("style")
+        for text, value in options:
+            combo.addItem(text, value)
+        idx = combo.findData(current)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)  # set before connecting, so no spurious change
+        kind, ident = it["kind"], it["id"]
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo, k=kind, d=ident: self._on_rep_changed(k, d, c.currentData())
+        )
+        return combo
+
+    def _on_rep_changed(self, kind: str, ident: str, value) -> None:
+        if self._suppress_model_events:
+            return
+        if kind == "model":
+            self._desktop.set_model_representation(ident, value)
+        elif kind == "volume":
+            self._desktop.set_volume_style(ident, value)
 
     def _sync_table_model_combo(self, model_items) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
@@ -1506,12 +1560,27 @@ class DesktopApp:
 
     # -- models --
 
+    def _apply_model_rep(self, session, rep: str) -> None:
+        session.set_representation(rep, color=_model_rep_color(rep))
+
+    def _default_model_rep(self, session) -> str:
+        from . import cctbx_io
+
+        model = getattr(session, "model", None)
+        return "cartoon" if model is not None and cctbx_io.model_is_polymer(model) else "ball-and-stick"
+
     def _add_model(self, session, name: str, *, group: Optional[str] = None) -> str:
         """Register + show a model session (visible + active); returns its id."""
         session.start(host=self._host, port=0)
         self._model_counter += 1
         mid = f"model-{self._model_counter}"
-        self._models.append({"id": mid, "name": name, "session": session, "visible": True, "group": group})
+        # Cartoon reads better for a polymer, ball-and-stick otherwise; the choice
+        # is replayed to the viewer when it connects and shown in the inline dropdown.
+        rep = self._default_model_rep(session)
+        self._apply_model_rep(session, rep)
+        self._models.append(
+            {"id": mid, "name": name, "session": session, "visible": True, "group": group, "rep": rep}
+        )
         self._active_model_id = mid
         # Register this model's pick handler once (tagged with its id); the click
         # mode is what actually turns picking on/off. Registering here means a
@@ -1523,6 +1592,27 @@ class DesktopApp:
         self._reload_viewport()
         self._emit_loaded_changed()
         return mid
+
+    def set_model_representation(self, mid: str, rep: str) -> None:
+        """Change a model's representation type (from the inline dropdown)."""
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("rep") == rep:
+            return
+        entry["rep"] = rep
+        self._apply_model_rep(entry["session"], rep)
+
+    def set_volume_style(self, vid: str, style: str) -> None:
+        """Change a volume's isosurface style (surface/wireframe/mesh) live."""
+        entry = self._volume_entry(vid)
+        if entry is None or entry.get("style") == style:
+            return
+        entry["style"] = style
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_style(entry["ref"], style)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def set_active_model(self, mid: str) -> None:
         """Make a loaded model the active one (the atoms table + selection follow it)."""
@@ -1664,11 +1754,11 @@ class DesktopApp:
             return
         items = [
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
-             "active": m["id"] == self._active_model_id, "group": m["group"]}
+             "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep")}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
-             "active": False, "group": v["group"]}
+             "active": False, "group": v["group"], "style": v.get("style")}
             for v in self._volumes
         ]
         groups = [{"id": gid, "name": name} for gid, name in self._groups.items()]
@@ -1705,27 +1795,19 @@ class DesktopApp:
         return self._load_group(paths)
 
     def _model_session(self, model, name: str):
-        """Build (and default-style) a live session from a cctbx model."""
-        from . import cctbx_io
+        """Build a live session from a cctbx model (styled by _add_model)."""
         from .live import LiveSession
 
-        session = LiveSession.from_cctbx_model(model)
-        # Cartoon reads better than ball-and-stick for a polymer; replayed on connect.
-        if cctbx_io.model_is_polymer(session.model):
-            session.set_representation("cartoon", color="secondary-structure")
-        return session
+        return LiveSession.from_cctbx_model(model)
 
     def _load_model_file(self, path: str) -> str:
         """Read a model with cctbx and add it to the viewport (alongside any others)."""
         self.stop_demo()
         self._reset_interactions()
 
-        from . import cctbx_io
         from .live import LiveSession
 
-        session = LiveSession.from_model_file(path)
-        if cctbx_io.model_is_polymer(session.model):
-            session.set_representation("cartoon", color="secondary-structure")
+        session = LiveSession.from_model_file(path)  # _add_model applies the default rep
         self._add_model(session, Path(path).name)
         self._status(f"Loaded model: {Path(path).name} ({session._n_atoms} atoms)")
         return "model"
