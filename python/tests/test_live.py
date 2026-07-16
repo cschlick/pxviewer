@@ -402,6 +402,27 @@ def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
     asyncio.run(scenario())
 
 
+def test_set_clip_command_reaches_client(session):
+    """A slab is per representation: with a ref it clips that volume, without one it
+    clips the session's own model. That is what lets density be cut open while the
+    model inside it stays whole."""
+    async def scenario():
+        import json
+
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_clip(0.25, 0.75, ref="vol8")
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clip", "ref": "vol8", "front": 0.25, "back": 0.75}
+
+            session.set_clip(0.0, 1.0)  # no ref -> this session's model
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clip", "ref": None, "front": 0.0, "back": 1.0}
+
+    asyncio.run(scenario())
+
+
 def test_set_volume_position_command_reaches_client(session):
     async def scenario():
         import json

@@ -841,6 +841,23 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_clip(self, front: float, back: float, *, ref: Optional[str] = None) -> None:
+        """Clip a representation to a front/rear slab.
+
+        ``front`` and ``back`` run 0..1 across the scene's depth: ``(0, 1)`` clips
+        nothing, and when the two meet everything is clipped and the object disappears.
+        ``ref`` names a volume; without one this session's own model is clipped. The slab
+        is per representation deliberately — it is what lets density be cut open while
+        the model inside stays whole — and it follows the camera. Thread-safe.
+        """
+        message = json.dumps({
+            "type": "clip", "ref": None if ref is None else str(ref),
+            "front": float(front), "back": float(back),
+        })
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_volume_scroll_target(self, ref: Optional[str]) -> None:
         """Name the volume that shift+scroll in the viewport adjusts (None = nothing).
 

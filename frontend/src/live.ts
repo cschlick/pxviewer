@@ -18,7 +18,7 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Color, ColorScale } from 'molstar/lib/mol-util/color';
-import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { Mat4, Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
@@ -413,6 +413,7 @@ export class LiveViewer {
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
     private reprNodes: StateObjectSelector[] = [];
+    private slab: Slab = { ...SLAB_OPEN };
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
     private probeChannels: Map<number, StateObjectSelector[]> = new Map();
@@ -511,10 +512,31 @@ export class LiveViewer {
             if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
             const typeParams: any = spec.params ? { ...spec.params } : {};
             if (spec.opacity != null) typeParams.alpha = spec.opacity;
+            // Set the clip as the representation is built: this rebuilds every node, so
+            // a slab applied afterwards would be lost on the next representation change.
+            if (!slabIsOpen(this.slab)) typeParams.clip = slabClip(this.plugin, this.slab);
             if (Object.keys(typeParams).length) params.typeParams = typeParams;
             const repr = await this.plugin.builders.structure.representation.addRepresentation(target, params);
             this.reprNodes.push(repr);
         }
+    }
+
+    /** Clip this model's representations to a front/rear slab. */
+    async setSlab(slab: Slab) {
+        this.slab = { ...slab };
+        await this.reaimSlab();
+    }
+
+    /** Re-aim the slab down the current view direction (called as the camera moves). */
+    async reaimSlab() {
+        if (!this.reprNodes.length) return;
+        for (const node of this.reprNodes) {
+            if (node.ref) await applySlabTo(this.plugin, node.ref, this.slab);
+        }
+    }
+
+    hasSlab() {
+        return !slabIsOpen(this.slab);
     }
 
     /** Swap in a new frame given interleaved [x0,y0,z0,x1,...] coordinates. */
@@ -1068,6 +1090,78 @@ async function setAxis(plugin: PluginContext, visible: boolean) {
 const ISO_WHEEL_STEP = 0.1;
 const ISO_MAX_SIGMA = 100;
 
+// -- clipping ------------------------------------------------------------
+//
+// A front/rear slab, per representation — so the density can be cut open while the
+// model inside it stays whole, which a camera-wide slab could never do.
+//
+// Mol*'s clip planes are model-space (the shader tests vModelPosition), so a slab that
+// stays square to the view has to be re-aimed whenever the camera moves. That costs a
+// fraction of a millisecond per representation, which fits inside a frame, so it can
+// simply follow the camera the way a viewer's clipping is expected to.
+
+export interface Slab {
+    /** Both in [0, 1] across the scene's depth. front=0/back=1 clips nothing; when the
+     *  two meet, everything is clipped and the object disappears. */
+    front: number;
+    back: number;
+}
+
+const SLAB_OPEN: Slab = { front: 0, back: 1 };
+
+const slabIsOpen = (s: Slab) => s.front <= 0 && s.back >= 1;
+
+/** A clip plane discarding everything on the far side of `at` along `normal`. */
+function clipPlane(normal: Vec3, at: Vec3) {
+    // A plane's normal is +y turned by `rotation`, so supply the axis/angle taking +y
+    // onto the normal we want.
+    const y = Vec3.create(0, 1, 0);
+    const axis = Vec3.cross(Vec3(), y, normal);
+    const len = Vec3.magnitude(axis);
+    const dot = Vec3.dot(y, normal);
+    let angle: number;
+    if (len < 1e-6) {
+        Vec3.set(axis, 1, 0, 0);
+        angle = dot > 0 ? 0 : 180;  // parallel or antiparallel to +y
+    } else {
+        Vec3.normalize(axis, axis);
+        angle = (Math.atan2(len, dot) * 180) / Math.PI;
+    }
+    return {
+        type: 'plane', invert: false, position: Vec3.clone(at),
+        rotation: { axis, angle }, scale: Vec3.create(1, 1, 1), transform: Mat4.identity(),
+    };
+}
+
+/** The clip params for a slab, aimed down the current view direction. */
+function slabClip(plugin: PluginContext, slab: Slab) {
+    if (slabIsOpen(slab)) return { variant: 'pixel', objects: [] };  // no shader cost
+    const camera = plugin.canvas3d?.camera;
+    if (!camera) return { variant: 'pixel', objects: [] };
+    const dir = Vec3.sub(Vec3(), camera.state.target, camera.state.position);
+    Vec3.normalize(dir, dir);
+    const radius = plugin.canvas3d?.boundingSphere.radius || 50;
+    // Handles span the scene's depth: 0 is the near edge, 1 the far edge.
+    const at = (t: number) =>
+        Vec3.scaleAndAdd(Vec3(), camera.state.target, dir, (t * 2 - 1) * radius);
+    return {
+        variant: 'pixel',
+        objects: [
+            clipPlane(Vec3.negate(Vec3(), dir), at(slab.front)),  // drop what is nearer
+            clipPlane(dir, at(slab.back)),                        // drop what is further
+        ],
+    };
+}
+
+/** Apply a slab to a state cell whose params carry geometry `clip`. */
+async function applySlabTo(plugin: PluginContext, ref: string, slab: Slab) {
+    const clip = slabClip(plugin, slab);
+    await plugin.state.data.build().to(ref).update((old: any) => {
+        // Components sit alongside representations and have no clip to set.
+        if (old?.type?.params && 'clip' in old.type.params) old.type.params.clip = clip;
+    }).commit();
+}
+
 const STYLE_VISUALS: Record<string, string[]> = {
     surface: ['solid'],
     wireframe: ['wireframe'],
@@ -1120,6 +1214,13 @@ async function setVolumeColor(plugin: PluginContext, ref: string, color: string)
     await updateVolumeRepr(plugin, ref, (old: any) => {
         old.colorTheme = { name: 'uniform', params: { value: decoded } };
     });
+}
+
+/** Clip a volume (an MVSJ representation) to a front/rear slab. */
+async function setVolumeSlab(plugin: PluginContext, ref: string, slab: Slab) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    await applySlabTo(plugin, repr.transform.ref, slab);
 }
 
 /** Read a volume's current contour level back out of the Mol* state. */
@@ -1192,6 +1293,32 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // Shift+scroll steps the contour level of whichever volume the controls are
     // pointing at — the wheel is a shortcut for the Level slider you can see, so the
     // server names the target and we echo every change back to keep the two in step.
+    // Volumes clipped by this connection (models carry their own slab on the viewer).
+    // Both must be re-aimed as the camera turns, so the slab stays square to the view.
+    const volumeSlabs = new Map<string, Slab>();
+    let reaiming = false;
+    let reaimAgain = false;
+    const reaimSlabs = async () => {
+        if (!volumeSlabs.size && !viewer?.hasSlab()) return;
+        // Camera events outpace state updates, so coalesce — but the *last* one has to
+        // win, or the slab is left aimed down a view the camera has already left.
+        if (reaiming) {
+            reaimAgain = true;
+            return;
+        }
+        reaiming = true;
+        try {
+            do {
+                reaimAgain = false;
+                for (const [ref, slab] of volumeSlabs) await setVolumeSlab(plugin, ref, slab);
+                if (viewer?.hasSlab()) await viewer.reaimSlab();
+            } while (reaimAgain);
+        } finally {
+            reaiming = false;
+        }
+    };
+    const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => { void reaimSlabs(); });
+
     let isoScrollTarget: string | null = null;
     let isoScrollValue: number | null = null;
     let isoPending: number | null = null;
@@ -1269,6 +1396,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'clip') {
+                const slab: Slab = { front: msg.front ?? 0, back: msg.back ?? 1 };
+                if (typeof msg.ref === 'string') {
+                    if (slabIsOpen(slab)) volumeSlabs.delete(msg.ref);
+                    else volumeSlabs.set(msg.ref, slab);
+                    await setVolumeSlab(plugin, msg.ref, slab);
+                } else if (viewer) {
+                    await viewer.setSlab(slab);
+                }
             } else if (msg.type === 'volume_iso' && typeof msg.ref === 'string' && typeof msg.value === 'number') {
                 await setVolumeIso(plugin, msg.ref, msg.value);
                 if (msg.ref === isoScrollTarget) isoScrollValue = msg.value;
@@ -1378,6 +1514,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     return {
         close: () => {
             window.removeEventListener('wheel', onWheel, { capture: true });
+            cameraSub?.unsubscribe();
             ws.close();
         },
     };

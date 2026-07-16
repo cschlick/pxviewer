@@ -164,6 +164,126 @@ def _make_bridge():
     return _Bridge()
 
 
+def _make_range_slider():
+    """A slider with two handles, for a front/rear clipping slab (built post-Qt).
+
+    Qt has no two-handle slider. This is the minimum that behaves like one: drag either
+    handle, drag the bar between them to move both, and the handles may meet — which is
+    not a degenerate case here but the point at which the object is fully clipped.
+    """
+    from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+    from PySide6.QtGui import QPainter, QPalette
+    from PySide6.QtWidgets import QSizePolicy, QWidget
+
+    class RangeSlider(QWidget):
+        """Two handles on one track. Values are floats in 0..1, front <= back."""
+
+        changed = Signal(float, float)
+
+        _HANDLE = 9.0   # radius, px
+        _TRACK = 5.0    # thickness, px
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self._front = 0.0
+            self._back = 1.0
+            self._drag = None      # 'front' | 'back' | 'both'
+            self._grab_at = 0.0
+            self.setMinimumHeight(24)
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def values(self):
+            return self._front, self._back
+
+        def set_values(self, front, back, *, notify=False):
+            front = min(max(float(front), 0.0), 1.0)
+            back = min(max(float(back), 0.0), 1.0)
+            if front > back:
+                front = back
+            if (front, back) == (self._front, self._back):
+                return
+            self._front, self._back = front, back
+            self.update()
+            if notify:
+                self.changed.emit(self._front, self._back)
+
+        # -- geometry --
+
+        def _span(self):
+            return self.width() - 2 * self._HANDLE
+
+        def _x(self, value):
+            return self._HANDLE + value * self._span()
+
+        def _value_at(self, x):
+            span = self._span()
+            return 0.0 if span <= 0 else min(max((x - self._HANDLE) / span, 0.0), 1.0)
+
+        # -- painting --
+
+        def paintEvent(self, _event):
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            mid = self.height() / 2
+            track = QRectF(self._HANDLE, mid - self._TRACK / 2, self._span(), self._TRACK)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.palette().mid())
+            painter.drawRoundedRect(track, self._TRACK / 2, self._TRACK / 2)
+            # The kept span is what is *shown*, so fill between the handles.
+            kept = QRectF(self._x(self._front), track.top(),
+                          max(self._x(self._back) - self._x(self._front), 1.0), self._TRACK)
+            painter.setBrush(self.palette().highlight())
+            painter.drawRoundedRect(kept, self._TRACK / 2, self._TRACK / 2)
+            painter.setBrush(self.palette().light())
+            painter.setPen(self.palette().color(QPalette.ColorRole.Mid))
+            for value in (self._front, self._back):
+                painter.drawEllipse(QPointF(self._x(value), mid), self._HANDLE, self._HANDLE)
+
+        # -- interaction --
+
+        def mousePressEvent(self, event):
+            x = event.position().x()
+            df = abs(x - self._x(self._front))
+            db = abs(x - self._x(self._back))
+            if min(df, db) <= self._HANDLE + 2:
+                # Pick the nearer handle; when they coincide, direction decides, so the
+                # slab can always be reopened after being closed.
+                if df < db or (df == db and x < self._x(self._front)):
+                    self._drag = "front"
+                else:
+                    self._drag = "back"
+            elif self._x(self._front) < x < self._x(self._back):
+                self._drag = "both"
+                self._grab_at = self._value_at(x)
+            else:
+                # Clicked off the ends: bring the nearer handle here.
+                self._drag = "front" if x < self._x(self._front) else "back"
+                self._move_to(self._value_at(x))
+
+        def mouseMoveEvent(self, event):
+            if self._drag is None:
+                return
+            self._move_to(self._value_at(event.position().x()))
+
+        def mouseReleaseEvent(self, _event):
+            self._drag = None
+
+        def _move_to(self, value):
+            if self._drag == "front":
+                self.set_values(min(value, self._back), self._back, notify=True)
+            elif self._drag == "back":
+                self.set_values(self._front, max(value, self._front), notify=True)
+            elif self._drag == "both":
+                width = self._back - self._front
+                shift = value - self._grab_at
+                front = min(max(self._front + shift, 0.0), 1.0 - width)
+                self._grab_at = value
+                self.set_values(front, front + width, notify=True)
+
+    return RangeSlider
+
+
 def _runs(indices):
     """Yield contiguous ``(start, end)`` runs over sorted, de-duplicated indices."""
     it = iter(sorted({int(i) for i in indices}))
@@ -1204,6 +1324,13 @@ class ControlsWindow:
             inter.setChecked(bool(it.get("interactions")))
             inter.toggled.connect(lambda on, d=mid: self._desktop.set_model_interactions(d, on))
             self._appearance_layout.addWidget(inter)
+
+            def _set_clip(front, back, it=it):
+                it["clip"] = (front, back)
+                self._safe(lambda: self._desktop.set_model_clip(mid, front, back))
+
+            self._add_clip_row(
+                {**it, **self._desktop.model_appearance(mid)}.get("clip"), _set_clip)
         else:  # volume
             vid = it["id"]
             # Read the live values, not this snapshot: the level in particular can have
@@ -1233,6 +1360,12 @@ class ControlsWindow:
 
             self._iso_row = self._add_iso_row(live.get("iso"), _set_iso)
 
+            def _set_clip(front, back, it=it):
+                it["clip"] = (front, back)
+                self._safe(lambda: self._desktop.set_volume_clip(vid, front, back))
+
+            self._add_clip_row(live.get("clip"), _set_clip)
+
         # Shift+scroll contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
         self._safe(lambda: self._desktop.set_volume_scroll_target(
@@ -1258,6 +1391,31 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None:
             item["iso"] = value
+
+    def _add_clip_row(self, current, on_change):
+        """The front/rear clipping slab: one track, two handles.
+
+        Per object, not per scene — cutting the density open while the model inside it
+        stays whole is the whole point, and a camera-wide slab cannot do that. Bring the
+        handles together and the object is clipped away entirely.
+        """
+        from PySide6.QtWidgets import QHBoxLayout, QLabel
+
+        front, back = current if current else (0.0, 1.0)
+        row = QHBoxLayout()
+        lab = QLabel("Clipping")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        slider = _make_range_slider()()
+        slider.setToolTip(
+            "Front and rear clipping planes for this object. Drag the handles to slice "
+            "into it, or the span between them to move the slab. The slab follows the "
+            "camera.")
+        slider.set_values(front, back)
+        slider.changed.connect(on_change)
+        row.addWidget(slider, stretch=1)
+        self._appearance_layout.addLayout(row)
+        return slider
 
     def _add_opacity_row(self, current, on_change):
         """Opacity as a slider with its value beside it (QSlider is integer-only)."""
@@ -2548,6 +2706,7 @@ class DesktopApp:
         rep = rep or self._default_model_rep(session)
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
                  "rep": rep, "color": None, "hidden_types": set(), "type_groups": None,
+                 "clip": (0.0, 1.0),
                  "interactions": False}
         self._models.append(entry)
         self._apply_model_rep(entry)
@@ -2942,7 +3101,34 @@ class DesktopApp:
         entry = self._volume_entry(vid)
         if entry is None:
             return {}
-        return {key: entry.get(key) for key in ("style", "color", "opacity", "iso")}
+        return {key: entry.get(key) for key in ("style", "color", "opacity", "iso", "clip")}
+
+    def set_volume_clip(self, vid: str, front: float, back: float) -> None:
+        """Clip a volume to a front/rear slab (see LiveSession.set_clip)."""
+        self._volume_command(vid, "clip", (float(front), float(back)),
+                             lambda c, ref, v: c.set_clip(v[0], v[1], ref=ref))
+
+    def set_model_clip(self, mid: str, front: float, back: float) -> None:
+        """Clip a model's representations to a front/rear slab.
+
+        Unlike a volume — whose representation belongs to the shared MVSJ scene, and so
+        is addressed by reference — a model is clipped through its own session, which
+        owns the representations the viewer built for it.
+        """
+        entry = self._model_entry(mid)
+        clip = (float(front), float(back))
+        if entry is None or entry.get("clip") == clip:
+            return
+        entry["clip"] = clip
+        try:
+            entry["session"].set_clip(front, back)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def model_appearance(self, mid: str) -> dict:
+        """A model's current clip slab (see :meth:`volume_appearance`)."""
+        entry = self._model_entry(mid)
+        return {} if entry is None else {"clip": entry.get("clip")}
 
     def set_volume_scroll_target(self, vid: Optional[str]) -> None:
         """Point shift+scroll contouring at a volume (None = nothing).
@@ -3037,7 +3223,7 @@ class DesktopApp:
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
             "iso": data.suggested_iso(), "color": _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
-            "opacity": 1.0, "style": "surface",
+            "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0),
         })
         self._reload_viewport()
         self._emit_loaded_changed()

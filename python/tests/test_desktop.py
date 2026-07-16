@@ -560,6 +560,65 @@ def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
         app.stop()
 
 
+def test_range_slider_two_handles(qapp):
+    """The clipping slab's control. Handles may meet — that is not degenerate here, it
+    is the point at which the object is fully clipped."""
+    from pxviewer.desktop import _make_range_slider
+
+    slider = _make_range_slider()()
+    slider.resize(240, 24)
+    assert slider.values() == (0.0, 1.0)  # open: nothing clipped
+
+    seen = []
+    slider.changed.connect(lambda f, b: seen.append((round(f, 2), round(b, 2))))
+    slider.set_values(0.25, 0.75, notify=True)
+    assert slider.values() == (0.25, 0.75) and seen == [(0.25, 0.75)]
+
+    slider.set_values(0.8, 0.2)  # crossed handles collapse rather than invert
+    assert slider.values() == (0.2, 0.2)
+    slider.set_values(-1.0, 5.0)  # out of range is clamped, not wrapped
+    assert slider.values() == (0.0, 1.0)
+
+
+def test_clipping_is_per_object(qapp):
+    """Each object carries its own slab, so the density can be clipped while the model
+    inside it stays whole. A model is clipped through its own session; a volume by
+    reference, since its representation belongs to the shared MVSJ scene."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        mid = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        # Both start unclipped.
+        assert app._volume_entry(vid)["clip"] == (0.0, 1.0)
+        assert app._model_entry(mid)["clip"] == (0.0, 1.0)
+
+        app.set_volume_clip(vid, 0.4, 0.6)
+        assert app._volume_entry(vid)["clip"] == (0.4, 0.6)
+        assert app._model_entry(mid)["clip"] == (0.0, 1.0)  # the model is untouched
+        assert app.volume_appearance(vid)["clip"] == (0.4, 0.6)
+
+        app.set_model_clip(mid, 0.1, 0.9)
+        assert app._model_entry(mid)["clip"] == (0.1, 0.9)
+        assert app.model_appearance(mid)["clip"] == (0.1, 0.9)
+
+        # The Appearance pane offers the slab for either kind, at its current value.
+        ctl = app._controls
+        ctl._update_appearance("volume", vid)
+        ctl._update_appearance("model", mid)
+    finally:
+        app.stop()
+
+
 def test_console_binds_and_tracks_active_session(qapp):
     """The embedded console exposes `app`/`session`, and `session` follows active."""
     pytest.importorskip("qtconsole")
