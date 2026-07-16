@@ -404,6 +404,41 @@ def test_geometry_restraints_populate_tables(qapp):
         app.stop()
 
 
+def test_select_by_expression(qapp):
+    """A cctbx/Phenix selection string selects atoms on the active model."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        # No model yet -> a clear error, not a crash.
+        with pytest.raises(ValueError):
+            app.select_by_expression("chain A")
+
+        app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        mid = app._active_model_id
+
+        n = app.select_by_expression("chain A and resseq 5:14 and name CA")
+        assert n == 10  # ten CA atoms in that range
+        assert len(app._scene_selection[mid]) == 10  # fed into the scene selection
+
+        # An empty string clears the model's selection.
+        assert app.select_by_expression("   ") == 0
+        assert mid not in app._scene_selection
+
+        # Invalid syntax raises (the UI catches and reports it).
+        with pytest.raises(Exception):
+            app.select_by_expression("chain @@@ bogus (")
+    finally:
+        app.stop()
+
+
 def test_multi_model_registry(qapp):
     """The desktop model registry: add (overlay), hide (switch), active, remove."""
     pytest.importorskip("iotbx.data_manager")

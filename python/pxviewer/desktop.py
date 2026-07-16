@@ -433,7 +433,15 @@ class ControlsWindow:
     # -- tabs ------------------------------------------------------------
 
     def _build_file_tab(self):
-        from PySide6.QtWidgets import QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QListWidget,
+            QPushButton,
+            QVBoxLayout,
+            QWidget,
+        )
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -475,6 +483,26 @@ class ControlsWindow:
         row.addWidget(self._remove_model_btn)
         row.addStretch()
         layout.addLayout(row)
+
+        # Select atoms on the active model by a cctbx/Phenix selection string.
+        layout.addSpacing(12)
+        layout.addWidget(QLabel("<b>Select atoms</b>  (cctbx / Phenix selection)"))
+        sel_row = QHBoxLayout()
+        self._select_expr = QLineEdit()
+        self._select_expr.setPlaceholderText("e.g. chain A and resseq 5:14 and name CA")
+        self._select_expr.setToolTip(
+            "A cctbx atom-selection string, resolved on the active model. "
+            "Press Enter or Select to highlight the matched atoms."
+        )
+        self._select_expr.returnPressed.connect(self._on_select_expression)
+        sel_row.addWidget(self._select_expr, stretch=1)
+        self._select_expr_btn = QPushButton("Select")
+        self._select_expr_btn.clicked.connect(self._on_select_expression)
+        sel_row.addWidget(self._select_expr_btn)
+        layout.addLayout(sel_row)
+        self._select_expr_status = QLabel("")
+        self._select_expr_status.setWordWrap(True)
+        layout.addWidget(self._select_expr_status)
 
         layout.addSpacing(12)
         layout.addWidget(QLabel("<b>Sample</b>"))
@@ -890,6 +918,18 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Could not load sample", str(exc))
             return
         self._file_label.setText(f"{sample.name}  ({kind})")
+
+    def _on_select_expression(self) -> None:
+        text = self._select_expr.text()
+        try:
+            n = self._desktop.select_by_expression(text)
+        except Exception as exc:  # invalid syntax / no model — report inline
+            self._select_expr_status.setText(f"<span style='color:#c0392b'>{exc}</span>")
+            return
+        if not text.strip():
+            self._select_expr_status.setText("selection cleared")
+        else:
+            self._select_expr_status.setText(f"{n} atom(s) selected")
 
     def _on_model_demo_changed(self) -> None:
         name = self._model_select.currentData()
@@ -1853,6 +1893,31 @@ class DesktopApp:
                 session.highlight(list(indices))
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
+
+    def select_by_expression(self, text: str) -> int:
+        """Resolve a cctbx/Phenix selection string on the active model and select it.
+
+        cctbx's own atom-selection machinery turns the string into atom indices
+        (raising on bad syntax); the atoms are highlighted in the viewer and fed
+        into the scene selection so the atoms table + count reflect them. Returns
+        the number of atoms selected. An empty string clears the model's selection.
+        """
+        text = (text or "").strip()
+        mid = self._active_model_id
+        session = self.active_model_session()
+        if session is None or getattr(session, "model", None) is None:
+            raise ValueError("load a model first, then enter a selection")
+        if not text:
+            session.clear_selection()
+            with self._scene_lock:
+                dropped = self._scene_selection.pop(mid, None) is not None
+            if dropped:
+                self._emit_scene_selection()
+            return 0
+        sel = session.select_by(selection=text)  # cctbx; raises on invalid syntax
+        session.highlight(sel)                    # show it in the viewer
+        self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
+        return len(sel)
 
 
 def run_desktop(host: str = "127.0.0.1", port: int = 5173) -> int:
