@@ -446,6 +446,7 @@ def _make_checkable_combo():
             self.setModel(QStandardItemModel(self))
             self.view().viewport().installEventFilter(self)
             self.on_change = None  # callback(data, checked)
+            self._press_index = None  # where a press landed inside the popup
 
         def add_checkable(self, text, checked, data):
             item = QStandardItem(text)
@@ -466,16 +467,28 @@ def _make_checkable_combo():
             return "All shown" if not hidden else f"{hidden} hidden"
 
         def eventFilter(self, obj, event):
-            if event.type() == QEvent.Type.MouseButtonRelease and obj is self.view().viewport():
-                index = self.view().indexAt(event.position().toPoint())
-                item = self.model().itemFromIndex(index)
-                if item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
-                    now = item.checkState() != Qt.CheckState.Checked
-                    item.setCheckState(Qt.CheckState.Checked if now else Qt.CheckState.Unchecked)
-                    self.update()  # repaint the summary
-                    if self.on_change:
-                        self.on_change(item.data(Qt.ItemDataRole.UserRole), now)
-                    return True  # consume -> popup stays open, no activation/close
+            if obj is self.view().viewport():
+                if event.type() == QEvent.Type.MouseButtonPress:
+                    # A press inside the open popup arms a toggle; consume it so the
+                    # view doesn't start its own selection.
+                    self._press_index = self.view().indexAt(event.position().toPoint())
+                    return True
+                if event.type() == QEvent.Type.MouseButtonRelease:
+                    index = self.view().indexAt(event.position().toPoint())
+                    pressed = self._press_index
+                    self._press_index = None
+                    # Toggle only on a real click *inside* the popup (press+release on
+                    # the same item). The click that opens the dropdown presses on the
+                    # combo, not the viewport, so it never toggles — it just opens.
+                    if pressed is not None and pressed.isValid() and pressed == index:
+                        item = self.model().itemFromIndex(index)
+                        if item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                            now = item.checkState() != Qt.CheckState.Checked
+                            item.setCheckState(Qt.CheckState.Checked if now else Qt.CheckState.Unchecked)
+                            self.update()  # repaint the summary
+                            if self.on_change:
+                                self.on_change(item.data(Qt.ItemDataRole.UserRole), now)
+                    return True  # consume -> popup stays open, never auto-selects/closes
             return super().eventFilter(obj, event)
 
         def paintEvent(self, _event):

@@ -631,6 +631,40 @@ def test_model_rep_options_are_valid(qapp):
         session.set_representation(value)  # must not raise (regression: 'line' did)
 
 
+def test_checkable_combo_requires_click_inside_popup(qapp):
+    """The click that opens the dropdown must not toggle the item under the cursor."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    from pxviewer.desktop import _make_checkable_combo
+
+    combo = _make_checkable_combo()
+    combo.add_checkable("Protein", True, "Protein")
+    combo.add_checkable("Water", True, "Water")
+    fired = []
+    combo.on_change = lambda data, checked: fired.append((data, checked))
+
+    viewport = combo.view().viewport()
+    idx0 = combo.model().index(0, 0)
+    combo.view().indexAt = lambda _pos: idx0  # every event maps to the first item
+
+    def click(kind):
+        ev = QMouseEvent(kind, QPointF(5, 5), Qt.MouseButton.LeftButton,
+                         Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
+        combo.eventFilter(viewport, ev)
+
+    # Opening gesture: a release with no prior press in the popup -> no toggle.
+    click(QEvent.Type.MouseButtonRelease)
+    assert combo.model().item(0).checkState() == Qt.CheckState.Checked
+    assert fired == []
+
+    # A real click inside the popup (press then release) toggles the item.
+    click(QEvent.Type.MouseButtonPress)
+    click(QEvent.Type.MouseButtonRelease)
+    assert combo.model().item(0).checkState() == Qt.CheckState.Unchecked
+    assert fired == [("Protein", False)]
+
+
 def test_hide_structure_types(qapp):
     """Show/hide structure types (cctbx classes) by restricting the representation."""
     pytest.importorskip("iotbx.data_manager")
