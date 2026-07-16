@@ -27,13 +27,30 @@ MONOMER_LIBRARY_HELP = (
 )
 
 
-def monomer_library_available() -> bool:
-    """Whether cctbx can find a monomer library to build restraints from."""
+def monomer_library_root() -> Optional[str]:
+    """The monomer-library (geostd) directory cctbx will use, or None."""
     for var in ("MMTBX_CCP4_MONOMER_LIB", "CLIBD_MON"):
         path = os.environ.get(var)
         if path and os.path.isdir(path):
-            return True
-    return False
+            return path
+    return None
+
+
+def monomer_library_available() -> bool:
+    """Whether cctbx can find a monomer library to build restraints from."""
+    return monomer_library_root() is not None
+
+
+def geostd_monomer_path(root: Optional[str], resname: str) -> Optional[str]:
+    """Path to a monomer's geostd CIF, or None.
+
+    geostd buckets monomers by lowercased first character and names each file
+    ``data_<CODE>.cif`` (e.g. ``a/data_ALA.cif``, ``m/data_MET.cif``).
+    """
+    if not root or not resname:
+        return None
+    candidate = os.path.join(root, resname[0].lower(), f"data_{resname}.cif")
+    return candidate if os.path.isfile(candidate) else None
 
 
 def _sigma(weight: float) -> float:

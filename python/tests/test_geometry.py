@@ -61,6 +61,19 @@ def test_bond_row_values_are_physical():
 
 
 @needs_monlib
+def test_geostd_monomer_path_resolves(tmp_path):
+    from pxviewer.geometry import geostd_monomer_path, monomer_library_root
+
+    root = monomer_library_root()
+    ala = geostd_monomer_path(root, "ALA")
+    assert ala is not None and ala.endswith("a/data_ALA.cif") and Path(ala).is_file()
+    assert geostd_monomer_path(root, "MET").endswith("m/data_MET.cif")
+    # No file in an empty root, and no library at all -> None.
+    assert geostd_monomer_path(str(tmp_path), "ALA") is None
+    assert geostd_monomer_path(None, "ALA") is None
+
+
+@needs_monlib
 def test_indices_within_selection():
     geo = GeometryRestraints(_model())
     selected = set(geo.row("bond", 0)[0])  # the two atoms of the first bond

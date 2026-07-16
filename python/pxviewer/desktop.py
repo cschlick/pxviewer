@@ -15,6 +15,7 @@ external browser is needed.
 from __future__ import annotations
 
 import signal
+import os
 import sys
 import threading
 import time
@@ -232,6 +233,49 @@ def _atom_label_fn(session):
     return label
 
 
+def _geostd_source_fn(session):
+    """An ``i_seqs -> (text, geostd_path_or_None)`` labeller for a restraint's source.
+
+    Intra-residue restraints come from that monomer's geostd file; a restraint whose
+    atoms span residues is defined by a link, not a single monomer file.
+    """
+    from .geometry import geostd_monomer_path, monomer_library_root
+
+    arrays = getattr(getattr(session, "_data", None), "arrays", None)
+    if arrays is None:
+        return lambda iseqs: ("", None)
+    resname = arrays.resname
+    root = monomer_library_root()
+    cache: dict = {}
+
+    def source(iseqs):
+        names = {resname[i] for i in iseqs}
+        if len(names) != 1:
+            return ("(link)", None)  # spans residues -> a link, not one monomer file
+        rn = next(iter(names))
+        if rn not in cache:
+            cache[rn] = (rn, geostd_monomer_path(root, rn))
+        return cache[rn]
+
+    return source
+
+
+def _reveal_in_file_manager(path) -> None:
+    """Reveal a file in the OS file browser (Finder / Explorer / folder on Linux)."""
+    import subprocess
+
+    path = str(path)
+    try:
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", "-R", path])
+        elif os.name == "nt":  # noqa: SIM  (explorer wants the odd "/select," token)
+            subprocess.Popen(["explorer", "/select,", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path)])
+    except Exception:  # pragma: no cover - platform/tooling dependent
+        pass
+
+
 def _make_restraint_table_model():
     """A QAbstractTableModel over a GeometryRestraints category (built lazily post-Qt).
 
@@ -241,6 +285,7 @@ def _make_restraint_table_model():
     cells from recomputing — so 100k+ restraints stay cheap (QTableView virtualises).
     """
     from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+    from PySide6.QtGui import QColor, QFont
 
     class RestraintTableModel(QAbstractTableModel):
         def __init__(self):
@@ -249,20 +294,32 @@ def _make_restraint_table_model():
             self._category = ""
             self._columns: List[str] = []
             self._label = None
+            self._source = None  # i_seqs -> (text, path_or_None); adds a "geostd" link column
             self._n = 0
             self._filter: Optional[list] = None  # None = all rows; else restraint indices
             self._memo_key = -1
             self._memo = None  # (i_seqs, values) for _memo_key (a restraint index)
 
-        def set_source(self, geo, category, columns, label_fn) -> None:
+        def set_source(self, geo, category, columns, label_fn, source_fn=None) -> None:
             self.beginResetModel()
             self._geo, self._category = geo, category
             self._columns = list(columns)
             self._label = label_fn
+            self._source = source_fn
             self._n = geo.count(category) if geo is not None else 0
             self._filter = None
             self._memo_key, self._memo = -1, None
             self.endResetModel()
+
+        def source_column(self) -> int:
+            """Column index of the geostd link (or -1 when there is none)."""
+            return 1 + len(self._columns) if self._source is not None else -1
+
+        def source_for_row(self, row: int):
+            """``(text, path_or_None)`` for the geostd file backing a row."""
+            if self._source is None:
+                return ("", None)
+            return self._source(self._rowdata(row)[0])
 
         def set_filter(self, indices) -> None:
             """Restrict visible rows to ``indices`` (restraint order); None = all."""
@@ -295,27 +352,41 @@ def _make_restraint_table_model():
         def columnCount(self, parent=QModelIndex()):
             if parent.isValid() or not self._columns:
                 return 0
-            return 1 + len(self._columns)  # "atoms" + value columns
+            extra = 1 if self._source is not None else 0
+            return 1 + len(self._columns) + extra  # "atoms" + values [+ "geostd"]
 
         def data(self, index, role=Qt.ItemDataRole.DisplayRole):
             if not index.isValid():
                 return None
+            col = index.column()
+            src_col = self.source_column()
+            if col == src_col:
+                text, path = self.source_for_row(index.row())
+                if role == Qt.ItemDataRole.DisplayRole:
+                    return text
+                if path is not None and role == Qt.ItemDataRole.ForegroundRole:
+                    return QColor("#2563eb")  # link blue
+                if path is not None and role == Qt.ItemDataRole.FontRole:
+                    font = QFont()
+                    font.setUnderline(True)
+                    return font
+                return None
             if role == Qt.ItemDataRole.DisplayRole:
                 iseqs, vals = self._rowdata(index.row())
-                col = index.column()
                 if col == 0:
                     return "  ".join(self._label(i) for i in iseqs) if self._label else str(iseqs)
                 v = vals.get(self._columns[col - 1])
                 if v is None:
                     return ""
                 return "" if v != v else f"{v:.3f}"  # v != v -> NaN
-            if role == Qt.ItemDataRole.TextAlignmentRole and index.column() > 0:
+            if role == Qt.ItemDataRole.TextAlignmentRole and col > 0 and col != src_col:
                 return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             return None
 
         def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
             if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-                return (["atoms"] + self._columns)[section]
+                headers = ["atoms"] + self._columns + (["geostd"] if self._source is not None else [])
+                return headers[section]
             return None
 
     return RestraintTableModel()
@@ -704,6 +775,8 @@ class ControlsWindow:
         view.selectionModel().selectionChanged.connect(
             lambda *_, c=category: self._on_restraint_selection(c)
         )
+        # Clicking the geostd column reveals that monomer's file in the file browser.
+        view.clicked.connect(lambda idx, c=category: self._on_restraint_link_clicked(c, idx))
 
         stack.addWidget(msg)   # page 0
         stack.addWidget(view)  # page 1
@@ -772,15 +845,25 @@ class ControlsWindow:
             self._geo_cache[mid] = geo
 
         label_fn = _atom_label_fn(session)
+        source_fn = _geostd_source_fn(session)  # the geostd link column
         self._suppress_restraint_sync = True
         try:
             for cat, info in self._restraint_tabs.items():
-                info["model"].set_source(geo, cat, info["columns"], label_fn)
+                info["model"].set_source(geo, cat, info["columns"], label_fn, source_fn)
                 info["stack"].setCurrentWidget(info["view"])
         finally:
             self._suppress_restraint_sync = False
         self._restraints_model_id = mid
         self._apply_restraint_filter()  # respect the shared filter on a fresh build
+
+    def _on_restraint_link_clicked(self, category: str, index) -> None:
+        """Click on the geostd column -> reveal that monomer's file in the file browser."""
+        model = self._restraint_tabs[category]["model"]
+        if not index.isValid() or index.column() != model.source_column():
+            return
+        _text, path = model.source_for_row(index.row())
+        if path:
+            _reveal_in_file_manager(path)
 
     def _on_restraint_selection(self, category: str) -> None:
         """Restraint row -> highlight the atoms it involves in the viewer."""

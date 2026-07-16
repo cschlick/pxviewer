@@ -349,6 +349,28 @@ def test_restraint_table_model(qapp):
     assert model.rowCount() == 0
 
 
+def test_restraint_table_geostd_column(qapp):
+    cols = ["ideal", "model"]
+    rows = [((0, 1), {}), ((2, 3), {})]
+
+    def src(iseqs):  # atoms 0,1 -> a monomer file; 2,3 -> a link (no single file)
+        return ("ALA", "/geostd/a/data_ALA.cif") if set(iseqs) == {0, 1} else ("(link)", None)
+
+    model = _make_restraint_table_model()
+    model.set_source(_FakeGeo(rows), "bond", cols, lambda i: f"a{i}", src)
+
+    headers = [model.headerData(c, Qt.Orientation.Horizontal) for c in range(model.columnCount())]
+    assert headers == ["atoms", "ideal", "model", "geostd"]
+    assert model.source_column() == 3
+    assert model.data(model.index(0, 3)) == "ALA"
+    assert model.data(model.index(1, 3)) == "(link)"
+    assert model.source_for_row(0) == ("ALA", "/geostd/a/data_ALA.cif")
+    assert model.source_for_row(1)[1] is None
+    # link styling (coloured foreground) only when there is a file
+    assert model.data(model.index(0, 3), Qt.ItemDataRole.ForegroundRole) is not None
+    assert model.data(model.index(1, 3), Qt.ItemDataRole.ForegroundRole) is None
+
+
 def test_restraint_table_filter(qapp):
     cols = ["ideal", "model", "delta", "sigma", "residual"]
     rows = [((0, 1), {}), ((2, 3), {}), ((4, 5), {})]
@@ -493,6 +515,46 @@ def test_geometry_filter_applies_to_restraint_tables(qapp):
 
         controls._filter_selection_check.setChecked(False)
         assert bond["model"].rowCount() == full
+    finally:
+        app.stop()
+
+
+def test_geostd_source_links_rows_to_files(qapp):
+    """Each intra-residue restraint row resolves to its geostd monomer file."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pathlib import Path
+
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB to a geostd checkout)")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        controls = app._controls
+        controls._ensure_restraints()
+        model = controls._restraint_tabs["bond"]["model"]
+
+        # The geostd column is last.
+        assert model.source_column() == model.columnCount() - 1
+
+        # At least one bond resolves to a real geostd .cif on disk.
+        resolved = 0
+        for r in range(min(model.rowCount(), 50)):
+            text, path = model.source_for_row(r)
+            assert text  # a resname or "(link)"
+            if path is not None:
+                assert path.endswith(".cif") and Path(path).is_file()
+                resolved += 1
+        assert resolved > 0
     finally:
         app.stop()
 
