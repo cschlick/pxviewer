@@ -581,7 +581,7 @@ class ControlsWindow:
         self._desktop = desktop
         self._window = QWidget()
         self._window.setWindowTitle(title)
-        self._window.setMinimumSize(360, 520)
+        self._window.setMinimumSize(300, 480)  # compact — the viewer takes the space
 
         layout = QVBoxLayout(self._window)
         layout.setSpacing(12)
@@ -598,6 +598,7 @@ class ControlsWindow:
         tabs.addTab(self._build_tools_tab(), "Tools")
         console_tab = self._build_console_tab()
         self._console_tab_index = tabs.addTab(console_tab, "Console")
+        tabs.addTab(self._build_settings_tab(), "Settings")
         # The console spins up an IPython kernel, so defer that cost until the tab
         # is actually opened.
         tabs.currentChanged.connect(self._on_tab_changed)
@@ -635,7 +636,6 @@ class ControlsWindow:
             QLineEdit,
             QPushButton,
             QScrollArea,
-            QToolButton,
             QTreeWidget,
             QVBoxLayout,
             QWidget,
@@ -658,9 +658,7 @@ class ControlsWindow:
         if sample_structure_path() is None:
             self._sample_btn.setEnabled(False)
         open_row.addWidget(self._sample_btn)
-        demos_btn = QToolButton()
-        demos_btn.setText("Demos ▾")
-        demos_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
         demos_btn.setMenu(self._build_demos_menu())
         open_row.addWidget(demos_btn)
         ol.addLayout(open_row)
@@ -694,13 +692,17 @@ class ControlsWindow:
         self._active_group.setExclusive(True)
         self._active_group.buttonClicked.connect(self._on_active_radio)
         layout.addWidget(self._loaded_tree)
+        obj_row = QHBoxLayout()
+        self._write_btn = QPushButton("Write…")
+        self._write_btn.setToolTip("Write the focused object to disk (model coordinates or map).")
+        self._write_btn.clicked.connect(self._on_write_object)
+        obj_row.addWidget(self._write_btn)
+        obj_row.addStretch()
         self._remove_model_btn = QPushButton("Remove")
         self._remove_model_btn.setToolTip("Remove the highlighted object")
         self._remove_model_btn.clicked.connect(self._on_remove_selected)
-        remove_row = QHBoxLayout()
-        remove_row.addStretch()
-        remove_row.addWidget(self._remove_model_btn)
-        layout.addLayout(remove_row)
+        obj_row.addWidget(self._remove_model_btn)
+        layout.addLayout(obj_row)
 
         # -- Appearance of the focused object ----------------------------
         self._appearance_box = QGroupBox("Appearance")
@@ -822,14 +824,24 @@ class ControlsWindow:
         ag.addLayout(clash_row)
         layout.addWidget(analysis)
 
-        display = QGroupBox("Display")
-        dg = QVBoxLayout(display)
-        from PySide6.QtWidgets import QCheckBox
+        layout.addStretch()
+        return tab
 
+    def _build_settings_tab(self):
+        """Second-class settings that don't belong in the everyday workflow."""
+        from PySide6.QtWidgets import QCheckBox, QGroupBox, QVBoxLayout, QWidget
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        viewer = QGroupBox("Viewer")
+        vg = QVBoxLayout(viewer)
         self._axis_check = QCheckBox("Show XYZ axes")
+        self._axis_check.setChecked(True)  # the viewer shows them by default
         self._axis_check.toggled.connect(lambda on: self._desktop.set_axis(on))
-        dg.addWidget(self._axis_check)
-        layout.addWidget(display)
+        vg.addWidget(self._axis_check)
+        layout.addWidget(viewer)
 
         layout.addStretch()
         return tab
@@ -1246,6 +1258,28 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Could not load sample", str(exc))
             return
         self._file_label.setText(f"{sample.name}  ({kind})")
+
+    def _on_write_object(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        kind, ident = self._focused
+        if ident is None:
+            self._set_status("select an object to write")
+            return
+        it = self._find_item(kind, ident)
+        default = it["name"] if it else "out"
+        if kind == "model":
+            fmt = "mmCIF (*.cif);;PDB (*.pdb)"
+        else:
+            fmt = "CCP4/MRC map (*.mrc *.map *.ccp4)"
+        path, _ = QFileDialog.getSaveFileName(self._window, "Write object", default, fmt)
+        if not path:
+            return
+        try:
+            self._desktop.write_object(kind, ident, path)
+            self._set_status(f"Wrote {Path(path).name}")
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Write failed", str(exc))
 
     def _on_select_expression(self) -> None:
         self._run_selection(self._select_expr.text())
@@ -1734,10 +1768,11 @@ class DesktopApp:
             rect = screen.availableGeometry()
 
         x, y, total_width, total_height = rect.x(), rect.y(), rect.width(), rect.height()
-        half_width = total_width // 2
+        # Viewer gets 3/4, the controls 1/4 (the master-detail panel is compact).
+        view_width = total_width * 3 // 4
 
-        self._viewport.set_geometry(QRect(x, y, half_width, total_height))
-        self._controls.set_geometry(QRect(x + half_width, y, total_width - half_width, total_height))
+        self._viewport.set_geometry(QRect(x, y, view_width, total_height))
+        self._controls.set_geometry(QRect(x + view_width, y, total_width - view_width, total_height))
 
     # -- live session ----------------------------------------------------
 
@@ -1777,6 +1812,12 @@ class DesktopApp:
         if self._dummy is None:
             self._dummy = _dummy_session()
             self._dummy.start(host=self._host, port=0)
+            # Render nothing: an empty `on` set draws no atoms, so an empty scene
+            # is truly empty (the dummy only keeps the ws channel open).
+            try:
+                self._dummy.set_representation("ball-and-stick", on=[])
+            except Exception:  # pragma: no cover - defensive
+                pass
         return f"ws://{self._host}:{self._dummy.port}"
 
     def _control_session(self):
@@ -1985,6 +2026,30 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             control.set_axis(bool(visible))
+
+    def write_object(self, kind: str, ident: str, path: str) -> None:
+        """Write a loaded object to disk: the model's cctbx coordinates, or the map.
+
+        This writes what the DataManager holds (the model's own coordinates), not
+        anything from the viewer — the same bytes cctbx would round-trip.
+        """
+        p = str(path)
+        if kind == "model":
+            entry = self._model_entry(ident)
+            model = entry["session"].model if entry else None
+            if model is None:
+                raise ValueError("no cctbx model to write")
+            is_pdb = p.lower().endswith((".pdb", ".ent"))
+            text = model.model_as_pdb() if is_pdb else model.model_as_mmcif()
+            with open(p, "w") as fh:
+                fh.write(text)
+        elif kind == "volume":
+            entry = self._volume_entry(ident)
+            if entry is None:
+                raise ValueError("no such volume")
+            entry["data"].write_map(p)  # cctbx writes the map
+        else:
+            raise ValueError("nothing to write")
 
     def set_volume_style(self, vid: str, style: str) -> None:
         """Change a volume's isosurface style (surface/wireframe/mesh) live."""

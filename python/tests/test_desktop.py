@@ -618,6 +618,38 @@ def test_model_rep_options_are_valid(qapp):
         session.set_representation(value)  # must not raise (regression: 'line' did)
 
 
+def test_write_object(qapp, tmp_path):
+    """Write a model's cctbx coordinates (PDB/mmCIF) and a volume's map."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        pdb = tmp_path / "out.pdb"
+        app.write_object("model", mid, str(pdb))
+        assert pdb.exists() and "ATOM" in pdb.read_text()
+        cif = tmp_path / "out.cif"
+        app.write_object("model", mid, str(cif))
+        assert cif.exists() and "_atom_site" in cif.read_text()
+
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        mrc = tmp_path / "out.mrc"
+        app.write_object("volume", vid, str(mrc))
+        assert mrc.exists() and mrc.stat().st_size > 0
+    finally:
+        app.stop()
+
+
 def test_tools_and_appearance_setters(qapp):
     """Measure-from-selection, colour/interactions setters, clashes and axis."""
     pytest.importorskip("iotbx.data_manager")
