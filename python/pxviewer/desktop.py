@@ -1614,6 +1614,7 @@ class ControlsWindow:
         rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
         atoms = [self._atom_model.row_atom(r) for r in rows]
         self._desktop.highlight_atoms_in(self._table_model_id, atoms)
+        self._desktop.focus_atoms_in(self._table_model_id, atoms)
 
     def _select_table_rows(self, indices) -> None:
         """Select the given atom rows in the table without echoing back to the viewer."""
@@ -2507,6 +2508,16 @@ class DesktopApp:
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
 
+    def focus_atoms_in(self, mid: Optional[str], indices) -> None:
+        """Aim the viewer camera at atoms in one model (table selection -> focus)."""
+        indices = list(indices)
+        session = self.session_for(mid)
+        if session is not None and indices:
+            try:
+                session.focus(indices)
+            except Exception:  # pragma: no cover - defensive (e.g. stale indices)
+                pass
+
     def _clear_restraint_notations(self) -> None:
         session = self._restraint_prim_session
         if session is not None:
@@ -2531,9 +2542,11 @@ class DesktopApp:
             return
         self._restraint_prim_session = session
         highlight: set = set()
+        focus_atoms: set = set()
         for i, (kind, iseqs) in enumerate(specs):
             pid = f"geomsel-{i}"
             iseqs = list(iseqs)
+            focus_atoms.update(iseqs)
             try:
                 if kind == "bond" and len(iseqs) == 2:
                     session.add_distance(iseqs[0], iseqs[1], id=pid)
@@ -2553,6 +2566,11 @@ class DesktopApp:
             session.highlight(sorted(highlight))
         except Exception:  # pragma: no cover - defensive
             pass
+        if focus_atoms:  # aim the camera at the selected restraint's atoms
+            try:
+                session.focus(sorted(focus_atoms))
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def select_by_expression(self, text: str) -> int:
         """Resolve a cctbx/Phenix selection string on the active model and select it.
