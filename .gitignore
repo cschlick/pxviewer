@@ -21,3 +21,6 @@ AGENTS.md
 
 # Local dev fixtures for manual GUI testing (regenerate: scripts/make_dev_fixtures.py)
 python/tests/data/
+
+# geostd monomer library (large; git clone https://github.com/phenix-project/geostd)
+/geostd/
