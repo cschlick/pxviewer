@@ -149,6 +149,7 @@ def _make_bridge():
         run_on_main = Signal(object)        # call a thunk on the GUI thread
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
+        minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
 
     return _Bridge()
 
@@ -657,6 +658,8 @@ class ControlsWindow:
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
+        desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
+        self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -844,8 +847,10 @@ class ControlsWindow:
         """Geometry-focused tools: measure from the selection. (Clash/contact analysis
         lives in the Validation tab, alongside the other MolProbity checks.)"""
         from PySide6.QtWidgets import (
+            QCheckBox,
             QGridLayout,
             QGroupBox,
+            QHBoxLayout,
             QLabel,
             QPushButton,
             QVBoxLayout,
@@ -876,12 +881,25 @@ class ControlsWindow:
         minimization = QGroupBox("Minimization")
         ming = QVBoxLayout(minimization)
         ming.addWidget(QLabel("Relax the model onto ideal geometry:"))
+        self._minimize_map_check = QCheckBox("Use map")
+        self._minimize_map_check.setToolTip(
+            "Also pull the model into the density. Needs a map loaded together with "
+            "the model as a group, so the two share a frame.")
+        ming.addWidget(self._minimize_map_check)
+        min_row = QHBoxLayout()
         self._minimize_btn = QPushButton("Minimize")
         self._minimize_btn.setToolTip(
             "Minimize the active model against its geometry restraints (no map), "
             "streaming each step into the viewport as it runs.")
         self._minimize_btn.clicked.connect(self._on_minimize)
-        ming.addWidget(self._minimize_btn)
+        min_row.addWidget(self._minimize_btn)
+        self._minimize_stop_btn = QPushButton("Stop")
+        self._minimize_stop_btn.setToolTip("Halt the run, keeping the progress so far.")
+        self._minimize_stop_btn.setEnabled(False)
+        self._minimize_stop_btn.clicked.connect(lambda: self._desktop.stop_minimization())
+        min_row.addWidget(self._minimize_stop_btn)
+        min_row.addStretch()
+        ming.addLayout(min_row)
         layout.addWidget(minimization)
 
         layout.addStretch()
@@ -889,9 +907,23 @@ class ControlsWindow:
 
     def _on_minimize(self) -> None:
         try:
-            self._desktop.minimize_model()
+            self._desktop.minimize_model(use_map=self._minimize_map_check.isChecked())
         except Exception as exc:
             self._set_status(str(exc))
+
+    def _on_minimizing_changed(self, running: bool) -> None:
+        """Stop is only meaningful while a run is going; Minimize only while one is not."""
+        self._minimize_btn.setEnabled(not running)
+        self._minimize_stop_btn.setEnabled(running)
+
+    def _update_minimize_map(self) -> None:
+        """Offer 'Use map' only when the active model actually has one to use."""
+        available = self._desktop.map_for_model() is not None
+        self._minimize_map_check.setEnabled(available)
+        if not available:
+            self._minimize_map_check.setChecked(False)
+            self._minimize_map_check.setToolTip(
+                "Load a model and a map together (as a group) to minimize into density.")
 
     def _build_clashes_group(self):
         """All-atom contacts: add hydrogens with reduce2, then run probe2. Its two
@@ -1757,6 +1789,7 @@ class ControlsWindow:
             self._suppress_model_events = False
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
+        self._update_minimize_map()  # the active model may now have (or have lost) a map
         # Point the Appearance pane at the focused object. Focusing a model activates
         # it, so a focused *model* must always be the active one — if the active model
         # changed underneath us (a new model, a radio click, hydrogenate+analyze),
@@ -1947,6 +1980,7 @@ class DesktopApp:
         self._prev_sigint = None
         self._sigint_installed = False
         self._sigint_timer = None
+        self._minimize_stop = threading.Event()  # set to halt a running minimization
 
         self.bridge = _make_bridge()
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
@@ -2450,14 +2484,44 @@ class DesktopApp:
         else:
             session.clear_markup(channel)
 
-    def minimize_model(self) -> None:
-        """Minimize the active model's geometry, streaming the run into the viewport.
+    def map_for_model(self, mid: Optional[str] = None) -> Any:
+        """The map the given model can be minimized into, or None.
 
-        cctbx hands us every intermediate conformation (see :mod:`pxviewer.minimize`),
-        and each one goes straight out on the live coordinate wire — so the model is
-        seen relaxing rather than jumping to the answer. Runs on a background thread;
-        ``session.push`` is thread-safe. The model itself ends up minimized, so the
-        tables, validation and Write all see the new coordinates.
+        Only a map loaded *with* the model — as a group — is trustworthy here: cctbx's
+        map_model_manager puts the two in a common frame on load, which is exactly what
+        the minimizer's density interpolation assumes. A separately-loaded map may sit
+        in a different frame entirely, so cctbx is asked to confirm compatibility
+        rather than us guessing from the grid.
+        """
+        entry = self._model_entry(self._active_model_id if mid is None else mid)
+        if entry is None or entry.get("group") is None:
+            return None
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return None
+        for vol in self._volumes:
+            if vol.get("group") != entry["group"]:
+                continue
+            mm = getattr(vol["data"], "map_manager", None)
+            if mm is None:
+                continue
+            try:
+                if mm.origin_is_zero() and mm.is_compatible_model(model):
+                    return mm.map_data()
+            except Exception:  # pragma: no cover - cctbx symmetry comparison edge cases
+                continue
+        return None
+
+    def minimize_model(self, *, use_map: bool = False) -> None:
+        """Minimize the active model, streaming the run into the viewport.
+
+        Onto its geometry restraints, or with ``use_map`` also into the density of a
+        map loaded alongside it (see :meth:`map_for_model`). cctbx hands us every
+        intermediate conformation (see :mod:`pxviewer.minimize`), and each one goes
+        straight out on the live coordinate wire — so the model is seen relaxing rather
+        than jumping to the answer. Runs on a background thread; ``session.push`` is
+        thread-safe, and :meth:`stop_minimization` can halt it. The model itself ends up
+        minimized, so the tables, validation and Write all see the new coordinates.
         """
         entry = self._model_entry(self._active_model_id)
         if entry is None:
@@ -2468,28 +2532,51 @@ class DesktopApp:
             raise ValueError("the active object has no cctbx model")
         name = entry["name"]
 
+        map_data = self.map_for_model(entry["id"]) if use_map else None
+        if use_map and map_data is None:
+            raise ValueError("no map in this model's group to minimize into")
+
+        self._minimize_stop.clear()
+
         def work():
             from .geometry import monomer_library_available
-            from .minimize import minimize_geometry
+            from .minimize import minimize
 
             if not monomer_library_available():
                 self._status("minimization needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+                self.bridge.minimizing_changed.emit(False)
                 return
             try:
-                self._status(f"minimizing {name}…")
+                self._status(f"minimizing {name}{' into the map' if map_data else ''}…")
                 # Thin the stream: cctbx emits a state per function evaluation, far
                 # more than the viewport can show.
-                stats = minimize_geometry(model, on_state=session.push, stride=4)
+                stats = minimize(
+                    model, map_data=map_data, on_state=session.push,
+                    should_stop=self._minimize_stop.is_set, stride=4)
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"minimization failed: {exc}")
                 return
+            finally:
+                self.bridge.minimizing_changed.emit(False)
             self._status(
                 f"{name}: bond rmsd {stats['bonds_before']:.3f} -> {stats['bonds_after']:.3f}, "
                 f"angle rmsd {stats['angles_before']:.2f} -> {stats['angles_after']:.2f} "
-                f"({stats['n_sent']} of {stats['n_states']} steps shown)")
+                f"({stats['n_sent']} of {stats['n_states']} steps shown)"
+                + (f", map weight {stats['weight']:.1f}" if stats["weight"] else "")
+                + (" — stopped" if stats["stopped"] else ""))
             entry.pop("validation", None)  # stale: the coordinates just moved
 
+        self.bridge.minimizing_changed.emit(True)
         threading.Thread(target=work, name="pxviewer-minimize", daemon=True).start()
+
+    def stop_minimization(self) -> None:
+        """Halt a running minimization at its next step.
+
+        The model keeps the progress made so far — a stopped run is a shorter run, not
+        a discarded one.
+        """
+        self._minimize_stop.set()
+        self._status("stopping minimization…")
         self._status("minimizing…")
 
     def set_axis(self, visible: bool) -> None:
