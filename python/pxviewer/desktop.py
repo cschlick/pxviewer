@@ -926,10 +926,17 @@ class ControlsWindow:
 
         if it["kind"] == "model":
             mid = it["id"]
-            add_combo("Representation", _MODEL_REP_OPTIONS, it.get("rep"),
-                      lambda v: self._safe(lambda: self._desktop.set_model_representation(mid, v)))
-            add_combo("Colour", _MODEL_COLOR_OPTIONS, it.get("color"),
-                      lambda v: self._safe(lambda: self._desktop.set_model_color(mid, v)))
+
+            def _set_rep(v, it=it):
+                it["rep"] = v  # keep this snapshot in step with the backend entry
+                self._safe(lambda: self._desktop.set_model_representation(mid, v))
+
+            def _set_color(v, it=it):
+                it["color"] = v
+                self._safe(lambda: self._desktop.set_model_color(mid, v))
+
+            add_combo("Representation", _MODEL_REP_OPTIONS, it.get("rep"), _set_rep)
+            add_combo("Colour", _MODEL_COLOR_OPTIONS, it.get("color"), _set_color)
             types = it.get("types") or []
             if len(types) > 1:
                 r = QHBoxLayout()
@@ -1619,6 +1626,10 @@ class ControlsWindow:
         mid = button.property("mid")
         if mid:
             self._desktop.set_active_model(mid)
+            # Activating a model also points Appearance at it (mirrors row-focus, which
+            # activates). Without this the pane stays bound to the previously focused
+            # model, so its dropdowns would edit the wrong model.
+            self._update_appearance("model", mid)
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt

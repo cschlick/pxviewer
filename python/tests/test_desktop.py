@@ -800,6 +800,45 @@ def test_active_model_radio(qapp):
         app.stop()
 
 
+def test_appearance_follows_active_model(qapp):
+    """Activating a model via its radio re-points the Appearance pane at it, so its
+    dropdowns edit that model — not the previously focused one — and each model keeps
+    its own representation."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QRadioButton
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+
+        # Focus A and give it a distinct representation.
+        app._controls._update_appearance("model", a)
+        assert app._controls._focused == ("model", a)
+        app.set_model_representation(a, "cartoon")
+        assert app._model_entry(a)["rep"] == "cartoon"
+
+        # Activating B via its radio must move Appearance to B (the bug: it stayed on A).
+        radios = {r.property("mid"): r for r in app._controls._loaded_tree.findChildren(QRadioButton)}
+        app._controls._on_active_radio(radios[b])
+        assert app._active_model_id == b
+        assert app._controls._focused == ("model", b)
+
+        # Editing now targets B and leaves A alone (independent per-model state).
+        app.set_model_representation(b, "spacefill")
+        assert app._model_entry(b)["rep"] == "spacefill"
+        assert app._model_entry(a)["rep"] == "cartoon"
+    finally:
+        app.stop()
+
+
 def test_checkable_combo_requires_click_inside_popup(qapp):
     """The click that opens the dropdown must not toggle the item under the cursor."""
     from PySide6.QtCore import QEvent, QPointF, Qt
