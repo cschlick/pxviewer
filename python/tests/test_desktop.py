@@ -510,6 +510,49 @@ def test_geometry_filter_applies_to_restraint_tables(qapp):
         app.stop()
 
 
+def test_restraint_row_draws_notation(qapp):
+    """Selecting angle rows draws angle notations (not a whole-residue highlight)."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB to a geostd checkout)")
+
+    from PySide6.QtCore import QItemSelectionModel
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        controls = app._controls
+        controls._ensure_restraints()
+        view = controls._restraint_tabs["angle"]["view"]
+        model = controls._restraint_tabs["angle"]["model"]
+        session = app.active_model_session()
+
+        # One angle row -> one angle notation primitive drawn.
+        view.selectRow(0)
+        assert len(app._restraint_prim_ids) == 1
+        assert len(session._primitives) == 1
+
+        # A second selected row -> a second notation (multiple at once).
+        flags = QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows
+        view.selectionModel().select(model.index(1, 0), flags)
+        assert len(app._restraint_prim_ids) == 2 and len(session._primitives) == 2
+
+        # Clearing the selection removes the notations.
+        view.clearSelection()
+        assert app._restraint_prim_ids == [] and len(session._primitives) == 0
+    finally:
+        app.stop()
+
+
 def test_geostd_source_links_rows_to_files(qapp):
     """Each intra-residue restraint row resolves to its geostd monomer file."""
     pytest.importorskip("iotbx.data_manager")

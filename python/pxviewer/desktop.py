@@ -1094,14 +1094,16 @@ class ControlsWindow:
             _reveal_in_file_manager(path)
 
     def _on_restraint_selection(self, category: str) -> None:
-        """Restraint row -> highlight the atoms it involves in the viewer."""
+        """Restraint row -> draw its geometry notation (bond/angle/dihedral) in the
+        viewer, marking exactly the participating atoms. Multiple rows -> multiple."""
         if self._suppress_restraint_sync:
             return
         info = self._restraint_tabs[category]
-        iseqs = set()
-        for idx in info["view"].selectionModel().selectedRows():
-            iseqs.update(int(i) for i in info["model"].i_seqs_for_row(idx.row()))
-        self._desktop.highlight_atoms_in(self._table_model_id, sorted(iseqs))
+        specs = [
+            (category, tuple(int(i) for i in info["model"].i_seqs_for_row(idx.row())))
+            for idx in info["view"].selectionModel().selectedRows()
+        ]
+        self._desktop.show_restraint_notations(self._table_model_id, specs)
 
     def _build_console_tab(self):
         """A live IPython console bound to the API (created on first view)."""
@@ -1678,6 +1680,9 @@ class DesktopApp:
         # WebSocket threads, read on the GUI thread, so guard it.
         self._scene_selection: dict = {}
         self._scene_lock = threading.Lock()
+        # Restraint-notation primitives currently drawn for the selected geometry rows.
+        self._restraint_prim_ids: list = []
+        self._restraint_prim_session = None
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
@@ -2501,6 +2506,53 @@ class DesktopApp:
                 session.highlight(list(indices))
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
+
+    def _clear_restraint_notations(self) -> None:
+        session = self._restraint_prim_session
+        if session is not None:
+            for pid in self._restraint_prim_ids:
+                try:
+                    session.remove_primitive(pid)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+        self._restraint_prim_ids = []
+
+    def show_restraint_notations(self, mid: Optional[str], specs) -> None:
+        """Draw geometry notations for the selected restraint rows.
+
+        ``specs`` is a list of ``(kind, i_seqs)``. Bonds/angles/dihedrals get their
+        measurement notation (so exactly the participating atoms are marked, not the
+        whole residue); chirality/planarity have no simple notation, so their atoms
+        are highlighted instead. Multiple rows -> multiple notations.
+        """
+        session = self.session_for(mid)
+        self._clear_restraint_notations()
+        if session is None:
+            return
+        self._restraint_prim_session = session
+        highlight: set = set()
+        for i, (kind, iseqs) in enumerate(specs):
+            pid = f"geomsel-{i}"
+            iseqs = list(iseqs)
+            try:
+                if kind == "bond" and len(iseqs) == 2:
+                    session.add_distance(iseqs[0], iseqs[1], id=pid)
+                elif kind == "angle" and len(iseqs) == 3:
+                    session.add_angle(iseqs[0], iseqs[1], iseqs[2], id=pid)
+                elif kind == "dihedral" and len(iseqs) == 4:
+                    session.add_dihedral(iseqs[0], iseqs[1], iseqs[2], iseqs[3], id=pid)
+                else:  # chirality / planarity: no notation, just mark the atoms
+                    highlight.update(iseqs)
+                    continue
+                self._restraint_prim_ids.append(pid)
+            except Exception:  # pragma: no cover - defensive (stale indices)
+                highlight.update(iseqs)
+        # Highlight only the atoms without a notation (empty list clears the overlay,
+        # so a pure bond/angle/dihedral selection shows just the notation).
+        try:
+            session.highlight(sorted(highlight))
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def select_by_expression(self, text: str) -> int:
         """Resolve a cctbx/Phenix selection string on the active model and select it.
