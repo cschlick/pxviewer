@@ -53,11 +53,11 @@ class VolumeData:
         return cls(map_manager, name=name, map_id=map_id)
 
     @classmethod
-    def from_map_file(cls, path: Any) -> "VolumeData":
-        """Read a map file (MRC/MAP/CCP4/…) with cctbx's ``DataManager``."""
-        from iotbx.data_manager import DataManager
+    def from_map_file(cls, path: Any, *, data_manager: Any = None) -> "VolumeData":
+        """Read a map file (MRC/MAP/CCP4/…) through a cctbx ``DataManager``."""
+        from .cctbx_io import data_manager as _dm
 
-        dm = DataManager()
+        dm = _dm(data_manager)
         dm.process_real_map_file(str(path))
         return cls.from_map_manager(dm.get_real_map(str(path)), name=Path(path).name)
 
@@ -177,12 +177,21 @@ def split_map_model_manager(mmm: Any, *, name: Optional[str] = None) -> Tuple[Op
 
 
 def map_model_manager_from_files(
-    model_file: Optional[Any] = None, map_files: Any = (), *, ignore_symmetry_conflicts: bool = True
+    model_file: Optional[Any] = None,
+    map_files: Any = (),
+    *,
+    ignore_symmetry_conflicts: bool = True,
+    data_manager: Any = None,
 ) -> Any:
-    """Build a cctbx ``map_model_manager`` from files — cctbx decides the grouping."""
-    from iotbx.data_manager import DataManager
+    """Build a cctbx ``map_model_manager`` from files — cctbx decides the grouping.
 
-    dm = DataManager()
+    Note that ``get_map_model_manager`` *consumes* its inputs: it removes the model and
+    maps from the DataManager on the way out, since building the manager shifts them.
+    The returned manager is therefore the only record that these files belong together.
+    """
+    from .cctbx_io import data_manager as _dm
+
+    dm = _dm(data_manager)
     maps = [str(p) for p in (map_files or ())]
     return dm.get_map_model_manager(
         model_file=str(model_file) if model_file is not None else None,

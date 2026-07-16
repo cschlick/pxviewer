@@ -48,7 +48,7 @@ def _model_has_hydrogens(model: Any) -> bool:
     return any(e.strip() == "H" for e in elements)
 
 
-def run_probe_dots(model: Any) -> List[dict]:
+def run_probe_dots(model: Any, *, data_manager: Any = None) -> List[dict]:
     """Run probe2 on a cctbx model in memory; return the raw ``flat_results`` dots.
 
     No disk round-trip: the model goes straight into a DataManager (no PDB write) and
@@ -59,12 +59,13 @@ def run_probe_dots(model: Any) -> List[dict]:
     assembles the master phil (probe2's scope plus the base output scope).
     """
     import iotbx.phil
-    from iotbx.data_manager import DataManager
     from libtbx.program_template import ProgramTemplate
     from libtbx.utils import null_out
     from mmtbx.programs import probe2
 
-    dm = DataManager()
+    from .cctbx_io import data_manager as _dm
+
+    dm = _dm(data_manager)
     dm.add_model("model", model)
 
     master = iotbx.phil.parse(probe2.Program.master_phil_str, process_includes=True)
@@ -90,7 +91,7 @@ _CLASH_TYPES = {"bo"}
 
 
 def probe_dots(
-    model: Any, *, only_clashes: bool = False,
+    model: Any, *, only_clashes: bool = False, data_manager: Any = None,
 ) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[int, int, int]]]:
     """``[(loc, spike, rgb), ...]`` — drawable dots with MolProbity colours.
 
@@ -98,18 +99,18 @@ def probe_dots(
     clashes), for drawing a clash-only overlay separate from the full surface.
     """
     dots = []
-    for row in run_probe_dots(model):
+    for row in run_probe_dots(model, data_manager=data_manager):
         if only_clashes and row["type"] not in _CLASH_TYPES:
             continue
         dots.append((tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"])))
     return dots
 
 
-def probe_dots_split(model: Any):
+def probe_dots_split(model: Any, *, data_manager: Any = None):
     """Run probe2 once and return ``(contacts, clashes)`` — the full dot surface and
     the bad-overlap (clash) subset — so both overlays come from a single run."""
     contacts, clashes = [], []
-    for row in run_probe_dots(model):
+    for row in run_probe_dots(model, data_manager=data_manager):
         dot = (tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"]))
         contacts.append(dot)
         if row["type"] in _CLASH_TYPES:

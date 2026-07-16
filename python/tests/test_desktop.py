@@ -276,6 +276,74 @@ def test_map_model_demo_loads_bundled_model_as_group(qapp):
         app.stop()
 
 
+def test_group_keeps_the_map_model_manager_that_pairs_its_objects(qapp):
+    """A group is not just a label: it holds the cctbx map_model_manager that put the
+    model and map in a common frame. That manager is the record of the pairing — the
+    DataManager does not keep one (get_map_model_manager evicts what it consumed)."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_map_model_demo(d_min=4.0)
+        gid = app._models[0]["group"]
+        mmm = app.group_mmm(gid)
+        assert mmm is not None
+        # The viewer shows the manager's own model, so minimizing it in place keeps
+        # the pairing true rather than drifting from it.
+        assert app._models[0]["session"].model is mmm.model()
+        # ... and the map offered for minimization is the manager's, not one we
+        # picked out by inspecting grids ourselves.
+        assert app.map_for_model() is mmm.map_manager().map_data()
+
+        app.remove_group(gid)
+        assert app.group_mmm(gid) is None
+    finally:
+        app.stop()
+
+
+def test_unpaired_model_and_map_are_never_treated_as_paired(qapp, tmp_path):
+    """A map loaded on its own is not paired with a model loaded on its own, even
+    when they are the same structure and would look compatible. Pairing is an
+    operation cctbx performs, not a resemblance we detect."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.desktop import DesktopApp
+
+    mmm = map_model_manager()
+    mmm.generate_map()
+    map_path = tmp_path / "m.mrc"
+    model_path = tmp_path / "m.pdb"
+    mmm.map_manager().write_map(str(map_path))
+    model_path.write_text(mmm.model().model_as_pdb())
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        # Loaded separately -> no group, so no pairing, so nothing to minimize into.
+        app.load_files([str(model_path)])
+        app.load_files([str(map_path)])
+        assert len(app._models) == 1 and len(app._volumes) == 1
+        assert app._models[0]["group"] is None
+        assert app.map_for_model() is None
+        with pytest.raises(ValueError, match="not paired"):
+            app.minimize_model(use_map=True)
+
+        # The same two files loaded together -> cctbx pairs them, and now there is one.
+        app.load_files([str(model_path), str(map_path)])
+        assert app.map_for_model() is not None
+    finally:
+        app.stop()
+
+
 def test_console_binds_and_tracks_active_session(qapp):
     """The embedded console exposes `app`/`session`, and `session` follows active."""
     pytest.importorskip("qtconsole")

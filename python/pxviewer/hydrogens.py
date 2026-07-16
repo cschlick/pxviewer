@@ -20,7 +20,7 @@ def hydrogens_available() -> bool:
     return monomer_library_available()
 
 
-def add_hydrogens(model: Any, *, flip: bool = True) -> Any:
+def add_hydrogens(model: Any, *, flip: bool = True, data_manager: Any = None) -> Any:
     """Return a new model with explicit H placed and optimized by reduce2.
 
     Runs reduce2 ``approach=add`` with ``n_terminal_charge=no_charge`` — the mode
@@ -30,8 +30,9 @@ def add_hydrogens(model: Any, *, flip: bool = True) -> Any:
     entry point, so the result is written to a temp file and reloaded.
     """
     from iotbx.cli_parser import run_program
-    from iotbx.data_manager import DataManager
     from mmtbx.programs import reduce2
+
+    from .cctbx_io import data_manager as _dm
 
     workdir = tempfile.mkdtemp(prefix="pxviewer-reduce2-")
     in_path = os.path.join(workdir, "in.pdb")
@@ -49,6 +50,6 @@ def add_hydrogens(model: Any, *, flip: bool = True) -> Any:
     with open(os.devnull, "w") as devnull:
         run_program(program_class=reduce2.Program, args=args, logger=devnull)
 
-    dm = DataManager()
+    dm = _dm(data_manager)
     dm.process_model_file(out_path)
-    return dm.get_model()
+    return dm.get_model(out_path)

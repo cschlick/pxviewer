@@ -338,3 +338,30 @@ def test_load_attribute_text_bad_line(tmp_path):
     p.write_text("1\ntwo\n")
     with pytest.raises(ValueError, match="one number per line"):
         session.load_attribute_text("bad", p)
+
+
+def test_data_manager_is_the_callers_or_a_fresh_one_per_operation():
+    """Nothing makes a private DataManager: callers pass one in, or get one scoped to
+    the single operation — the scope cctbx itself uses, since a program mutates the
+    manager it is handed (ProgramTemplate binds it with set_program)."""
+    pytest.importorskip("iotbx.data_manager")
+    from pxviewer.cctbx_io import data_manager
+
+    mine = data_manager()
+    assert data_manager(mine) is mine   # passed in -> used, not replaced
+    assert data_manager() is not mine   # otherwise independent
+
+
+def test_read_model_reads_through_a_given_data_manager():
+    """Passing a DataManager in is what lets the caller own provenance: the file and
+    the model it produced stay with the caller's manager."""
+    pytest.importorskip("iotbx.data_manager")
+    from pxviewer.cctbx_io import data_manager, read_model
+
+    dm = data_manager()
+    model = read_model(UBIQUITIN, data_manager=dm)
+    assert dm.get_model_names() == [str(UBIQUITIN)]
+    assert dm.get_model(str(UBIQUITIN)) is model
+
+    read_model(UBIQUITIN)  # no manager given -> the caller's is untouched
+    assert len(dm.get_model_names()) == 1

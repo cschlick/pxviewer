@@ -26,6 +26,7 @@ from .data import AtomArrays
 
 __all__ = [
     "ModelData",
+    "data_manager",
     "read_model",
     "first_model",
     "model_to_arrays",
@@ -111,7 +112,7 @@ def _identity_keys(model: Any) -> List[tuple]:
     ]
 
 
-def attributes_from_cif(path: str | Path, target_model: Any) -> dict:
+def attributes_from_cif(path: str | Path, target_model: Any, *, data_manager: Any = None) -> dict:
     """Read custom ``_atom_site`` columns from mmCIF ``path`` and align to a model.
 
     The file is read with cctbx and matched to ``target_model`` **by atom identity**
@@ -119,7 +120,7 @@ def attributes_from_cif(path: str | Path, target_model: Any) -> dict:
     the same order, and atoms absent from the file get ``nan``. Returns
     ``{name: float array}`` of length ``target_model``'s atom count.
     """
-    source = first_model(read_model(path))
+    source = first_model(read_model(path, data_manager=data_manager))
     block = _cif_block(source)
     if block is None:
         raise ValueError(f"{path} is not mmCIF (no _atom_site cif block to read attributes from)")
@@ -183,6 +184,7 @@ def model_from_sites(
     resseqs: Any = None,
     resnames: Any = None,
     label: str = "pxviewer",
+    data_manager: Any = None,
 ) -> Any:
     """Build a cctbx model from coordinate + label arrays via a generated mmCIF.
 
@@ -220,8 +222,7 @@ def model_from_sites(
         )
     cif = "\n".join(out) + "\n"
 
-    DataManager = _require_data_manager()
-    dm = DataManager()
+    dm = _dm(data_manager)
     return dm.get_model(dm.process_model_str(label, cif))
 
 
@@ -236,12 +237,37 @@ def _require_data_manager():
     return DataManager
 
 
-def read_model(path: str | Path) -> Any:
-    """Read a model file (PDB or mmCIF) and return its ``mmtbx.model.manager``."""
-    DataManager = _require_data_manager()
-    dm = DataManager()
+def data_manager(existing: Any = None) -> Any:
+    """The DataManager for one operation: the caller's, or a fresh one.
+
+    Anything here that needs a DataManager takes one, rather than quietly making its
+    own, so the caller owns where the data came from.
+
+    The scope is one operation, not one application, because that is the scope cctbx
+    itself uses: ``CCTBXParser`` builds a DataManager per invocation and hands it to
+    the program, and ``ProgramTemplate.__init__`` then *mutates* what it is given —
+    default output filename, overwrite, and ``set_program(self)``, which binds the
+    DataManager to that one program. Two tools sharing one DataManager would fight
+    over that binding, so there is deliberately no app-wide instance to pass around.
+    """
+    if existing is not None:
+        return existing
+    return _require_data_manager()()
+
+
+# Callers take a `data_manager` argument, which shadows the function above.
+_dm = data_manager
+
+
+def read_model(path: str | Path, *, data_manager: Any = None) -> Any:
+    """Read a model file (PDB or mmCIF) and return its ``mmtbx.model.manager``.
+
+    Reads through ``data_manager`` when given, so the caller keeps the file and the
+    model it produced (see :func:`data_manager`).
+    """
+    dm = _dm(data_manager)
     dm.process_model_file(str(path))
-    return dm.get_model()
+    return dm.get_model(str(path))
 
 
 def first_model(model: Any) -> Any:
@@ -449,6 +475,6 @@ class ModelData:
         return None if dev <= tol else f"coordinate drift: max |delta| = {dev:.4f} A"
 
 
-def load_model(path: str | Path) -> ModelData:
+def load_model(path: str | Path, *, data_manager: Any = None) -> ModelData:
     """Read a model file (reduced to model 1) into a :class:`ModelData`."""
-    return ModelData.from_model(read_model(path))
+    return ModelData.from_model(read_model(path, data_manager=data_manager))

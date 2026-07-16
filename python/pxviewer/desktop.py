@@ -923,7 +923,7 @@ class ControlsWindow:
         if not available:
             self._minimize_map_check.setChecked(False)
             self._minimize_map_check.setToolTip(
-                "Load a model and a map together (as a group) to minimize into density.")
+                "Load a model and a map together to pair them, then minimize into density.")
 
     def _build_clashes_group(self):
         """All-atom contacts: add hydrogens with reduce2, then run probe2. Its two
@@ -2135,11 +2135,22 @@ class DesktopApp:
             self._reload_viewport()
             self._emit_loaded_changed()
 
-    def _new_group(self, name: str) -> str:
+    def _new_group(self, name: str, *, mmm: Any = None) -> str:
+        """Register a group of loaded objects.
+
+        ``mmm`` is the cctbx ``map_model_manager`` the group was built from, when there
+        is one. Holding on to it is what makes the group more than a label: it is cctbx's
+        record that this model and these maps belong together, in a common frame.
+        """
         self._group_counter += 1
         gid = f"group-{self._group_counter}"
-        self._groups[gid] = name
+        self._groups[gid] = {"name": name, "mmm": mmm}
         return gid
+
+    def group_mmm(self, gid: Optional[str]) -> Any:
+        """The ``map_model_manager`` a group came from, or None if it did not come from one."""
+        group = self._groups.get(gid) if gid else None
+        return group["mmm"] if group else None
 
     # -- viewport composition --
 
@@ -2485,32 +2496,28 @@ class DesktopApp:
             session.clear_markup(channel)
 
     def map_for_model(self, mid: Optional[str] = None) -> Any:
-        """The map the given model can be minimized into, or None.
+        """The map this model is paired with, or None.
 
-        Only a map loaded *with* the model — as a group — is trustworthy here: cctbx's
-        map_model_manager puts the two in a common frame on load, which is exactly what
-        the minimizer's density interpolation assumes. A separately-loaded map may sit
-        in a different frame entirely, so cctbx is asked to confirm compatibility
-        rather than us guessing from the grid.
+        Whether a model and a map go together is cctbx's call, not ours. They are paired
+        exactly when they share a ``map_model_manager``, which is what puts them in a
+        common frame — the thing the minimizer's density interpolation assumes. So this
+        asks the group for its manager and takes the map from there.
+
+        There is deliberately no logic here that inspects two independently-loaded
+        objects and decides they look compatible. Pairing them is a real operation (it
+        can shift a model), not an observation, and cctbx's own guess at it —
+        ``DataManager.get_map_model_manager``'s ``guess_files`` — is just "one model and
+        one map, so probably". Getting it wrong refines a model into someone else's
+        density. To pair unpaired objects, build a manager for them explicitly.
         """
         entry = self._model_entry(self._active_model_id if mid is None else mid)
-        if entry is None or entry.get("group") is None:
+        if entry is None:
             return None
-        model = getattr(entry["session"], "model", None)
-        if model is None:
+        mmm = self.group_mmm(entry.get("group"))
+        if mmm is None:
             return None
-        for vol in self._volumes:
-            if vol.get("group") != entry["group"]:
-                continue
-            mm = getattr(vol["data"], "map_manager", None)
-            if mm is None:
-                continue
-            try:
-                if mm.origin_is_zero() and mm.is_compatible_model(model):
-                    return mm.map_data()
-            except Exception:  # pragma: no cover - cctbx symmetry comparison edge cases
-                continue
-        return None
+        mm = mmm.map_manager()
+        return mm.map_data() if mm is not None else None
 
     def minimize_model(self, *, use_map: bool = False) -> None:
         """Minimize the active model, streaming the run into the viewport.
@@ -2534,7 +2541,8 @@ class DesktopApp:
 
         map_data = self.map_for_model(entry["id"]) if use_map else None
         if use_map and map_data is None:
-            raise ValueError("no map in this model's group to minimize into")
+            raise ValueError(
+                "this model is not paired with a map — load the two together to pair them")
 
         self._minimize_stop.clear()
 
@@ -2777,7 +2785,7 @@ class DesktopApp:
              "active": False, "group": v["group"], "style": v.get("style")}
             for v in self._volumes
         ]
-        groups = [{"id": gid, "name": name} for gid, name in self._groups.items()]
+        groups = [{"id": gid, "name": g["name"]} for gid, g in self._groups.items()]
         self.bridge.loaded_changed.emit({"groups": groups, "items": items})
 
     def session_for(self, mid: Optional[str]):
@@ -2857,7 +2865,10 @@ class DesktopApp:
         mmm = map_model_manager_from_files(model_file=models[0] if models else None, map_files=maps)
         model_data, volumes = split_map_model_manager(mmm, name=group_name)
 
-        gid = self._new_group(group_name)
+        # Keep the manager: it is cctbx's record that these files are paired, and the
+        # only place that survives the load (get_map_model_manager empties the
+        # DataManager of the model and maps it consumed).
+        gid = self._new_group(group_name, mmm=mmm)
         with self._batch_load():
             if model_data is not None and model_data.model is not None:
                 session = self._model_session(model_data.model, group_name)
@@ -2893,25 +2904,23 @@ class DesktopApp:
         self.stop_demo()
         self._reset_interactions()
 
-        from iotbx.data_manager import DataManager
         from iotbx.map_model_manager import map_model_manager
 
+        from .cctbx_io import read_model
         from .volume_io import split_map_model_manager
 
         sample = sample_structure_path()
         if sample is None:
             raise FileNotFoundError("the bundled sample model is missing")
 
-        dm = DataManager()
-        dm.process_model_file(str(sample))
-        mmm = map_model_manager(model=dm.get_model())
+        mmm = map_model_manager(model=read_model(str(sample)))
         mmm.generate_map(d_min=d_min)  # a density computed from the model
 
         model_data, volumes = split_map_model_manager(mmm, name=SAMPLE_STRUCTURE[1])
         # generate_map also adds a redundant 'model_map'; keep only the density.
         volumes = [v for v in volumes if v.map_id == "map_manager"] or volumes
 
-        gid = self._new_group(SAMPLE_STRUCTURE[1])
+        gid = self._new_group(SAMPLE_STRUCTURE[1], mmm=mmm)
         with self._batch_load():
             session = self._model_session(model_data.model, SAMPLE_STRUCTURE[1])
             self._add_model(session, f"{SAMPLE_STRUCTURE[0]} (model)", group=gid)
