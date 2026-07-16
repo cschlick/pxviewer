@@ -586,6 +586,7 @@ class ControlsWindow:
         _check_qt()
 
         from PySide6.QtWidgets import (
+            QHBoxLayout,
             QLabel,
             QPushButton,
             QTabWidget,
@@ -622,11 +623,23 @@ class ControlsWindow:
         tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(tabs, stretch=1)
 
-        # A slim, always-visible status line.
+        # A slim, always-visible status line, with the app icon + Help on the far side.
+        status_row = QHBoxLayout()
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #666;")
-        layout.addWidget(self._status_label)
+        status_row.addWidget(self._status_label, stretch=1)
+        icon = _app_icon()
+        if icon is not None:
+            icon_label = QLabel()
+            icon_label.setPixmap(icon.pixmap(18, 18))
+            status_row.addWidget(icon_label)
+        help_btn = QPushButton("Help…")
+        help_btn.setFlat(True)  # link-like, unobtrusive
+        help_btn.setToolTip("Documentation (coming soon)")
+        help_btn.clicked.connect(self._on_help)
+        status_row.addWidget(help_btn)
+        layout.addLayout(status_row)
 
         self._suppress_model_events = False
         # Which model the atoms table shows. Defaults to the active model but the
@@ -883,7 +896,7 @@ class ControlsWindow:
         viewer = QGroupBox("Viewer")
         vg = QVBoxLayout(viewer)
         self._axis_check = QCheckBox("Show XYZ axes")
-        self._axis_check.setChecked(True)  # the viewer shows them by default
+        self._axis_check.setChecked(False)  # the viewer hides them by default
         self._axis_check.toggled.connect(lambda on: self._desktop.set_axis(on))
         vg.addWidget(self._axis_check)
         layout.addWidget(viewer)
@@ -1400,6 +1413,10 @@ class ControlsWindow:
             self._desktop.analyze_clashes()
         except Exception as exc:
             self._set_status(str(exc))
+
+    def _on_help(self) -> None:
+        # Placeholder until the documentation is linked.
+        self._set_status("Documentation coming soon.")
 
     def _on_analysis_ready(self, mid) -> None:
         """Analysis finished: enable and check both overlay toggles (both drawn)."""

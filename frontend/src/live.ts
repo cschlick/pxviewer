@@ -947,6 +947,7 @@ export interface LiveConnectionHandle {
  */
 export function connectLive(plugin: PluginContext, url: string): LiveConnectionHandle {
     registerAttributeColorTheme(plugin);
+    setAxis(plugin, false);  // XYZ axes off by default; the Settings toggle turns them on
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;

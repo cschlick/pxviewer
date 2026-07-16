@@ -861,6 +861,26 @@ def test_new_model_focuses_appearance(qapp):
         app.stop()
 
 
+def test_axis_off_by_default_and_help(qapp):
+    """XYZ axes start hidden (the Settings checkbox is unchecked) and the Help button
+    updates the status line."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        controls = app._controls
+        assert controls._axis_check.isChecked() is False  # axes off by default
+        controls._on_help()
+        assert "coming soon" in controls._status_label.text().lower()
+    finally:
+        app.stop()
+
+
 def test_checkable_combo_requires_click_inside_popup(qapp):
     """The click that opens the dropdown must not toggle the item under the cursor."""
     from PySide6.QtCore import QEvent, QPointF, Qt
