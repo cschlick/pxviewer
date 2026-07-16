@@ -951,12 +951,12 @@ class ControlsWindow:
         return tab
 
     def _build_validation_section(self, mid, result):
-        """One validator's sub-tab: summary, a whole-row-selectable table that
-        selects+focuses the residue in the viewport, and a Markers toggle."""
+        """One validator's sub-tab: summary, a Markers checkbox (on by default), and a
+        whole-row-selectable table that selects+focuses the residue in the viewport."""
         from PySide6.QtWidgets import (
             QAbstractItemView,
+            QCheckBox,
             QLabel,
-            QPushButton,
             QTableWidget,
             QTableWidgetItem,
             QVBoxLayout,
@@ -969,6 +969,17 @@ class ControlsWindow:
         summary.setStyleSheet("color: #666;")
         summary.setWordWrap(True)
         v.addWidget(summary)
+
+        # Above the table and on by default: the markup is the point of the tab, so it
+        # shows as soon as the results do. Connected before setChecked so that initial
+        # state actually draws it.
+        markers = QCheckBox("Markers")
+        markers.setToolTip("Show/hide this validator's MolProbity markup in the viewport.")
+        markers.setEnabled(bool(result.markup))
+        markers.toggled.connect(
+            lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
+        markers.setChecked(bool(result.markup))
+        v.addWidget(markers)
 
         table = QTableWidget(len(result.rows), len(result.columns))
         table.setHorizontalHeaderLabels(result.columns)
@@ -984,14 +995,6 @@ class ControlsWindow:
         table.itemSelectionChanged.connect(
             lambda t=table, res=result: self._on_validation_row_selected(t, res))
         v.addWidget(table)
-
-        markers = QPushButton("Markers")
-        markers.setCheckable(True)
-        markers.setEnabled(bool(result.markup))
-        markers.setToolTip("Show/hide this validator's markers in the viewport.")
-        markers.toggled.connect(
-            lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
-        v.addWidget(markers)
         return page
 
     def _on_validation_row_selected(self, table, result) -> None:
