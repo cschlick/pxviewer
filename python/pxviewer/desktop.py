@@ -200,6 +200,90 @@ def _make_atom_table_model():
     return AtomTableModel()
 
 
+def _atom_label_fn(session):
+    """A ``i_seq -> "chain/resnameresseq/name"`` labeller from a session's columns."""
+    arrays = getattr(getattr(session, "_data", None), "arrays", None)
+    if arrays is None:
+        return str
+    chain, resname, resseq, name = arrays.chain, arrays.resname, arrays.resseq, arrays.name
+
+    def label(i: int) -> str:
+        return f"{chain[i]}/{resname[i]}{int(resseq[i])}/{name[i]}"
+
+    return label
+
+
+def _make_restraint_table_model():
+    """A QAbstractTableModel over a GeometryRestraints category (built lazily post-Qt).
+
+    Rows are restraint proxies; the first column lists the atoms involved and the
+    rest are the restraint's values (ideal/model/delta/…). Values are computed from
+    cctbx on demand for the row the view paints — a small one-row memo keeps a row's
+    cells from recomputing — so 100k+ restraints stay cheap (QTableView virtualises).
+    """
+    from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
+    class RestraintTableModel(QAbstractTableModel):
+        def __init__(self):
+            super().__init__()
+            self._geo = None
+            self._category = ""
+            self._columns: List[str] = []
+            self._label = None
+            self._n = 0
+            self._memo_row = -1
+            self._memo = None  # (i_seqs, values)
+
+        def set_source(self, geo, category, columns, label_fn) -> None:
+            self.beginResetModel()
+            self._geo, self._category = geo, category
+            self._columns = list(columns)
+            self._label = label_fn
+            self._n = geo.count(category) if geo is not None else 0
+            self._memo_row, self._memo = -1, None
+            self.endResetModel()
+
+        def _rowdata(self, row: int):
+            if row != self._memo_row:
+                self._memo = self._geo.row(self._category, row)
+                self._memo_row = row
+            return self._memo
+
+        def i_seqs_for_row(self, row: int):
+            return self._rowdata(row)[0]
+
+        def rowCount(self, parent=QModelIndex()):
+            return 0 if parent.isValid() else self._n
+
+        def columnCount(self, parent=QModelIndex()):
+            if parent.isValid() or not self._columns:
+                return 0
+            return 1 + len(self._columns)  # "atoms" + value columns
+
+        def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+            if not index.isValid():
+                return None
+            if role == Qt.ItemDataRole.DisplayRole:
+                iseqs, vals = self._rowdata(index.row())
+                col = index.column()
+                if col == 0:
+                    return "  ".join(self._label(i) for i in iseqs) if self._label else str(iseqs)
+                v = vals.get(self._columns[col - 1])
+                if v is None:
+                    return ""
+                return "" if v != v else f"{v:.3f}"  # v != v -> NaN
+            if role == Qt.ItemDataRole.TextAlignmentRole and index.column() > 0:
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return None
+
+        def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+            if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+                return (["atoms"] + self._columns)[section]
+            return None
+
+    return RestraintTableModel()
+
+
 def _make_close_filter(on_close):
     """An event filter that reports a window being closed.
 
@@ -483,13 +567,148 @@ class ControlsWindow:
     def _build_geometry_tab(self):
         from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
+        from .geometry import CATEGORIES
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Geometry state (restraints follow the same model as the atoms table).
+        self._restraint_tabs: dict = {}   # category -> {stack, msg, view, model, columns}
+        self._geo_cache: dict = {}        # model_id -> GeometryRestraints
+        self._restraints_model_id = None  # model the restraint tables currently show
+        self._suppress_restraint_sync = False
+
         subtabs = QTabWidget()
+        self._geo_subtabs = subtabs
         subtabs.addTab(self._build_atoms_subtab(), "Atoms")
+        self._restraint_subtab_start = subtabs.count()
+        for key, label, columns in CATEGORIES:
+            subtabs.addTab(self._build_restraint_subtab(key, columns), label)
+        subtabs.currentChanged.connect(self._on_geometry_subtab_changed)
         layout.addWidget(subtabs)
         return tab
+
+    def _build_restraint_subtab(self, category: str, columns):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import (
+            QAbstractItemView,
+            QLabel,
+            QStackedWidget,
+            QTableView,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        stack = QStackedWidget()
+        msg = QLabel("Open this tab to build geometry restraints.")
+        msg.setWordWrap(True)
+        msg.setContentsMargins(12, 12, 12, 12)
+        msg.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+
+        view = QTableView()
+        model = _make_restraint_table_model()
+        view.setModel(model)
+        view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        view.verticalHeader().setVisible(False)
+        view.setAlternatingRowColors(True)
+        view.setWordWrap(False)
+        view.horizontalHeader().setStretchLastSection(True)
+        view.selectionModel().selectionChanged.connect(
+            lambda *_, c=category: self._on_restraint_selection(c)
+        )
+
+        stack.addWidget(msg)   # page 0
+        stack.addWidget(view)  # page 1
+        outer.addWidget(stack)
+
+        self._restraint_tabs[category] = {
+            "stack": stack, "msg": msg, "view": view, "model": model, "columns": columns,
+        }
+        return tab
+
+    def _on_geometry_subtab_changed(self, index: int) -> None:
+        if index >= self._restraint_subtab_start:  # a restraint tab
+            self._ensure_restraints()
+
+    def _viewing_restraint_tab(self) -> bool:
+        return self._geo_subtabs.currentIndex() >= self._restraint_subtab_start
+
+    def _show_restraint_message(self, text: str) -> None:
+        self._suppress_restraint_sync = True
+        try:
+            for info in self._restraint_tabs.values():
+                info["msg"].setText(text)
+                info["model"].set_source(None, "", info["columns"], None)
+                info["stack"].setCurrentWidget(info["msg"])
+        finally:
+            self._suppress_restraint_sync = False
+
+    def _invalidate_restraints(self) -> None:
+        """The geometry model changed; rebuild on next view (now, if one is open)."""
+        self._restraints_model_id = None
+        if self._viewing_restraint_tab():
+            self._ensure_restraints()
+
+    def _ensure_restraints(self) -> None:
+        """Build restraints for the current geometry model and fill the tables."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication
+
+        from . import geometry as geo_mod
+
+        mid = self._table_model_id
+        if mid is not None and self._restraints_model_id == mid:
+            return  # already showing this model's restraints
+
+        session = self._desktop.session_for(mid)
+        if session is None or getattr(session, "model", None) is None:
+            self._show_restraint_message("Load a model to see its geometry restraints.")
+            self._restraints_model_id = None
+            return
+        if not geo_mod.monomer_library_available():
+            self._show_restraint_message(geo_mod.MONOMER_LIBRARY_HELP)
+            self._restraints_model_id = None
+            return
+
+        geo = self._geo_cache.get(mid)
+        if geo is None:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                geo = geo_mod.build_geometry(session.model)
+            except Exception as exc:  # a malformed model shouldn't take the app down
+                self._show_restraint_message(f"Could not build restraints:\n{exc}")
+                self._restraints_model_id = None
+                return
+            finally:
+                QApplication.restoreOverrideCursor()
+            self._geo_cache[mid] = geo
+
+        label_fn = _atom_label_fn(session)
+        self._suppress_restraint_sync = True
+        try:
+            for cat, info in self._restraint_tabs.items():
+                info["model"].set_source(geo, cat, info["columns"], label_fn)
+                info["stack"].setCurrentWidget(info["view"])
+        finally:
+            self._suppress_restraint_sync = False
+        self._restraints_model_id = mid
+
+    def _on_restraint_selection(self, category: str) -> None:
+        """Restraint row -> highlight the atoms it involves in the viewer."""
+        if self._suppress_restraint_sync:
+            return
+        info = self._restraint_tabs[category]
+        iseqs = set()
+        for idx in info["view"].selectionModel().selectedRows():
+            iseqs.update(int(i) for i in info["model"].i_seqs_for_row(idx.row()))
+        self._desktop.highlight_atoms_in(self._table_model_id, sorted(iseqs))
 
     def _build_console_tab(self):
         """A live IPython console bound to the API (created on first view)."""
@@ -793,6 +1012,7 @@ class ControlsWindow:
             self._atom_model.set_session(session)  # clears any filter
         self._update_atoms_count()
         self._apply_table_selection()
+        self._invalidate_restraints()  # geometry follows the same model
 
     def _on_table_model_combo_changed(self, _index: int) -> None:
         if self._suppress_table_model_combo:

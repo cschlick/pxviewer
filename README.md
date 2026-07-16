@@ -425,8 +425,22 @@ window with tabs:
   the active model, or pin it to another); **Show only selected atoms** collapses it
   to the current selection. Selecting rows highlights those atoms in the viewport,
   and picking atoms in the viewport selects their rows.
+- **Geometry ▸ Bonds / Angles / Dihedrals / Chirality / Planarity** — the model's
+  cctbx geometry restraints, one virtualised table per type. Each row is a restraint
+  (its atoms, ideal, model, delta, sigma, residual), read straight from the cctbx
+  proxy arrays and computed on demand. Selecting a row highlights the atoms it
+  involves. Needs the monomer library (see below).
 - **Console** — a live IPython shell (see below).
 - **Demos** — the built-in model and volume demos.
+
+The geometry restraints tables build with cctbx, which needs the CCP4/**geostd**
+monomer library. Point `MMTBX_CCP4_MONOMER_LIB` at a checkout — the tables show a
+setup hint until it's set:
+
+```bash
+git clone https://github.com/phenix-project/geostd
+export MMTBX_CCP4_MONOMER_LIB=/path/to/geostd
+```
 
 Selection is scene-wide: a selection can span models (e.g. a protein model and a
 ligand model), and each model reports its own picks.

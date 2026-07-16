@@ -12,7 +12,11 @@ from PySide6.QtCore import Qt  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from pxviewer.data import AtomArrays  # noqa: E402
-from pxviewer.desktop import _make_atom_table_model, _runs  # noqa: E402
+from pxviewer.desktop import (  # noqa: E402
+    _make_atom_table_model,
+    _make_restraint_table_model,
+    _runs,
+)
 
 
 @pytest.fixture(scope="module")
@@ -307,6 +311,95 @@ def test_console_binds_and_tracks_active_session(qapp):
         assert controls._bottom_controls.isHidden()
         tabs.setCurrentIndex(0)  # File
         assert not controls._bottom_controls.isHidden()
+    finally:
+        app.stop()
+
+
+class _FakeGeo:
+    """A stand-in for GeometryRestraints (no cctbx needed for the table test)."""
+
+    def __init__(self, rows):
+        self._rows = rows  # [(i_seqs, {col: value}), ...]
+
+    def count(self, category):
+        return len(self._rows)
+
+    def row(self, category, i):
+        return self._rows[i]
+
+
+def test_restraint_table_model(qapp):
+    cols = ["ideal", "model", "delta", "sigma", "residual"]
+    rows = [
+        ((0, 1), {"ideal": 1.52, "model": 1.50, "delta": 0.02, "sigma": 0.02, "residual": 1.0}),
+        ((2, 3), {"ideal": 1.33, "model": 1.40, "delta": -0.07, "sigma": 0.02, "residual": 12.0}),
+    ]
+    model = _make_restraint_table_model()
+    model.set_source(_FakeGeo(rows), "bond", cols, lambda i: f"atom{i}")
+
+    assert model.rowCount() == 2
+    headers = [model.headerData(c, Qt.Orientation.Horizontal) for c in range(model.columnCount())]
+    assert headers == ["atoms", "ideal", "model", "delta", "sigma", "residual"]
+    assert model.data(model.index(0, 0)) == "atom0  atom1"  # the atoms column
+    assert model.data(model.index(0, 1)) == "1.520"
+    assert model.data(model.index(1, 3)) == "-0.070"
+    assert model.i_seqs_for_row(1) == (2, 3)
+
+    model.set_source(None, "", cols, None)  # cleared -> no rows
+    assert model.rowCount() == 0
+
+
+def test_geometry_shows_setup_message_without_monomer_library(qapp, monkeypatch):
+    """With no monomer library, the restraint tabs show the geostd setup message."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    monkeypatch.delenv("MMTBX_CCP4_MONOMER_LIB", raising=False)
+    monkeypatch.delenv("CLIBD_MON", raising=False)
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]]), "m")
+        controls = app._controls
+        controls._ensure_restraints()
+        bond = controls._restraint_tabs["bond"]
+        assert bond["stack"].currentWidget() is bond["msg"]
+        assert "MMTBX_CCP4_MONOMER_LIB" in bond["msg"].text()
+    finally:
+        app.stop()
+
+
+def test_geometry_restraints_populate_tables(qapp):
+    """With a monomer library, the restraint tables fill from the built manager."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB to a geostd checkout)")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        controls = app._controls
+        controls._ensure_restraints()
+
+        bond = controls._restraint_tabs["bond"]
+        assert bond["stack"].currentWidget() is bond["view"]
+        assert bond["model"].rowCount() > 500  # 1UBQ has hundreds of bonds
+        assert controls._restraint_tabs["angle"]["model"].rowCount() > bond["model"].rowCount()
+        # the atoms column reads i_seqs as labels
+        assert "/" in bond["model"].data(bond["model"].index(0, 0))
     finally:
         app.stop()
 
