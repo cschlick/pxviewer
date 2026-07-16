@@ -15,11 +15,6 @@ from ..kinemage import parse_kinemage
 
 COLUMNS = ["chain", "resid", "res", "cablam", "ca_geom", "type"]
 
-# The wheels come with a hairline (width=1) black outline per wedge — thousands of
-# segments, and we draw kinemage vectors as solid cylinders, so they render far too
-# heavy. Drop them: the score-coloured wedges read fine on their own.
-_WHEEL_OUTLINES = "cablam_wheels_lines"
-
 
 def _fmt(value: Optional[float], ndigits: int) -> str:
     """Format a score to ``ndigits`` decimals, blank when None."""
@@ -81,8 +76,7 @@ def run(model: Any) -> ValidationResult:
         title="CaBLAM",
         columns=COLUMNS,
         rows=rows,
-        # outlier/disfavored/CA-geom vectors + the score wheels, minus their outlines
-        markup=[p for p in parse_kinemage(result.as_kinemage())
-                if p["name"] != _WHEEL_OUTLINES],
+        # outlier/disfavored/CA-geom vectors + the score wheels and their outlines
+        markup=parse_kinemage(result.as_kinemage()),
         summary=summary,
     )

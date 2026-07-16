@@ -193,12 +193,19 @@ type ProbeDotsLines = typeof ProbeDotsLines;
 // into one Mesh — spheres for balls/dots, cylinders for vectors, filled triangles —
 // coloured per primitive via its group id.
 
-// Markup vector thickness (A). Must exceed a ball-and-stick bond's radius, or the
-// rotamer markup — which runs along the side-chain bonds — renders inside them.
-const MARKUP_VECTOR_RADIUS = 0.22;
+// Kinemage line widths are screen-space pixels; we draw vectors as world-space
+// cylinders, so map width -> radius. MolProbity's markup lists are mostly width=4, and
+// that must exceed a ball-and-stick bond's radius or the rotamer markup — which runs
+// along the side-chain bonds — renders inside them. So width 4 -> 0.22 A, and a
+// width=1 hairline (CaBLAM's wheel outlines) -> a proportionally thin 0.055 A.
+const MARKUP_RADIUS_PER_WIDTH = 0.055;
+// Lists that set no width (e.g. MolProbity's rotamer outliers) are drawn prominently
+// rather than at kinemage's thin default, which would hide them inside the bonds.
+const MARKUP_DEFAULT_WIDTH = 4;
 
 interface MarkupPrimitive {
     kind: string;
+    width?: number | null;
     color: [number, number, number];
     segments?: number[][][];   // vectors: [[a,b], ...]
     points?: number[][];       // dots
@@ -221,13 +228,10 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
         } else if (prim.kind === 'dots' && prim.points) {
             for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.1, 0);
         } else if (prim.kind === 'vectors' && prim.segments) {
-            // Deliberately fatter than a ball-and-stick bond: MolProbity draws these
-            // as wide screen-space lines *over* the model, and rotamer markup runs
-            // along the side-chain bonds — a thinner cylinder hides inside them.
+            const r = (prim.width ?? MARKUP_DEFAULT_WIDTH) * MARKUP_RADIUS_PER_WIDTH;
             for (const [a, b] of prim.segments) {
                 addSimpleCylinder(state, Vec3.create(a[0], a[1], a[2]), Vec3.create(b[0], b[1], b[2]),
-                    { radiusTop: MARKUP_VECTOR_RADIUS, radiusBottom: MARKUP_VECTOR_RADIUS,
-                      topCap: true, bottomCap: true });
+                    { radiusTop: r, radiusBottom: r, topCap: true, bottomCap: true });
             }
         } else if (prim.kind === 'triangles' && prim.triangles) {
             for (const [a, b, c] of prim.triangles) {

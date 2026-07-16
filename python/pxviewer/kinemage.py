@@ -48,6 +48,7 @@ _LIST_KINDS = {
 
 _COLOR_RE = re.compile(r"color=\s*(\w+)")
 _NAME_RE = re.compile(r"^@\w+list\s*\{([^}]*)\}")  # the list's name: @vectorlist {name} …
+_WIDTH_RE = re.compile(r"width=\s*(\d+)")  # a vectorlist's line width, when it sets one
 _POINT_RE = re.compile(r"\{[^}]*\}([^{]*)")  # capture the text after each {label}
 
 
@@ -134,6 +135,7 @@ def parse_kinemage(text: str) -> List[dict]:
     prims: List[dict] = []
     kind = None
     name = ""
+    width: Optional[int] = None
     color = _DEFAULT_COLOR
     points: List[tuple] = []
 
@@ -156,7 +158,11 @@ def parse_kinemage(text: str) -> List[dict]:
                 prims.append({"kind": "balls", "name": name, "color": list(c), "balls": balls})
         elif kind == "vectors":
             for c, segs in _segments(resolved).items():
-                prims.append({"kind": "vectors", "name": name, "color": list(c), "segments": segs})
+                # width is the kinemage line width when the list gives one, else None
+                # ("unspecified") — it is screen-space, so how to draw it is the
+                # renderer's call.
+                prims.append({"kind": "vectors", "name": name, "color": list(c),
+                              "width": width, "segments": segs})
         elif kind == "triangles":
             for c, tris in _triangles(resolved).items():
                 prims.append({"kind": "triangles", "name": name, "color": list(c), "triangles": tris})
@@ -175,6 +181,8 @@ def parse_kinemage(text: str) -> List[dict]:
                 color = _KIN_COLORS.get(m.group(1).lower(), _DEFAULT_COLOR) if m else _DEFAULT_COLOR
                 m = _NAME_RE.match(line)
                 name = m.group(1) if m else ""
+                m = _WIDTH_RE.search(line)
+                width = int(m.group(1)) if m else None
             else:  # @subgroup / @group / @master etc. end the current list
                 flush()
                 kind = None

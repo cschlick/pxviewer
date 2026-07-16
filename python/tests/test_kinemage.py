@@ -22,7 +22,22 @@ def test_vectorlist_segments():
     )
     prims = parse_kinemage(text)
     assert prims == [{"kind": "vectors", "name": "chain A", "color": [255, 215, 0],
+                      "width": None,  # this list sets none, like MolProbity's rotamers
                       "segments": [[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]]}]
+
+
+def test_vector_width_is_kept():
+    """Kinemage line width drives how thick we draw a vector: MolProbity uses width=4
+    for its outlier markup and width=1 for CaBLAM's wheel outlines. A list that sets
+    none reports None, and the renderer decides."""
+    text = (
+        "@vectorlist {bad Rama Ca} width= 4 color= green\n{a} P 0 0 0 {b} 1 1 1\n"
+        "@vectorlist {cablam_wheels_lines} color=deadblack width= 1 alpha=0.75\n{c} P 0 0 0 {d} 2 2 2\n"
+        "@vectorlist {chain A} color= gold\n{e} P 0 0 0 {f} 3 3 3"
+    )
+    assert [(p["name"], p["width"]) for p in parse_kinemage(text)] == [
+        ("bad Rama Ca", 4), ("cablam_wheels_lines", 1), ("chain A", None),
+    ]
 
 
 def test_trianglelist_strip():
@@ -81,6 +96,6 @@ def test_per_point_colour_persists():
 def test_unknown_color_and_empty():
     assert parse_kinemage("") == []
     assert parse_kinemage("@vectorlist {v} color= chartreuse\n{a} P 0 0 0 {b} 1 1 1") == [
-        {"kind": "vectors", "name": "v", "color": [255, 255, 255],
+        {"kind": "vectors", "name": "v", "color": [255, 255, 255], "width": None,
          "segments": [[[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]]}
     ]
