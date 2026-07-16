@@ -256,6 +256,10 @@ _COVALENT_RADII = {
 }
 _COVALENT_FALLBACK = 0.77
 
+# Hydrogen-bond donor/acceptor elements. Close heavy-atom contacts between two of
+# these are usually H-bonds (the H sits between them), not steric clashes.
+_HBOND_ELEMENTS = {"N", "O", "F", "S"}
+
 
 def _radii(elements: List[str], table: dict, fallback: float) -> np.ndarray:
     return np.array([table.get(str(e).strip().upper(), fallback) for e in elements], dtype=float)
@@ -267,13 +271,31 @@ def _detect_clashes(
     *,
     tolerance: float,
     bond_tolerance: float,
+    exclude_depth: int = 3,
+    hbond_floor: float = 2.4,
 ) -> List[tuple]:
-    """Steric clashes: non-bonded atom pairs that overlap in van der Waals space.
+    """Steric clashes: atom pairs that overlap in van der Waals space and are not
+    close neighbours in the bond graph.
 
     A pair (i, j) clashes when their separation is less than ``vdw_i + vdw_j -
-    tolerance`` but greater than ``cov_i + cov_j + bond_tolerance`` (i.e. they are
-    close enough to interpenetrate yet too far apart to be a covalent bond — Mol*
-    infers bonds by distance, and we have no explicit connectivity to consult).
+    tolerance``, *excluding* pairs within ``exclude_depth`` bonds of each other.
+    Excluding only directly bonded atoms (depth 1) is not enough: the covalent
+    framework routinely places nearby-in-graph heavy atoms inside the vdW-overlap
+    window even though the geometry is perfectly normal — 1-3 geminal pairs (the
+    two atoms flanking a bond angle, e.g. N-CA-C, ~2.4A apart) and 1-4 pairs (e.g.
+    a planar peptide's O(i)...CA(i+1), ~2.8A apart). Without explicit hydrogens we
+    cannot tell these from true clashes, so the default ``exclude_depth=3`` drops
+    1-2, 1-3 and 1-4 neighbours, leaving only genuine through-space overlaps. (For
+    rigorous, hydrogen-aware contacts use the probe2 dot surface instead.)
+
+    A second heavy-atom-only artefact is the hydrogen bond: two donor/acceptor
+    atoms (N, O, F, S) sit ~2.6-3.0A apart with the hydrogen between them, so their
+    heavy-atom separation is *shorter* than the vdW sum even though nothing clashes.
+    Such pairs are skipped unless they are closer than ``hbond_floor`` (2.4A), below
+    which even a donor/acceptor pair is too close to explain with an H-bond.
+
+    Bonds are inferred by distance (``d < cov_i + cov_j + bond_tolerance``), since
+    Mol* does the same and we have no explicit connectivity to consult.
 
     Returns sorted ``(i, j)`` index pairs with ``i < j``. O(N^2); fine for the
     small-to-medium structures this tool streams.
@@ -284,14 +306,42 @@ def _detect_clashes(
     vdw = _radii(elements, _VDW_RADII, _VDW_FALLBACK)
     cov = _radii(elements, _COVALENT_RADII, _COVALENT_FALLBACK)
 
+    # Infer the bond graph by distance.
+    adj: List[set] = [set() for _ in range(n)]
+    for i in range(n - 1):
+        d = np.linalg.norm(coords[i + 1 :] - coords[i], axis=1)
+        bond_max = cov[i] + cov[i + 1 :] + bond_tolerance
+        for k in np.where(d < bond_max)[0]:
+            j = i + 1 + int(k)
+            adj[i].add(j)
+            adj[j].add(i)
+
+    def neighbours_within(i: int, depth: int) -> set:
+        """All atoms reachable from ``i`` in <= ``depth`` bonds (includes ``i``)."""
+        seen = {i}
+        frontier = {i}
+        for _ in range(depth):
+            nxt = set().union(*(adj[a] for a in frontier)) if frontier else set()
+            frontier = nxt - seen
+            seen |= frontier
+        return seen
+
+    hb = [str(e).strip().upper() in _HBOND_ELEMENTS for e in elements]
+
     pairs: List[tuple] = []
     for i in range(n - 1):
         d = np.linalg.norm(coords[i + 1 :] - coords[i], axis=1)
         vdw_sum = vdw[i] + vdw[i + 1 :]
-        bond_max = cov[i] + cov[i + 1 :] + bond_tolerance
-        hit = np.where((d < vdw_sum - tolerance) & (d > bond_max))[0]
-        for k in hit:
-            pairs.append((i, i + 1 + int(k)))
+        excluded = neighbours_within(i, exclude_depth)
+        for k in np.where(d < vdw_sum - tolerance)[0]:
+            j = i + 1 + int(k)
+            if j in excluded:
+                continue
+            # Skip likely hydrogen bonds: donor/acceptor pairs that are close but
+            # not closer than an H-bond can account for.
+            if hb[i] and hb[j] and d[k] >= hbond_floor:
+                continue
+            pairs.append((i, j))
     return pairs
 
 
@@ -757,14 +807,18 @@ class LiveSession:
         *,
         tolerance: float = 0.4,
         bond_tolerance: float = 0.45,
+        exclude_depth: int = 3,
         coords: Any = None,
     ) -> List[tuple]:
         """Compute steric clashes and return them as ``(i, j)`` atom-index pairs.
 
-        A clash is a pair of **non-bonded** atoms overlapping in van der Waals
-        space: separation ``< vdw_i + vdw_j - tolerance`` but ``> cov_i + cov_j +
-        bond_tolerance`` (so covalent bonds aren't flagged). Radii are looked up by
-        element (Bondi vdW; covalent), with sensible fallbacks. Mol\\* has no
+        A clash is a pair of atoms overlapping in van der Waals space (separation
+        ``< vdw_i + vdw_j - tolerance``) that are not close neighbours in the bond
+        graph. Bonds are inferred by distance (``< cov_i + cov_j + bond_tolerance``)
+        and pairs within ``exclude_depth`` bonds are dropped: at the default depth 3
+        that excludes 1-2, 1-3 and 1-4 neighbours, whose ordinary covalent geometry
+        would otherwise be flagged (see :func:`_detect_clashes`). Radii are looked
+        up by element (Bondi vdW; covalent), with sensible fallbacks. Mol\\* has no
         general clash detector, so this is computed here from the coordinates you
         own.
 
@@ -774,7 +828,10 @@ class LiveSession:
         :meth:`show_clashes` to do both.
         """
         pts = self._current_coords() if coords is None else _coords_to_f32(coords, self._n_atoms).astype(float)
-        return _detect_clashes(pts, self._data.elements, tolerance=tolerance, bond_tolerance=bond_tolerance)
+        return _detect_clashes(
+            pts, self._data.elements,
+            tolerance=tolerance, bond_tolerance=bond_tolerance, exclude_depth=exclude_depth,
+        )
 
     def set_clashes(self, pairs: Any) -> List[tuple]:
         """Draw steric clashes between the given atom-index pairs.

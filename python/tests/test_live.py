@@ -219,6 +219,25 @@ def test_detect_clashes_excludes_bonded_and_distant():
     assert distant.detect_clashes() == []
 
 
+def test_detect_clashes_excludes_geminal_and_1_4():
+    # A bonded chain of carbons 1.2 A apart: consecutive atoms are bonded, so the
+    # 1-3 (geminal, e.g. 0-2 at 2.4 A) and 1-4 pairs overlap in vdW space but are
+    # ordinary covalent geometry, not clashes. Only the bond graph can tell them
+    # apart from a real overlap.
+    chain = LiveSession.from_sites([(i * 1.2, 0, 0) for i in range(4)])
+    assert chain.detect_clashes() == []
+
+
+def test_detect_clashes_skips_hydrogen_bonds():
+    # Two oxygens 2.7 A apart (a typical H-bond) must not be flagged: the H sits
+    # between them, so their heavy-atom distance is shorter than the vdW sum with no
+    # clash. But below the 2.4 A H-bond floor even an O-O pair is a real clash.
+    hbond = LiveSession.from_sites([(0, 0, 0), (2.7, 0, 0)], elements=["O", "O"])
+    assert hbond.detect_clashes() == []
+    tooclose = LiveSession.from_sites([(0, 0, 0), (2.2, 0, 0)], elements=["O", "O"])
+    assert tooclose.detect_clashes() == [(0, 1)]
+
+
 def test_detect_clashes_accepts_explicit_coords():
     s = LiveSession.from_sites([(0, 0, 0), (10, 0, 0)])  # far apart as built
     moved = np.array([[0, 0, 0], [2.5, 0, 0]], dtype="<f4")  # but test them close
@@ -248,10 +267,13 @@ def test_set_clashes_message_reaches_client(session):
     asyncio.run(scenario())
 
 
-def test_show_clashes_detects_and_draws(session):
-    # The fixture's 4 carbons at unit spacing put 0-2 and 1-3 in clashing range.
-    drawn = session.show_clashes()
-    assert drawn == [(0, 2), (1, 3)]
+def test_show_clashes_detects_and_draws():
+    # Two non-bonded carbons overlapping in vdW space: show_clashes both detects the
+    # pair and records it for drawing/replay.
+    s = LiveSession.from_sites([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)])
+    drawn = s.show_clashes()
+    assert drawn == [(0, 1)]
+    assert s._clashes == [{"a": 0, "b": 1}]
 
 
 def test_clashes_replayed_to_late_client(session):
