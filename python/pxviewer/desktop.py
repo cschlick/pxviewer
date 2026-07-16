@@ -873,8 +873,25 @@ class ControlsWindow:
         mg.addWidget(clear_m)
         layout.addWidget(measure)
 
+        minimization = QGroupBox("Minimization")
+        ming = QVBoxLayout(minimization)
+        ming.addWidget(QLabel("Relax the model onto ideal geometry:"))
+        self._minimize_btn = QPushButton("Minimize")
+        self._minimize_btn.setToolTip(
+            "Minimize the active model against its geometry restraints (no map), "
+            "streaming each step into the viewport as it runs.")
+        self._minimize_btn.clicked.connect(self._on_minimize)
+        ming.addWidget(self._minimize_btn)
+        layout.addWidget(minimization)
+
         layout.addStretch()
         return tab
+
+    def _on_minimize(self) -> None:
+        try:
+            self._desktop.minimize_model()
+        except Exception as exc:
+            self._set_status(str(exc))
 
     def _build_clashes_group(self):
         """All-atom contacts: add hydrogens with reduce2, then run probe2. Its two
@@ -2432,6 +2449,48 @@ class DesktopApp:
             session.show_markup(channel, result.markup)
         else:
             session.clear_markup(channel)
+
+    def minimize_model(self) -> None:
+        """Minimize the active model's geometry, streaming the run into the viewport.
+
+        cctbx hands us every intermediate conformation (see :mod:`pxviewer.minimize`),
+        and each one goes straight out on the live coordinate wire — so the model is
+        seen relaxing rather than jumping to the answer. Runs on a background thread;
+        ``session.push`` is thread-safe. The model itself ends up minimized, so the
+        tables, validation and Write all see the new coordinates.
+        """
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        session = entry["session"]
+        model = getattr(session, "model", None)
+        if model is None:
+            raise ValueError("the active object has no cctbx model")
+        name = entry["name"]
+
+        def work():
+            from .geometry import monomer_library_available
+            from .minimize import minimize_geometry
+
+            if not monomer_library_available():
+                self._status("minimization needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+                return
+            try:
+                self._status(f"minimizing {name}…")
+                # Thin the stream: cctbx emits a state per function evaluation, far
+                # more than the viewport can show.
+                stats = minimize_geometry(model, on_state=session.push, stride=4)
+            except Exception as exc:  # pragma: no cover - restraints/runtime errors
+                self._status(f"minimization failed: {exc}")
+                return
+            self._status(
+                f"{name}: bond rmsd {stats['bonds_before']:.3f} -> {stats['bonds_after']:.3f}, "
+                f"angle rmsd {stats['angles_before']:.2f} -> {stats['angles_after']:.2f} "
+                f"({stats['n_sent']} of {stats['n_states']} steps shown)")
+            entry.pop("validation", None)  # stale: the coordinates just moved
+
+        threading.Thread(target=work, name="pxviewer-minimize", daemon=True).start()
+        self._status("minimizing…")
 
     def set_axis(self, visible: bool) -> None:
         control = self._control_session()
