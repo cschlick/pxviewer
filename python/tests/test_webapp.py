@@ -42,9 +42,25 @@ def test_viewer_page_is_served_with_a_query_string(webapp):
 
 
 def test_app_and_viewer_pages_are_served(webapp):
-    assert "<!DOCTYPE html>" in _get(f"{webapp.url}").read().decode()
-    assert "<!DOCTYPE html>" in _get(f"{webapp.url}index.html").read().decode()
+    app_page = _get(f"{webapp.url}").read().decode()
+    viewer_page = _get(f"{webapp.url}index.html").read().decode()
+    assert "<!DOCTYPE html>" in app_page
+    assert "<!DOCTYPE html>" in viewer_page
     assert _get(f"{webapp.url}build/index.js").status == 200
+    # Both pages point the browser tab at the favicon.
+    assert "/favicon.png" in app_page
+    assert "/favicon.png" in viewer_page
+
+
+def test_favicon_is_served(webapp):
+    """The favicon lives in the frontend dir; the webapp handler must serve
+    /favicon.png from there. It doesn't match the app/index/build routes, so without
+    an explicit case it fell through to the static handler (rooted at the volume dir)
+    and 404'd — a blank browser-tab icon."""
+    resp = _get(f"{webapp.url}favicon.png")
+    assert resp.status == 200
+    assert resp.headers.get_content_type() == "image/png"
+    assert len(resp.read()) > 0
 
 
 def test_volume_demo_api_generates_files(webapp):

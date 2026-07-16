@@ -66,6 +66,9 @@ class _WebappHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/index.html":
             self._serve_frontfile("index.html")
             return
+        if path == "/favicon.png":
+            self._serve_frontfile("favicon.png")
+            return
         if path.startswith("/build/"):
             self._serve_frontfile(path.lstrip("/"))
             return
