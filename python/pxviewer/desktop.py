@@ -621,12 +621,16 @@ class ControlsWindow:
         layout.addWidget(QLabel("<b>Loaded</b>  (check = shown, selected model = active)"))
         self._loaded_tree = QTreeWidget()
         self._loaded_tree.setMaximumHeight(180)
-        self._loaded_tree.setColumnCount(2)  # name + inline representation dropdown
+        # Columns: [check] [controls] [name]. Controls sit on the left so they're
+        # always visible; the name is last and stretches (elides on overflow), so a
+        # long name is clipped rather than pushing the widgets off-screen.
+        self._loaded_tree.setColumnCount(3)
         self._loaded_tree.setHeaderHidden(True)
         header = self._loaded_tree.header()
-        header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setStretchLastSection(True)  # the name column
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # checkbox
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)  # controls
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # name
         self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         layout.addWidget(self._loaded_tree)
@@ -1277,19 +1281,20 @@ class ControlsWindow:
                 if gid and gid not in group_nodes:
                     node = QTreeWidgetItem(self._loaded_tree, [f"{groups.get(gid, gid)}  (map+model group)"])
                     node.setData(0, Qt.ItemDataRole.UserRole, ("group", gid))
+                    node.setFirstColumnSpanned(True)  # the header spans the whole row
                     node.setExpanded(True)
                     group_nodes[gid] = node
             for it in items:
                 parent = group_nodes.get(it["group"], self._loaded_tree)
-                label = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
-                if it.get("active"):
-                    label += "   ● active"
-                node = QTreeWidgetItem(parent, [label])
+                # [check] in col 0, [controls] in col 1, [name] in col 2 (last, elides).
+                node = QTreeWidgetItem(parent)
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                 node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
-                # An inline representation dropdown (models and maps differ).
                 self._loaded_tree.setItemWidget(node, 1, self._make_rep_combo(it))
+                name = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
+                node.setText(2, ("● " + name) if it.get("active") else name)
+                node.setToolTip(2, it["name"])  # full name on hover when elided
                 if it.get("active"):
                     active_item = node
             if active_item is not None:

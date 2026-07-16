@@ -687,8 +687,17 @@ def test_hide_structure_types(qapp):
 
         # The model row carries a "Show" menu button (2+ types present).
         tree = app._controls._loaded_tree
-        w = tree.itemWidget(tree.topLevelItem(0), 1)
+        item0 = tree.topLevelItem(0)
+        w = tree.itemWidget(item0, 1)
         assert w is not None and w.findChildren(QToolButton)
+
+        # Layout: [check] col 0, [controls] col 1, [name] col 2 (widgets on the left).
+        from PySide6.QtCore import Qt
+
+        assert tree.columnCount() == 3
+        assert item0.checkState(0) in (Qt.CheckState.Checked, Qt.CheckState.Unchecked)
+        assert item0.text(0) == "" and item0.text(1) == ""  # no text left of the name
+        assert "1ubq" in item0.text(2)
     finally:
         app.stop()
 
