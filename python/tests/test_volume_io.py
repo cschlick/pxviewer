@@ -89,3 +89,31 @@ def test_write_map_is_reloadable(synthetic_mmm, tmp_path):
     reloaded = VolumeData.from_map_file(str(out))
     assert reloaded.grid == vol.grid
     np.testing.assert_allclose(reloaded.array, vol.array, atol=1e-4)
+
+
+def test_masked_map_copy_leaves_the_real_map_alone():
+    """The map the viewer draws and the map it refines against are the same object, so
+    masking must copy. cctbx's mask_all_maps_around_atoms masks in place — using it here
+    would quietly put holes in the density minimization is fitting to."""
+    pytest.importorskip("iotbx.map_model_manager")
+
+    import numpy as np
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.volume_io import masked_map_copy
+
+    mmm = map_model_manager()
+    mmm.generate_map()  # a synthetic model + density, in one frame
+    before = mmm.map_manager().map_data().as_numpy_array().copy()
+    ids_before = set(mmm.map_id_list())
+
+    masked = masked_map_copy(mmm, "map_manager", 3.0)
+
+    after = mmm.map_manager().map_data().as_numpy_array()
+    assert np.array_equal(before, after)                  # the real map is whole
+    assert set(mmm.map_id_list()) == ids_before           # scratch maps cleaned up
+
+    # The copy has lost the density away from the model.
+    kept = masked.map_data().as_numpy_array()
+    occupied = lambda d: float((np.abs(d) > 1e-4).mean())
+    assert occupied(kept) < 0.5 * occupied(before)

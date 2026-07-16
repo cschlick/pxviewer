@@ -191,6 +191,33 @@ def split_map_model_manager(mmm: Any, *, name: Optional[str] = None) -> Tuple[Op
     return model_data, volumes
 
 
+def masked_map_copy(mmm: Any, map_id: str, radius: float) -> Any:
+    """A copy of ``mmm``'s ``map_id`` with density further than ``radius`` A from the
+    model removed.
+
+    A *copy*, emphatically: cctbx's ``mask_all_maps_around_atoms`` masks the manager's
+    maps in place, and the map being refined against must not quietly acquire holes
+    because someone tidied up the view. The mask and the copy are cctbx's own, and both
+    scratch maps are removed from the manager on the way out so repeated masking does
+    not pile them up.
+
+    Needs a paired model — which is the manager's whole point, and why this takes one.
+    """
+    made = []
+    try:
+        mmm.create_mask_around_atoms(model=mmm.model(), mask_atoms_atom_radius=float(radius))
+        made = list(mmm.create_masked_copies_of_maps(map_id_list=[map_id], mask_id="mask"))
+        if not made:
+            raise ValueError("cctbx produced no masked copy")
+        return mmm.get_map_manager_by_id(made[0]).deep_copy()
+    finally:
+        for scratch in made + ["mask"]:
+            try:
+                mmm.remove_map_manager_by_id(scratch)
+            except Exception:  # pragma: no cover - nothing to remove
+                pass
+
+
 def map_model_manager_from_files(
     model_file: Optional[Any] = None,
     map_files: Any = (),

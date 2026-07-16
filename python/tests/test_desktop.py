@@ -597,6 +597,61 @@ def test_volume_colour_swatches_and_custom(qapp):
         app.stop()
 
 
+def test_masking_density_around_the_model(qapp):
+    """Hide density away from the molecule. It needs a paired map — "away from the
+    molecule" has no meaning without one — and it masks a copy, so the map minimization
+    refines against keeps all its density."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    def occupied(path):
+        d = VolumeData.from_map_file(str(path)).map_manager.map_data().as_numpy_array()
+        return float((np.abs(d) > 1e-4).mean())
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_map_model_demo(d_min=3.0)
+        vid = app._volumes[0]["id"]
+        mmm = app.group_mmm(app._volumes[0]["group"])
+        real_before = mmm.map_manager().map_data().as_numpy_array().copy()
+        served = app._webapp.volume_dir / "vols" / f"{vid}.map"
+
+        assert app.can_mask_volume(vid)
+        full = occupied(served)
+
+        app.set_volume_mask(vid, 3.0)
+        assert occupied(served) < 0.5 * full          # the served map lost the outside
+        assert app.volume_appearance(vid)["mask_radius"] == 3.0
+        # A wider shell keeps more, so the radius means what it says.
+        app.set_volume_mask(vid, 8.0)
+        near, far = 3.0, 8.0
+        wide = occupied(served)
+        app.set_volume_mask(vid, near)
+        assert occupied(served) < wide
+
+        # The map that gets refined against is untouched by any of it.
+        assert np.array_equal(real_before, mmm.map_manager().map_data().as_numpy_array())
+        assert set(mmm.map_id_list()) == {"map_manager", "model_map"}  # no scratch pile-up
+
+        app.set_volume_mask(vid, None)
+        assert occupied(served) == pytest.approx(full)  # back to the whole map
+
+        # An unpaired volume has no model to mask around.
+        loose = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "loose")
+        assert not app.can_mask_volume(loose)
+        with pytest.raises(ValueError, match="paired"):
+            app.set_volume_mask(loose, 3.0)
+    finally:
+        app.stop()
+
+
 def test_range_slider_two_handles(qapp):
     """The clipping slab's control. Handles may meet — that is not degenerate here, it
     is the point at which the object is fully clipped."""

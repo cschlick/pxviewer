@@ -49,6 +49,10 @@ _ISO_SLIDER_MAX = 10.0
 _ISO_SPIN_MAX = 100.0
 _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in steps of this
 
+# Default radius for masking density around a model (A). 3 A is roughly one atom's
+# reach, which is what "the density belonging to this model" usually means.
+_MASK_RADIUS_DEFAULT = 3.0
+
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
 # The model values must be types the LiveSession API accepts (see live.py's
 # _STRUCTURE_REPR_TYPES / _REPR_ALIASES) — test_model_rep_options_are_valid guards this.
@@ -1371,6 +1375,13 @@ class ControlsWindow:
 
             self._add_clip_row(live.get("clip"), _set_clip)
 
+            def _set_mask(radius, it=it):
+                it["mask_radius"] = radius
+                self._safe(lambda: self._desktop.set_volume_mask(vid, radius))
+
+            self._add_mask_row(live.get("mask_radius"),
+                               self._desktop.can_mask_volume(vid), _set_mask)
+
         # Shift+scroll contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
         self._safe(lambda: self._desktop.set_volume_scroll_target(
@@ -1396,6 +1407,49 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None:
             item["iso"] = value
+
+    def _add_mask_row(self, current, enabled, on_change):
+        """Hide density away from the model: a switch and the distance.
+
+        Only offered for a paired map — "away from the molecule" needs a molecule, and
+        the pairing is what says which one. Applying it rewrites the map the browser
+        fetches, so unlike the contour this is a set-and-apply control, not a drag.
+        """
+        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel
+
+        row = QHBoxLayout()
+        lab = QLabel("Mask")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        check = QCheckBox("within")
+        check.setChecked(current is not None)
+        spin = QDoubleSpinBox()
+        spin.setRange(0.5, 50.0)
+        spin.setDecimals(1)
+        spin.setSingleStep(0.5)
+        spin.setSuffix(" Å")
+        spin.setValue(_MASK_RADIUS_DEFAULT if current is None else float(current))
+        spin.setEnabled(current is not None)
+        for widget in (check, spin):
+            widget.setEnabled(widget.isEnabled() and enabled)
+        check.setEnabled(enabled)
+        if not enabled:
+            check.setToolTip("Pair this map with a model to mask around it.")
+        else:
+            check.setToolTip("Hide density further than this from the model.")
+
+        def toggled(on):
+            spin.setEnabled(on)
+            on_change(spin.value() if on else None)
+
+        check.toggled.connect(toggled)
+        spin.editingFinished.connect(
+            lambda: on_change(spin.value()) if check.isChecked() else None)
+        row.addWidget(check)
+        row.addWidget(spin)
+        row.addStretch()
+        self._appearance_layout.addLayout(row)
+        return {"check": check, "spin": spin}
 
     def _add_color_row(self, current, on_pick):
         """A volume's colour: swatches, and a picker for anything else.
@@ -3209,7 +3263,8 @@ class DesktopApp:
         entry = self._volume_entry(vid)
         if entry is None:
             return {}
-        return {key: entry.get(key) for key in ("style", "color", "opacity", "iso", "clip")}
+        return {key: entry.get(key)
+                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius")}
 
     def set_volume_clip(self, vid: str, front: float, back: float) -> None:
         """Clip a volume to a front/rear slab (see LiveSession.set_clip)."""
@@ -3322,6 +3377,54 @@ class DesktopApp:
         vols_dir.mkdir(parents=True, exist_ok=True)
         data.write_map(str(vols_dir / f"{vid}.map"), working_frame=True)
 
+    def _display_map_data(self, entry):
+        """The map the browser should fetch: the real one, or a masked copy of it."""
+        radius = entry.get("mask_radius")
+        if not radius:
+            return entry["data"]
+        mmm = self.group_mmm(entry.get("group"))
+        if mmm is None or mmm.model() is None:
+            return entry["data"]
+        from .volume_io import VolumeData, masked_map_copy
+
+        masked = masked_map_copy(mmm, entry["data"].map_id, radius)
+        return VolumeData.from_map_manager(masked, name=entry["data"].name)
+
+    def set_volume_mask(self, vid: str, radius: Optional[float]) -> None:
+        """Hide density more than ``radius`` A from the model this map is paired with.
+
+        ``None`` turns it off. Unlike the other volume controls this is not a live
+        command — masking changes the map itself, so the copy the browser fetches is
+        rewritten and the scene reloaded. It masks a copy: the real map keeps its
+        density, so minimizing still refines against all of it.
+
+        Needs a paired map, since "away from the molecule" has no meaning without one.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return
+        radius = None if radius is None else float(radius)
+        if radius is not None:
+            mmm = self.group_mmm(entry.get("group"))
+            if mmm is None or mmm.model() is None:
+                raise ValueError("masking needs a map paired with a model")
+        if entry.get("mask_radius") == radius:
+            return
+        entry["mask_radius"] = radius
+        self._write_display_map(vid, self._display_map_data(entry))
+        self._reload_viewport()
+        self._status(
+            f"{entry['name']}: masked {radius:g} A around the model" if radius
+            else f"{entry['name']}: mask off")
+
+    def can_mask_volume(self, vid: str) -> bool:
+        """True when a volume is paired with a model, so masking has a meaning."""
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return False
+        mmm = self.group_mmm(entry.get("group"))
+        return mmm is not None and mmm.model() is not None
+
     def _add_volume(self, data, name: str, *, group: Optional[str] = None) -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene."""
         self._volume_counter += 1
@@ -3331,7 +3434,7 @@ class DesktopApp:
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
             "iso": data.suggested_iso(), "color": _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
-            "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0),
+            "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
         })
         self._reload_viewport()
         self._emit_loaded_changed()
