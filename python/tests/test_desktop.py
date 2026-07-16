@@ -618,6 +618,19 @@ def test_representation_dropdowns(qapp):
         app.stop()
 
 
+def test_model_rep_options_are_valid(qapp):
+    """Every model representation dropdown value is accepted by the LiveSession API."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+
+    from pxviewer.desktop import _MODEL_REP_OPTIONS
+    from pxviewer.live import LiveSession
+
+    session = LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]])
+    for _label, value in _MODEL_REP_OPTIONS:
+        session.set_representation(value)  # must not raise (regression: 'line' did)
+
+
 def test_hide_waters_toggle(qapp):
     """Each model row hides its waters by restricting the representation to non-water."""
     pytest.importorskip("iotbx.data_manager")

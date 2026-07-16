@@ -39,12 +39,13 @@ from .webapp import Webapp
 _VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
 
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
+# The model values must be types the LiveSession API accepts (see live.py's
+# _STRUCTURE_REPR_TYPES / _REPR_ALIASES) — test_model_rep_options_are_valid guards this.
 _MODEL_REP_OPTIONS = [
     ("Cartoon", "cartoon"),
     ("Ball & stick", "ball-and-stick"),
     ("Spacefill", "spacefill"),
-    ("Surface", "gaussian-surface"),
-    ("Line", "line"),
+    ("Surface", "surface"),
 ]
 _VOLUME_STYLE_OPTIONS = [
     ("Surface", "surface"),
@@ -1297,10 +1298,13 @@ class ControlsWindow:
     def _on_rep_changed(self, kind: str, ident: str, value) -> None:
         if self._suppress_model_events:
             return
-        if kind == "model":
-            self._desktop.set_model_representation(ident, value)
-        elif kind == "volume":
-            self._desktop.set_volume_style(ident, value)
+        try:
+            if kind == "model":
+                self._desktop.set_model_representation(ident, value)
+            elif kind == "volume":
+                self._desktop.set_volume_style(ident, value)
+        except Exception as exc:  # a bad type must not crash the GUI slot
+            self._set_status(f"Could not set representation: {exc}")
 
     def _on_hide_waters(self, mid: str, checked: bool) -> None:
         if self._suppress_model_events:
