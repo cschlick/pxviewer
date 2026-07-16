@@ -1805,8 +1805,8 @@ class DesktopApp:
             rect = screen.availableGeometry()
 
         x, y, total_width, total_height = rect.x(), rect.y(), rect.width(), rect.height()
-        # Viewer gets 3/4, the controls 1/4 (the master-detail panel is compact).
-        view_width = total_width * 3 // 4
+        # Viewer gets 2/3, the controls 1/3.
+        view_width = total_width * 2 // 3
 
         self._viewport.set_geometry(QRect(x, y, view_width, total_height))
         self._controls.set_geometry(QRect(x + view_width, y, total_width - view_width, total_height))
