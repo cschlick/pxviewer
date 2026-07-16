@@ -538,7 +538,7 @@ def test_representation_dropdowns(qapp):
         app.set_volume_style(vid, "wireframe")
         assert v["style"] == "wireframe"
 
-        # The Loaded tree shows an inline combo (column 1) on every model/volume row.
+        # The Loaded tree shows an inline rep combo (column 1) on every model/volume row.
         tree = app._controls._loaded_tree
         combos = []
 
@@ -547,11 +547,58 @@ def test_representation_dropdowns(qapp):
                 child = node.child(i)
                 w = tree.itemWidget(child, 1)
                 if w is not None:
-                    combos.append(w)
+                    combos.extend(w.findChildren(QComboBox))
                 walk(child)
 
         walk(tree.invisibleRootItem())
         assert len(combos) >= 3 and all(isinstance(c, QComboBox) for c in combos)
+    finally:
+        app.stop()
+
+
+def test_hide_waters_toggle(qapp):
+    """Each model row hides its waters by restricting the representation to non-water."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QCheckBox
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    captured = {}
+    app.bridge.loaded_changed.connect(lambda s: captured.update(s))
+    try:
+        mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        entry = app._model_entry(mid)
+        session = entry["session"]
+        assert entry["hide_waters"] is False
+        assert all("on" not in r for r in session._representations.values())  # whole structure
+        assert next(it for it in captured["items"] if it["id"] == mid)["hide_waters"] is False
+
+        app.set_model_hide_waters(mid, True)
+        assert entry["hide_waters"] is True
+        reps = list(session._representations.values())
+        assert len(reps) == 1 and "on" in reps[0]
+        shown = sum(e - s + 1 for s, e in reps[0]["on"]["runs"])
+        assert shown == 602  # 660 total - 58 waters
+
+        # Switching representation keeps waters hidden.
+        app.set_model_representation(mid, "spacefill")
+        assert "on" in next(iter(session._representations.values()))
+
+        app.set_model_hide_waters(mid, False)
+        assert entry["hide_waters"] is False
+        assert all("on" not in r for r in session._representations.values())
+
+        # The model row carries a hide-waters checkbox in the tree.
+        tree = app._controls._loaded_tree
+        w = tree.itemWidget(tree.topLevelItem(0), 1)
+        assert w is not None and w.findChildren(QCheckBox)
     finally:
         app.stop()
 

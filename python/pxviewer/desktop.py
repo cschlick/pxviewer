@@ -1177,8 +1177,14 @@ class ControlsWindow:
         self._refresh_console_session()
 
     def _make_rep_combo(self, it):
-        """The inline representation dropdown for one loaded item (model or map)."""
-        from PySide6.QtWidgets import QComboBox
+        """Inline per-object controls: a representation dropdown, plus a hide-waters
+        toggle for models (maps have no waters)."""
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QWidget
+
+        container = QWidget()
+        row = QHBoxLayout(container)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(6)
 
         combo = QComboBox()
         if it["kind"] == "model":
@@ -1194,7 +1200,16 @@ class ControlsWindow:
         combo.currentIndexChanged.connect(
             lambda _i, c=combo, k=kind, d=ident: self._on_rep_changed(k, d, c.currentData())
         )
-        return combo
+        row.addWidget(combo)
+
+        if it["kind"] == "model":
+            waters = QCheckBox("hide H₂O")
+            waters.setToolTip("Hide water atoms in this model.")
+            waters.setChecked(bool(it.get("hide_waters")))
+            waters.toggled.connect(lambda checked, d=ident: self._on_hide_waters(d, checked))
+            row.addWidget(waters)
+
+        return container
 
     def _on_rep_changed(self, kind: str, ident: str, value) -> None:
         if self._suppress_model_events:
@@ -1203,6 +1218,11 @@ class ControlsWindow:
             self._desktop.set_model_representation(ident, value)
         elif kind == "volume":
             self._desktop.set_volume_style(ident, value)
+
+    def _on_hide_waters(self, mid: str, checked: bool) -> None:
+        if self._suppress_model_events:
+            return
+        self._desktop.set_model_hide_waters(mid, checked)
 
     def _sync_table_model_combo(self, model_items) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
@@ -1560,8 +1580,18 @@ class DesktopApp:
 
     # -- models --
 
-    def _apply_model_rep(self, session, rep: str) -> None:
-        session.set_representation(rep, color=_model_rep_color(rep))
+    def _apply_model_rep(self, session, rep: str, hide_waters: bool = False) -> None:
+        color = _model_rep_color(rep)
+        on = None
+        if hide_waters:
+            try:  # restrict the representation to non-water atoms (cctbx selection)
+                on = list(session.select_by(selection="not water").indices)
+            except Exception:  # pragma: no cover - defensive
+                on = None
+        if on is not None:
+            session.set_representation(rep, color=color, on=on)
+        else:
+            session.set_representation(rep, color=color)
 
     def _default_model_rep(self, session) -> str:
         from . import cctbx_io
@@ -1579,7 +1609,8 @@ class DesktopApp:
         rep = self._default_model_rep(session)
         self._apply_model_rep(session, rep)
         self._models.append(
-            {"id": mid, "name": name, "session": session, "visible": True, "group": group, "rep": rep}
+            {"id": mid, "name": name, "session": session, "visible": True, "group": group,
+             "rep": rep, "hide_waters": False}
         )
         self._active_model_id = mid
         # Register this model's pick handler once (tagged with its id); the click
@@ -1599,7 +1630,15 @@ class DesktopApp:
         if entry is None or entry.get("rep") == rep:
             return
         entry["rep"] = rep
-        self._apply_model_rep(entry["session"], rep)
+        self._apply_model_rep(entry["session"], rep, entry.get("hide_waters", False))
+
+    def set_model_hide_waters(self, mid: str, hide: bool) -> None:
+        """Show or hide water atoms on a model (reapplies its representation)."""
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("hide_waters", False) == bool(hide):
+            return
+        entry["hide_waters"] = bool(hide)
+        self._apply_model_rep(entry["session"], entry["rep"], bool(hide))
 
     def set_volume_style(self, vid: str, style: str) -> None:
         """Change a volume's isosurface style (surface/wireframe/mesh) live."""
@@ -1754,7 +1793,8 @@ class DesktopApp:
             return
         items = [
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
-             "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep")}
+             "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
+             "hide_waters": m.get("hide_waters", False)}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
