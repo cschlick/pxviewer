@@ -49,10 +49,12 @@ _POINT_RE = re.compile(r"\{[^}]*\}([^{]*)")  # capture the text after each {labe
 
 
 def _parse_point(chunk: str):
-    """Parse the text after one ``{label}`` into (flags, xyz, radius). xyz is None
-    if the chunk has no coordinate triple."""
+    """Parse the text after one ``{label}`` into (flags, xyz, radius, colour). xyz is
+    None if the chunk has no coordinate triple; colour is None unless the point names
+    one (a per-point colour overrides the list's, e.g. CaBLAM's score-coded wheels)."""
     flags = set()
     radius = None
+    color = None
     coords: List[float] = []
     for tok in chunk.replace(",", " ").split():
         if tok.startswith("r="):
@@ -68,46 +70,59 @@ def _parse_point(chunk: str):
             try:
                 coords.append(float(tok))
             except ValueError:
-                continue  # a colour word or other aspect
+                if tok.lower() in _KIN_COLORS:
+                    color = _KIN_COLORS[tok.lower()]
     xyz = tuple(coords[-3:]) if len(coords) >= 3 else None
-    return flags, xyz, radius
+    return flags, xyz, radius, color
 
 
 def _points_in_line(line: str):
-    """Yield (flags, xyz, radius) for every ``{label} … x y z`` point on a line."""
+    """Yield (flags, xyz, radius, colour) for every ``{label} … x y z`` point."""
     for chunk in _POINT_RE.findall(line):
-        flags, xyz, radius = _parse_point(chunk)
+        flags, xyz, radius, color = _parse_point(chunk)
         if xyz is not None:
-            yield flags, xyz, radius
+            yield flags, xyz, radius, color
 
 
-def _segments(points) -> List[list]:
-    """Line segments from a vectorlist: P is a pen-up move, others draw from the
-    previous point."""
-    segments = []
+def _resolve_colors(points, header_color):
+    """Give each point its effective colour: the list's, overridden by a per-point
+    colour which then persists for the following points (kinemage's rule)."""
+    resolved = []
+    current = header_color
+    for flags, xyz, radius, color in points:
+        if color is not None:
+            current = color
+        resolved.append((flags, xyz, radius, current))
+    return resolved
+
+
+def _segments(points) -> dict:
+    """colour -> line segments. P is a pen-up move; others draw from the previous
+    point (the segment takes the colour of the point it draws to)."""
+    segments: dict = {}
     prev = None
-    for flags, xyz, _r in points:
+    for flags, xyz, _r, color in points:
         if "P" in flags or prev is None:
             prev = xyz
         else:
-            segments.append([list(prev), list(xyz)])
+            segments.setdefault(color, []).append([list(prev), list(xyz)])
             prev = xyz
     return segments
 
 
-def _triangles(points) -> List[list]:
-    """Triangles from a trianglelist: P starts a new strip; within a strip each new
-    point makes a triangle with the previous two."""
-    triangles = []
+def _triangles(points) -> dict:
+    """colour -> triangles. P starts a new strip; within a strip each new point makes
+    a triangle with the previous two."""
+    triangles: dict = {}
     strip: List[tuple] = []
-    for flags, xyz, _r in points:
+    for flags, xyz, _r, color in points:
         if "P" in flags:
             strip = [xyz]
         else:
             strip.append(xyz)
             if len(strip) >= 3:
                 a, b, c = strip[-3], strip[-2], strip[-1]
-                triangles.append([list(a), list(b), list(c)])
+                triangles.setdefault(color, []).append([list(a), list(b), list(c)])
     return triangles
 
 
@@ -119,20 +134,28 @@ def parse_kinemage(text: str) -> List[dict]:
     points: List[tuple] = []
 
     def flush():
+        """Emit one primitive per distinct colour in the list just parsed."""
         if kind is None or not points:
             return
-        prim = {"kind": kind, "color": list(color)}
+        resolved = _resolve_colors(points, color)
         if kind == "dots":
-            prim["points"] = [list(xyz) for _f, xyz, _r in points]
+            by: dict = {}
+            for _f, xyz, _r, c in resolved:
+                by.setdefault(c, []).append(list(xyz))
+            for c, pts in by.items():
+                prims.append({"kind": "dots", "color": list(c), "points": pts})
         elif kind == "balls":
-            prim["balls"] = [[list(xyz), (r if r is not None else _DEFAULT_BALL_RADIUS)]
-                             for _f, xyz, r in points]
+            by = {}
+            for _f, xyz, r, c in resolved:
+                by.setdefault(c, []).append([list(xyz), r if r is not None else _DEFAULT_BALL_RADIUS])
+            for c, balls in by.items():
+                prims.append({"kind": "balls", "color": list(c), "balls": balls})
         elif kind == "vectors":
-            prim["segments"] = _segments(points)
+            for c, segs in _segments(resolved).items():
+                prims.append({"kind": "vectors", "color": list(c), "segments": segs})
         elif kind == "triangles":
-            prim["triangles"] = _triangles(points)
-        if prim.get("points") or prim.get("balls") or prim.get("segments") or prim.get("triangles"):
-            prims.append(prim)
+            for c, tris in _triangles(resolved).items():
+                prims.append({"kind": "triangles", "color": list(c), "triangles": tris})
 
     for raw in text.splitlines():
         line = raw.strip()

@@ -29,6 +29,7 @@ from .demos import DEMOS, Player, list_demos
 from .loader import (
     FILE_DIALOG_FILTER,
     SAMPLE_STRUCTURE,
+    SAMPLES,
     file_kind,
     sample_structure_path,
 )
@@ -688,10 +689,10 @@ class ControlsWindow:
         self._open_btn.setMinimumHeight(38)
         self._open_btn.clicked.connect(self._on_open_file)
         open_row.addWidget(self._open_btn, stretch=1)
-        self._sample_btn = QPushButton("Sample")
-        self._sample_btn.setToolTip(f"Load the bundled sample ({SAMPLE_STRUCTURE[1]})")
-        self._sample_btn.clicked.connect(self._on_load_sample)
-        if sample_structure_path() is None:
+        self._sample_btn = QPushButton("Sample")  # a menu button (native dropdown arrow)
+        self._sample_btn.setToolTip("Load a bundled sample structure")
+        self._sample_btn.setMenu(self._build_samples_menu())
+        if all(sample_structure_path(f) is None for f, _ in SAMPLES):
             self._sample_btn.setEnabled(False)
         open_row.addWidget(self._sample_btn)
         demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
@@ -812,6 +813,17 @@ class ControlsWindow:
         scroll.setWidget(body)
         ol.addWidget(scroll, stretch=1)
         return outer
+
+    def _build_samples_menu(self):
+        """One entry per bundled sample; missing files are greyed out."""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self._window)
+        for filename, label in SAMPLES:
+            action = menu.addAction(label, lambda _c=False, f=filename: self._on_load_sample(f))
+            if sample_structure_path(filename) is None:
+                action.setEnabled(False)
+        return menu
 
     def _build_demos_menu(self):
         from PySide6.QtWidgets import QMenu
@@ -1451,10 +1463,10 @@ class ControlsWindow:
         label = Path(paths[0]).name if len(paths) == 1 else f"{len(paths)} files"
         self._file_label.setText(f"{label}  ({kind})")
 
-    def _on_load_sample(self) -> None:
+    def _on_load_sample(self, filename: Optional[str] = None) -> None:
         from PySide6.QtWidgets import QMessageBox
 
-        sample = sample_structure_path()
+        sample = sample_structure_path(filename)
         if sample is None:
             QMessageBox.warning(self._window, "Sample not available", "The bundled sample file is missing.")
             return

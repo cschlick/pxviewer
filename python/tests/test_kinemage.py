@@ -46,6 +46,28 @@ def test_dotlist_points():
                       "points": [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]}]
 
 
+def test_per_point_colour_splits_primitives():
+    """CaBLAM's wheels carry a colour per point ({} P X magenta x y z) instead of on
+    the list header (which has none) — score-coded magenta/purple wedges. Each colour
+    becomes its own primitive; ignoring them rendered the wheels white."""
+    text = (
+        "@trianglelist {cablam_wheels} alpha=0.75\n"
+        "{} P X magenta 0 0 0\n{} magenta 1 0 0\n{} magenta 1 1 0\n"
+        "{} P X purple 0 0 0\n{} purple 0 1 0\n{} purple 0 0 1"
+    )
+    prims = parse_kinemage(text)
+    assert {tuple(p["color"]) for p in prims} == {(255, 0, 255), (160, 32, 240)}
+    assert all(p["kind"] == "triangles" and len(p["triangles"]) == 1 for p in prims)
+
+
+def test_per_point_colour_persists():
+    """A per-point colour applies to following points until the next colour."""
+    text = "@vectorlist {v} color= green\n{a} P red 0 0 0 {b} 1 1 1 {c} 2 2 2"
+    prims = parse_kinemage(text)
+    assert len(prims) == 1 and prims[0]["color"] == [255, 0, 0]  # red, not the list's green
+    assert len(prims[0]["segments"]) == 2
+
+
 def test_unknown_color_and_empty():
     assert parse_kinemage("") == []
     assert parse_kinemage("@vectorlist {v} color= chartreuse\n{a} P 0 0 0 {b} 1 1 1") == [

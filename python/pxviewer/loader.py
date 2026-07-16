@@ -28,10 +28,20 @@ __all__ = [
 # and the map+model demo can compute a density from it.
 SAMPLE_STRUCTURE = ("1ubq.pdb", "Ubiquitin (1UBQ)")
 
+# Every bundled sample. 1TEC is deliberately imperfect: it trips every MolProbity
+# validator — Ramachandran, rotamer, Cbeta and CaBLAM outliers plus a cis-proline
+# *and* a cis-nonproline — so the Validation tab has a structure that shows all of
+# its markup. (1UBQ is near-pristine and shows almost none.)
+SAMPLES = [
+    SAMPLE_STRUCTURE,
+    ("1tec.pdb", "Thermitase-eglin (1TEC) — validation demo"),
+]
 
-def sample_structure_path() -> Path | None:
-    """Path to the bundled sample model (shipped as package data), or None."""
-    path = Path(__file__).resolve().parent / "data" / SAMPLE_STRUCTURE[0]
+
+def sample_structure_path(filename: str | None = None) -> Path | None:
+    """Path to a bundled sample model (package data), or None if it isn't there.
+    Defaults to :data:`SAMPLE_STRUCTURE`; pass a filename from :data:`SAMPLES`."""
+    path = Path(__file__).resolve().parent / "data" / (filename or SAMPLE_STRUCTURE[0])
     return path if path.is_file() else None
 
 
