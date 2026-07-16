@@ -627,6 +627,14 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def reset_view(self) -> None:
+        """Reframe the camera to fit the whole scene at its default orientation.
+        Thread-safe: may be called from any thread."""
+        message = json.dumps({"type": "reset-view"})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_interactions(self, interactions: Any) -> List[dict]:
         """Draw an explicit set of non-covalent interactions between atom pairs.
 

@@ -699,6 +699,14 @@ class ControlsWindow:
         open_row.addWidget(demos_btn)
         ol.addLayout(open_row)
 
+        reset_row = QHBoxLayout()
+        reset_btn = QPushButton("Reset view")
+        reset_btn.setToolTip("Reframe the camera to fit the whole scene.")
+        reset_btn.clicked.connect(lambda: self._desktop.reset_view())
+        reset_row.addWidget(reset_btn)
+        reset_row.addStretch()
+        ol.addLayout(reset_row)
+
         self._file_label = QLabel("")
         self._file_label.setWordWrap(True)
         self._file_label.setStyleSheet("color: #888;")
@@ -2407,6 +2415,13 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             control.set_axis(bool(visible))
+
+    def reset_view(self) -> None:
+        """Reframe the viewport camera to fit the whole scene."""
+        self._focused_residue = None  # space-bar nav restarts from the top after a reset
+        control = self._control_session()
+        if control is not None:
+            control.reset_view()
 
     def write_object(self, kind: str, ident: str, path: str) -> None:
         """Write a loaded object to disk: the model's cctbx coordinates, or the map.

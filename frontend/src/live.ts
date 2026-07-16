@@ -1011,6 +1011,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
                 await setAxis(plugin, msg.visible);
+            } else if (msg.type === 'reset-view') {
+                plugin.managers.camera.reset();  // reframe the whole scene, default orientation
             } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
                 await setComputedInteractions(plugin, msg.visible);
             } else if (msg.type === 'interactions' && viewer) {

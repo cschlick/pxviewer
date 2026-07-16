@@ -763,6 +763,7 @@ def test_tools_and_appearance_setters(qapp):
         app.set_probe_channel(0, False)
         app.clear_measurements()
         app.set_axis(True)
+        app.reset_view()
     finally:
         app.stop()
 
