@@ -202,6 +202,17 @@ const MARKUP_RADIUS_PER_WIDTH = 0.055;
 // Lists that set no width (e.g. MolProbity's rotamer outliers) are drawn prominently
 // rather than at kinemage's thin default, which would hide them inside the bonds.
 const MARKUP_DEFAULT_WIDTH = 4;
+// Hairlines (CaBLAM's wheel outlines) are drawn as real screen-space Lines instead of
+// mesh cylinders: kinemage widths *are* screen-space, and a wheel's outline traces its
+// rim rather than the model, so it needs no depth-beating bulk. Thousands of thin
+// cylinders cost thousands of tessellated tubes; as Lines they are nearly free.
+// Wider markup stays a cylinder — it runs along the side-chain bonds, and only a
+// cylinder fat enough to envelope a bond escapes being occluded inside it.
+const MARKUP_MAX_LINE_WIDTH = 2;
+
+function isHairline(prim: MarkupPrimitive): boolean {
+    return prim.kind === 'vectors' && (prim.width ?? MARKUP_DEFAULT_WIDTH) <= MARKUP_MAX_LINE_WIDTH;
+}
 
 interface MarkupPrimitive {
     kind: string;
@@ -227,7 +238,7 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
             }
         } else if (prim.kind === 'dots' && prim.points) {
             for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.1, 0);
-        } else if (prim.kind === 'vectors' && prim.segments) {
+        } else if (prim.kind === 'vectors' && prim.segments && !isHairline(prim)) {
             const r = (prim.width ?? MARKUP_DEFAULT_WIDTH) * MARKUP_RADIUS_PER_WIDTH;
             for (const [a, b] of prim.segments) {
                 addSimpleCylinder(state, Vec3.create(a[0], a[1], a[2]), Vec3.create(b[0], b[1], b[2]),
@@ -248,6 +259,49 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
         (g) => colors[g] ?? Color(0xffffff), () => 1, () => 'validation markup',
     );
 }
+
+/** Lines shape for the hairline vectors, each segment sized by its kinemage width. */
+function buildMarkupLines(primitives: MarkupPrimitive[]): Shape<Lines> {
+    const starts: number[][] = [], ends: number[][] = [];
+    const colors: number[] = [], widths: number[] = [];
+    for (const prim of primitives) {
+        if (!isHairline(prim) || !prim.segments) continue;
+        const color = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
+        const w = prim.width ?? MARKUP_DEFAULT_WIDTH;
+        for (const [a, b] of prim.segments) {
+            starts.push(a); ends.push(b); colors.push(color); widths.push(w);
+        }
+    }
+    const builder = LinesBuilder.create(starts.length, 1);
+    for (let i = 0; i < starts.length; i++) {
+        builder.add(starts[i][0], starts[i][1], starts[i][2], ends[i][0], ends[i][1], ends[i][2], i);
+    }
+    return Shape.create(
+        'validation-markup-lines', {}, builder.getLines(),
+        (g) => colors[g] ?? Color(0xffffff), (g) => widths[g] ?? 1, () => 'validation markup',
+    );
+}
+
+const MarkupLines = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-markup-lines',
+    display: { name: 'Validation Markup Lines' },
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: { primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }) },
+})({
+    apply({ params }) {
+        const p = params as { primitives: MarkupPrimitive[] };
+        return new SO.Shape.Provider({
+            label: 'Validation Markup Lines',
+            data: p,
+            // Constant screen-space width, so the kinemage width reads as pixels.
+            params: PD.withDefaults(Lines.Params, { lineSizeAttenuation: false, sizeFactor: 1 }),
+            getShape: (_ctx, data) => buildMarkupLines(data.primitives),
+            geometryUtils: Lines.Utils,
+        }, { label: 'Validation Markup Lines' });
+    },
+});
+type MarkupLines = typeof MarkupLines;
 
 const MarkupMesh = PluginStateTransform.BuiltIn({
     name: 'pxviewer-markup',
@@ -362,7 +416,7 @@ export class LiveViewer {
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
     private probeChannels: Map<number, StateObjectSelector[]> = new Map();
-    private markupChannels: Map<number, StateObjectSelector> = new Map();
+    private markupChannels: Map<number, StateObjectSelector[]> = new Map();
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -805,18 +859,33 @@ export class LiveViewer {
     async setMarkup(channel: number, primitives: MarkupPrimitive[]) {
         await this.clearMarkup(channel);
         if (!primitives || primitives.length === 0) return;
-        const node = this.plugin.state.data.build().toRoot()
-            .apply(MarkupMesh, { primitives }).apply(ShapeRepresentation3D);
-        await node.commit();
-        this.markupChannels.set(channel, node.selector);
+        // Split by how each primitive is drawn, and only build a geometry that has
+        // something in it — an empty Mesh/Lines throws ("empty textures are not allowed").
+        const solid = primitives.filter((p) => !isHairline(p));
+        const hairlines = primitives.filter(isHairline);
+        const nodes: StateObjectSelector[] = [];
+        const build = this.plugin.state.data.build();
+        if (solid.length) {
+            nodes.push(build.toRoot().apply(MarkupMesh, { primitives: solid })
+                .apply(ShapeRepresentation3D).selector);
+        }
+        if (hairlines.length) {
+            nodes.push(build.toRoot().apply(MarkupLines, { primitives: hairlines })
+                .apply(ShapeRepresentation3D).selector);
+        }
+        if (!nodes.length) return;
+        await build.commit();
+        this.markupChannels.set(channel, nodes);
     }
 
     /** Remove a validator's markup overlay. */
     async clearMarkup(channel: number) {
-        const node = this.markupChannels.get(channel);
-        if (!node) return;
+        const nodes = this.markupChannels.get(channel);
+        if (!nodes) return;
         this.markupChannels.delete(channel);
-        if (node.ref) await this.plugin.state.data.build().delete(node.ref).commit();
+        const b = this.plugin.state.data.build();
+        for (const node of nodes) if (node.ref) b.delete(node.ref);
+        await b.commit();
     }
 
     /**
