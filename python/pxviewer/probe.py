@@ -14,9 +14,7 @@ fall back to a heavy-atom run (``ignore_lack_of_explicit_hydrogens``).
 from __future__ import annotations
 
 import json
-import os
 import struct
-import tempfile
 from typing import Any, List, Tuple
 
 # MolProbity gap -> RGB (mirrors probe2._color_for_gap); H-bonds get green-tint.
@@ -51,25 +49,39 @@ def _model_has_hydrogens(model: Any) -> bool:
 
 
 def run_probe_dots(model: Any) -> List[dict]:
-    """Run probe2 on a cctbx model; return the raw ``flat_results`` dot list."""
-    from iotbx.cli_parser import run_program
+    """Run probe2 on a cctbx model in memory; return the raw ``flat_results`` dots.
+
+    No disk round-trip: the model goes straight into a DataManager (no PDB write) and
+    probe2's JSON is captured from ``run()``'s return value with
+    ``output.write_files=False`` (nothing written or read back). ``run_program`` isn't
+    used because it discards that return value — probe2's ``get_results`` is commented
+    out — so the Program is built and run directly, mirroring how the CLI parser
+    assembles the master phil (probe2's scope plus the base output scope).
+    """
+    import iotbx.phil
+    from iotbx.data_manager import DataManager
+    from libtbx.program_template import ProgramTemplate
+    from libtbx.utils import null_out
     from mmtbx.programs import probe2
 
-    workdir = tempfile.mkdtemp(prefix="pxviewer-probe-")
-    model_path = os.path.join(workdir, "model.pdb")
-    with open(model_path, "w") as fh:
-        fh.write(model.model_as_pdb())
-    out_path = os.path.join(workdir, "probe.json")
+    dm = DataManager()
+    dm.add_model("model", model)
 
-    args = [model_path, "approach=self", "source_selection=all",
-            "output.format=json", f"output.file_name={out_path}"]
+    master = iotbx.phil.parse(probe2.Program.master_phil_str, process_includes=True)
+    master.adopt_scope(iotbx.phil.parse(ProgramTemplate.output_phil_str))
+    params = master.extract()
+    params.approach = "self"
+    params.source_selection = "all"
+    params.output.format = "json"
+    params.output.write_files = False        # capture the JSON from run()'s return, not a file
+    params.output.filename = "probe.json"    # set (never written) so validate() stays quiet
     if not _model_has_hydrogens(model):
-        args.append("ignore_lack_of_explicit_hydrogens=True")
+        params.ignore_lack_of_explicit_hydrogens = True
 
-    with open(os.devnull, "w") as devnull:
-        run_program(program_class=probe2.Program, args=args, logger=devnull)
-    with open(out_path) as fh:
-        return json.load(fh)["flat_results"]
+    task = probe2.Program(dm, params, master_phil=master, logger=null_out())
+    task.validate()
+    _results, out_string = task.run()
+    return json.loads(out_string)["flat_results"]
 
 
 # probe2 dot types: wc/cc wide+close contact, hb hydrogen bond, so small overlap,
