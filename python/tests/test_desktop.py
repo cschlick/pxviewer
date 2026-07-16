@@ -306,17 +306,9 @@ def test_group_keeps_the_map_model_manager_that_pairs_its_objects(qapp):
         app.stop()
 
 
-def test_unpaired_model_and_map_are_never_treated_as_paired(qapp, tmp_path):
-    """A map loaded on its own is not paired with a model loaded on its own, even
-    when they are the same structure and would look compatible. Pairing is an
-    operation cctbx performs, not a resemblance we detect."""
-    pytest.importorskip("iotbx.map_model_manager")
-    pytest.importorskip("websockets")
-    pytest.importorskip("PySide6.QtWebEngineWidgets")
-
+def _model_and_map_files(tmp_path):
+    """The same structure written out as a separate model file and map file."""
     from iotbx.map_model_manager import map_model_manager
-
-    from pxviewer.desktop import DesktopApp
 
     mmm = map_model_manager()
     mmm.generate_map()
@@ -324,22 +316,129 @@ def test_unpaired_model_and_map_are_never_treated_as_paired(qapp, tmp_path):
     model_path = tmp_path / "m.pdb"
     mmm.map_manager().write_map(str(map_path))
     model_path.write_text(mmm.model().model_as_pdb())
+    return model_path, map_path
+
+
+def test_looking_compatible_is_not_being_paired(qapp, tmp_path):
+    """The regression this guards: deciding a model and map go together by inspecting
+    them. These two *are* mutually compatible by cctbx's own test and sit in the same
+    group, and they are still not paired — because nothing ever paired them. Only a
+    map_model_manager makes a pairing, so a group without one offers no map."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.cctbx_io import read_model
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    model_path, map_path = _model_and_map_files(tmp_path)
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        model = read_model(str(model_path))
+        volume = VolumeData.from_map_file(str(map_path))
+        # A group put together without cctbx pairing the contents.
+        gid = app._new_group("hand-made")
+        app._add_model(LiveSession.from_cctbx_model(model), "m", group=gid)
+        app._add_volume(volume, "map", group=gid)
+
+        # The premise: they really would pass an eyeball compatibility check.
+        assert volume.map_manager.origin_is_zero()
+        assert volume.map_manager.is_compatible_model(model)
+        # And that counts for nothing: no manager, no pairing, no map.
+        assert app.group_mmm(gid) is None
+        assert app.map_for_model() is None
+        with pytest.raises(ValueError, match="not paired"):
+            app.minimize_model(use_map=True)
+    finally:
+        app.stop()
+
+
+def test_unpaired_objects_can_be_paired_explicitly(qapp, tmp_path):
+    """Pairing is offered as an action rather than inferred, because it is one: cctbx
+    relocates the model into a common frame with the map. Doing it is what makes the
+    two usable together."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    model_path, map_path = _model_and_map_files(tmp_path)
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(model_path)])
+        app.load_files([str(map_path)])
+        models, volumes = app.pairable()
+        assert len(models) == 1 and len(volumes) == 1  # both unpaired, so both offered
+        assert app.map_for_model() is None
+        assert app._controls._pair_btn.isEnabled()  # something to pair on both sides
+
+        gid = app.pair_model_with_map(models[0]["id"], volumes[0]["id"])
+        mmm = app.group_mmm(gid)
+        assert mmm is not None
+        assert app._models[0]["group"] == gid and app._volumes[0]["group"] == gid
+        # The pairing is cctbx's, and it is what now answers the map question.
+        assert app.map_for_model() is mmm.map_manager().map_data()
+        assert app._models[0]["session"].model is mmm.model()
+        # Paired objects are no longer on offer for pairing.
+        assert app.pairable() == ([], [])
+        assert not app._controls._pair_btn.isEnabled()
+        with pytest.raises(ValueError, match="already paired"):
+            app.pair_model_with_map(app._models[0]["id"], app._volumes[0]["id"])
+        # ... and the map they are paired with is now offered for minimization.
+        assert app._controls._minimize_map_check.isEnabled()
+    finally:
+        app.stop()
+
+
+def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
+    """Pairing relocates the model into the map's frame — several angstrom for a boxed
+    map. The map the browser is served has to move with it, or the model is drawn away
+    from its own density. (cctbx writes a map back in the frame it was read in, which is
+    right for saving a file and wrong for the copy on screen.)"""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    mmm = map_model_manager()
+    mmm.generate_map()
+    boxed = mmm.map_manager().deep_copy()
+    boxed.set_original_origin_and_gridding(original_origin=(10, 10, 10))  # not at zero
+    map_path = tmp_path / "boxed.mrc"
+    model_path = tmp_path / "m.pdb"
+    boxed.write_map(str(map_path))
+    model_path.write_text(mmm.model().model_as_pdb())
 
     app = DesktopApp(port=0)
     app._webapp.start()
     try:
-        # Loaded separately -> no group, so no pairing, so nothing to minimize into.
         app.load_files([str(model_path)])
         app.load_files([str(map_path)])
-        assert len(app._models) == 1 and len(app._volumes) == 1
-        assert app._models[0]["group"] is None
-        assert app.map_for_model() is None
-        with pytest.raises(ValueError, match="not paired"):
-            app.minimize_model(use_map=True)
+        before = app._models[0]["session"].model.get_sites_cart().as_numpy_array().copy()
+        vid = app._volumes[0]["id"]
+        app.pair_model_with_map(app._models[0]["id"], vid)
 
-        # The same two files loaded together -> cctbx pairs them, and now there is one.
-        app.load_files([str(model_path), str(map_path)])
-        assert app.map_for_model() is not None
+        # The model really did move (this is why pairing cannot be a passive label).
+        after = app._models[0]["session"].model.get_sites_cart().as_numpy_array()
+        shift = (after - before).mean(axis=0)
+        assert np.linalg.norm(shift) > 1.0
+        # The served map moved with it: it is written in the frame the model is drawn in.
+        served = app._webapp.volume_dir / "vols" / f"{vid}.map"
+        assert VolumeData.from_map_file(str(served)).map_manager.map_data().origin() == (0, 0, 0)
+        # Saving the map for the user is a different job: that keeps the original frame.
+        out = tmp_path / "saved.mrc"
+        app._volumes[0]["data"].write_map(str(out))
+        assert VolumeData.from_map_file(str(out)).map_manager.map_data().origin() == (10, 10, 10)
     finally:
         app.stop()
 

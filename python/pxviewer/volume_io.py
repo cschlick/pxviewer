@@ -148,9 +148,24 @@ class VolumeData:
 
     # -- output ----------------------------------------------------------
 
-    def write_map(self, path: Any) -> None:
-        """Write the map back out via cctbx (to serve to the browser)."""
-        self.map_manager.write_map(str(path))
+    def write_map(self, path: Any, *, working_frame: bool = False) -> None:
+        """Write the map out via cctbx.
+
+        By default cctbx writes a map back in the frame it was *read* in: the CCP4
+        header carries the original origin, so a reader puts the map back where it came
+        from. That is what someone saving a file wants.
+
+        ``working_frame`` writes the map where it currently *is* instead. Pairing a map
+        with a model shifts both into a common frame — cctbx's convention is to work
+        shifted and shift back on output — and the viewer draws the model at its shifted
+        coordinates. So the copy the viewer renders has to be written in that same frame,
+        or the model is drawn away from its own density.
+        """
+        mm = self.map_manager
+        if working_frame and tuple(mm.shift_cart()) != (0, 0, 0):
+            mm = mm.deep_copy()  # only when shifted: maps are large
+            mm.set_original_origin_and_gridding(original_origin=(0, 0, 0))
+        mm.write_map(str(path))
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"VolumeData(name={self.name!r}, map_id={self.map_id!r}, grid={self.grid})"

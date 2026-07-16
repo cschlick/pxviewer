@@ -660,6 +660,7 @@ class ControlsWindow:
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
         self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
+        self._update_pair_button()
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -745,6 +746,12 @@ class ControlsWindow:
         self._write_btn.setToolTip("Write the focused object to disk (model coordinates or map).")
         self._write_btn.clicked.connect(self._on_write_object)
         obj_row.addWidget(self._write_btn)
+        self._pair_btn = QPushButton("Pair…")
+        self._pair_btn.setToolTip(
+            "Pair a model with a map so they can be used together. cctbx moves them into "
+            "a common frame, which is what a map+model group already has from loading.")
+        self._pair_btn.clicked.connect(self._on_pair)
+        obj_row.addWidget(self._pair_btn)
         obj_row.addStretch()
         self._remove_model_btn = QPushButton("Remove")
         self._remove_model_btn.setToolTip("Remove the highlighted object")
@@ -1536,6 +1543,55 @@ class ControlsWindow:
             return
         self._file_label.setText(f"{sample.name}  ({kind})")
 
+    def _on_pair(self) -> None:
+        """Pair an unpaired model with an unpaired map, chosen explicitly."""
+        from PySide6.QtWidgets import (
+            QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QMessageBox,
+        )
+
+        models, volumes = self._desktop.pairable()
+        if not models or not volumes:
+            QMessageBox.information(
+                self._window, "Nothing to pair",
+                "Pairing needs a model and a map that are not already paired with "
+                "something.\n\nLoading a model and a map together pairs them for you.")
+            return
+
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Pair model with map")
+        form = QFormLayout(dialog)
+        note = QLabel(
+            "cctbx will move these into a common frame, so the model may shift.\n"
+            "That is what makes them usable together — minimizing into density, say.")
+        note.setStyleSheet("color: #888;")
+        form.addRow(note)
+        model_combo = QComboBox()
+        for m in models:
+            model_combo.addItem(m["name"], m["id"])
+        volume_combo = QComboBox()
+        for v in volumes:
+            volume_combo.addItem(v["name"], v["id"])
+        form.addRow("Model:", model_combo)
+        form.addRow("Map:", volume_combo)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self._desktop.pair_model_with_map(
+                model_combo.currentData(), volume_combo.currentData())
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not pair", str(exc))
+
+    def _update_pair_button(self) -> None:
+        """Pairing needs something unpaired on both sides."""
+        models, volumes = self._desktop.pairable()
+        self._pair_btn.setEnabled(bool(models) and bool(volumes))
+
     def _on_write_object(self) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
@@ -1790,6 +1846,7 @@ class ControlsWindow:
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
         self._update_minimize_map()  # the active model may now have (or have lost) a map
+        self._update_pair_button()
         # Point the Appearance pane at the focused object. Focusing a model activates
         # it, so a focused *model* must always be the active one — if the active model
         # changed underneath us (a new model, a radio click, hydrogenate+analyze),
@@ -2151,6 +2208,55 @@ class DesktopApp:
         """The ``map_model_manager`` a group came from, or None if it did not come from one."""
         group = self._groups.get(gid) if gid else None
         return group["mmm"] if group else None
+
+    def pairable(self) -> tuple:
+        """``(models, volumes)`` that are not paired with anything yet.
+
+        Only ungrouped objects: an object already in a group has a manager speaking for
+        it, and re-pairing it would move it out from under that.
+        """
+        models = [m for m in self._models
+                  if m.get("group") is None and getattr(m["session"], "model", None) is not None]
+        volumes = [v for v in self._volumes if v.get("group") is None]
+        return models, volumes
+
+    def pair_model_with_map(self, mid: str, vid: str) -> str:
+        """Pair a model and a map by building the cctbx manager that joins them.
+
+        This is the explicit answer to the question :meth:`map_for_model` refuses to
+        guess at. It is offered as an action rather than inferred because it *is* one:
+        cctbx relocates the model, and the map, into a common frame — a boxed map can
+        move a model several angstrom — and that is a change to the data, not a label on
+        it. Both objects move into a group holding the manager, which is what makes them
+        usable together (minimizing into density, and whatever joint work comes later).
+        """
+        from iotbx.map_model_manager import map_model_manager
+
+        mentry = self._model_entry(mid)
+        ventry = self._volume_entry(vid)
+        if mentry is None or ventry is None:
+            raise ValueError("pick a model and a map to pair")
+        if mentry.get("group") is not None or ventry.get("group") is not None:
+            raise ValueError("those objects are already paired with something")
+        model = getattr(mentry["session"], "model", None)
+        if model is None:
+            raise ValueError("that object has no cctbx model to pair")
+
+        mmm = map_model_manager(
+            model=model, map_manager=ventry["data"].map_manager,
+            ignore_symmetry_conflicts=True)
+
+        gid = self._new_group(f"{mentry['name']} + {ventry['name']}", mmm=mmm)
+        mentry["group"] = gid
+        ventry["group"] = gid
+        # cctbx moves the model (and possibly the map) into the shared frame, so show
+        # where they now are rather than where they were loaded.
+        mentry["session"].push(model.get_sites_cart().as_numpy_array())
+        self._write_display_map(vid, ventry["data"])
+        self._reload_viewport()
+        self._emit_loaded_changed()
+        self._status(f"Paired {mentry['name']} with {ventry['name']}")
+        return gid
 
     # -- viewport composition --
 
@@ -2678,14 +2784,23 @@ class DesktopApp:
 
     # -- volumes --
 
+    def _write_display_map(self, vid: str, data) -> None:
+        """Write the copy of a map the browser fetches, in the frame the viewer draws in.
+
+        Not the frame the map came from: once a map is paired with a model, cctbx has
+        shifted both into a common working frame and the model is drawn there, so the
+        map has to be written there too (see ``VolumeData.write_map``). Saving a map for
+        the user is a different job and keeps the original frame.
+        """
+        vols_dir = self._webapp.volume_dir / "vols"
+        vols_dir.mkdir(parents=True, exist_ok=True)
+        data.write_map(str(vols_dir / f"{vid}.map"), working_frame=True)
+
     def _add_volume(self, data, name: str, *, group: Optional[str] = None) -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene."""
         self._volume_counter += 1
         vid = f"volume-{self._volume_counter}"
-        vols_dir = self._webapp.volume_dir / "vols"
-        vols_dir.mkdir(parents=True, exist_ok=True)
-        map_path = vols_dir / f"{vid}.map"
-        data.write_map(str(map_path))  # cctbx writes it; the browser fetches it
+        self._write_display_map(vid, data)
         self._volumes.append({
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
