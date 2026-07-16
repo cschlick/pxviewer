@@ -131,10 +131,11 @@ const ProbeDotsPoints = PluginStateTransform.BuiltIn({
     params: {
         xyz: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
         rgb: PD.Value<Uint32Array>(new Uint32Array(0), { isHidden: true }),
+        sizeFactor: PD.Value<number>(2.5, { isHidden: true }),
     },
 })({
     apply({ params }) {
-        const p = params as { xyz: Float32Array; rgb: Uint32Array };
+        const p = params as { xyz: Float32Array; rgb: Uint32Array; sizeFactor: number };
         return new SO.Shape.Provider({
             label: 'Probe Dots',
             // Small round dots at a physical (world-scaled) size, not the default
@@ -145,9 +146,10 @@ const ProbeDotsPoints = PluginStateTransform.BuiltIn({
                 // Constant small screen-space dots (classic probe/kinemage look).
                 // Attenuation would scale gl_PointSize by (viewportH/2)/-z * 5, which
                 // makes each dot explode to ~200px as you zoom in — the opposite of
-                // what a dense contact surface wants.
+                // what a dense contact surface wants. Validation markers pass a larger
+                // sizeFactor so a sparse handful stays prominent.
                 pointSizeAttenuation: false,
-                sizeFactor: 2.5,
+                sizeFactor: p.sizeFactor,
             }),
             getShape: (_ctx, data) => buildDotPoints(data.xyz, data.rgb),
             geometryUtils: Points.Utils,
@@ -654,9 +656,12 @@ export class LiveViewer {
                 spikeStart.push(lx, ly, lz); spikeEnd.push(sx, sy, sz); spikeRgb.push(c);
             }
         }
+        // Validation markers (channels >= 10) are a sparse handful, so draw them
+        // large; probe2 contact/clash surfaces (channels 0/1) stay small.
+        const sizeFactor = channel >= VALIDATION_CHANNEL_BASE ? 16 : 2.5;
         const nodes: StateObjectSelector[] = [];
         const build = this.plugin.state.data.build();
-        const pts = build.toRoot().apply(ProbeDotsPoints, { xyz: locs, rgb }).apply(ShapeRepresentation3D);
+        const pts = build.toRoot().apply(ProbeDotsPoints, { xyz: locs, rgb, sizeFactor }).apply(ShapeRepresentation3D);
         nodes.push(pts.selector);
         if (spikeRgb.length) {
             const lines = build.toRoot().apply(ProbeDotsLines, {
@@ -813,6 +818,9 @@ const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 const TAG_ATTRIBUTE = 2;
 const TAG_DOTS = 3;
+// Dot channels >= this are validation markers (drawn large); must match
+// pxviewer.validation.CHANNEL_BASE.
+const VALIDATION_CHANNEL_BASE = 10;
 
 const INTERACTIONS_TAG = 'pxviewer-interactions';
 const CLASH_COLOR = 0xee2222; // red — reads as "bad contact"

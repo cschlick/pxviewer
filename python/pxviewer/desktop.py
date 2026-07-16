@@ -147,6 +147,7 @@ def _make_bridge():
         loaded_changed = Signal(object)     # {groups, items} for the Loaded tree
         run_on_main = Signal(object)        # call a thunk on the GUI thread
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
+        validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
 
     return _Bridge()
 
@@ -615,6 +616,7 @@ class ControlsWindow:
         tabs.addTab(self._build_scene_tab(), "Scene")
         tabs.addTab(self._build_geometry_tab(), "Geometry")
         tabs.addTab(self._build_tools_tab(), "Tools")
+        tabs.addTab(self._build_validation_tab(), "Validation")
         console_tab = self._build_console_tab()
         self._console_tab_index = tabs.addTab(console_tab, "Console")
         tabs.addTab(self._build_settings_tab(), "Settings")
@@ -653,6 +655,7 @@ class ControlsWindow:
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
+        desktop.bridge.validation_ready.connect(self._on_validation_ready)
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -884,6 +887,102 @@ class ControlsWindow:
 
         layout.addStretch()
         return tab
+
+    def _build_validation_tab(self):
+        """MolProbity validation. Data-driven from the validation registry: one
+        "Run validation" button runs every registered validator on the active model,
+        and each result is rendered as its own section — so new validators appear
+        here automatically with no changes to this tab."""
+        from PySide6.QtWidgets import (
+            QLabel,
+            QPushButton,
+            QScrollArea,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        run_btn = QPushButton("Run validation")
+        run_btn.setToolTip("Run every MolProbity validator on the active model (background thread).")
+        run_btn.clicked.connect(self._on_run_validation)
+        layout.addWidget(run_btn)
+
+        # Result sections are (re)built into this container as runs complete.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        self._validation_results_layout = QVBoxLayout(inner)
+        self._validation_results_layout.setSpacing(10)
+        placeholder = QLabel("Run validation to see results.")
+        placeholder.setStyleSheet("color: #666;")
+        self._validation_results_layout.addWidget(placeholder)
+        self._validation_results_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, stretch=1)
+        return tab
+
+    def _build_validation_section(self, mid, result):
+        """One validator's section: title, summary, table, and a Markers toggle."""
+        from PySide6.QtWidgets import (
+            QGroupBox,
+            QLabel,
+            QPushButton,
+            QTableWidget,
+            QTableWidgetItem,
+            QVBoxLayout,
+        )
+
+        box = QGroupBox(result.title)
+        v = QVBoxLayout(box)
+        summary = QLabel(result.summary)
+        summary.setStyleSheet("color: #666;")
+        summary.setWordWrap(True)
+        v.addWidget(summary)
+
+        table = QTableWidget(len(result.rows), len(result.columns))
+        table.setHorizontalHeaderLabels(result.columns)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        for r, row in enumerate(result.rows):
+            for c, value in enumerate(row):
+                table.setItem(r, c, QTableWidgetItem(str(value)))
+        table.resizeColumnsToContents()
+        v.addWidget(table)
+
+        markers = QPushButton("Markers")
+        markers.setCheckable(True)
+        markers.setEnabled(bool(result.markers))
+        markers.setToolTip("Show/hide this validator's markers in the viewport.")
+        markers.toggled.connect(
+            lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
+        v.addWidget(markers)
+        return box
+
+    def _on_run_validation(self) -> None:
+        try:
+            self._desktop.run_validation()
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_validation_ready(self, payload) -> None:
+        """Validation finished (GUI thread): rebuild one section per result."""
+        from PySide6.QtWidgets import QLabel
+
+        mid, results = payload
+        layout = self._validation_results_layout
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if not results:
+            layout.addWidget(QLabel("No validators registered."))
+        for result in results:
+            layout.addWidget(self._build_validation_section(mid, result))
+        layout.addStretch()
 
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
@@ -2210,6 +2309,56 @@ class DesktopApp:
         dots = (entry.get("probe_dots") or {}).get(channel)
         if visible and dots:
             session.show_probe_dots(dots, channel=channel)
+        else:
+            session.clear_probe_dots(channel=channel)
+
+    def run_validation(self) -> None:
+        """Run every registered MolProbity validator on the active model and hand the
+        results to the Validation tab. Validators can be slow (they build restraints
+        and run mmtbx analyses), so this runs on a background thread; the results are
+        cached on the model entry and emitted to the GUI thread via ``validation_ready``.
+        """
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            raise ValueError("the active object has no cctbx model")
+        mid, name = entry["id"], entry["name"]
+
+        def work():
+            from . import validation
+
+            try:
+                self._status(f"validating {name}…")
+                results = validation.run_all(model)
+            except Exception as exc:  # pragma: no cover - validator/runtime errors
+                self._status(f"validation failed: {exc}")
+                return
+            ventry = self._model_entry(mid)
+            if ventry is not None:  # cache so marker toggles redraw without re-running
+                ventry["validation"] = {r.key: r for r in results}
+            total = sum(len(r.markers) for r in results)
+            self._status(f"{name}: {len(results)} validators, {total} markers")
+            self.bridge.validation_ready.emit((mid, results))
+
+        threading.Thread(target=work, name="pxviewer-validation", daemon=True).start()
+        self._status("validating…")
+
+    def set_validation_markers(self, key: str, visible: bool) -> None:
+        """Toggle a validator's markers on the active model, redrawing from the results
+        cached by the last :meth:`run_validation` (no re-run). Each validator draws on
+        its own probe-dot channel (:func:`validation.channel_for`)."""
+        from . import validation
+
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            return
+        session = entry["session"]
+        channel = validation.channel_for(key)
+        result = (entry.get("validation") or {}).get(key)
+        if visible and result is not None and result.markers:
+            session.show_probe_dots(result.markers, channel=channel)
         else:
             session.clear_probe_dots(channel=channel)
 
