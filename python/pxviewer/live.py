@@ -1180,6 +1180,19 @@ class LiveSession:
         self._send_control({"type": "focus", "atoms": _encode_index_set(sel.indices)})
         return sel
 
+    def orient_camera(self, target: Any, up: Any, direction: Any, radius: float) -> None:
+        """Aim the camera at ``target`` with an explicit orientation. ``up`` is
+        screen-up, ``direction`` is the view axis (eye -> target), ``radius`` frames
+        the view. Thread-safe. Used to show a residue N->C left-to-right, side chain up.
+        """
+        self._send_control({
+            "type": "orient",
+            "target": [float(c) for c in target],
+            "up": [float(c) for c in up],
+            "direction": [float(c) for c in direction],
+            "radius": float(radius),
+        })
+
     def clear_selection(self) -> None:
         """Clear any highlighted selection in the viewer. Thread-safe."""
         self._last_highlight_indices = []

@@ -920,6 +920,48 @@ def test_validation_subtabs_and_row_focus(qapp):
         app.stop()
 
 
+def test_residue_orientation_and_space_navigation(qapp):
+    """Oriented focus frames a residue N->C screen-right with side chain up, and
+    advance_residue steps along the chain (space-bar navigation)."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file("pxviewer/data/1ubq.pdb"), "1ubq")
+        model = app._model_entry(mid)["session"].model
+        idx = app._build_residue_index(model)
+
+        target, up, direction, radius = app._residue_orientation(model, idx[("A", "13")])
+        assert abs(np.linalg.norm(up) - 1) < 1e-6 and abs(np.linalg.norm(direction) - 1) < 1e-6
+        assert abs(float(np.dot(up, direction))) < 1e-6  # orthonormal basis
+
+        ha = model.get_hierarchy().atoms()
+        named = {ha[i].name.strip(): np.array(ha[i].xyz) for i in idx[("A", "13")]}
+        n_to_c = named["C"] - named["N"]
+        n_to_c /= np.linalg.norm(n_to_c)
+        screen_right = np.cross(direction, up)  # Mol*'s right = view x up
+        assert float(np.dot(screen_right, n_to_c)) > 0.99  # N->C maps to screen-right
+        side = named["CB"] - named["CA"]
+        assert float(np.dot(up, side)) > 0  # side chain points up
+
+        # Space-bar navigation steps forward / back along the chain.
+        app._focused_residue = ("A", "13")
+        app.advance_residue(1)
+        assert app._focused_residue == ("A", "14")
+        app.advance_residue(-1)
+        assert app._focused_residue == ("A", "13")
+    finally:
+        app.stop()
+
+
 def test_checkable_combo_requires_click_inside_popup(qapp):
     """The click that opens the dropdown must not toggle the item under the cursor."""
     from PySide6.QtCore import QEvent, QPointF, Qt

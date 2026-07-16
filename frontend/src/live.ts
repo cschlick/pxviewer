@@ -18,6 +18,7 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Color, ColorScale } from 'molstar/lib/mol-util/color';
+import { Vec3 } from 'molstar/lib/mol-math/linear-algebra';
 import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
@@ -423,6 +424,26 @@ export class LiveViewer {
         const structure = this.currentStructure();
         if (!structure || indices.length === 0) return;
         this.plugin.managers.camera.focusLoci(lociFromElementIndices(structure, indices));
+    }
+
+    /**
+     * Aim the camera at `target` with an explicit orientation: `up` is screen-up and
+     * `direction` is the view axis (eye -> target). Used to frame a residue with its
+     * N->C backbone left-to-right and side chain up.
+     */
+    orient(target: number[], up: number[], direction: number[], radius: number) {
+        const camera = this.plugin.canvas3d?.camera;
+        if (!camera) return;
+        // getInvariantFocus sets up/dir absolutely; camera.focus() instead runs them
+        // through matchDirection (flips to stay near the current view), which would
+        // not honour the requested orientation.
+        const snapshot = camera.getInvariantFocus(
+            Vec3.create(target[0], target[1], target[2]),
+            radius,
+            Vec3.create(up[0], up[1], up[2]),
+            Vec3.create(direction[0], direction[1], direction[2]),
+        );
+        camera.setState(snapshot, 250);
     }
 
     /**
@@ -982,7 +1003,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'representations', 'click-mode', 'primitive', 'select', 'dots',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
@@ -1012,6 +1033,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
+            } else if (msg.type === 'orient' && viewer) {
+                viewer.orient(msg.target, msg.up, msg.direction, msg.radius);
             } else if (msg.type === 'representations' && viewer) {
                 // Attach the per-atom values (received on the binary attribute
                 // channel) to any attribute-coloured spec before applying.

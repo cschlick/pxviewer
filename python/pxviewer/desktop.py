@@ -1868,6 +1868,7 @@ class DesktopApp:
         self._models: List[dict] = []
         self._model_counter = 0
         self._active_model_id: Optional[str] = None
+        self._focused_residue: Optional[tuple] = None  # (chain, resid) for space-bar nav
         # Loaded volumes (a distinct category — never in the atoms table / selection):
         # {id, name, data(VolumeData), visible, group, ref, map_url, iso, color}. Shown
         # as an MVSJ scene composed alongside the model ws in the one viewport.
@@ -1913,6 +1914,19 @@ class DesktopApp:
         self._viewport.widget().installEventFilter(self._close_filter)
         self._controls.widget().installEventFilter(self._close_filter)
         self._app.aboutToQuit.connect(self.stop)
+
+        # Space / Shift+Space step the focused residue forward / back along its chain,
+        # from either window.
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        for _w in (self._viewport.widget(), self._controls.widget()):
+            nxt = QShortcut(QKeySequence(Qt.Key.Key_Space), _w)
+            nxt.setContext(Qt.ShortcutContext.WindowShortcut)
+            nxt.activated.connect(lambda: self.advance_residue(1))
+            prv = QShortcut(QKeySequence("Shift+Space"), _w)
+            prv.setContext(Qt.ShortcutContext.WindowShortcut)
+            prv.activated.connect(lambda: self.advance_residue(-1))
 
     # -- lifecycle -------------------------------------------------------
 
@@ -2848,27 +2862,123 @@ class DesktopApp:
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
 
+    @staticmethod
+    def _build_residue_index(model):
+        """(chain id, resid) stripped -> [streamed atom index] over the model."""
+        index: dict = {}
+        for i, atom in enumerate(model.get_hierarchy().atoms()):
+            rg = atom.parent().parent()  # atom -> atom_group -> residue_group
+            index.setdefault((rg.parent().id.strip(), rg.resid().strip()), []).append(i)
+        return index
+
+    @staticmethod
+    def _residue_orientation(model, atom_indices):
+        """Camera ``(target, up, direction, radius)`` that shows the residue with its
+        N->C backbone left-to-right and side chain up, or ``None`` when the backbone
+        atoms are missing (e.g. a non-amino-acid).
+
+        ``right`` = N->C (screen +x); ``up`` = the side-chain (Ca->Cb) component
+        perpendicular to it (screen +y); the view axis is up x right.
+        """
+        atoms = model.get_hierarchy().atoms()
+        named: dict = {}
+        for i in atom_indices:
+            a = atoms[i]
+            named[a.name.strip()] = np.array(a.xyz, dtype=float)
+        n, ca, c = named.get("N"), named.get("CA"), named.get("C")
+        if n is None or ca is None or c is None:
+            return None
+        right = c - n
+        rn = np.linalg.norm(right)
+        if rn < 1e-6:
+            return None
+        right /= rn
+        cb = named.get("CB")
+        if cb is not None:
+            side = cb - ca
+        else:  # glycine: approximate where the Cb would sit
+            nd, cd = n - ca, c - ca
+            side = -(nd / (np.linalg.norm(nd) or 1.0) + cd / (np.linalg.norm(cd) or 1.0))
+        up = side - np.dot(side, right) * right
+        un = np.linalg.norm(up)
+        if un < 1e-6:
+            return None
+        up /= un
+        direction = np.cross(up, right)
+        dn = np.linalg.norm(direction)
+        if dn < 1e-6:
+            return None
+        direction /= dn
+        radius = max(float(max(np.linalg.norm(v - ca) for v in named.values())) + 2.0, 4.0)
+        return ca, up, direction, radius
+
     def focus_residue(self, chain: str, resid: str) -> None:
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode
-        string) on the active model — driven by a Validation table row. The residue ->
-        atom-index map is built once from the model and cached on the model entry."""
+        string) on the active model — driven by a Validation table row or space-bar
+        navigation. The residue is framed N->C left-to-right with its side chain up
+        (falling back to a plain focus for non-amino-acids). The residue->atom-index
+        map is built once from the model and cached on the model entry."""
         entry = self._model_entry(self._active_model_id)
         if entry is None:
             return
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return
         index = entry.get("_residue_index")
         if index is None:
-            model = getattr(entry["session"], "model", None)
-            if model is None:
-                return
-            index = {}
-            for i, atom in enumerate(model.get_hierarchy().atoms()):
-                rg = atom.parent().parent()  # atom -> atom_group -> residue_group
-                index.setdefault((rg.parent().id.strip(), rg.resid().strip()), []).append(i)
-            entry["_residue_index"] = index
-        atoms = index.get((chain.strip(), resid.strip()))
-        if atoms:
-            self.highlight_atoms_in(entry["id"], atoms)
+            index = entry["_residue_index"] = self._build_residue_index(model)
+        key = (chain.strip(), resid.strip())
+        atoms = index.get(key)
+        if not atoms:
+            return
+        self._focused_residue = key
+        self.highlight_atoms_in(entry["id"], atoms)
+        orient = self._residue_orientation(model, atoms)
+        if orient is None:
             self.focus_atoms_in(entry["id"], atoms)
+        else:
+            entry["session"].orient_camera(*orient)
+
+    def advance_residue(self, step: int = 1) -> None:
+        """Move the focused residue to the next/previous one in its chain (space-bar
+        navigation). With nothing focused yet, start at the first residue."""
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            return
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return
+        order = entry.get("_chain_order")
+        if order is None:
+            order = entry["_chain_order"] = self._build_chain_order(model)
+        cur = self._focused_residue
+        if cur is None:
+            for cid, residues in order.items():
+                if residues:
+                    self.focus_residue(cid, residues[0])
+                    return
+            return
+        chain, resid = cur
+        residues = order.get(chain, [])
+        if resid not in residues:
+            if residues:
+                self.focus_residue(chain, residues[0])
+            return
+        nxt = residues.index(resid) + step
+        if 0 <= nxt < len(residues):
+            self.focus_residue(chain, residues[nxt])
+
+    @staticmethod
+    def _build_chain_order(model):
+        """chain id -> ordered list of resid strings, in hierarchy (sequence) order."""
+        order: dict = {}
+        for chain in model.get_hierarchy().chains():
+            residues = order.setdefault(chain.id.strip(), [])
+            for rg in chain.residue_groups():
+                rid = rg.resid().strip()
+                if rid not in residues:
+                    residues.append(rid)
+        return order
 
     def _clear_restraint_notations(self) -> None:
         session = self._restraint_prim_session
