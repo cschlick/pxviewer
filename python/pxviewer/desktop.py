@@ -38,7 +38,8 @@ from .webapp import Webapp
 
 # Distinct default isosurface colours so overlaid volumes read apart.
 _VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
-_VOLUME_COLOR_OPTIONS = [(c.capitalize(), c) for c in _VOLUME_COLORS]
+# Sentinel for the "Custom…" entry in a colour dropdown (never a real colour value).
+_CUSTOM_COLOR = "\x00custom"
 
 # Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
 # for any map and one fixed slider range serves all of them. The slider covers the range
@@ -1346,7 +1347,7 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
-            add_combo("Colour", _VOLUME_COLOR_OPTIONS, live.get("color"), _set_color)
+            self._add_color_row(live.get("color"), _set_color)
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -1391,6 +1392,62 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None:
             item["iso"] = value
+
+    def _add_color_row(self, current, on_pick):
+        """A volume's colour: swatches, and a picker for anything else.
+
+        Colours are shown rather than named — a swatch says what "orchid" is and a word
+        does not. The picker is the escape hatch, since the wire takes any hex Mol* can
+        decode, not just the presets.
+        """
+        from PySide6.QtCore import QSize, Qt
+        from PySide6.QtGui import QColor, QIcon, QPixmap
+        from PySide6.QtWidgets import QColorDialog, QComboBox, QHBoxLayout, QLabel
+
+        def swatch(name):
+            pixmap = QPixmap(28, 14)
+            pixmap.fill(QColor(name))
+            return QIcon(pixmap)
+
+        row = QHBoxLayout()
+        lab = QLabel("Colour")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        combo = QComboBox()
+        combo.setIconSize(QSize(28, 14))
+        combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(6)
+        for name in _VOLUME_COLORS:
+            combo.addItem(swatch(name), name.capitalize(), name)
+        custom = None
+        if current and current not in _VOLUME_COLORS:
+            custom = current  # a picked colour: keep it on the list so it stays selected
+            combo.addItem(swatch(current), current, current)
+        combo.addItem("Custom…", _CUSTOM_COLOR)
+        idx = combo.findData(current)
+        combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+        def picked(_index, combo=combo):
+            value = combo.currentData()
+            if value != _CUSTOM_COLOR:
+                on_pick(value)
+                return
+            initial = QColor(custom or _VOLUME_COLORS[0])
+            chosen = QColorDialog.getColor(initial, self._window, "Volume colour")
+            if not chosen.isValid():
+                # Cancelled: put the selection back where it was.
+                back = combo.findData(current)
+                combo.setCurrentIndex(back if back >= 0 else 0)
+                return
+            name = chosen.name()  # '#rrggbb', which Mol* decodes like a named colour
+            at = combo.count() - 1
+            combo.insertItem(at, swatch(name), name, name)
+            combo.setCurrentIndex(at)  # re-enters here and dispatches the pick
+
+        combo.currentIndexChanged.connect(picked)
+        row.addWidget(combo, stretch=1)
+        self._appearance_layout.addLayout(row)
+        return combo
 
     def _add_clip_row(self, current, on_change):
         """The front/rear clipping slab: one track, two handles.

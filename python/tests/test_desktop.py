@@ -560,6 +560,43 @@ def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
         app.stop()
 
 
+def test_volume_colour_swatches_and_custom(qapp):
+    """Colours are shown as swatches rather than named, with a picker for anything off
+    the preset list — the wire takes any hex Mol* can decode."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+    from PySide6.QtWidgets import QComboBox
+
+    from pxviewer.desktop import _CUSTOM_COLOR, DesktopApp, _VOLUME_COLORS
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        ctl = app._controls
+        ctl._update_appearance("volume", vid)
+        combo = ctl._appearance_box.findChildren(QComboBox)[1]  # after Style
+
+        assert [combo.itemData(i) for i in range(len(_VOLUME_COLORS))] == _VOLUME_COLORS
+        assert all(not combo.itemIcon(i).isNull() for i in range(len(_VOLUME_COLORS)))
+        assert combo.itemData(combo.count() - 1) == _CUSTOM_COLOR  # the picker, last
+
+        combo.setCurrentIndex(2)
+        assert app._volume_entry(vid)["color"] == _VOLUME_COLORS[2]
+
+        # A picked colour is a hex string; it stays on the list so it stays selected.
+        app.set_volume_color(vid, "#3fa9f5")
+        ctl._update_appearance("volume", vid)
+        combo = ctl._appearance_box.findChildren(QComboBox)[1]
+        assert combo.currentData() == "#3fa9f5"
+        assert not combo.itemIcon(combo.currentIndex()).isNull()
+    finally:
+        app.stop()
+
+
 def test_range_slider_two_handles(qapp):
     """The clipping slab's control. Handles may meet — that is not degenerate here, it
     is the point at which the object is fully clipped."""
