@@ -637,7 +637,7 @@ def test_hide_structure_types(qapp):
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-    from PySide6.QtWidgets import QToolButton
+    from PySide6.QtWidgets import QComboBox
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
@@ -685,11 +685,12 @@ def test_hide_structure_types(qapp):
         assert entry["hidden_types"] == set()
         assert all("on" not in r for r in session._representations.values())
 
-        # The model row carries a "Show" menu button (2+ types present).
+        # The model row carries two dropdowns (representation + structure-type
+        # checklist) since 1UBQ has >1 type present.
         tree = app._controls._loaded_tree
         item0 = tree.topLevelItem(0)
         w = tree.itemWidget(item0, 1)
-        assert w is not None and w.findChildren(QToolButton)
+        assert w is not None and len(w.findChildren(QComboBox)) == 2
 
         # Layout: [check] col 0, [controls] col 1, [name] col 2 (widgets on the left).
         from PySide6.QtCore import Qt

@@ -432,6 +432,63 @@ def _make_restraint_table_model():
     return RestraintTableModel()
 
 
+def _make_checkable_combo():
+    """A QComboBox with checkable items — looks like a normal dropdown, but its popup
+    is a checklist. The closed control shows a short summary; toggling an item keeps
+    the popup open and fires ``on_change(data, checked)``."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QStandardItem, QStandardItemModel
+    from PySide6.QtWidgets import QComboBox, QStyle, QStyleOptionComboBox, QStylePainter
+
+    class CheckableComboBox(QComboBox):
+        def __init__(self):
+            super().__init__()
+            self.setModel(QStandardItemModel(self))
+            self.view().viewport().installEventFilter(self)
+            self.on_change = None  # callback(data, checked)
+
+        def add_checkable(self, text, checked, data):
+            item = QStandardItem(text)
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setData(
+                Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked,
+                Qt.ItemDataRole.CheckStateRole,
+            )
+            item.setData(data, Qt.ItemDataRole.UserRole)
+            self.model().appendRow(item)
+
+        def _summary(self):
+            model = self.model()
+            hidden = sum(
+                1 for i in range(model.rowCount())
+                if model.item(i).checkState() == Qt.CheckState.Unchecked
+            )
+            return "All shown" if not hidden else f"{hidden} hidden"
+
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.MouseButtonRelease and obj is self.view().viewport():
+                index = self.view().indexAt(event.position().toPoint())
+                item = self.model().itemFromIndex(index)
+                if item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+                    now = item.checkState() != Qt.CheckState.Checked
+                    item.setCheckState(Qt.CheckState.Checked if now else Qt.CheckState.Unchecked)
+                    self.update()  # repaint the summary
+                    if self.on_change:
+                        self.on_change(item.data(Qt.ItemDataRole.UserRole), now)
+                    return True  # consume -> popup stays open, no activation/close
+            return super().eventFilter(obj, event)
+
+        def paintEvent(self, _event):
+            painter = QStylePainter(self)
+            opt = QStyleOptionComboBox()
+            self.initStyleOption(opt)
+            opt.currentText = self._summary()
+            painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, opt)
+            painter.drawControl(QStyle.ControlElement.CE_ComboBoxLabel, opt)
+
+    return CheckableComboBox()
+
+
 def _make_close_filter(on_close):
     """An event filter that reports a window being closed.
 
@@ -1332,28 +1389,18 @@ class ControlsWindow:
 
         types = it.get("types") or []
         if it["kind"] == "model" and len(types) > 1:  # only useful with >1 type present
-            row.addWidget(self._make_show_menu(ident, types, set(it.get("hidden_types") or [])))
+            row.addWidget(self._make_type_combo(ident, types, set(it.get("hidden_types") or [])))
 
         return container
 
-    def _make_show_menu(self, mid, types, hidden):
-        """A 'Show ▾' button whose checkable menu toggles each structure type."""
-        from PySide6.QtWidgets import QMenu, QToolButton
-
-        button = QToolButton()
-        button.setText("Show ▾")
-        button.setToolTip("Show or hide structure types (protein, water, …) in this model.")
-        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(button)
+    def _make_type_combo(self, mid, types, hidden):
+        """A checkable dropdown of structure types (checked = shown)."""
+        combo = _make_checkable_combo()
+        combo.setToolTip("Show or hide structure types (protein, water, …) in this model.")
         for label in types:
-            action = menu.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(label not in hidden)  # checked = shown; set before connect
-            action.toggled.connect(
-                lambda shown, d=mid, lbl=label: self._on_type_toggle(d, lbl, shown)
-            )
-        button.setMenu(menu)
-        return button
+            combo.add_checkable(label, label not in hidden, label)  # before on_change
+        combo.on_change = lambda label, shown, d=mid: self._on_type_toggle(d, label, shown)
+        return combo
 
     def _on_rep_changed(self, kind: str, ident: str, value) -> None:
         if self._suppress_model_events:
