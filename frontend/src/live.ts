@@ -27,6 +27,11 @@ import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/r
 import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 import { decodeColor } from 'molstar/lib/mol-util/color/utils';
+import { Shape } from 'molstar/lib/mol-model/shape';
+import { Points } from 'molstar/lib/mol-geo/geometry/points/points';
+import { PointsBuilder } from 'molstar/lib/mol-geo/geometry/points/points-builder';
+import { Lines } from 'molstar/lib/mol-geo/geometry/lines/lines';
+import { LinesBuilder } from 'molstar/lib/mol-geo/geometry/lines/lines-builder';
 
 export interface AtomInfo {
     id: number;
@@ -85,6 +90,85 @@ export const LiveTrajectory = PluginStateTransform.BuiltIn({
     },
 });
 type LiveTrajectory = typeof LiveTrajectory;
+
+// -- probe2 contact-dot surface ------------------------------------------
+//
+// A probe2 "dotkin": a point cloud of contact dots plus line "spikes" for the
+// overlaps, both at raw model coordinates and coloured MolProbity-style. Two
+// custom state transforms turn the parsed arrays into Mol* Shapes (Points and
+// Lines), each rendered by ShapeRepresentation3D.
+
+/** Points shape from dot positions (`xyz` interleaved) + per-dot packed rgb. */
+function buildDotPoints(xyz: Float32Array, rgb: Uint32Array): Shape<Points> {
+    const n = rgb.length;
+    const builder = PointsBuilder.create(n, 1);
+    for (let i = 0; i < n; i++) builder.add(xyz[i * 3], xyz[i * 3 + 1], xyz[i * 3 + 2], i);
+    return Shape.create(
+        'probe-dots', {}, builder.getPoints(),
+        (g) => Color(rgb[g]), () => 1, () => 'probe dot',
+    );
+}
+
+/** Lines shape from spike segments (`start`/`end` interleaved) + per-spike rgb. */
+function buildDotLines(starts: Float32Array, ends: Float32Array, rgb: Uint32Array): Shape<Lines> {
+    const n = rgb.length;
+    const builder = LinesBuilder.create(n, 1);
+    for (let i = 0; i < n; i++) {
+        builder.add(starts[i * 3], starts[i * 3 + 1], starts[i * 3 + 2],
+                    ends[i * 3], ends[i * 3 + 1], ends[i * 3 + 2], i);
+    }
+    return Shape.create(
+        'probe-spikes', {}, builder.getLines(),
+        (g) => Color(rgb[g]), () => 1, () => 'clash spike',
+    );
+}
+
+const ProbeDotsPoints = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-probe-points',
+    display: { name: 'Probe Dots' },
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: {
+        xyz: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
+        rgb: PD.Value<Uint32Array>(new Uint32Array(0), { isHidden: true }),
+    },
+})({
+    apply({ params }) {
+        const p = params as { xyz: Float32Array; rgb: Uint32Array };
+        return new SO.Shape.Provider({
+            label: 'Probe Dots',
+            data: p,
+            params: PD.withDefaults(Points.Params, { pointSizeAttenuation: true }),
+            getShape: (_ctx, data) => buildDotPoints(data.xyz, data.rgb),
+            geometryUtils: Points.Utils,
+        }, { label: 'Probe Dots' });
+    },
+});
+type ProbeDotsPoints = typeof ProbeDotsPoints;
+
+const ProbeDotsLines = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-probe-lines',
+    display: { name: 'Probe Spikes' },
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: {
+        starts: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
+        ends: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
+        rgb: PD.Value<Uint32Array>(new Uint32Array(0), { isHidden: true }),
+    },
+})({
+    apply({ params }) {
+        const p = params as { starts: Float32Array; ends: Float32Array; rgb: Uint32Array };
+        return new SO.Shape.Provider({
+            label: 'Probe Spikes',
+            data: p,
+            params: PD.withDefaults(Lines.Params, {}),
+            getShape: (_ctx, data) => buildDotLines(data.starts, data.ends, data.rgb),
+            geometryUtils: Lines.Utils,
+        }, { label: 'Probe Spikes' });
+    },
+});
+type ProbeDotsLines = typeof ProbeDotsLines;
 
 function deinterleave(flat: ArrayLike<number>, n: number) {
     const x = new Float32Array(n);
@@ -178,6 +262,7 @@ export class LiveViewer {
     private reprNodes: StateObjectSelector[] = [];
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
+    private probeNodes: StateObjectSelector[] = [];
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -530,6 +615,56 @@ export class LiveViewer {
     }
 
     /**
+     * Draw a probe2 contact-dot surface from a flat dot buffer: each dot is
+     * `[loc xyz][spike xyz][rgb]`. All dots become a point cloud; the ones whose
+     * spike differs from their location (the overlaps) also get a line spike.
+     */
+    async setProbeDots(buffer: ArrayBuffer, offset: number) {
+        await this.clearProbeDots();
+        const dv = new DataView(buffer);
+        const n = dv.getUint32(offset, true);
+        let p = offset + 4;
+        const locs = new Float32Array(n * 3);
+        const rgb = new Uint32Array(n);
+        // Spikes: collected only for overlaps (loc !== spike).
+        const spikeStart: number[] = [];
+        const spikeEnd: number[] = [];
+        const spikeRgb: number[] = [];
+        for (let i = 0; i < n; i++) {
+            const lx = dv.getFloat32(p, true), ly = dv.getFloat32(p + 4, true), lz = dv.getFloat32(p + 8, true);
+            const sx = dv.getFloat32(p + 12, true), sy = dv.getFloat32(p + 16, true), sz = dv.getFloat32(p + 20, true);
+            const c = dv.getUint32(p + 24, true);
+            p += 28;
+            locs[i * 3] = lx; locs[i * 3 + 1] = ly; locs[i * 3 + 2] = lz;
+            rgb[i] = c;
+            if (lx !== sx || ly !== sy || lz !== sz) {
+                spikeStart.push(lx, ly, lz); spikeEnd.push(sx, sy, sz); spikeRgb.push(c);
+            }
+        }
+        const build = this.plugin.state.data.build();
+        const pts = build.toRoot().apply(ProbeDotsPoints, { xyz: locs, rgb }).apply(ShapeRepresentation3D);
+        this.probeNodes.push(pts.selector);
+        if (spikeRgb.length) {
+            const lines = build.toRoot().apply(ProbeDotsLines, {
+                starts: new Float32Array(spikeStart),
+                ends: new Float32Array(spikeEnd),
+                rgb: new Uint32Array(spikeRgb),
+            }).apply(ShapeRepresentation3D);
+            this.probeNodes.push(lines.selector);
+        }
+        await build.commit();
+    }
+
+    /** Remove the probe contact-dot surface, if any. */
+    async clearProbeDots() {
+        if (!this.probeNodes.length) return;
+        const b = this.plugin.state.data.build();
+        for (const node of this.probeNodes) if (node.ref) b.delete(node.ref);
+        this.probeNodes = [];
+        await b.commit();
+    }
+
+    /**
      * Set the click interaction mode. `'select'` builds a selection reported to
      * Python; `'distance'|'angle'|'dihedral'|'label'` collect N clicks then draw
      * that measurement; `'off'` does neither. Modes are mutually exclusive.
@@ -656,6 +791,7 @@ function decodeIndexSet(enc: any): number[] {
 const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 const TAG_ATTRIBUTE = 2;
+const TAG_DOTS = 3;
 
 const INTERACTIONS_TAG = 'pxviewer-interactions';
 const CLASH_COLOR = 0xee2222; // red — reads as "bad contact"
@@ -816,9 +952,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'representations', 'click-mode', 'primitive', 'select',
+        'interactions', 'clashes', 'highlight', 'focus', 'representations', 'click-mode', 'primitive', 'select', 'dots',
     ]);
     const pendingControl: any[] = [];
+    let pendingDots: ArrayBuffer | null = null;  // dot buffer that beat the viewer build
 
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
@@ -831,6 +968,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'clashes' && viewer) {
                 if (msg.action === 'clear') await viewer.clearClashes();
                 else await viewer.setClashes(msg.pairs ?? []);
+            } else if (msg.type === 'dots' && viewer) {
+                if (msg.action === 'clear') await viewer.clearProbeDots();
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
@@ -910,6 +1049,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // Now that the viewer exists, apply anything that arrived while building.
             const queued = pendingControl.splice(0);
             for (const m of queued) await handleControlMessage(m);
+            if (pendingDots) { await viewer.setProbeDots(pendingDots, 4); pendingDots = null; }
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -923,6 +1063,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const key = new TextDecoder().decode(new Uint8Array(buffer, 8, keyLen));
             const valuesOffset = 8 + keyLen + ((4 - (keyLen % 4)) % 4);
             attributeValues.set(key, new Float32Array(buffer, valuesOffset));
+        } else if (tag === TAG_DOTS) {
+            // [u32 tag][u32 n][per dot: 6 f32 (loc, spike) + u32 rgb]. Buffer if the
+            // viewer is still building (it's one-shot; a dropped frame is fine, dots
+            // are not).
+            if (viewer) await viewer.setProbeDots(buffer, 4);
+            else pendingDots = buffer;
         }
     };
 

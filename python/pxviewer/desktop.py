@@ -830,6 +830,17 @@ class ControlsWindow:
         clash_row.addWidget(clear_c)
         clash_row.addStretch()
         ag.addLayout(clash_row)
+
+        probe_row = QHBoxLayout()
+        probe = QPushButton("Probe contacts")
+        probe.setToolTip("Run MolProbity probe2 and draw its contact-dot surface (clashes as spikes).")
+        probe.clicked.connect(self._on_probe)
+        probe_row.addWidget(probe)
+        clear_probe = QPushButton("Clear")
+        clear_probe.clicked.connect(lambda: self._desktop.clear_probe_contacts())
+        probe_row.addWidget(clear_probe)
+        probe_row.addStretch()
+        ag.addLayout(probe_row)
         layout.addWidget(analysis)
 
         layout.addStretch()
@@ -1355,6 +1366,12 @@ class ControlsWindow:
         try:
             n = self._desktop.show_clashes()
             self._set_status(f"{n} clash(es) found" if n else "no clashes found")
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_probe(self) -> None:
+        try:
+            self._desktop.show_probe_contacts()
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2063,6 +2080,35 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             control.set_axis(bool(visible))
+
+    def show_probe_contacts(self) -> None:
+        """Run MolProbity probe2 on the active model and draw its contact-dot surface.
+
+        probe2 is slow, so it runs on a background thread; the dots are pushed to the
+        viewer when it finishes (show_probe_dots is thread-safe).
+        """
+        session = self.active_model_session()
+        model = getattr(session, "model", None) if session is not None else None
+        if model is None:
+            raise ValueError("load a model first")
+
+        def work():
+            from .probe import probe_dots
+
+            try:
+                dots = probe_dots(model)
+                session.show_probe_dots(dots)
+                self._status(f"probe: {len(dots)} contact dots")
+            except Exception as exc:  # pragma: no cover - probe/runtime errors
+                self._status(f"probe failed: {exc}")
+
+        threading.Thread(target=work, name="pxviewer-probe", daemon=True).start()
+        self._status("running probe2…")
+
+    def clear_probe_contacts(self) -> None:
+        session = self.active_model_session()
+        if session is not None:
+            session.clear_probe_dots()
 
     def write_object(self, kind: str, ident: str, path: str) -> None:
         """Write a loaded object to disk: the model's cctbx coordinates, or the map.

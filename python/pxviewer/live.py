@@ -82,6 +82,7 @@ _MVS_TO_MOLSTAR_REPR = {
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
 _TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
+_TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colours)
 
 ATOM_IDENTITY_CONTRACT = """\
 pxviewer atom-identity contract
@@ -530,6 +531,8 @@ class LiveSession:
         self._interactions_contacts: List[dict] = []
         # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
         self._computed_interactions_visible = False
+        # probe2 contact-dot surface (a binary payload); replayed to late clients.
+        self._probe_dots_payload: Optional[bytes] = None
         # Explicit clash pairs (list of {a, b} dicts); replayed to late clients.
         self._clashes: List[dict] = []
 
@@ -811,6 +814,35 @@ class LiveSession:
         ``bond_tolerance``, ``coords``). Returns the drawn pairs.
         """
         return self.set_clashes(self.detect_clashes(**detect_kwargs))
+
+    def show_probe_dots(self, dots: Any) -> int:
+        """Draw a probe2 contact-dot surface: ``dots`` is ``[(loc, spike, rgb), …]``.
+
+        Sent as one binary payload (positions + spike tips + colours) and drawn as a
+        Mol* point cloud plus clash spikes. Thread-safe; replayed to late viewers.
+        Returns the number of dots. Pass an empty list (or :meth:`clear_probe_dots`)
+        to remove them.
+        """
+        from .probe import encode_dots
+
+        dots = list(dots)
+        if not dots:
+            self.clear_probe_dots()
+            return 0
+        payload = struct.pack("<I", _TAG_DOTS) + encode_dots(dots)
+        self._probe_dots_payload = payload
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast, payload)
+        return len(dots)
+
+    def clear_probe_dots(self) -> None:
+        """Remove the probe contact-dot surface. See :meth:`show_probe_dots`."""
+        self._probe_dots_payload = None
+        message = json.dumps({"type": "dots", "action": "clear"})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_volume_color(self, ref: str, color: str) -> None:
         """Broadcast a command to change the color of a volume by reference.
@@ -1579,6 +1611,8 @@ class LiveSession:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
                 )
+            if self._probe_dots_payload is not None:
+                await self._locked_send(websocket, self._probe_dots_payload)
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:
