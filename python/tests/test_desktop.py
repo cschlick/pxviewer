@@ -631,17 +631,20 @@ def test_model_rep_options_are_valid(qapp):
         session.set_representation(value)  # must not raise (regression: 'line' did)
 
 
-def test_hide_waters_toggle(qapp):
-    """Each model row hides its waters by restricting the representation to non-water."""
+def test_hide_structure_types(qapp):
+    """Show/hide structure types (cctbx classes) by restricting the representation."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-    from PySide6.QtWidgets import QCheckBox
+    from PySide6.QtWidgets import QToolButton
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
     from pxviewer.loader import sample_structure_path
+
+    def count_on(on):
+        return sum(e - s + 1 for s, e in on["runs"]) if "runs" in on else len(on.get("list", []))
 
     app = DesktopApp(port=0)
     app._webapp.start()
@@ -651,29 +654,41 @@ def test_hide_waters_toggle(qapp):
         mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
         entry = app._model_entry(mid)
         session = entry["session"]
-        assert entry["hide_waters"] is False
-        assert all("on" not in r for r in session._representations.values())  # whole structure
-        assert next(it for it in captured["items"] if it["id"] == mid)["hide_waters"] is False
 
-        app.set_model_hide_waters(mid, True)
-        assert entry["hide_waters"] is True
+        # 1UBQ has two structure types; nothing hidden -> whole structure.
+        assert app.model_structure_types(mid) == ["Protein", "Water"]
+        assert entry["hidden_types"] == set()
+        assert all("on" not in r for r in session._representations.values())
+        item = next(it for it in captured["items"] if it["id"] == mid)
+        assert item["types"] == ["Protein", "Water"] and item["hidden_types"] == []
+
+        # Hide water -> representation restricted to the 602 protein atoms.
+        app.set_model_type_hidden(mid, "Water", True)
+        assert entry["hidden_types"] == {"Water"}
         reps = list(session._representations.values())
-        assert len(reps) == 1 and "on" in reps[0]
-        shown = sum(e - s + 1 for s, e in reps[0]["on"]["runs"])
-        assert shown == 602  # 660 total - 58 waters
+        assert len(reps) == 1 and count_on(reps[0]["on"]) == 602
 
-        # Switching representation keeps waters hidden.
+        # Switching representation keeps water hidden.
         app.set_model_representation(mid, "spacefill")
         assert "on" in next(iter(session._representations.values()))
 
-        app.set_model_hide_waters(mid, False)
-        assert entry["hide_waters"] is False
+        # Hide protein too -> nothing shown.
+        app.set_model_type_hidden(mid, "Protein", True)
+        assert count_on(next(iter(session._representations.values()))["on"]) == 0
+
+        # Show water again -> just the 58 waters.
+        app.set_model_type_hidden(mid, "Water", False)
+        assert count_on(next(iter(session._representations.values()))["on"]) == 58
+
+        # Show everything -> back to the whole structure (no restriction).
+        app.set_model_type_hidden(mid, "Protein", False)
+        assert entry["hidden_types"] == set()
         assert all("on" not in r for r in session._representations.values())
 
-        # The model row carries a hide-waters checkbox in the tree.
+        # The model row carries a "Show" menu button (2+ types present).
         tree = app._controls._loaded_tree
         w = tree.itemWidget(tree.topLevelItem(0), 1)
-        assert w is not None and w.findChildren(QCheckBox)
+        assert w is not None and w.findChildren(QToolButton)
     finally:
         app.stop()
 

@@ -59,6 +59,45 @@ def _model_rep_color(rep: str) -> str:
     return "secondary-structure" if rep == "cartoon" else "element-symbol"
 
 
+# cctbx classifies each residue (common_residue_names_get_class) into these named
+# structure types; we fold them into a small, friendly set for the show/hide menu.
+_CLASS_TO_CATEGORY = {
+    "common_amino_acid": "Protein",
+    "d_amino_acid": "Protein",
+    "modified_amino_acid": "Protein",
+    "common_rna_dna": "Nucleic acid",
+    "modified_rna_dna": "Nucleic acid",
+    "ccp4_mon_lib_rna_dna": "Nucleic acid",
+    "common_water": "Water",
+    "common_saccharide": "Sugar",
+    "common_element": "Ion",
+    "common_small_molecule": "Ligand / other",
+    "other": "Ligand / other",
+}
+_STRUCTURE_TYPE_ORDER = ["Protein", "Nucleic acid", "Sugar", "Ion", "Water", "Ligand / other"]
+
+
+def _structure_type_groups(session) -> dict:
+    """Map each present structure type -> its atom indices, via cctbx's residue class.
+
+    Returned in a stable display order; only types actually present are included.
+    """
+    from iotbx.pdb import common_residue_names_get_class as get_class
+
+    arrays = getattr(getattr(session, "_data", None), "arrays", None)
+    if arrays is None:
+        return {}
+    category_of: dict = {}  # resname -> category (cache; few distinct resnames)
+    groups: dict = {}
+    for i, rn in enumerate(arrays.resname):
+        cat = category_of.get(rn)
+        if cat is None:
+            cat = _CLASS_TO_CATEGORY.get(get_class(rn), "Ligand / other")
+            category_of[rn] = cat
+        groups.setdefault(cat, []).append(i)
+    return {label: groups[label] for label in _STRUCTURE_TYPE_ORDER if label in groups}
+
+
 def _dummy_session():
     from .live import LiveSession
     return LiveSession.from_sites([[100.0, 0.0, 0.0]])
@@ -1261,9 +1300,9 @@ class ControlsWindow:
         self._refresh_console_session()
 
     def _make_rep_combo(self, it):
-        """Inline per-object controls: a representation dropdown, plus a hide-waters
-        toggle for models (maps have no waters)."""
-        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QWidget
+        """Inline per-object controls: a representation dropdown, plus a structure-type
+        show/hide menu for models (maps have no structure types)."""
+        from PySide6.QtWidgets import QComboBox, QHBoxLayout, QWidget
 
         container = QWidget()
         row = QHBoxLayout(container)
@@ -1286,14 +1325,30 @@ class ControlsWindow:
         )
         row.addWidget(combo)
 
-        if it["kind"] == "model":
-            waters = QCheckBox("hide H₂O")
-            waters.setToolTip("Hide water atoms in this model.")
-            waters.setChecked(bool(it.get("hide_waters")))
-            waters.toggled.connect(lambda checked, d=ident: self._on_hide_waters(d, checked))
-            row.addWidget(waters)
+        types = it.get("types") or []
+        if it["kind"] == "model" and len(types) > 1:  # only useful with >1 type present
+            row.addWidget(self._make_show_menu(ident, types, set(it.get("hidden_types") or [])))
 
         return container
+
+    def _make_show_menu(self, mid, types, hidden):
+        """A 'Show ▾' button whose checkable menu toggles each structure type."""
+        from PySide6.QtWidgets import QMenu, QToolButton
+
+        button = QToolButton()
+        button.setText("Show ▾")
+        button.setToolTip("Show or hide structure types (protein, water, …) in this model.")
+        button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(button)
+        for label in types:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(label not in hidden)  # checked = shown; set before connect
+            action.toggled.connect(
+                lambda shown, d=mid, lbl=label: self._on_type_toggle(d, lbl, shown)
+            )
+        button.setMenu(menu)
+        return button
 
     def _on_rep_changed(self, kind: str, ident: str, value) -> None:
         if self._suppress_model_events:
@@ -1306,10 +1361,10 @@ class ControlsWindow:
         except Exception as exc:  # a bad type must not crash the GUI slot
             self._set_status(f"Could not set representation: {exc}")
 
-    def _on_hide_waters(self, mid: str, checked: bool) -> None:
+    def _on_type_toggle(self, mid: str, label: str, shown: bool) -> None:
         if self._suppress_model_events:
             return
-        self._desktop.set_model_hide_waters(mid, checked)
+        self._desktop.set_model_type_hidden(mid, label, not shown)  # checked = shown
 
     def _sync_table_model_combo(self, model_items) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
@@ -1667,14 +1722,31 @@ class DesktopApp:
 
     # -- models --
 
-    def _apply_model_rep(self, session, rep: str, hide_waters: bool = False) -> None:
+    def _type_groups(self, entry) -> dict:
+        """Cached {structure-type -> atom indices} for a model (via cctbx classes)."""
+        if entry.get("type_groups") is None:
+            entry["type_groups"] = _structure_type_groups(entry["session"])
+        return entry["type_groups"]
+
+    def _shown_indices(self, entry) -> Optional[list]:
+        """Atom indices to show given the model's hidden types, or None for all."""
+        hidden = entry.get("hidden_types") or set()
+        if not hidden:
+            return None
+        groups = self._type_groups(entry)
+        drop = set()
+        for label in hidden:
+            drop.update(groups.get(label, []))
+        if not drop:
+            return None
+        mask = np.ones(entry["session"]._n_atoms, dtype=bool)
+        mask[list(drop)] = False
+        return np.nonzero(mask)[0].tolist()
+
+    def _apply_model_rep(self, entry) -> None:
+        session, rep = entry["session"], entry["rep"]
         color = _model_rep_color(rep)
-        on = None
-        if hide_waters:
-            try:  # restrict the representation to non-water atoms (cctbx selection)
-                on = list(session.select_by(selection="not water").indices)
-            except Exception:  # pragma: no cover - defensive
-                on = None
+        on = self._shown_indices(entry)  # restrict to shown structure types
         if on is not None:
             session.set_representation(rep, color=color, on=on)
         else:
@@ -1694,11 +1766,10 @@ class DesktopApp:
         # Cartoon reads better for a polymer, ball-and-stick otherwise; the choice
         # is replayed to the viewer when it connects and shown in the inline dropdown.
         rep = self._default_model_rep(session)
-        self._apply_model_rep(session, rep)
-        self._models.append(
-            {"id": mid, "name": name, "session": session, "visible": True, "group": group,
-             "rep": rep, "hide_waters": False}
-        )
+        entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
+                 "rep": rep, "hidden_types": set(), "type_groups": None}
+        self._models.append(entry)
+        self._apply_model_rep(entry)
         self._active_model_id = mid
         # Register this model's pick handler once (tagged with its id); the click
         # mode is what actually turns picking on/off. Registering here means a
@@ -1717,15 +1788,23 @@ class DesktopApp:
         if entry is None or entry.get("rep") == rep:
             return
         entry["rep"] = rep
-        self._apply_model_rep(entry["session"], rep, entry.get("hide_waters", False))
+        self._apply_model_rep(entry)
 
-    def set_model_hide_waters(self, mid: str, hide: bool) -> None:
-        """Show or hide water atoms on a model (reapplies its representation)."""
+    def set_model_type_hidden(self, mid: str, label: str, hidden: bool) -> None:
+        """Show or hide a structure type (protein/water/…) on a model."""
         entry = self._model_entry(mid)
-        if entry is None or entry.get("hide_waters", False) == bool(hide):
+        if entry is None:
             return
-        entry["hide_waters"] = bool(hide)
-        self._apply_model_rep(entry["session"], entry["rep"], bool(hide))
+        types = entry.setdefault("hidden_types", set())
+        if (label in types) == bool(hidden):
+            return
+        types.add(label) if hidden else types.discard(label)
+        self._apply_model_rep(entry)
+
+    def model_structure_types(self, mid: str) -> list:
+        """The structure types present in a model (for the show/hide menu)."""
+        entry = self._model_entry(mid)
+        return list(self._type_groups(entry).keys()) if entry else []
 
     def set_volume_style(self, vid: str, style: str) -> None:
         """Change a volume's isosurface style (surface/wireframe/mesh) live."""
@@ -1881,7 +1960,7 @@ class DesktopApp:
         items = [
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
-             "hide_waters": m.get("hide_waters", False)}
+             "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or [])}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
