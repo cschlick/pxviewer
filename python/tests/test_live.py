@@ -205,45 +205,6 @@ def test_computed_interactions_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
-def test_detect_clashes_flags_overlap():
-    # Two carbons 2.5 A apart overlap in vdW space (sum 3.4) but aren't bonded; a
-    # third sits far away.
-    s = LiveSession.from_sites([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)])
-    assert s.detect_clashes() == [(0, 1)]
-
-
-def test_detect_clashes_excludes_bonded_and_distant():
-    bonded = LiveSession.from_sites([(0, 0, 0), (1.5, 0, 0)])   # covalent distance
-    assert bonded.detect_clashes() == []
-    distant = LiveSession.from_sites([(0, 0, 0), (5.0, 0, 0)])  # no vdW overlap
-    assert distant.detect_clashes() == []
-
-
-def test_detect_clashes_excludes_geminal_and_1_4():
-    # A bonded chain of carbons 1.2 A apart: consecutive atoms are bonded, so the
-    # 1-3 (geminal, e.g. 0-2 at 2.4 A) and 1-4 pairs overlap in vdW space but are
-    # ordinary covalent geometry, not clashes. Only the bond graph can tell them
-    # apart from a real overlap.
-    chain = LiveSession.from_sites([(i * 1.2, 0, 0) for i in range(4)])
-    assert chain.detect_clashes() == []
-
-
-def test_detect_clashes_skips_hydrogen_bonds():
-    # Two oxygens 2.7 A apart (a typical H-bond) must not be flagged: the H sits
-    # between them, so their heavy-atom distance is shorter than the vdW sum with no
-    # clash. But below the 2.4 A H-bond floor even an O-O pair is a real clash.
-    hbond = LiveSession.from_sites([(0, 0, 0), (2.7, 0, 0)], elements=["O", "O"])
-    assert hbond.detect_clashes() == []
-    tooclose = LiveSession.from_sites([(0, 0, 0), (2.2, 0, 0)], elements=["O", "O"])
-    assert tooclose.detect_clashes() == [(0, 1)]
-
-
-def test_detect_clashes_accepts_explicit_coords():
-    s = LiveSession.from_sites([(0, 0, 0), (10, 0, 0)])  # far apart as built
-    moved = np.array([[0, 0, 0], [2.5, 0, 0]], dtype="<f4")  # but test them close
-    assert s.detect_clashes(coords=moved) == [(0, 1)]
-
-
 def test_set_clashes_validates_and_dedupes(session):
     assert session.set_clashes([(0, 2), (2, 0), {"a": 1, "b": 3}]) == [(0, 2), (1, 3)]
     with pytest.raises(ValueError, match="out of range"):
@@ -267,13 +228,21 @@ def test_set_clashes_message_reaches_client(session):
     asyncio.run(scenario())
 
 
-def test_show_clashes_detects_and_draws():
-    # Two non-bonded carbons overlapping in vdW space: show_clashes both detects the
-    # pair and records it for drawing/replay.
-    s = LiveSession.from_sites([(0, 0, 0), (2.5, 0, 0), (10, 0, 0)])
-    drawn = s.show_clashes()
-    assert drawn == [(0, 1)]
-    assert s._clashes == [{"a": 0, "b": 1}]
+def test_probe_dots_channels_independent(session):
+    # Two overlays keyed by channel: each show/clear touches only its own channel,
+    # and the payload carries [tag=3][channel].
+    from pxviewer.live import PROBE_CLASHES, PROBE_CONTACTS, _TAG_DOTS
+
+    session.show_probe_dots([((0, 0, 0), (0, 0, 0), (0, 255, 0))], channel=PROBE_CONTACTS)
+    session.show_probe_dots([((1, 0, 0), (1.2, 0, 0), (255, 0, 0))], channel=PROBE_CLASHES)
+    assert set(session._probe_dots_payloads) == {PROBE_CONTACTS, PROBE_CLASHES}
+    tag, ch = struct.unpack("<II", session._probe_dots_payloads[PROBE_CLASHES][:8])
+    assert tag == _TAG_DOTS and ch == PROBE_CLASHES
+
+    session.clear_probe_dots(channel=PROBE_CLASHES)
+    assert set(session._probe_dots_payloads) == {PROBE_CONTACTS}
+    session.clear_probe_dots()  # all
+    assert session._probe_dots_payloads == {}
 
 
 def test_clashes_replayed_to_late_client(session):

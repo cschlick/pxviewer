@@ -272,7 +272,7 @@ export class LiveViewer {
     private reprNodes: StateObjectSelector[] = [];
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
-    private probeNodes: StateObjectSelector[] = [];
+    private probeChannels: Map<number, StateObjectSelector[]> = new Map();
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -630,10 +630,13 @@ export class LiveViewer {
      * spike differs from their location (the overlaps) also get a line spike.
      */
     async setProbeDots(buffer: ArrayBuffer, offset: number) {
-        await this.clearProbeDots();
         const dv = new DataView(buffer);
-        const n = dv.getUint32(offset, true);
-        let p = offset + 4;
+        // [u32 channel][u32 n][dots...] — channel keeps overlays (contacts/clashes)
+        // independent so they toggle separately.
+        const channel = dv.getUint32(offset, true);
+        await this.clearProbeDots(channel);
+        const n = dv.getUint32(offset + 4, true);
+        let p = offset + 8;
         const locs = new Float32Array(n * 3);
         const rgb = new Uint32Array(n);
         // Spikes: collected only for overlaps (loc !== spike).
@@ -651,27 +654,35 @@ export class LiveViewer {
                 spikeStart.push(lx, ly, lz); spikeEnd.push(sx, sy, sz); spikeRgb.push(c);
             }
         }
+        const nodes: StateObjectSelector[] = [];
         const build = this.plugin.state.data.build();
         const pts = build.toRoot().apply(ProbeDotsPoints, { xyz: locs, rgb }).apply(ShapeRepresentation3D);
-        this.probeNodes.push(pts.selector);
+        nodes.push(pts.selector);
         if (spikeRgb.length) {
             const lines = build.toRoot().apply(ProbeDotsLines, {
                 starts: new Float32Array(spikeStart),
                 ends: new Float32Array(spikeEnd),
                 rgb: new Uint32Array(spikeRgb),
             }).apply(ShapeRepresentation3D);
-            this.probeNodes.push(lines.selector);
+            nodes.push(lines.selector);
         }
         await build.commit();
+        this.probeChannels.set(channel, nodes);
     }
 
-    /** Remove the probe contact-dot surface, if any. */
-    async clearProbeDots() {
-        if (!this.probeNodes.length) return;
+    /** Remove a probe dot overlay: one `channel`, or all when omitted. */
+    async clearProbeDots(channel?: number) {
+        const channels = channel === undefined ? [...this.probeChannels.keys()] : [channel];
         const b = this.plugin.state.data.build();
-        for (const node of this.probeNodes) if (node.ref) b.delete(node.ref);
-        this.probeNodes = [];
-        await b.commit();
+        let any = false;
+        for (const ch of channels) {
+            const nodes = this.probeChannels.get(ch);
+            if (!nodes) continue;
+            for (const node of nodes) if (node.ref) b.delete(node.ref);
+            this.probeChannels.delete(ch);
+            any = true;
+        }
+        if (any) await b.commit();
     }
 
     /**
@@ -965,7 +976,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         'interactions', 'clashes', 'highlight', 'focus', 'representations', 'click-mode', 'primitive', 'select', 'dots',
     ]);
     const pendingControl: any[] = [];
-    let pendingDots: ArrayBuffer | null = null;  // dot buffer that beat the viewer build
+    let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
 
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
@@ -979,7 +990,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearClashes();
                 else await viewer.setClashes(msg.pairs ?? []);
             } else if (msg.type === 'dots' && viewer) {
-                if (msg.action === 'clear') await viewer.clearProbeDots();
+                if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
@@ -1059,7 +1070,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // Now that the viewer exists, apply anything that arrived while building.
             const queued = pendingControl.splice(0);
             for (const m of queued) await handleControlMessage(m);
-            if (pendingDots) { await viewer.setProbeDots(pendingDots, 4); pendingDots = null; }
+            for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -1074,11 +1085,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const valuesOffset = 8 + keyLen + ((4 - (keyLen % 4)) % 4);
             attributeValues.set(key, new Float32Array(buffer, valuesOffset));
         } else if (tag === TAG_DOTS) {
-            // [u32 tag][u32 n][per dot: 6 f32 (loc, spike) + u32 rgb]. Buffer if the
-            // viewer is still building (it's one-shot; a dropped frame is fine, dots
-            // are not).
+            // [u32 tag][u32 channel][u32 n][per dot: 6 f32 (loc, spike) + u32 rgb].
+            // Buffer per channel if the viewer is still building (dots are not a
+            // droppable frame).
             if (viewer) await viewer.setProbeDots(buffer, 4);
-            else pendingDots = buffer;
+            else pendingDots.push(buffer);
         }
     };
 

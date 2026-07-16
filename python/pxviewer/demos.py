@@ -360,6 +360,18 @@ def _two_clusters():
     return _plain(np.concatenate([left, right]).astype("<f4"))
 
 
+def _cluster_clashes(coords: np.ndarray, half: int, cutoff: float = 2.0) -> list:
+    """Cross-cluster atom pairs closer than ``cutoff`` — a simple distance rule for
+    the synthetic demo (rigorous clash analysis lives in the probe2 overlay)."""
+    left, right = coords[:half], coords[half:]
+    pairs = []
+    for i in range(len(left)):
+        d = np.linalg.norm(right - left[i], axis=1)
+        for k in np.where(d < cutoff)[0]:
+            pairs.append((i, half + int(k)))
+    return pairs
+
+
 def _run_clashes(p: Player) -> None:
     session = p.session
     base = p.base
@@ -380,7 +392,7 @@ def _run_clashes(p: Player) -> None:
             coords = positioned(gap)
             p.push(coords)
             # Recompute clashes for this conformation and update the red markers.
-            session.set_clashes(session.detect_clashes(coords=coords))
+            session.set_clashes(_cluster_clashes(coords, half))
             p.hold(dt)
 
     print("  Red markers appear where atoms overlap as the clusters interpenetrate.", flush=True)

@@ -72,12 +72,37 @@ def run_probe_dots(model: Any) -> List[dict]:
         return json.load(fh)["flat_results"]
 
 
-def probe_dots(model: Any) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[int, int, int]]]:
-    """``[(loc, spike, rgb), ...]`` — drawable dots with MolProbity colours."""
+# probe2 dot types: wc/cc wide+close contact, hb hydrogen bond, so small overlap,
+# bo bad overlap. MolProbity "clashes" are the bad overlaps (overlap > 0.4 A).
+_CLASH_TYPES = {"bo"}
+
+
+def probe_dots(
+    model: Any, *, only_clashes: bool = False,
+) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[int, int, int]]]:
+    """``[(loc, spike, rgb), ...]`` — drawable dots with MolProbity colours.
+
+    With ``only_clashes`` the result is limited to bad-overlap dots (the MolProbity
+    clashes), for drawing a clash-only overlay separate from the full surface.
+    """
     dots = []
     for row in run_probe_dots(model):
+        if only_clashes and row["type"] not in _CLASH_TYPES:
+            continue
         dots.append((tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"])))
     return dots
+
+
+def probe_dots_split(model: Any):
+    """Run probe2 once and return ``(contacts, clashes)`` — the full dot surface and
+    the bad-overlap (clash) subset — so both overlays come from a single run."""
+    contacts, clashes = [], []
+    for row in run_probe_dots(model):
+        dot = (tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"]))
+        contacts.append(dot)
+        if row["type"] in _CLASH_TYPES:
+            clashes.append(dot)
+    return contacts, clashes
 
 
 def encode_dots(dots) -> bytes:

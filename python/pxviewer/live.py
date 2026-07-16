@@ -48,7 +48,7 @@ import json
 import struct
 import threading
 from http import HTTPStatus
-from typing import Any, Callable, Iterable, List, Optional, Sequence, get_args
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, get_args
 
 import numpy as np
 from molviewspec.nodes import ColorNamesT, ComponentExpression, RepresentationTypeT
@@ -83,6 +83,10 @@ _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
 _TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
 _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colours)
+
+# probe2 dot overlay channels — independently toggleable (full surface vs clashes).
+PROBE_CONTACTS = 0
+PROBE_CLASHES = 1
 
 ATOM_IDENTITY_CONTRACT = """\
 pxviewer atom-identity contract
@@ -236,113 +240,6 @@ def _read_value_column(path: Any) -> np.ndarray:
             except ValueError:
                 raise ValueError(f"{path}:{lineno}: expected one number per line, got {s!r}") from None
     return np.array(values, dtype=float)
-
-
-# Bondi van der Waals radii (Angstrom), for steric-clash detection. Fallback below.
-_VDW_RADII = {
-    "H": 1.20, "HE": 1.40, "C": 1.70, "N": 1.55, "O": 1.52, "F": 1.47, "NE": 1.54,
-    "P": 1.80, "S": 1.80, "CL": 1.75, "AR": 1.88, "BR": 1.85, "I": 1.98, "SE": 1.90,
-    "SI": 2.10, "B": 1.92, "NA": 2.27, "MG": 1.73, "K": 2.75, "CA": 2.31, "ZN": 1.39,
-    "FE": 2.05, "MN": 2.05, "CU": 1.40,
-}
-_VDW_FALLBACK = 1.70
-
-# Covalent radii (Angstrom), used to exclude bonded pairs from clashes.
-_COVALENT_RADII = {
-    "H": 0.31, "HE": 0.28, "C": 0.76, "N": 0.71, "O": 0.66, "F": 0.57, "NE": 0.58,
-    "P": 1.07, "S": 1.05, "CL": 1.02, "AR": 1.06, "BR": 1.20, "I": 1.39, "SE": 1.20,
-    "SI": 1.11, "B": 0.84, "NA": 1.66, "MG": 1.41, "K": 2.03, "CA": 1.76, "ZN": 1.22,
-    "FE": 1.32, "MN": 1.39, "CU": 1.32,
-}
-_COVALENT_FALLBACK = 0.77
-
-# Hydrogen-bond donor/acceptor elements. Close heavy-atom contacts between two of
-# these are usually H-bonds (the H sits between them), not steric clashes.
-_HBOND_ELEMENTS = {"N", "O", "F", "S"}
-
-
-def _radii(elements: List[str], table: dict, fallback: float) -> np.ndarray:
-    return np.array([table.get(str(e).strip().upper(), fallback) for e in elements], dtype=float)
-
-
-def _detect_clashes(
-    coords: np.ndarray,
-    elements: List[str],
-    *,
-    tolerance: float,
-    bond_tolerance: float,
-    exclude_depth: int = 3,
-    hbond_floor: float = 2.4,
-) -> List[tuple]:
-    """Steric clashes: atom pairs that overlap in van der Waals space and are not
-    close neighbours in the bond graph.
-
-    A pair (i, j) clashes when their separation is less than ``vdw_i + vdw_j -
-    tolerance``, *excluding* pairs within ``exclude_depth`` bonds of each other.
-    Excluding only directly bonded atoms (depth 1) is not enough: the covalent
-    framework routinely places nearby-in-graph heavy atoms inside the vdW-overlap
-    window even though the geometry is perfectly normal — 1-3 geminal pairs (the
-    two atoms flanking a bond angle, e.g. N-CA-C, ~2.4A apart) and 1-4 pairs (e.g.
-    a planar peptide's O(i)...CA(i+1), ~2.8A apart). Without explicit hydrogens we
-    cannot tell these from true clashes, so the default ``exclude_depth=3`` drops
-    1-2, 1-3 and 1-4 neighbours, leaving only genuine through-space overlaps. (For
-    rigorous, hydrogen-aware contacts use the probe2 dot surface instead.)
-
-    A second heavy-atom-only artefact is the hydrogen bond: two donor/acceptor
-    atoms (N, O, F, S) sit ~2.6-3.0A apart with the hydrogen between them, so their
-    heavy-atom separation is *shorter* than the vdW sum even though nothing clashes.
-    Such pairs are skipped unless they are closer than ``hbond_floor`` (2.4A), below
-    which even a donor/acceptor pair is too close to explain with an H-bond.
-
-    Bonds are inferred by distance (``d < cov_i + cov_j + bond_tolerance``), since
-    Mol* does the same and we have no explicit connectivity to consult.
-
-    Returns sorted ``(i, j)`` index pairs with ``i < j``. O(N^2); fine for the
-    small-to-medium structures this tool streams.
-    """
-    n = len(elements)
-    if n < 2:
-        return []
-    vdw = _radii(elements, _VDW_RADII, _VDW_FALLBACK)
-    cov = _radii(elements, _COVALENT_RADII, _COVALENT_FALLBACK)
-
-    # Infer the bond graph by distance.
-    adj: List[set] = [set() for _ in range(n)]
-    for i in range(n - 1):
-        d = np.linalg.norm(coords[i + 1 :] - coords[i], axis=1)
-        bond_max = cov[i] + cov[i + 1 :] + bond_tolerance
-        for k in np.where(d < bond_max)[0]:
-            j = i + 1 + int(k)
-            adj[i].add(j)
-            adj[j].add(i)
-
-    def neighbours_within(i: int, depth: int) -> set:
-        """All atoms reachable from ``i`` in <= ``depth`` bonds (includes ``i``)."""
-        seen = {i}
-        frontier = {i}
-        for _ in range(depth):
-            nxt = set().union(*(adj[a] for a in frontier)) if frontier else set()
-            frontier = nxt - seen
-            seen |= frontier
-        return seen
-
-    hb = [str(e).strip().upper() in _HBOND_ELEMENTS for e in elements]
-
-    pairs: List[tuple] = []
-    for i in range(n - 1):
-        d = np.linalg.norm(coords[i + 1 :] - coords[i], axis=1)
-        vdw_sum = vdw[i] + vdw[i + 1 :]
-        excluded = neighbours_within(i, exclude_depth)
-        for k in np.where(d < vdw_sum - tolerance)[0]:
-            j = i + 1 + int(k)
-            if j in excluded:
-                continue
-            # Skip likely hydrogen bonds: donor/acceptor pairs that are close but
-            # not closer than an H-bond can account for.
-            if hb[i] and hb[j] and d[k] >= hbond_floor:
-                continue
-            pairs.append((i, j))
-    return pairs
 
 
 def _normalize_pairs(pairs: Any, n_atoms: int) -> List[dict]:
@@ -581,9 +478,11 @@ class LiveSession:
         self._interactions_contacts: List[dict] = []
         # Whether Mol*'s *computed* interaction overlay is on; replayed to late clients.
         self._computed_interactions_visible = False
-        # probe2 contact-dot surface (a binary payload); replayed to late clients.
-        self._probe_dots_payload: Optional[bytes] = None
-        # Explicit clash pairs (list of {a, b} dicts); replayed to late clients.
+        # probe2 dot overlays, keyed by channel (contacts / clashes) so they toggle
+        # independently; each value is a binary payload replayed to late clients.
+        self._probe_dots_payloads: Dict[int, bytes] = {}
+        # Explicit clash-marker pairs drawn by set_clashes (list of {a, b} dicts);
+        # replayed to late clients. Used by the synthetic streaming demo.
         self._clashes: List[dict] = []
 
         # Click interaction mode: 'off' | 'select' | 'distance' | 'angle' | 'dihedral'
@@ -802,47 +701,18 @@ class LiveSession:
         """Hide the computed overlay. See :meth:`set_computed_interactions`."""
         self.set_computed_interactions(False)
 
-    def detect_clashes(
-        self,
-        *,
-        tolerance: float = 0.4,
-        bond_tolerance: float = 0.45,
-        exclude_depth: int = 3,
-        coords: Any = None,
-    ) -> List[tuple]:
-        """Compute steric clashes and return them as ``(i, j)`` atom-index pairs.
-
-        A clash is a pair of atoms overlapping in van der Waals space (separation
-        ``< vdw_i + vdw_j - tolerance``) that are not close neighbours in the bond
-        graph. Bonds are inferred by distance (``< cov_i + cov_j + bond_tolerance``)
-        and pairs within ``exclude_depth`` bonds are dropped: at the default depth 3
-        that excludes 1-2, 1-3 and 1-4 neighbours, whose ordinary covalent geometry
-        would otherwise be flagged (see :func:`_detect_clashes`). Radii are looked
-        up by element (Bondi vdW; covalent), with sensible fallbacks. Mol\\* has no
-        general clash detector, so this is computed here from the coordinates you
-        own.
-
-        ``coords`` defaults to the most recent streamed frame (else the topology's
-        coordinates). Pass an ``(N, 3)`` array to test a specific conformation.
-        This only computes — call :meth:`set_clashes` to draw the result, or use
-        :meth:`show_clashes` to do both.
-        """
-        pts = self._current_coords() if coords is None else _coords_to_f32(coords, self._n_atoms).astype(float)
-        return _detect_clashes(
-            pts, self._data.elements,
-            tolerance=tolerance, bond_tolerance=bond_tolerance, exclude_depth=exclude_depth,
-        )
-
     def set_clashes(self, pairs: Any) -> List[tuple]:
-        """Draw steric clashes between the given atom-index pairs.
+        """Draw red clash markers between the given atom-index pairs.
 
-        Each pair is drawn as a distinct red marker (visually separate from the
-        interaction notation). ``pairs`` is an iterable of ``(i, j)`` tuples or
-        ``{"a", "b"}`` dicts; indices are positional and validated against the atom
-        count, self-pairs are rejected, and duplicates are collapsed. Because the
-        markers reference atoms, they track streamed coordinates. Returns the
-        normalised ``(a, b)`` pairs. Thread-safe; replayed to late viewers. Pass an
-        empty iterable (or call :meth:`clear_clashes`) to remove them.
+        A low-level drawing primitive: each pair becomes a distinct red marker
+        (visually separate from the interaction notation). ``pairs`` is an iterable
+        of ``(i, j)`` tuples or ``{"a", "b"}`` dicts; indices are positional and
+        validated against the atom count, self-pairs are rejected, and duplicates are
+        collapsed. Because the markers reference atoms, they track streamed
+        coordinates. Returns the normalised ``(a, b)`` pairs. Thread-safe; replayed to
+        late viewers. Pass an empty iterable (or call :meth:`clear_clashes`) to remove
+        them. (Rigorous clash analysis is done with hydrogens via the probe2 dot
+        overlay — see :meth:`show_probe_dots`.)
         """
         clashes = _normalize_pairs(pairs, self._n_atoms)
         self._clashes = clashes
@@ -863,40 +733,37 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def show_clashes(self, **detect_kwargs: Any) -> List[tuple]:
-        """Detect steric clashes and draw them in one call.
+    def show_probe_dots(self, dots: Any, *, channel: int = PROBE_CONTACTS) -> int:
+        """Draw a probe2 dot overlay: ``dots`` is ``[(loc, spike, rgb), …]``.
 
-        A convenience wrapper for ``set_clashes(detect_clashes(**kwargs))``; keyword
-        arguments are forwarded to :meth:`detect_clashes` (``tolerance``,
-        ``bond_tolerance``, ``coords``). Returns the drawn pairs.
-        """
-        return self.set_clashes(self.detect_clashes(**detect_kwargs))
-
-    def show_probe_dots(self, dots: Any) -> int:
-        """Draw a probe2 contact-dot surface: ``dots`` is ``[(loc, spike, rgb), …]``.
-
-        Sent as one binary payload (positions + spike tips + colours) and drawn as a
-        Mol* point cloud plus clash spikes. Thread-safe; replayed to late viewers.
-        Returns the number of dots. Pass an empty list (or :meth:`clear_probe_dots`)
-        to remove them.
+        ``channel`` selects an independently toggleable overlay (:data:`PROBE_CONTACTS`
+        for the full surface, :data:`PROBE_CLASHES` for a clash-only overlay). Sent as
+        one binary payload (positions + spike tips + colours) and drawn as a Mol*
+        point cloud plus clash spikes. Thread-safe; replayed to late viewers. Returns
+        the number of dots. Pass an empty list (or :meth:`clear_probe_dots`) to remove
+        that channel.
         """
         from .probe import encode_dots
 
         dots = list(dots)
         if not dots:
-            self.clear_probe_dots()
+            self.clear_probe_dots(channel=channel)
             return 0
-        payload = struct.pack("<I", _TAG_DOTS) + encode_dots(dots)
-        self._probe_dots_payload = payload
+        payload = struct.pack("<II", _TAG_DOTS, channel) + encode_dots(dots)
+        self._probe_dots_payloads[channel] = payload
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, payload)
         return len(dots)
 
-    def clear_probe_dots(self) -> None:
-        """Remove the probe contact-dot surface. See :meth:`show_probe_dots`."""
-        self._probe_dots_payload = None
-        message = json.dumps({"type": "dots", "action": "clear"})
+    def clear_probe_dots(self, *, channel: Optional[int] = None) -> None:
+        """Remove a probe dot overlay (a single ``channel``, or all). See
+        :meth:`show_probe_dots`."""
+        if channel is None:
+            self._probe_dots_payloads.clear()
+        else:
+            self._probe_dots_payloads.pop(channel, None)
+        message = json.dumps({"type": "dots", "action": "clear", "channel": channel})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1668,8 +1535,8 @@ class LiveSession:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
                 )
-            if self._probe_dots_payload is not None:
-                await self._locked_send(websocket, self._probe_dots_payload)
+            for payload in self._probe_dots_payloads.values():
+                await self._locked_send(websocket, payload)
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:

@@ -757,9 +757,10 @@ def test_tools_and_appearance_setters(qapp):
         app.set_model_interactions(mid, True)
         assert app._model_entry(mid)["interactions"] is True
 
-        # Tools that just broadcast must not raise.
-        app.show_clashes()
-        app.clear_clashes()
+        # Tools that just broadcast must not raise (no analysis run, so toggling a
+        # probe channel with no cached dots simply clears it).
+        app.set_probe_channel(0, True)
+        app.set_probe_channel(0, False)
         app.clear_measurements()
         app.set_axis(True)
     finally:

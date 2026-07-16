@@ -135,6 +135,8 @@ def _make_bridge():
         interactions_changed = Signal(bool)
         structure_changed = Signal(object)  # the active LiveSession (or None)
         loaded_changed = Signal(object)     # {groups, items} for the Loaded tree
+        run_on_main = Signal(object)        # call a thunk on the GUI thread
+        analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
 
     return _Bridge()
 
@@ -621,6 +623,7 @@ class ControlsWindow:
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
+        desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -818,29 +821,36 @@ class ControlsWindow:
         mg.addWidget(clear_m)
         layout.addWidget(measure)
 
-        analysis = QGroupBox("Analysis")
-        ag = QVBoxLayout(analysis)
-        clash_row = QHBoxLayout()
-        detect = QPushButton("Detect clashes")
-        detect.setToolTip("Find and mark steric clashes on the active model.")
-        detect.clicked.connect(self._on_detect_clashes)
-        clash_row.addWidget(detect)
-        clear_c = QPushButton("Clear")
-        clear_c.clicked.connect(lambda: self._desktop.clear_clashes())
-        clash_row.addWidget(clear_c)
-        clash_row.addStretch()
-        ag.addLayout(clash_row)
+        from .live import PROBE_CLASHES, PROBE_CONTACTS
 
-        probe_row = QHBoxLayout()
-        probe = QPushButton("Probe contacts")
-        probe.setToolTip("Run MolProbity probe2 and draw its contact-dot surface (clashes as spikes).")
-        probe.clicked.connect(self._on_probe)
-        probe_row.addWidget(probe)
-        clear_probe = QPushButton("Clear")
-        clear_probe.clicked.connect(lambda: self._desktop.clear_probe_contacts())
-        probe_row.addWidget(clear_probe)
-        probe_row.addStretch()
-        ag.addLayout(probe_row)
+        analysis = QGroupBox("Clashes && contacts")
+        ag = QVBoxLayout(analysis)
+        ag.addWidget(QLabel("Add hydrogens, then run MolProbity probe2:"))
+        analyze = QPushButton("Add H + analyze")
+        analyze.setToolTip(
+            "Add hydrogens with reduce2 as a new object (hiding the original), then run "
+            "probe2 for MolProbity contacts and clashes.")
+        analyze.clicked.connect(self._on_analyze)
+        ag.addWidget(analyze)
+
+        # Independently toggleable overlays; enabled once an analysis has produced dots.
+        toggles = QHBoxLayout()
+        self._contacts_toggle = QPushButton("Contacts")
+        self._contacts_toggle.setToolTip("Show/hide the full probe2 contact-dot surface.")
+        self._contacts_toggle.setCheckable(True)
+        self._contacts_toggle.setEnabled(False)
+        self._contacts_toggle.toggled.connect(
+            lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
+        toggles.addWidget(self._contacts_toggle)
+        self._clashes_toggle = QPushButton("Clashes")
+        self._clashes_toggle.setToolTip("Show/hide the bad-overlap (clash) spikes.")
+        self._clashes_toggle.setCheckable(True)
+        self._clashes_toggle.setEnabled(False)
+        self._clashes_toggle.toggled.connect(
+            lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
+        toggles.addWidget(self._clashes_toggle)
+        toggles.addStretch()
+        ag.addLayout(toggles)
         layout.addWidget(analysis)
 
         layout.addStretch()
@@ -1362,18 +1372,19 @@ class ControlsWindow:
     def _on_clear_measurements(self) -> None:
         self._desktop.clear_measurements()
 
-    def _on_detect_clashes(self) -> None:
+    def _on_analyze(self) -> None:
         try:
-            n = self._desktop.show_clashes()
-            self._set_status(f"{n} clash(es) found" if n else "no clashes found")
+            self._desktop.analyze_clashes()
         except Exception as exc:
             self._set_status(str(exc))
 
-    def _on_probe(self) -> None:
-        try:
-            self._desktop.show_probe_contacts()
-        except Exception as exc:
-            self._set_status(str(exc))
+    def _on_analysis_ready(self, mid) -> None:
+        """Analysis finished: enable and check both overlay toggles (both drawn)."""
+        for toggle in (self._contacts_toggle, self._clashes_toggle):
+            toggle.setEnabled(True)
+            toggle.blockSignals(True)
+            toggle.setChecked(True)
+            toggle.blockSignals(False)
 
     def _on_scene_selection_changed(self, scene) -> None:
         """A model's picks changed. Refresh the aggregate label + the atoms table."""
@@ -1713,6 +1724,9 @@ class DesktopApp:
         self._sigint_timer = None
 
         self.bridge = _make_bridge()
+        # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
+        # emitted from another thread it dispatches as a queued call on the GUI thread.
+        self.bridge.run_on_main.connect(lambda fn: fn())
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
 
@@ -2064,51 +2078,88 @@ class DesktopApp:
         if session is not None:
             session.clear_primitives()
 
-    def show_clashes(self) -> int:
-        """Detect and draw steric clashes on the active model; returns the count."""
-        session = self.active_model_session()
-        if session is None:
-            raise ValueError("load a model first")
-        return len(session.show_clashes())
+    def analyze_clashes(self) -> None:
+        """Add hydrogens to the active model (reduce2), register the result as a new
+        object, hide the original, and draw probe2 contacts + clashes as two
+        independently toggleable overlays.
 
-    def clear_clashes(self) -> None:
-        session = self.active_model_session()
-        if session is not None:
-            session.clear_clashes()
+        With real hydrogens probe2 decides overlaps from actual H positions and
+        directionality — the MolProbity-approved path — so no heavy-atom heuristics
+        are needed. reduce2 + probe2 are slow, so this runs on a background thread;
+        adding the model object is marshalled back to the GUI thread.
+        """
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            raise ValueError("the active object has no cctbx model")
+        name, src_mid = entry["name"], entry["id"]
+
+        def work():
+            from .hydrogens import add_hydrogens, hydrogens_available
+            from .live import LiveSession, PROBE_CLASHES, PROBE_CONTACTS
+            from .probe import probe_dots_split
+
+            if not hydrogens_available():
+                self._status("reduce2 needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+                return
+            try:
+                self._status(f"adding hydrogens to {name} (reduce2)…")
+                hmodel = add_hydrogens(model)
+            except Exception as exc:  # pragma: no cover - reduce2/runtime errors
+                self._status(f"hydrogenate failed: {exc}")
+                return
+
+            box: dict = {}
+            ready = threading.Event()
+
+            def add_on_main():
+                hsession = LiveSession.from_cctbx_model(hmodel)
+                box["mid"] = self._add_model(hsession, f"{name} + H")
+                box["session"] = hsession
+                self.set_model_visible(src_mid, False)  # hide the H-less original
+                ready.set()
+
+            self.bridge.run_on_main.emit(add_on_main)
+            ready.wait()
+            hsession, hmid = box["session"], box["mid"]
+
+            try:
+                self._status("running probe2 on the hydrogenated model…")
+                contacts, clashes = probe_dots_split(hmodel)
+            except Exception as exc:  # pragma: no cover - probe/runtime errors
+                self._status(f"probe failed: {exc}")
+                return
+
+            hentry = self._model_entry(hmid)
+            if hentry is not None:  # cache so the toggles redraw without re-running probe
+                hentry["probe_dots"] = {PROBE_CONTACTS: contacts, PROBE_CLASHES: clashes}
+            hsession.show_probe_dots(contacts, channel=PROBE_CONTACTS)
+            hsession.show_probe_dots(clashes, channel=PROBE_CLASHES)
+            self._status(f"{name} + H: {len(clashes)} clashes, {len(contacts)} contact dots")
+            self.bridge.analysis_ready.emit(hmid)
+
+        threading.Thread(target=work, name="pxviewer-hydrogenate", daemon=True).start()
+        self._status("hydrogenating…")
+
+    def set_probe_channel(self, channel: int, visible: bool) -> None:
+        """Toggle a probe overlay (contacts/clashes) on the active model, redrawing
+        from the dots cached by the last analysis (no probe re-run)."""
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            return
+        session = entry["session"]
+        dots = (entry.get("probe_dots") or {}).get(channel)
+        if visible and dots:
+            session.show_probe_dots(dots, channel=channel)
+        else:
+            session.clear_probe_dots(channel=channel)
 
     def set_axis(self, visible: bool) -> None:
         control = self._control_session()
         if control is not None:
             control.set_axis(bool(visible))
-
-    def show_probe_contacts(self) -> None:
-        """Run MolProbity probe2 on the active model and draw its contact-dot surface.
-
-        probe2 is slow, so it runs on a background thread; the dots are pushed to the
-        viewer when it finishes (show_probe_dots is thread-safe).
-        """
-        session = self.active_model_session()
-        model = getattr(session, "model", None) if session is not None else None
-        if model is None:
-            raise ValueError("load a model first")
-
-        def work():
-            from .probe import probe_dots
-
-            try:
-                dots = probe_dots(model)
-                session.show_probe_dots(dots)
-                self._status(f"probe: {len(dots)} contact dots")
-            except Exception as exc:  # pragma: no cover - probe/runtime errors
-                self._status(f"probe failed: {exc}")
-
-        threading.Thread(target=work, name="pxviewer-probe", daemon=True).start()
-        self._status("running probe2…")
-
-    def clear_probe_contacts(self) -> None:
-        session = self.active_model_session()
-        if session is not None:
-            session.clear_probe_dots()
 
     def write_object(self, kind: str, ident: str, path: str) -> None:
         """Write a loaded object to disk: the model's cctbx coordinates, or the map.

@@ -41,7 +41,10 @@ _CATEGORIES: List[Tuple[str, List[str]]] = [
     ("Interactions & clashes", [
         "set_interactions", "clear_interactions",
         "set_computed_interactions", "show_computed_interactions", "hide_computed_interactions",
-        "detect_clashes", "set_clashes", "show_clashes", "clear_clashes",
+        "set_clashes", "clear_clashes",
+    ]),
+    ("Probe contacts (with hydrogens)", [
+        "show_probe_dots", "clear_probe_dots",
     ]),
     ("Volumes", [
         "set_volume_color", "set_volume_opacity", "set_volume_style", "set_volume_position",

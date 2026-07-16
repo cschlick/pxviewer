@@ -36,11 +36,12 @@ def test_show_probe_dots_payload():
 
     session = LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]])
     n = session.show_probe_dots([((0, 0, 0), (0.1, 0, 0), (255, 0, 0))])
-    assert n == 1 and session._probe_dots_payload is not None
-    assert struct.unpack("<I", session._probe_dots_payload[:4])[0] == 3  # _TAG_DOTS
+    assert n == 1 and session._probe_dots_payloads
+    tag, channel = struct.unpack("<II", session._probe_dots_payloads[0][:8])
+    assert tag == 3 and channel == 0  # _TAG_DOTS, default PROBE_CONTACTS channel
 
     session.clear_probe_dots()
-    assert session._probe_dots_payload is None
+    assert session._probe_dots_payloads == {}
 
 
 def test_probe_dots_on_ubiquitin():
@@ -63,3 +64,23 @@ def test_probe_dots_on_ubiquitin():
     assert len(loc) == 3 and len(spike) == 3 and len(rgb) == 3
     # at least some dots are overlaps (spike differs from loc)
     assert any(l != s for l, s, _ in dots)
+
+
+def test_probe_dots_split_is_subset():
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("mmtbx.programs.probe2")
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB to a geostd checkout)")
+
+    from iotbx.data_manager import DataManager
+
+    from pxviewer.probe import probe_dots, probe_dots_split
+
+    dm = DataManager()
+    dm.process_model_file(str(UBIQUITIN))
+    contacts, clashes = probe_dots_split(dm.get_model())
+    # clashes are a strict subset of the full surface, and clashes only == probe_dots(only_clashes)
+    assert 0 < len(clashes) < len(contacts)
+    assert clashes == probe_dots(dm.get_model(), only_clashes=True)
