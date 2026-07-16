@@ -881,6 +881,45 @@ def test_axis_off_by_default_and_help(qapp):
         app.stop()
 
 
+def test_validation_subtabs_and_row_focus(qapp):
+    """Validation results become one sub-tab each; selecting a whole row focuses that
+    residue (resolved to atom indices from the active model)."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QTableWidget
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.validation import ValidationResult
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file("pxviewer/data/1ubq.pdb"), "1ubq")
+
+        # A synthetic result (no mmtbx/reference-data needed) drives the UI.
+        res = ValidationResult(
+            key="ramachandran", title="Ramachandran",
+            columns=["chain", "resid", "res"], rows=[["A", "  13 ", "ILE"]],
+            markers=[], summary="1 residue",
+        )
+        app._controls._on_validation_ready((mid, [res]))
+        tabs = app._controls._validation_subtabs
+        assert tabs.count() == 1 and tabs.tabText(0) == "Ramachandran"
+
+        table = tabs.widget(0).findChild(QTableWidget)
+        assert table.selectionBehavior() == QTableWidget.SelectionBehavior.SelectRows
+
+        # Selecting the row resolves the residue -> atoms and focuses it.
+        table.selectRow(0)
+        index = app._model_entry(mid)["_residue_index"]
+        assert index[("A", "13")] == [94, 95, 96, 97, 98, 99, 100, 101]  # ILE 13's atoms
+    finally:
+        app.stop()
+
+
 def test_checkable_combo_requires_click_inside_popup(qapp):
     """The click that opens the dropdown must not toggle the item under the cursor."""
     from PySide6.QtCore import QEvent, QPointF, Qt

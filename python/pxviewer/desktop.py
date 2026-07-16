@@ -891,12 +891,12 @@ class ControlsWindow:
     def _build_validation_tab(self):
         """MolProbity validation. Data-driven from the validation registry: one
         "Run validation" button runs every registered validator on the active model,
-        and each result is rendered as its own section — so new validators appear
-        here automatically with no changes to this tab."""
+        and each result becomes its own sub-tab — so new validators appear here
+        automatically with no changes to this tab."""
         from PySide6.QtWidgets import (
             QLabel,
             QPushButton,
-            QScrollArea,
+            QTabWidget,
             QVBoxLayout,
             QWidget,
         )
@@ -910,33 +910,34 @@ class ControlsWindow:
         run_btn.clicked.connect(self._on_run_validation)
         layout.addWidget(run_btn)
 
-        # Result sections are (re)built into this container as runs complete.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        inner = QWidget()
-        self._validation_results_layout = QVBoxLayout(inner)
-        self._validation_results_layout.setSpacing(10)
-        placeholder = QLabel("Run validation to see results.")
-        placeholder.setStyleSheet("color: #666;")
-        self._validation_results_layout.addWidget(placeholder)
-        self._validation_results_layout.addStretch()
-        scroll.setWidget(inner)
-        layout.addWidget(scroll, stretch=1)
+        # One sub-tab per validator, (re)built as runs complete.
+        self._validation_subtabs = QTabWidget()
+        self._validation_subtabs.setDocumentMode(True)
+        placeholder = QWidget()
+        pl = QVBoxLayout(placeholder)
+        hint = QLabel("Run validation to see results.")
+        hint.setStyleSheet("color: #666;")
+        pl.addWidget(hint)
+        pl.addStretch()
+        self._validation_subtabs.addTab(placeholder, "—")
+        layout.addWidget(self._validation_subtabs, stretch=1)
         return tab
 
     def _build_validation_section(self, mid, result):
-        """One validator's section: title, summary, table, and a Markers toggle."""
+        """One validator's sub-tab: summary, a whole-row-selectable table that
+        selects+focuses the residue in the viewport, and a Markers toggle."""
         from PySide6.QtWidgets import (
-            QGroupBox,
+            QAbstractItemView,
             QLabel,
             QPushButton,
             QTableWidget,
             QTableWidgetItem,
             QVBoxLayout,
+            QWidget,
         )
 
-        box = QGroupBox(result.title)
-        v = QVBoxLayout(box)
+        page = QWidget()
+        v = QVBoxLayout(page)
         summary = QLabel(result.summary)
         summary.setStyleSheet("color: #666;")
         summary.setWordWrap(True)
@@ -946,10 +947,15 @@ class ControlsWindow:
         table.setHorizontalHeaderLabels(result.columns)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
+        # Whole-row selection; picking a row focuses that residue in the viewport.
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         for r, row in enumerate(result.rows):
             for c, value in enumerate(row):
                 table.setItem(r, c, QTableWidgetItem(str(value)))
         table.resizeColumnsToContents()
+        table.itemSelectionChanged.connect(
+            lambda t=table, res=result: self._on_validation_row_selected(t, res))
         v.addWidget(table)
 
         markers = QPushButton("Markers")
@@ -959,7 +965,23 @@ class ControlsWindow:
         markers.toggled.connect(
             lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
         v.addWidget(markers)
-        return box
+        return page
+
+    def _on_validation_row_selected(self, table, result) -> None:
+        """A validation table row was selected: select + focus that residue. Rows
+        carry chain/resid columns (per-residue validators); whole-model results like
+        Rama-Z have neither, so there is nothing to focus."""
+        cols = result.columns
+        if "chain" not in cols or "resid" not in cols:
+            return
+        row = table.currentRow()
+        if row < 0:
+            return
+        chain = table.item(row, cols.index("chain"))
+        resid = table.item(row, cols.index("resid"))
+        if chain is None or resid is None:
+            return
+        self._desktop.focus_residue(chain.text(), resid.text())
 
     def _on_run_validation(self) -> None:
         try:
@@ -968,21 +990,26 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _on_validation_ready(self, payload) -> None:
-        """Validation finished (GUI thread): rebuild one section per result."""
-        from PySide6.QtWidgets import QLabel
+        """Validation finished (GUI thread): rebuild one sub-tab per result."""
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
         mid, results = payload
-        layout = self._validation_results_layout
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        tabs = self._validation_subtabs
+        current = tabs.tabText(tabs.currentIndex())  # preserve the selected validator
+        tabs.clear()
         if not results:
-            layout.addWidget(QLabel("No validators registered."))
+            empty = QWidget()
+            el = QVBoxLayout(empty)
+            el.addWidget(QLabel("No validators registered."))
+            el.addStretch()
+            tabs.addTab(empty, "—")
+            return
         for result in results:
-            layout.addWidget(self._build_validation_section(mid, result))
-        layout.addStretch()
+            tabs.addTab(self._build_validation_section(mid, result), result.title)
+        for i in range(tabs.count()):  # keep the user on the same validator across re-runs
+            if tabs.tabText(i) == current:
+                tabs.setCurrentIndex(i)
+                break
 
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
@@ -2820,6 +2847,28 @@ class DesktopApp:
                 session.focus(indices)
             except Exception:  # pragma: no cover - defensive (e.g. stale indices)
                 pass
+
+    def focus_residue(self, chain: str, resid: str) -> None:
+        """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode
+        string) on the active model — driven by a Validation table row. The residue ->
+        atom-index map is built once from the model and cached on the model entry."""
+        entry = self._model_entry(self._active_model_id)
+        if entry is None:
+            return
+        index = entry.get("_residue_index")
+        if index is None:
+            model = getattr(entry["session"], "model", None)
+            if model is None:
+                return
+            index = {}
+            for i, atom in enumerate(model.get_hierarchy().atoms()):
+                rg = atom.parent().parent()  # atom -> atom_group -> residue_group
+                index.setdefault((rg.parent().id.strip(), rg.resid().strip()), []).append(i)
+            entry["_residue_index"] = index
+        atoms = index.get((chain.strip(), resid.strip()))
+        if atoms:
+            self.highlight_atoms_in(entry["id"], atoms)
+            self.focus_atoms_in(entry["id"], atoms)
 
     def _clear_restraint_notations(self) -> None:
         session = self._restraint_prim_session
