@@ -24,3 +24,6 @@ python/tests/data/
 
 # geostd monomer library (large; git clone https://github.com/phenix-project/geostd)
 /geostd/
+
+# Richardson-lab validation reference data (large; scripts/setup_reference_data.sh)
+/reference_data/

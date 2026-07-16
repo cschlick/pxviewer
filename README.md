@@ -442,6 +442,18 @@ git clone https://github.com/phenix-project/geostd
 export MMTBX_CCP4_MONOMER_LIB=/path/to/geostd
 ```
 
+The MolProbity **validation** tools (rotamers, CaBLAM, Rama-Z) need the Richardson-lab
+Top8000 reference data. cctbx searches only under `$CONDA_PREFIX` for it (no env-var
+override), so a helper fetches it into a git-ignored `reference_data/` checkout and
+links it into place:
+
+```bash
+conda activate pxviewer
+scripts/setup_reference_data.sh   # idempotent; re-run after recreating the env
+```
+
+Ramachandran, cis/twisted peptides and Cβ deviation work without it.
+
 Selection is scene-wide: a selection can span models (e.g. a protein model and a
 ligand model), and each model reports its own picks.
 
