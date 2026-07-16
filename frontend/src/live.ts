@@ -137,8 +137,18 @@ const ProbeDotsPoints = PluginStateTransform.BuiltIn({
         const p = params as { xyz: Float32Array; rgb: Uint32Array };
         return new SO.Shape.Provider({
             label: 'Probe Dots',
+            // Small round dots at a physical (world-scaled) size, not the default
+            // 3-unit fixed squares.
             data: p,
-            params: PD.withDefaults(Points.Params, { pointSizeAttenuation: true }),
+            params: PD.withDefaults(Points.Params, {
+                pointStyle: 'circle',
+                // Constant small screen-space dots (classic probe/kinemage look).
+                // Attenuation would scale gl_PointSize by (viewportH/2)/-z * 5, which
+                // makes each dot explode to ~200px as you zoom in — the opposite of
+                // what a dense contact surface wants.
+                pointSizeAttenuation: false,
+                sizeFactor: 2.5,
+            }),
             getShape: (_ctx, data) => buildDotPoints(data.xyz, data.rgb),
             geometryUtils: Points.Utils,
         }, { label: 'Probe Dots' });

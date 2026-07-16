@@ -49,6 +49,8 @@ function App() {
             }
         };
 
+        // Expose the plugin for headless render/verification harnesses (opt-in via ?debug).
+        if (params.has('debug')) (window as any).__pxviewer_plugin = model.plugin;
         setup();
 
         return () => {
