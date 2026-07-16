@@ -2433,13 +2433,20 @@ class DesktopApp:
         return f"ws://{self._host}:{self._dummy.port}"
 
     def _control_session(self):
-        """The session that carries volume commands: the active model, else the dummy."""
-        active = self.active_model_session()
-        if active is not None:
-            return active
-        if self._dummy is not None:
-            return self._dummy
-        return None
+        """A session the viewport is actually connected to, for volume commands.
+
+        It has to be one of the sockets ``_reload_viewport`` put in the page: the visible
+        models', or the dummy when no model is visible. The *active* model is the wrong
+        answer when it is hidden — commands would be broadcast to a session with no
+        clients and vanish, so every volume control would quietly stop working.
+        """
+        entry = self._model_entry(self._active_model_id)
+        if entry is not None and entry["visible"]:
+            return entry["session"]
+        visible = next((m["session"] for m in self._models if m["visible"]), None)
+        if visible is not None:
+            return visible
+        return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
         """Write an MVSJ composing every visible volume; return its URL path (or None)."""

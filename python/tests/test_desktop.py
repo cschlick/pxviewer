@@ -489,6 +489,46 @@ def test_volume_appearance_controls(qapp, tmp_path):
         app.stop()
 
 
+def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
+    """Volume commands are broadcast on a model's socket, and the page only connects to
+    the *visible* models' sockets (or the dummy when none are). Sending on the active
+    model's socket while it is hidden broadcasts to nobody, and every volume control
+    silently stops working."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+
+        # B is active and visible: commands ride its socket, which the page has.
+        assert app._active_model_id == b
+        assert app._control_session() is app.session_for(b)
+
+        # Hide the active model -> the page drops its socket, so commands must move to
+        # one it still has.
+        app.set_model_visible(b, False)
+        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._visible_model_ws()
+        assert app._control_session() is app.session_for(a)
+
+        # Hide everything -> the page falls back to the dummy, and so must the commands.
+        app.set_model_visible(a, False)
+        assert app._visible_model_ws() == []
+        app._ensure_dummy_ws()
+        assert app._control_session() is app._dummy
+    finally:
+        app.stop()
+
+
 def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
     """Shift+scroll is applied in the viewer, so the level arrives here after the fact.
     The widgets must follow it without writing it back — that would fight the scroll."""
