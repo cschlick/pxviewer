@@ -1551,11 +1551,17 @@ class ControlsWindow:
             self._suppress_model_events = False
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
-        # Keep the Appearance pane pointed at the focused object (or the active model).
+        # Point the Appearance pane at the focused object. Focusing a model activates
+        # it, so a focused *model* must always be the active one — if the active model
+        # changed underneath us (a new model, a radio click, hydrogenate+analyze),
+        # follow it. A focused volume is left alone while it still exists.
         kind, ident = self._focused
+        active = next((m for m in model_items if m["active"]), None)
+        active_ref = ("model", active["id"]) if active else (None, None)
         if self._find_item(kind, ident) is None:
-            act = next((m for m in model_items if m["active"]), None)
-            kind, ident = ("model", act["id"]) if act else (None, None)
+            kind, ident = active_ref
+        elif kind == "model" and active and ident != active["id"]:
+            kind, ident = active_ref
         self._update_appearance(kind, ident)
 
     def _on_tree_current_changed(self, current, _previous) -> None:
@@ -1625,11 +1631,9 @@ class ControlsWindow:
             return
         mid = button.property("mid")
         if mid:
+            # set_active_model refreshes the Loaded tree; _on_loaded_changed then points
+            # Appearance at the newly active model (a focused model tracks the active one).
             self._desktop.set_active_model(mid)
-            # Activating a model also points Appearance at it (mirrors row-focus, which
-            # activates). Without this the pane stays bound to the previously focused
-            # model, so its dropdowns would edit the wrong model.
-            self._update_appearance("model", mid)
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt

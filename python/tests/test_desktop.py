@@ -818,23 +818,45 @@ def test_appearance_follows_active_model(qapp):
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert app._active_model_id == b  # last added is active + focused
 
-        # Focus A and give it a distinct representation.
-        app._controls._update_appearance("model", a)
-        assert app._controls._focused == ("model", a)
         app.set_model_representation(a, "cartoon")
-        assert app._model_entry(a)["rep"] == "cartoon"
+        b_rep = app._model_entry(b)["rep"]  # B's own representation, to check it's left alone
 
-        # Activating B via its radio must move Appearance to B (the bug: it stayed on A).
+        # Activating A via its radio must move Appearance to A (the bug: it stayed on B).
         radios = {r.property("mid"): r for r in app._controls._loaded_tree.findChildren(QRadioButton)}
-        app._controls._on_active_radio(radios[b])
-        assert app._active_model_id == b
-        assert app._controls._focused == ("model", b)
+        app._controls._on_active_radio(radios[a])
+        assert app._active_model_id == a
+        assert app._controls._focused == ("model", a)
 
-        # Editing now targets B and leaves A alone (independent per-model state).
-        app.set_model_representation(b, "spacefill")
-        assert app._model_entry(b)["rep"] == "spacefill"
-        assert app._model_entry(a)["rep"] == "cartoon"
+        # Editing now targets A and leaves B alone (independent per-model state).
+        app.set_model_representation(a, "spacefill")
+        assert app._model_entry(a)["rep"] == "spacefill"
+        assert app._model_entry(b)["rep"] == b_rep  # B untouched
+    finally:
+        app.stop()
+
+
+def test_new_model_focuses_appearance(qapp):
+    """A newly added model becomes active, so Appearance follows it (this is why the
+    hydrogenate+analyze '+H' model — a new active model — is what the dropdowns edit,
+    not the hidden original)."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        assert app._controls._focused == ("model", a)  # first model focused
+
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert app._active_model_id == b
+        assert app._controls._focused == ("model", b)  # new active model, Appearance follows
     finally:
         app.stop()
 
