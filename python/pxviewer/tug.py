@@ -23,7 +23,7 @@ from typing import Any, List, Optional
 
 import numpy as np
 
-__all__ = ["Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA"]
+__all__ = ["Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA", "JIGGLE_AMPLITUDE"]
 
 #: How much of the structure gives way, in Angstrom around the dragged atom. Big enough
 #: that a residue can move without its neighbours fighting it; small enough to stay
@@ -42,6 +42,18 @@ ANCHOR_SIGMA = 0.01
 #: Minimizer steps per drag frame. Enough that the model visibly chases the pointer,
 #: few enough to leave the frame budget alone.
 STEPS_PER_FRAME = 20
+
+#: Shake amplitude for continuous "living" dragging, in Angstrom. Small on purpose:
+#: 0.05 was harmless in testing (a held drag settled into density about as well as with
+#: no shake, adding a ~0.007 A wander), while 0.1+ began to hold the fit back.
+JIGGLE_AMPLITUDE = 0.05
+
+
+def flex_vec3(array):
+    """An (N, 3) numpy array as a cctbx flex.vec3_double."""
+    from cctbx.array_family import flex
+
+    return flex.vec3_double(np.ascontiguousarray(array, dtype=float))
 
 
 class Tug:
@@ -100,12 +112,21 @@ class Tug:
         free-running drag, where the target moves under a minimizer that never stops."""
         self._tug(target)
 
-    def step(self) -> np.ndarray:
+    def step(self, jiggle: float = 0.0) -> np.ndarray:
         """One burst of minimizer steps toward the current target. Returns all sites.
 
         The atom will not reach the target, and should not: what comes back is where the
         geometry (and the map, if any) allows it to go.
+
+        ``jiggle`` (Angstrom) shakes the zone before minimizing, so a held drag keeps
+        moving instead of freezing at the first minimum it finds — a crude warmth that
+        keeps the structure alive and nudges it out of shallow traps. Kept small: enough
+        to shake is enough to break geometry, and the minimizer only pulls back what it
+        can reach in a burst.
         """
+        if jiggle > 0:
+            noise = np.random.normal(0.0, jiggle, (self._sites.size(), 3))
+            self._sites = self._sites + flex_vec3(noise)
         self._minimize()
         self._full_sites.set_selected(self._zone, self._sites)
         self.model.set_sites_cart(self._full_sites)

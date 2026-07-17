@@ -53,6 +53,11 @@ _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in ste
 # reach, which is what "the density belonging to this model" usually means.
 _MASK_RADIUS_DEFAULT = 3.0
 
+# Least time between coordinate frames pushed during a drag. A drag can compute frames
+# faster than the viewer renders them; unpaced, they back up and read as lag, so this
+# caps the rate (~20 fps) and keeps the picture current rather than queued.
+_TUG_PUSH_INTERVAL = 0.05
+
 # How much density to draw around the view centre, for maps that need it. A map made
 # from reflections fills the unit cell, so drawing all of it buries the model — those
 # open with a radius. A map read from a file is already a box around its subject, so it
@@ -1135,8 +1140,9 @@ class ControlsWindow:
         dg.addWidget(self._tug_density_check)
         self._tug_continuous_check = QCheckBox("Keep minimizing while dragging")
         self._tug_continuous_check.setToolTip(
-            "Hold Shift and the model keeps relaxing the whole time, settling even when "
-            "the pointer is still — rather than nudging once per move and stopping.")
+            "Hold Shift and the model keeps relaxing the whole time — a gentle living "
+            "settle that stays in motion even when the pointer is still, rather than "
+            "nudging once per move and stopping.")
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         dg.addWidget(self._tug_continuous_check)
@@ -2763,6 +2769,7 @@ class DesktopApp:
         self._tug_model: Optional[str] = None
         self._tug_session: Any = None
         self._tug_last: Any = None
+        self._tug_last_push: float = 0.0
         self._tug_queue: Any = None  # made with its worker on the first drag
         # The radius new maps from reflections open with (Settings changes it).
         self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
@@ -3467,6 +3474,7 @@ class DesktopApp:
             self._tug_model = mid
             self._tug_session = session
             self._tug_last = None
+            self._tug_last_push = 0.0
             self._status(f"dragging atom {atom} — {self._tug.zone_size} atoms giving way")
             return
 
@@ -3482,24 +3490,37 @@ class DesktopApp:
             entry.pop("validation", None)  # stale: the atoms just moved
 
     def _tug_relax(self) -> None:
-        """One free-running step, for continuous mode. On the worker's thread."""
+        """One free-running step, for continuous mode. On the worker's thread.
+
+        Shakes as it minimizes, so a held drag keeps moving instead of freezing at the
+        first minimum — a warm, living settle rather than a cold stop.
+        """
+        from .tug import JIGGLE_AMPLITUDE
+
         try:
-            self._push_tug(self._tug.step())
+            self._push_tug(self._tug.step(jiggle=JIGGLE_AMPLITUDE))
         except Exception as exc:  # pragma: no cover - runtime errors
             self._status(f"drag failed: {exc}")
             self._end_tug()
 
     def _push_tug(self, coords) -> None:
-        """Stream a drag frame, unless it is the same as the last one.
+        """Stream a drag frame — paced, and never a repeat of the last.
 
-        A converged geometry-only drag held still keeps producing the identical
-        conformation; sending it 30 times a second is pointless wire traffic.
+        Each frame is a whole set of coordinates and the viewer re-derives geometry from
+        it; pushing them as fast as cctbx computes floods the render, and the frames back
+        up into visible lag. Capping the rate keeps the picture current instead. A frame
+        identical to the last is dropped outright — a settled geometry drag would
+        otherwise send the same conformation over and over.
         """
         if self._tug_session is None:
             return
         if self._tug_last is not None and np.array_equal(coords, self._tug_last):
             return
+        now = time.monotonic()
+        if now - self._tug_last_push < _TUG_PUSH_INTERVAL:
+            return  # too soon; the next frame supersedes this one
         self._tug_last = coords
+        self._tug_last_push = now
         self._tug_session.push(coords)
 
     def _end_tug(self) -> None:

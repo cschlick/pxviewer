@@ -1594,18 +1594,33 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         void flushTug();
     };
 
-    const onMouseUp = (ev: MouseEvent) => {
+    const endTug = () => {
         if (!tugging) return;
-        ev.preventDefault();
-        ev.stopPropagation();
         ws.send(JSON.stringify({ type: 'tug', action: 'end', atom: tugging.atom }));
         tugging = null;
         tugPending = null;
     };
 
+    const onMouseUp = (ev: MouseEvent) => {
+        if (!tugging) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        endTug();
+    };
+
+    // The drag lives only while Shift is held: let go of Shift and it stops at once, so
+    // the minimizer never keeps running under a hand that has moved on. Same for losing
+    // the window — an alt-tab mid-drag must not strand it running.
+    const onKeyUp = (ev: KeyboardEvent) => {
+        if (ev.key === 'Shift') endTug();
+    };
+    const onBlur = () => endTug();
+
     window.addEventListener('mousedown', onMouseDown, { capture: true });
     window.addEventListener('mousemove', onMouseMove, { capture: true });
     window.addEventListener('mouseup', onMouseUp, { capture: true });
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', onBlur);
 
     let isoScrollTarget: string | null = null;
     let isoScrollValue: number | null = null;
@@ -1820,6 +1835,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             window.removeEventListener('mousedown', onMouseDown, { capture: true });
             window.removeEventListener('mousemove', onMouseMove, { capture: true });
             window.removeEventListener('mouseup', onMouseUp, { capture: true });
+            window.removeEventListener('keyup', onKeyUp);
+            window.removeEventListener('blur', onBlur);
             cameraSub?.unsubscribe();
             ws.close();
         },
