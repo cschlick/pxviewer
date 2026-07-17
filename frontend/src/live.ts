@@ -1424,17 +1424,60 @@ function pointerInSpace(plugin: PluginContext, fx: number, fy: number, anchor: V
         vp.x + fx * vp.width, vp.y + (1 - fy) * vp.height, projected[2]));
 }
 
-/** The atom under the pointer, as an index into the streamed topology, or undefined. */
+/** The atom to grab for whatever is under the pointer, or undefined.
+ *
+ *  A handle on the whole surface, not just the atom spheres: in ball-and-stick most of
+ *  what you see is bonds, so a bond has to be grabbable too. A bond gives the endpoint
+ *  nearer the pointer, which is the atom you meant.
+ */
 function atomAt(plugin: PluginContext, viewer: LiveViewer | null, x: number, y: number) {
     if (!viewer || !plugin.canvas3d) return undefined;
     const picked = plugin.canvas3d.identify(Vec2.create(x, y));
     if (!picked?.id) return undefined;
     const loci = plugin.canvas3d.getLoci(picked.id).loci;
-    if (!StructureElement.Loci.is(loci)) return undefined;
     const own = viewer.structureForPicking();
-    if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
-    const location = StructureElement.Loci.getFirstLocation(loci);
-    return location ? (location.element as unknown as number) : undefined;
+
+    if (StructureElement.Loci.is(loci)) {
+        if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
+        const location = StructureElement.Loci.getFirstLocation(loci);
+        return location ? (location.element as unknown as number) : undefined;
+    }
+    if (Bond.isLoci(loci) && loci.bonds.length) {
+        if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
+        const bond = loci.bonds[0];
+        const a = bond.aUnit.elements[bond.aIndex] as unknown as number;
+        const b = bond.bUnit.elements[bond.bIndex] as unknown as number;
+        // Whichever end is nearer the pointer on screen is the one you were aiming at.
+        return nearerOnScreen(plugin, viewer, x, y, a, b);
+    }
+    return undefined;
+}
+
+/** Of two atoms, the one whose projection is closer to `(x, y)` in the viewport. */
+function nearerOnScreen(
+    plugin: PluginContext, viewer: LiveViewer, x: number, y: number, a: number, b: number,
+) {
+    const camera = plugin.canvas3d!.camera;
+    const vp = camera.viewport;
+    const screen = (atom: number) => {
+        const p = viewer.atomPosition(atom);
+        if (!p) return undefined;
+        const proj = camera.project(Vec4(), p);
+        // project() is viewport-framed (device px, y-up); the pointer is CSS px, y-down.
+        return Vec2.create(
+            (proj[0] - vp.x) / vp.width, 1 - (proj[1] - vp.y) / vp.height);
+    };
+    const sa = screen(a);
+    const sb = screen(b);
+    if (!sa) return sb ? b : undefined;
+    if (!sb) return a;
+    // x,y are CSS px; comparing fractions of the canvas is frame-independent.
+    const canvas: HTMLCanvasElement | undefined = (plugin.canvas3d as any)?.webgl?.gl?.canvas;
+    const rect = canvas?.getBoundingClientRect();
+    const fx = rect ? x / rect.width : 0;
+    const fy = rect ? y / rect.height : 0;
+    const d2 = (s: Vec2) => (s[0] - fx) ** 2 + (s[1] - fy) ** 2;
+    return d2(sa) <= d2(sb) ? a : b;
 }
 
 export interface LiveConnectionHandle {
@@ -1488,8 +1531,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     };
     const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => { void reaimSlabs(); });
 
-    // Tugging: armed by the server, and only ever a left-drag that starts on an atom.
-    let tugArmed = false;
+    // Tugging: Shift + left-drag on any of the model's surface pulls the atom there;
+    // a plain drag still rotates. No mode and no arming — you cannot hold Shift by
+    // accident, which is the safety a checkbox was standing in for.
     let tugging: { atom: number; anchor: Vec3 } | null = null;
     let tugPending: Vec3 | null = null;
     let tugSending = false;
@@ -1528,7 +1572,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     };
 
     const onMouseDown = (ev: MouseEvent) => {
-        if (!tugArmed || ev.button !== 0 || !viewer || !plugin.canvas3d) return;
+        if (!ev.shiftKey || ev.button !== 0 || !viewer || !plugin.canvas3d) return;
         const point = canvasPoint(ev);
         const atom = atomAt(plugin, viewer, point.x, point.y);
         if (atom === undefined) return;  // background: let Mol* rotate, as Coot does
@@ -1653,8 +1697,6 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     error = String(e);
                 }
                 ws.send(JSON.stringify({ type: 'screenshot-result', reqId: msg.reqId, dataUri, error }));
-            } else if (msg.type === 'tug_mode') {
-                tugArmed = !!msg.armed;
             } else if (msg.type === 'clip') {
                 const slab: Slab = {
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,

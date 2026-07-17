@@ -95,17 +95,26 @@ class Tug:
 
     # -- the drag --------------------------------------------------------
 
-    def move_to(self, target) -> np.ndarray:
-        """Pull the atom towards ``target`` and let the zone settle. Returns all sites.
+    def set_target(self, target) -> None:
+        """Aim the pull at ``target`` without stepping. Paired with :meth:`step` for a
+        free-running drag, where the target moves under a minimizer that never stops."""
+        self._tug(target)
+
+    def step(self) -> np.ndarray:
+        """One burst of minimizer steps toward the current target. Returns all sites.
 
         The atom will not reach the target, and should not: what comes back is where the
-        geometry allows it to go.
+        geometry (and the map, if any) allows it to go.
         """
-        self._tug(target)
         self._minimize()
         self._full_sites.set_selected(self._zone, self._sites)
         self.model.set_sites_cart(self._full_sites)
         return self._full_sites.as_numpy_array()
+
+    def move_to(self, target) -> np.ndarray:
+        """Aim at ``target`` and take one step. The whole of a discrete drag frame."""
+        self.set_target(target)
+        return self.step()
 
     def finish(self) -> np.ndarray:
         """End the drag, leaving the model where it stands."""

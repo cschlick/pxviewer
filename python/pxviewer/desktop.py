@@ -1123,14 +1123,9 @@ class ControlsWindow:
         # about instead of turning the view.
         dragging = QGroupBox("Drag atoms")
         dg = QVBoxLayout(dragging)
-        dg.addWidget(QLabel("Pull an atom and let the model give way:"))
-        self._tug_check = QCheckBox("Left-drag an atom to pull it")
-        self._tug_check.setToolTip(
-            "While this is on, dragging an atom pulls it and the model bends to follow. "
-            "Dragging the background still turns the view.")
-        self._tug_check.toggled.connect(lambda on: self._safe(
-            lambda: self._desktop.set_tug_enabled(on)))
-        dg.addWidget(self._tug_check)
+        hint = QLabel("Shift-drag any atom or bond to pull it; the model bends to follow.")
+        hint.setWordWrap(True)
+        dg.addWidget(hint)
         self._tug_density_check = QCheckBox("Into the density")
         self._tug_density_check.setToolTip(
             "Let the map pull too, so a drag settles the neighbourhood into density "
@@ -1138,6 +1133,13 @@ class ControlsWindow:
         self._tug_density_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_into_density(on)))
         dg.addWidget(self._tug_density_check)
+        self._tug_continuous_check = QCheckBox("Keep minimizing while dragging")
+        self._tug_continuous_check.setToolTip(
+            "Hold Shift and the model keeps relaxing the whole time, settling even when "
+            "the pointer is still — rather than nudging once per move and stopping.")
+        self._tug_continuous_check.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_tug_continuous(on)))
+        dg.addWidget(self._tug_continuous_check)
         layout.addWidget(dragging)
 
         layout.addStretch()
@@ -2754,11 +2756,13 @@ class DesktopApp:
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
-        # Dragging atoms: off until armed, and one drag at a time (there is one pointer).
-        self._tug_enabled = False
+        # Dragging atoms: Shift-drag, one drag at a time (there is one pointer).
         self._tug_into_density = False
+        self._tug_continuous = False
         self._tug: Any = None
         self._tug_model: Optional[str] = None
+        self._tug_session: Any = None
+        self._tug_last: Any = None
         self._tug_queue: Any = None  # made with its worker on the first drag
         # The radius new maps from reflections open with (Settings changes it).
         self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
@@ -3161,8 +3165,6 @@ class DesktopApp:
         # changes made in the viewport can come back on any of them.
         session.on_volume_iso(self._on_volume_iso_changed)
         session.on_tug(lambda action, atom, target, mid=mid: self._on_tug(mid, action, atom, target))
-        if self._tug_enabled:
-            session.set_tug_mode(True)  # a model loaded while it is armed is draggable too
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
@@ -3370,22 +3372,6 @@ class DesktopApp:
         else:
             session.clear_markup(channel)
 
-    def set_tug_enabled(self, enabled: bool) -> None:
-        """Arm dragging atoms in the viewport, for every loaded model.
-
-        Off by default and armed deliberately: with it on, a left-drag that lands on an
-        atom deforms the model instead of rotating the view, and that is not something
-        to discover by accident.
-        """
-        self._tug_enabled = bool(enabled)
-        for entry in self._models:
-            try:
-                entry["session"].set_tug_mode(self._tug_enabled)
-            except Exception:  # pragma: no cover - defensive
-                pass
-        self._status("Drag atoms: on — left-drag an atom to pull it" if self._tug_enabled
-                     else "Drag atoms: off")
-
     def set_tug_into_density(self, enabled: bool) -> None:
         """Whether a drag pulls into the map as well as against the geometry.
 
@@ -3394,6 +3380,16 @@ class DesktopApp:
         effect on the next drag — a drag already running keeps what it started with.
         """
         self._tug_into_density = bool(enabled)
+
+    def set_tug_continuous(self, enabled: bool) -> None:
+        """Whether the minimizer keeps running for the whole hold, or settles per move.
+
+        Off, a drag is a series of nudges: each pointer move relaxes the zone toward it
+        and stops. On, the minimizer never stops while the button is down — the target
+        moves under it and the neighbourhood keeps settling even when the pointer is
+        still, which is what lets it flow into density rather than only bend. Next drag.
+        """
+        self._tug_continuous = bool(enabled)
 
     def _on_tug(self, mid: str, action: str, atom: int, target) -> None:
         """A drag in the viewport: queued, never served here.
@@ -3411,19 +3407,24 @@ class DesktopApp:
         self._tug_queue.put((action, mid, atom, target))
 
     def _tug_worker(self) -> None:
-        """Serve drags off the socket's thread, newest target first.
+        """Serve drags off the socket's thread.
 
-        Stale targets are dropped rather than worked through: the pointer outruns cctbx,
-        and every target but the last is somewhere it has already left. Working through
-        them would make the model lag further behind the further you drag.
+        When a drag is running in continuous mode the loop does not block: it keeps
+        stepping the minimizer between messages, so the model settles even while the
+        pointer is still. Otherwise it blocks until the next message, since there is
+        nothing to do between them. Runs of pointer targets collapse to the newest — the
+        pointer outruns cctbx, and every target but the last is somewhere it has left.
         """
         import queue
 
         while not self._stopped:
-            try:
-                waiting = [self._tug_queue.get(timeout=0.2)]
-            except queue.Empty:
-                continue
+            free_running = self._tug is not None and self._tug_continuous
+            waiting = []
+            if not free_running:
+                try:
+                    waiting.append(self._tug_queue.get(timeout=0.2))
+                except queue.Empty:
+                    continue
             while True:
                 try:
                     waiting.append(self._tug_queue.get_nowait())
@@ -3435,9 +3436,11 @@ class DesktopApp:
                 except Exception as exc:  # pragma: no cover - defensive
                     self._status(f"drag failed: {exc}")
                     self._end_tug()
+            if self._tug is not None and self._tug_continuous:
+                self._tug_relax()
 
     def _serve_tug(self, mid: str, action: str, atom: int, target) -> None:
-        """One step of a drag. On the tug worker's thread."""
+        """Apply one drag message. On the tug worker's thread."""
         entry = self._model_entry(mid)
         if entry is None:
             return
@@ -3462,20 +3465,42 @@ class DesktopApp:
                 self._tug = None
                 return
             self._tug_model = mid
+            self._tug_session = session
+            self._tug_last = None
             self._status(f"dragging atom {atom} — {self._tug.zone_size} atoms giving way")
             return
 
         if self._tug is None or self._tug_model != mid:
             return
         if action == "move" and target is not None:
-            try:
-                session.push(self._tug.move_to(target))
-            except Exception as exc:  # pragma: no cover - runtime errors
-                self._status(f"drag failed: {exc}")
-                self._end_tug()
+            if self._tug_continuous:
+                self._tug.set_target(target)  # the free-run loop does the stepping
+            else:
+                self._push_tug(self._tug.move_to(target))
         elif action == "end":
             self._end_tug()
             entry.pop("validation", None)  # stale: the atoms just moved
+
+    def _tug_relax(self) -> None:
+        """One free-running step, for continuous mode. On the worker's thread."""
+        try:
+            self._push_tug(self._tug.step())
+        except Exception as exc:  # pragma: no cover - runtime errors
+            self._status(f"drag failed: {exc}")
+            self._end_tug()
+
+    def _push_tug(self, coords) -> None:
+        """Stream a drag frame, unless it is the same as the last one.
+
+        A converged geometry-only drag held still keeps producing the identical
+        conformation; sending it 30 times a second is pointless wire traffic.
+        """
+        if self._tug_session is None:
+            return
+        if self._tug_last is not None and np.array_equal(coords, self._tug_last):
+            return
+        self._tug_last = coords
+        self._tug_session.push(coords)
 
     def _end_tug(self) -> None:
         """Close out a drag, if one is running. Idempotent."""
@@ -3487,6 +3512,8 @@ class DesktopApp:
             pass
         self._tug = None
         self._tug_model = None
+        self._tug_session = None
+        self._tug_last = None
 
     def map_for_model(self, mid: Optional[str] = None) -> Any:
         """The map this model is paired with, or None.

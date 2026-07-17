@@ -89,6 +89,9 @@ def test_density_is_what_makes_a_tug_correct_something():
     truth = mmm.model().get_sites_cart().as_numpy_array().copy()
     map_data = mmm.map_manager().map_data()
 
+    from scitbx.array_family import flex
+    flex.set_random_seed(0)  # the shake is random; a corrective case must be reproducible
+
     shaken = _model()
     xrs = shaken.get_xray_structure().deep_copy_scatterers()
     xrs.shake_sites_in_place(mean_distance=0.4)
@@ -136,36 +139,6 @@ def test_stale_drag_targets_are_dropped_but_not_the_last_one():
         ("move", "a"), ("end", None), ("begin", None), ("move", "z")]
 
 
-def test_tug_mode_reaches_the_viewer_and_late_clients(qapp=None):
-    """Dragging is armed explicitly, and the arming is not part of any scene — so it has
-    to be replayed, or a viewport reload silently disarms it."""
-    import asyncio
-    import json
-
-    websockets = pytest.importorskip("websockets")
-    from pxviewer.live import LiveSession
-
-    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
-    session.start(port=0)
-    try:
-        async def scenario():
-            url = f"ws://{session.host}:{session.port}"
-            async with websockets.connect(url) as ws:
-                await ws.recv()  # topology
-                session.set_tug_mode(True)
-                assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {
-                    "type": "tug_mode", "armed": True}
-            # a fresh viewport (a reload) is told without being asked
-            async with websockets.connect(url) as ws:
-                await ws.recv()
-                assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {
-                    "type": "tug_mode", "armed": True}
-
-        asyncio.run(scenario())
-    finally:
-        session.stop()
-
-
 def test_a_drag_from_the_viewport_reaches_a_handler():
     """The browser says which atom and where the pointer is; what the model does about
     it is cctbx's business, not the browser's."""
@@ -199,6 +172,33 @@ def test_a_drag_from_the_viewport_reaches_a_handler():
         session.stop()
 
 
+def test_continuous_mode_keeps_minimizing_between_targets():
+    """The difference the mode makes: with the target held still, the free-running steps
+    keep reducing the strain, where a single nudge would have stopped. That is what lets
+    a held-still drag keep settling instead of freezing at the first thing it reached."""
+    _require_restraints()
+    from pxviewer.tug import Tug
+
+    model = _model()
+    xrs = model.get_xray_structure().deep_copy_scatterers()
+    xrs.shake_sites_in_place(mean_distance=0.4)
+    model.set_sites_cart(xrs.sites_cart())
+
+    tug = Tug(model, 300)
+    # Aim at the atom's own position and never move it — only the free-run does anything.
+    tug.set_target(model.get_sites_cart().as_numpy_array()[300])
+    after_one = tug.step().copy()
+    for _ in range(20):
+        after_many = tug.step()
+    tug.finish()
+
+    # It kept moving the model with no new target — a single step had not reached the
+    # bottom. (A non-continuous drag held still would have stopped at `after_one`, which
+    # is why the wire de-dups: see DesktopApp._push_tug.)
+    zone = tug._indices
+    assert np.linalg.norm(after_many[zone] - after_one[zone], axis=1).max() > 0.02
+
+
 def test_restraints_are_built_once_not_per_drag():
     """Processing a model costs seconds. Doing it on every begin is a freeze at the
     start of every drag, which is exactly when it is least affordable."""
@@ -214,3 +214,49 @@ def test_restraints_are_built_once_not_per_drag():
     grm = model.get_restraints_manager()
     Tug(model, 320).finish()
     assert model.get_restraints_manager() is grm
+
+
+def test_desktop_continuous_free_runs_and_dedups(qapp=None):
+    """The desktop wiring: in continuous mode the worker keeps stepping with no new
+    message (so a held-still drag settles), and identical frames are not re-sent (so a
+    converged geometry drag does not spam the wire)."""
+    _require_restraints()
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(MODEL))
+        mid = app._models[0]["id"]
+        session = app._models[0]["session"]
+        pushed = []
+        session.push = lambda c, _p=session.push: (pushed.append(1), _p(c))[1]
+
+        app.set_tug_continuous(True)
+        start = session.model.get_sites_cart().as_numpy_array()[300].copy()
+        app._serve_tug(mid, "begin", 300, None)
+        app._serve_tug(mid, "move", 300, (start + [3.0, 0.0, 0.0]).tolist())
+
+        # Free-run with no new message: the model keeps moving while it has somewhere
+        # to go — this is what a held-still drag does in continuous mode.
+        n_before = len(pushed)
+        for _ in range(20):
+            app._tug_relax()
+        assert len(pushed) - n_before > 0     # it kept stepping with no new target
+
+        # A frame identical to the last is not resent: once a drag has truly settled,
+        # re-pushing the same conformation 30 times a second is pointless wire traffic.
+        settled = len(pushed)
+        last = app._tug_last
+        app._push_tug(last.copy())            # same coordinates again
+        assert len(pushed) == settled
+
+        app._serve_tug(mid, "end", 300, None)
+        assert app._tug is None
+    finally:
+        app.stop()

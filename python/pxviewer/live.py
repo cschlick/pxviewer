@@ -33,7 +33,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
   - {"type": "volume-iso-changed", "ref": str, "value": float}  wheel contouring
-  - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  atom being dragged
+  - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  Shift-drag of an atom
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
@@ -501,9 +501,6 @@ class LiveSession:
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
         self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
-        # Whether the viewport lets a drag move atoms. Replayed to late clients: it is
-        # not part of any scene, so a reload would otherwise silently disarm it.
-        self._tug_armed = False
         # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
@@ -915,26 +912,13 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def set_tug_mode(self, armed: bool) -> None:
-        """Arm dragging atoms in the viewport (None of this happens unless armed).
-
-        A left-drag that starts on an atom tugs it; one that starts on the background
-        still rotates, which is Coot's arrangement and costs no new binding. It is armed
-        explicitly because a stray drag quietly deforming a model is not something to
-        leave switched on. Thread-safe.
-        """
-        self._tug_armed = bool(armed)
-        message = json.dumps({"type": "tug_mode", "armed": self._tug_armed})
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(self._broadcast_text, message)
-
     def on_tug(self, handler: Callable[[str, int, Optional[list]], None]) -> None:
         """Register a callback for atom drags: ``(action, atom, target)``.
 
         ``action`` is 'begin', 'move' or 'end'; ``target`` is the pointer in space for
-        'move' and None otherwise. The viewer says which atom and where the pointer is;
-        what the model does about it is cctbx's business, not the browser's.
+        'move' and None otherwise. Dragging is Shift + left-drag in the viewport, gated
+        by the modifier rather than a mode — the browser says which atom and where the
+        pointer is, and what the model does about it is cctbx's business.
         """
         self._tug_handlers.append(handler)
 
@@ -1716,8 +1700,6 @@ class LiveSession:
                 )
             for clip in list(self._clips.values()):
                 await self._locked_send(websocket, json.dumps(clip))
-            if self._tug_armed:
-                await self._locked_send(websocket, json.dumps({"type": "tug_mode", "armed": True}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
