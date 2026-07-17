@@ -18,7 +18,7 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Color, ColorScale } from 'molstar/lib/mol-util/color';
-import { Mat4, Vec3 } from 'molstar/lib/mol-math/linear-algebra';
+import { Mat4, Vec2, Vec3, Vec4 } from 'molstar/lib/mol-math/linear-algebra';
 import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
@@ -920,6 +920,23 @@ export class LiveViewer {
         this.measurePending = [];
     }
 
+    /** This viewer's structure, for deciding whether a pick belongs to it. */
+    structureForPicking() {
+        return this.currentStructure();
+    }
+
+    /** Where an atom is right now — the anchor for the plane a drag happens on. */
+    atomPosition(atom: number): Vec3 | undefined {
+        const structure = this.currentStructure();
+        if (!structure) return undefined;
+        for (const unit of structure.units) {
+            if (!SortedArray.has(unit.elements, atom as any)) continue;
+            const c = unit.conformation;  // not destructured: these are methods on it
+            return Vec3.create(c.x(atom as any), c.y(atom as any), c.z(atom as any));
+        }
+        return undefined;
+    }
+
     private subscribeClick(onPick?: (info: AtomInfo | null) => void) {
         this.pickHandler = onPick;
         this.plugin.behaviors.interaction.click.subscribe((e) => {
@@ -1085,6 +1102,10 @@ async function setAxis(plugin: PluginContext, visible: boolean) {
         p.camera.helper.axes.name = visible ? 'on' : 'off';
     });
 }
+
+/** Smallest gap between tug targets sent upstream. cctbx needs ~10 ms a frame, and
+ *  asking faster only queues stale pointer positions. */
+const TUG_MIN_INTERVAL_MS = 16;
 
 /** Contour level step per wheel notch, and the ceiling shared with the controls. */
 const ISO_WHEEL_STEP = 0.1;
@@ -1373,6 +1394,49 @@ function findVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
     return findCellByTag(plugin, `mvs-ref:${ref}${NEGATIVE_SUFFIX}`);
 }
 
+// -- tugging -------------------------------------------------------------
+//
+// Drag an atom and let the model give way. The browser's whole job is to say which atom
+// and where the pointer is in space; cctbx decides what the model does about it.
+//
+// No new mouse binding: a left-drag on an *atom* tugs, a left-drag on the background
+// still rotates, which is how Coot does it and needs nothing the hand does not already
+// know. It has to be armed first, because a stray drag silently deforming a model is
+// not something to leave lying around.
+
+/** Where the pointer is, in space, on the plane through `anchor` facing the camera.
+ *
+ *  A pointer is two numbers and an atom is three, so the missing one has to be invented:
+ *  the atom is held on the plane it started on. Dragging is therefore always across the
+ *  view, never into it — which is what you want, since depth under a pointer is a guess.
+ */
+function pointerInSpace(plugin: PluginContext, fx: number, fy: number, anchor: Vec3): Vec3 {
+    const camera = plugin.canvas3d!.camera;
+    // project() already returns viewport coordinates with the depth in [0,1], which is
+    // exactly what unproject() wants back. Its 4th component is 1/w, not w — dividing
+    // the depth by it lands the point wildly off in space.
+    const projected = camera.project(Vec4(), anchor);
+    // `fx`/`fy` are fractions of the canvas, y-down, because that is the only frame the
+    // pointer and the viewport agree on: the viewport is in device pixels (twice the
+    // CSS ones on this screen) and its y runs the other way.
+    const vp = camera.viewport;
+    return camera.unproject(Vec3(), Vec3.create(
+        vp.x + fx * vp.width, vp.y + (1 - fy) * vp.height, projected[2]));
+}
+
+/** The atom under the pointer, as an index into the streamed topology, or undefined. */
+function atomAt(plugin: PluginContext, viewer: LiveViewer | null, x: number, y: number) {
+    if (!viewer || !plugin.canvas3d) return undefined;
+    const picked = plugin.canvas3d.identify(Vec2.create(x, y));
+    if (!picked?.id) return undefined;
+    const loci = plugin.canvas3d.getLoci(picked.id).loci;
+    if (!StructureElement.Loci.is(loci)) return undefined;
+    const own = viewer.structureForPicking();
+    if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
+    const location = StructureElement.Loci.getFirstLocation(loci);
+    return location ? (location.element as unknown as number) : undefined;
+}
+
 export interface LiveConnectionHandle {
     close(): void;
 }
@@ -1423,6 +1487,81 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         }
     };
     const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => { void reaimSlabs(); });
+
+    // Tugging: armed by the server, and only ever a left-drag that starts on an atom.
+    let tugArmed = false;
+    let tugging: { atom: number; anchor: Vec3 } | null = null;
+    let tugPending: Vec3 | null = null;
+    let tugSending = false;
+
+    /** The pointer, as CSS pixels for picking and as canvas fractions for unprojecting.
+     *  identify() wants the first (it is fed by Mol*'s own input observer); the camera
+     *  wants the second, in device pixels. */
+    const canvasPoint = (ev: MouseEvent) => {
+        const canvas: HTMLCanvasElement | undefined = (plugin.canvas3d as any)?.webgl?.gl?.canvas;
+        const rect = (canvas ?? (ev.target as HTMLElement)).getBoundingClientRect();
+        const x = ev.clientX - rect.left;
+        const y = ev.clientY - rect.top;
+        return { x, y, fx: x / rect.width, fy: y / rect.height };
+    };
+
+    const flushTug = async () => {
+        // The pointer moves faster than cctbx minimizes, so only the newest target
+        // matters: an old one is a place the pointer has already left.
+        if (tugSending) return;
+        tugSending = true;
+        try {
+            while (tugPending && tugging) {
+                const target = tugPending;
+                tugPending = null;
+                ws.send(JSON.stringify({
+                    type: 'tug', action: 'move', atom: tugging.atom,
+                    target: [target[0], target[1], target[2]],
+                }));
+                // One in flight at a time: the model that comes back is the answer to
+                // this target, and queueing more would only be asking about the past.
+                await new Promise((r) => setTimeout(r, TUG_MIN_INTERVAL_MS));
+            }
+        } finally {
+            tugSending = false;
+        }
+    };
+
+    const onMouseDown = (ev: MouseEvent) => {
+        if (!tugArmed || ev.button !== 0 || !viewer || !plugin.canvas3d) return;
+        const point = canvasPoint(ev);
+        const atom = atomAt(plugin, viewer, point.x, point.y);
+        if (atom === undefined) return;  // background: let Mol* rotate, as Coot does
+        const anchor = viewer.atomPosition(atom);
+        if (!anchor) return;
+        tugging = { atom, anchor };
+        // Taken from the trackball only now that an atom is really under the pointer.
+        ev.preventDefault();
+        ev.stopPropagation();
+        ws.send(JSON.stringify({ type: 'tug', action: 'begin', atom }));
+    };
+
+    const onMouseMove = (ev: MouseEvent) => {
+        if (!tugging || !plugin.canvas3d) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const point = canvasPoint(ev);
+        tugPending = pointerInSpace(plugin, point.fx, point.fy, tugging.anchor);
+        void flushTug();
+    };
+
+    const onMouseUp = (ev: MouseEvent) => {
+        if (!tugging) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        ws.send(JSON.stringify({ type: 'tug', action: 'end', atom: tugging.atom }));
+        tugging = null;
+        tugPending = null;
+    };
+
+    window.addEventListener('mousedown', onMouseDown, { capture: true });
+    window.addEventListener('mousemove', onMouseMove, { capture: true });
+    window.addEventListener('mouseup', onMouseUp, { capture: true });
 
     let isoScrollTarget: string | null = null;
     let isoScrollValue: number | null = null;
@@ -1514,6 +1653,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     error = String(e);
                 }
                 ws.send(JSON.stringify({ type: 'screenshot-result', reqId: msg.reqId, dataUri, error }));
+            } else if (msg.type === 'tug_mode') {
+                tugArmed = !!msg.armed;
             } else if (msg.type === 'clip') {
                 const slab: Slab = {
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,
@@ -1634,6 +1775,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     return {
         close: () => {
             window.removeEventListener('wheel', onWheel, { capture: true });
+            window.removeEventListener('mousedown', onMouseDown, { capture: true });
+            window.removeEventListener('mousemove', onMouseMove, { capture: true });
+            window.removeEventListener('mouseup', onMouseUp, { capture: true });
             cameraSub?.unsubscribe();
             ws.close();
         },

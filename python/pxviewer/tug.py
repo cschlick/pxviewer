@@ -71,7 +71,10 @@ class Tug:
         self.map_weight = float(map_weight)
         self.steps = int(steps)
 
-        model.process(make_restraints=True)
+        # Only if they are not already built: processing costs seconds and rebuilds
+        # what is already there, which at the start of every drag is a freeze.
+        if not model.restraints_manager_available():
+            model.process(make_restraints=True)
         self._full_sites = model.get_sites_cart()
         sites = self._full_sites.as_numpy_array()
         if not 0 <= self.atom < len(sites):

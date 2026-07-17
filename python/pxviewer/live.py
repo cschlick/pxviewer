@@ -33,6 +33,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
   - {"type": "volume-iso-changed", "ref": str, "value": float}  wheel contouring
+  - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  atom being dragged
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
@@ -499,6 +500,10 @@ class LiveSession:
         self._click_mode = "off"
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
+        self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
+        # Whether the viewport lets a drag move atoms. Replayed to late clients: it is
+        # not part of any scene, so a reload would otherwise silently disarm it.
+        self._tug_armed = False
         # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
@@ -909,6 +914,29 @@ class LiveSession:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_tug_mode(self, armed: bool) -> None:
+        """Arm dragging atoms in the viewport (None of this happens unless armed).
+
+        A left-drag that starts on an atom tugs it; one that starts on the background
+        still rotates, which is Coot's arrangement and costs no new binding. It is armed
+        explicitly because a stray drag quietly deforming a model is not something to
+        leave switched on. Thread-safe.
+        """
+        self._tug_armed = bool(armed)
+        message = json.dumps({"type": "tug_mode", "armed": self._tug_armed})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def on_tug(self, handler: Callable[[str, int, Optional[list]], None]) -> None:
+        """Register a callback for atom drags: ``(action, atom, target)``.
+
+        ``action`` is 'begin', 'move' or 'end'; ``target`` is the pointer in space for
+        'move' and None otherwise. The viewer says which atom and where the pointer is;
+        what the model does about it is cctbx's business, not the browser's.
+        """
+        self._tug_handlers.append(handler)
 
     def set_volume_scroll_target(self, ref: Optional[str]) -> None:
         """Name the volume the viewport's scroll wheel contours (None = nothing).
@@ -1688,6 +1716,8 @@ class LiveSession:
                 )
             for clip in list(self._clips.values()):
                 await self._locked_send(websocket, json.dumps(clip))
+            if self._tug_armed:
+                await self._locked_send(websocket, json.dumps({"type": "tug_mode", "armed": True}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})
@@ -1734,6 +1764,15 @@ class LiveSession:
                     pass
         elif etype == "measure":
             self._on_measure(event)
+        elif etype == "tug":
+            action, atom = event.get("action"), event.get("atom")
+            if action in ("begin", "move", "end") and isinstance(atom, int):
+                target = event.get("target") if action == "move" else None
+                for handler in self._tug_handlers:
+                    try:
+                        handler(action, atom, target)
+                    except Exception:  # pragma: no cover - user callback errors
+                        pass
         elif etype == "volume-iso-changed":
             ref, value = event.get("ref"), event.get("value")
             if isinstance(ref, str) and isinstance(value, (int, float)):

@@ -116,3 +116,101 @@ def test_density_is_what_makes_a_tug_correct_something():
     # Geometry alone cannot improve on the truth it cannot see; density moves toward it.
     assert after_map < before_map - 0.05
     assert after_map < after_geom - 0.05
+
+
+def test_stale_drag_targets_are_dropped_but_not_the_last_one():
+    """The pointer outruns cctbx, so every target but the newest is somewhere it has
+    already left. Only *runs* of targets collapse: an end between them is a different
+    thing being said, and the target before a release is where the user let go."""
+    from pxviewer.desktop import _collapse_moves
+
+    drag = [("begin", "m", 1, None), ("move", "m", 1, "a"), ("move", "m", 1, "b"),
+            ("move", "m", 1, "c"), ("end", "m", 1, None)]
+    assert [(i[0], i[3]) for i in _collapse_moves(drag)] == [
+        ("begin", None), ("move", "c"), ("end", None)]
+
+    # Two drags in one batch: neither loses its own last target.
+    two = [("move", "m", 1, "a"), ("end", "m", 1, None),
+           ("begin", "m", 2, None), ("move", "m", 2, "z")]
+    assert [(i[0], i[3]) for i in _collapse_moves(two)] == [
+        ("move", "a"), ("end", None), ("begin", None), ("move", "z")]
+
+
+def test_tug_mode_reaches_the_viewer_and_late_clients(qapp=None):
+    """Dragging is armed explicitly, and the arming is not part of any scene — so it has
+    to be replayed, or a viewport reload silently disarms it."""
+    import asyncio
+    import json
+
+    websockets = pytest.importorskip("websockets")
+    from pxviewer.live import LiveSession
+
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
+    session.start(port=0)
+    try:
+        async def scenario():
+            url = f"ws://{session.host}:{session.port}"
+            async with websockets.connect(url) as ws:
+                await ws.recv()  # topology
+                session.set_tug_mode(True)
+                assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {
+                    "type": "tug_mode", "armed": True}
+            # a fresh viewport (a reload) is told without being asked
+            async with websockets.connect(url) as ws:
+                await ws.recv()
+                assert json.loads(await asyncio.wait_for(ws.recv(), timeout=5)) == {
+                    "type": "tug_mode", "armed": True}
+
+        asyncio.run(scenario())
+    finally:
+        session.stop()
+
+
+def test_a_drag_from_the_viewport_reaches_a_handler():
+    """The browser says which atom and where the pointer is; what the model does about
+    it is cctbx's business, not the browser's."""
+    import asyncio
+    import json
+
+    websockets = pytest.importorskip("websockets")
+    from pxviewer.live import LiveSession
+
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
+    session.start(port=0)
+    seen = []
+    session.on_tug(lambda action, atom, target: seen.append((action, atom, target)))
+    try:
+        async def scenario():
+            url = f"ws://{session.host}:{session.port}"
+            async with websockets.connect(url) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "tug", "action": "begin", "atom": 1}))
+                await ws.send(json.dumps({"type": "tug", "action": "move", "atom": 1,
+                                          "target": [1.0, 2.0, 3.0]}))
+                await ws.send(json.dumps({"type": "tug", "action": "end", "atom": 1}))
+                for _ in range(50):
+                    if len(seen) == 3:
+                        break
+                    await asyncio.sleep(0.05)
+
+        asyncio.run(scenario())
+        assert seen == [("begin", 1, None), ("move", 1, [1.0, 2.0, 3.0]), ("end", 1, None)]
+    finally:
+        session.stop()
+
+
+def test_restraints_are_built_once_not_per_drag():
+    """Processing a model costs seconds. Doing it on every begin is a freeze at the
+    start of every drag, which is exactly when it is least affordable."""
+    _require_restraints()
+    from pxviewer.tug import Tug
+
+    model = _model()
+    assert not model.restraints_manager_available()
+    Tug(model, 300).finish()
+    assert model.restraints_manager_available()
+
+    # A second drag reuses them rather than rebuilding.
+    grm = model.get_restraints_manager()
+    Tug(model, 320).finish()
+    assert model.get_restraints_manager() is grm
