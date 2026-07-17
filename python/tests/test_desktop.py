@@ -1703,3 +1703,38 @@ def test_mouse_bindings_are_shown_in_the_gui(qapp):
         assert chips == ["scroll"]
     finally:
         app.stop()
+
+
+def test_custom_colour_previews_live_not_only_on_close(qapp):
+    """The custom colour picker changed the map only after the dialog closed, which read
+    as broken until you gave up. The fix drives the colour from the dialog's live
+    currentColorChanged, so it updates as the wheel moves."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QColorDialog
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        applied = []
+        combo = app._controls._add_color_row("gold", applied.append)
+
+        # A preset still applies at once.
+        combo.setCurrentIndex(combo.findData("salmon"))
+        assert applied[-1] == "salmon"
+
+        # The live wire the picker uses: currentColorChanged -> apply, per move.
+        dialog = QColorDialog(QColor("gold"))
+        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        live = []
+        dialog.currentColorChanged.connect(
+            lambda c: live.append(c.name()) if c.isValid() else None)
+        for hex_colour in ("#112233", "#445566", "#778899"):
+            dialog.setCurrentColor(QColor(hex_colour))
+        assert live == ["#112233", "#445566", "#778899"]  # fired live, one per move
+    finally:
+        app.stop()

@@ -1727,22 +1727,38 @@ class ControlsWindow:
         idx = combo.findData(current)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
 
+        # The last colour actually committed — the target to revert to if a custom pick
+        # is cancelled, since by then the live preview has already changed the map.
+        committed = {"value": current}
+
         def picked(_index, combo=combo):
             value = combo.currentData()
             if value != _CUSTOM_COLOR:
+                committed["value"] = value
                 on_pick(value)
                 return
-            initial = QColor(custom or _VOLUME_COLORS[0])
-            chosen = QColorDialog.getColor(initial, self._window, "Volume colour")
-            if not chosen.isValid():
-                # Cancelled: put the selection back where it was.
-                back = combo.findData(current)
+            revert_to = committed["value"]
+            dialog = QColorDialog(QColor(revert_to or _VOLUME_COLORS[0]), self._window)
+            dialog.setWindowTitle("Volume colour")
+            # Qt's own dialog, not the native one: the macOS colour panel is a shared
+            # singleton that emits its live-colour signal unreliably, and this preview
+            # depends on that signal firing every time.
+            dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
+            # Apply as the wheel moves, not only on OK — otherwise it looks broken until
+            # you close the dialog, which is exactly when you have given up on it.
+            dialog.currentColorChanged.connect(
+                lambda c: on_pick(c.name()) if c.isValid() else None)
+            if dialog.exec() == QColorDialog.DialogCode.Accepted:
+                name = dialog.selectedColor().name()  # '#rrggbb', which Mol* decodes
+                committed["value"] = name
+                at = combo.count() - 1
+                combo.insertItem(at, swatch(name), name, name)
+                combo.setCurrentIndex(at)  # re-enters here and commits the pick
+            else:
+                # Cancelled: undo the preview and put the selection back where it was.
+                on_pick(revert_to)
+                back = combo.findData(revert_to)
                 combo.setCurrentIndex(back if back >= 0 else 0)
-                return
-            name = chosen.name()  # '#rrggbb', which Mol* decodes like a named colour
-            at = combo.count() - 1
-            combo.insertItem(at, swatch(name), name, name)
-            combo.setCurrentIndex(at)  # re-enters here and dispatches the pick
 
         combo.currentIndexChanged.connect(picked)
         row.addWidget(combo, stretch=1)
