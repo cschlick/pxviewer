@@ -24,6 +24,7 @@ def assert_viewer_consistent(app: Any, *, check_windows: bool = True) -> None:
     _control_session_is_reachable(app)
     _derived_queries_point_at_live_objects(app)
     _summary_round_trips(app)
+    _appearance_values_are_well_formed(app)
     if check_windows:
         assert_no_stray_windows(app)
 
@@ -118,6 +119,26 @@ def _summary_round_trips(app) -> None:
     assert group_ids == set(app._groups), "summary groups disagree with the registry"
     # Rebuilding the tree from the summary must not raise.
     app._controls._on_loaded_changed(summary)
+
+
+def _well_formed_clip(clip) -> bool:
+    front, back = clip
+    return 0.0 <= front <= back <= 1.0
+
+
+def _appearance_values_are_well_formed(app) -> None:
+    """The knobs stay in range. A slider or handler that writes a bad value — opacity
+    over 1, a clip with front past back, a negative radius — would draw wrong or wedge
+    the control, so it should never reach the entry in the first place."""
+    for v in app._volumes:
+        assert v["iso"] >= 0, f"volume {v['id']} iso {v['iso']} < 0"
+        assert 0.0 <= v["opacity"] <= 1.0, f"volume {v['id']} opacity {v['opacity']} out of range"
+        assert _well_formed_clip(v["clip"]), f"volume {v['id']} clip {v['clip']} malformed"
+        assert v["radius"] is None or v["radius"] > 0, f"volume {v['id']} radius {v['radius']}"
+        assert v["mask_radius"] is None or v["mask_radius"] > 0, \
+            f"volume {v['id']} mask_radius {v['mask_radius']}"
+    for m in app._models:
+        assert _well_formed_clip(m["clip"]), f"model {m['id']} clip {m['clip']} malformed"
 
 
 # -- widget-level -------------------------------------------------------------
