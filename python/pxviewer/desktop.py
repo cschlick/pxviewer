@@ -25,15 +25,13 @@ from typing import Any, List, Optional
 
 import numpy as np
 
-from .demos import DEMOS, Player, list_demos
+from .demos import DEMOS, Player
 from .loader import (
     FILE_DIALOG_FILTER,
     SAMPLE_STRUCTURE,
-    SAMPLES,
     file_kind,
     sample_structure_path,
 )
-from .volume_demos import list_volume_demos
 from .webapp import Webapp
 
 # Distinct default isosurface colours so overlaid volumes read apart.
@@ -826,9 +824,9 @@ class ControlsWindow:
 
         tabs = QTabWidget()
         tabs.addTab(self._build_scene_tab(), "Scene")
-        tabs.addTab(self._build_geometry_tab(), "Geometry")
         tabs.addTab(self._build_tools_tab(), "Tools")
         tabs.addTab(self._build_validation_tab(), "Validation")
+        tabs.addTab(self._build_geometry_tab(), "Geometry")
         console_tab = self._build_console_tab()
         self._console_tab_index = tabs.addTab(console_tab, "Console")
         tabs.addTab(self._build_settings_tab(), "Settings")
@@ -931,12 +929,8 @@ class ControlsWindow:
         self._open_btn = QPushButton("Open…")
         self._open_btn.setToolTip("Open a structure or map (models via cctbx; maps as .mrc/.map/.ccp4)")
         self._open_btn.clicked.connect(self._on_open_file)
-        self._sample_btn = QPushButton("Sample")  # a menu button (native dropdown arrow)
-        self._sample_btn.setToolTip("Load a bundled sample structure")
-        self._sample_btn.setMenu(self._build_samples_menu())
-        if all(sample_structure_path(f) is None for f, _ in SAMPLES):
-            self._sample_btn.setEnabled(False)
         demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
+        demos_btn.setToolTip("Load a bundled example to try things out")
         demos_btn.setMenu(self._build_demos_menu())
         self._write_btn = QPushButton("Write…")
         self._write_btn.setToolTip("Write the focused object to disk (model coordinates or map).")
@@ -958,14 +952,18 @@ class ControlsWindow:
 
         actions = QGridLayout()
         actions.setSpacing(6)
+        # Row 1 gets data in and out; row 2 acts on what is loaded and on the view.
         rows = (
-            (self._open_btn, self._sample_btn, demos_btn, self._write_btn),
-            (self._pair_btn, self._remove_model_btn, reset_btn, picture_btn),
+            (self._open_btn, demos_btn, self._write_btn, self._pair_btn),
+            (self._remove_model_btn, reset_btn, picture_btn),
         )
         for r, row in enumerate(rows):
             for c, button in enumerate(row):
-                actions.addWidget(button, r, c)
-                actions.setColumnStretch(c, 1)  # equal columns, so it reads as a grid
+                # The shorter second row spans its last button so both rows fill the width.
+                span = 2 if (r == 1 and c == len(row) - 1) else 1
+                actions.addWidget(button, r, c, 1, span)
+        for c in range(4):
+            actions.setColumnStretch(c, 1)  # equal columns, so it reads as a grid
         ol.addLayout(actions)
 
         self._file_label = QLabel("")
@@ -1043,30 +1041,19 @@ class ControlsWindow:
         ol.addWidget(scroll, stretch=1)
         return outer
 
-    def _build_samples_menu(self):
-        """One entry per bundled sample; missing files are greyed out."""
-        from PySide6.QtWidgets import QMenu
-
-        menu = QMenu(self._window)
-        for filename, label in SAMPLES:
-            action = menu.addAction(label, lambda _c=False, f=filename: self._on_load_sample(f))
-            if sample_structure_path(filename) is None:
-                action.setEnabled(False)
-        return menu
-
     def _build_demos_menu(self):
+        """A short list of bundled examples, each showing off one thing the app does."""
         from PySide6.QtWidgets import QMenu
 
         menu = QMenu(self._window)
-        menu.addAction(f"{SAMPLE_STRUCTURE[1]} — map + model", self._on_run_map_model_demo)
-        model_menu = menu.addMenu("Model demos (animated)")
-        for name, _ in list_demos():
-            model_menu.addAction(name, lambda _c=False, n=name: self._desktop.load_model_demo(n))
-        vol_menu = menu.addMenu("Volume demos")
-        for name, _ in list_volume_demos():
-            vol_menu.addAction(name, lambda _c=False, n=name: self._desktop.load_volume_demo(n))
-        menu.addSeparator()
-        menu.addAction("Stop demo", self._on_stop_demo)
+        menu.addAction("Ubiquitin (1UBQ)",
+                       lambda: self._on_load_sample("1ubq.pdb"))
+        menu.addAction("Ubiquitin — with density (map + model)",
+                       self._on_run_map_model_demo)
+        menu.addAction("Thermitase-eglin (1TEC) — validation demo",
+                       lambda: self._on_load_sample("1tec.pdb"))
+        menu.addAction("X-ray — model + reflections (make density)",
+                       self._on_run_xray_demo)
         return menu
 
     def _build_tools_tab(self):
@@ -2331,6 +2318,14 @@ class ControlsWindow:
             self._desktop.load_map_model_demo()
         except Exception as exc:  # generating the map can fail; don't take the app down
             QMessageBox.warning(self._window, "Map+model demo failed", str(exc))
+
+    def _on_run_xray_demo(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        try:
+            self._desktop.load_xray_demo()
+        except Exception as exc:  # computing the reflections can fail; keep the app up
+            QMessageBox.warning(self._window, "X-ray demo failed", str(exc))
 
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
@@ -4496,6 +4491,51 @@ class DesktopApp:
                 self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (density)", group=gid)
         self._status(f"Loaded demo: {SAMPLE_STRUCTURE[1]} — map + model")
         return "group"
+
+    def load_xray_demo(self, *, d_min: float = 2.0) -> str:
+        """Demo: the bundled model plus reflections computed from it.
+
+        The point is to show the density-from-data path without shipping a real dataset:
+        amplitudes (and free flags) are generated from the model and written to an MTZ,
+        then the model and the reflections are loaded side by side — unpaired, so the
+        Reflections pane offers "Make maps" and you can watch 2mFo-DFc and mFo-DFc get
+        computed from them.
+        """
+        import os
+        import tempfile
+
+        self.stop_demo()
+        self._reset_interactions()
+
+        from .cctbx_io import read_model
+
+        sample = sample_structure_path()
+        if sample is None:
+            raise FileNotFoundError("the bundled sample model is missing")
+
+        f_calc = read_model(str(sample)).get_xray_structure().structure_factors(
+            d_min=d_min).f_calc()
+        f_obs = abs(f_calc).set_observation_type_xray_amplitude()
+        f_obs = f_obs.customized_copy(sigmas=f_obs.data() * 0.05)  # plausible sigmas
+        flags = f_obs.generate_r_free_flags(fraction=0.05)
+
+        # A temp dir, not auto-cleaned: make_maps reads this file back, so it has to
+        # outlive the load.
+        out_dir = tempfile.mkdtemp(prefix="pxviewer-xray-demo-")
+        stem = Path(SAMPLE_STRUCTURE[0]).stem
+        mtz = os.path.join(out_dir, f"{stem}_data.mtz")
+        dataset = f_obs.as_mtz_dataset(column_root_label="F")
+        dataset.add_miller_array(flags, column_root_label="R-free-flags")
+        dataset.mtz_object().write(mtz)
+
+        # Loaded separately: pairing them is the demo. The Reflections pane's Make maps
+        # phases the reflections against the model and produces the density.
+        self._load_model_file(str(sample))
+        self._load_reflection_file(mtz)
+        self._status(
+            f"X-ray demo: {SAMPLE_STRUCTURE[0]} + reflections — open the reflections and "
+            "click Make maps")
+        return "xray"
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
         """Stream an animated model demo into the viewport."""

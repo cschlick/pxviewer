@@ -421,3 +421,30 @@ def test_a_data_mtz_makes_no_maps(tmp_path):
         assert app._reflections[0]["group"] is None  # nothing to group it with
     finally:
         app.stop()
+
+
+def test_xray_demo_loads_a_model_and_its_reflections():
+    """The X-ray demo shows the density-from-data path without a real dataset: it
+    generates amplitudes from the bundled model, writes an MTZ, and loads the two
+    unpaired so Make maps is there to try. The MTZ must outlive the load, since phasing
+    reads it back."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    import os
+
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_xray_demo(d_min=2.5)
+        assert len(app._models) == 1 and len(app._reflections) == 1
+        reflections = app._reflections[0]
+        assert not reflections["data"].has_map_coefficients
+        assert os.path.exists(reflections["data"].path)
+        assert len(app.models_for_phasing()) == 1
+    finally:
+        app.stop()

@@ -681,9 +681,9 @@ def test_object_list_fits_its_contents(qapp):
 
 
 def test_scene_actions_are_one_grid(qapp):
-    """The eight actions live in one 4x2 grid under the object list, and none of them
-    forces a height — a QPushButton only gets its native macOS chrome at the height the
-    style asks for."""
+    """The seven actions live in one grid under the object list (Sample is gone; Demos
+    is the only preload dropdown), and none forces a height — a QPushButton only gets
+    its native macOS chrome at the height the style asks for."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -695,8 +695,8 @@ def test_scene_actions_are_one_grid(qapp):
     app._webapp.start()
     try:
         ctl = app._controls
-        labels = {"Open…", "Sample", "Demos", "Write…",
-                  "Pair…", "Remove", "Reset view", "Picture…"}
+        labels = {"Open…", "Demos", "Write…", "Pair…",
+                  "Remove", "Reset view", "Picture…"}
         buttons = {b.text(): b for b in ctl.widget().findChildren(QPushButton)
                    if b.text() in labels}
         assert set(buttons) == labels
@@ -1602,5 +1602,35 @@ def test_multi_model_registry(qapp):
 
         app.remove_model(b)
         assert len(app._models) == 1 and app._active_model_id == a
+    finally:
+        app.stop()
+
+
+def test_demos_menu_has_the_four_curated_examples(qapp):
+    """The Demos dropdown is the one preload entry point (Samples is gone): four bundled
+    examples, each showing off one thing the app does."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QPushButton, QTabWidget
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        ctl = app._controls
+        labels = [a.text() for a in ctl._build_demos_menu().actions() if a.text()]
+        assert len(labels) == 4
+        assert any("1UBQ" in l for l in labels)
+        assert any("map + model" in l for l in labels)
+        assert any("validation" in l for l in labels)
+        assert any("X-ray" in l for l in labels)
+
+        texts = {b.text() for b in ctl.widget().findChildren(QPushButton)}
+        assert "Sample" not in texts and "Demos" in texts
+
+        tabs = ctl.widget().findChild(QTabWidget)
+        assert [tabs.tabText(i) for i in range(4)] == ["Scene", "Tools", "Validation", "Geometry"]
     finally:
         app.stop()
