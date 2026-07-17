@@ -368,7 +368,7 @@ def test_set_volume_iso_command_reaches_client(session):
 def test_volume_scroll_target_is_replayed_to_late_clients(session):
     """A volume's style/colour/level survive a viewport reload because the scene
     carries them. The scroll target is not part of the scene, so it must be replayed
-    on connect — otherwise shift+scroll goes dead after any scene change."""
+    on connect — otherwise wheel contouring goes dead after any scene change."""
     async def scenario():
         import json
 
@@ -383,7 +383,7 @@ def test_volume_scroll_target_is_replayed_to_late_clients(session):
 
 
 def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
-    """Shift+scroll contouring is applied in the viewer and echoed back, which is how
+    """Wheel contouring is applied in the viewer and echoed back, which is how
     the controls hear about a level they did not set."""
     async def scenario():
         import json

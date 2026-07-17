@@ -1090,6 +1090,53 @@ async function setAxis(plugin: PluginContext, visible: boolean) {
 const ISO_WHEEL_STEP = 0.1;
 const ISO_MAX_SIGMA = 100;
 
+/** Put the mouse where a crystallographer's hands already expect it — Coot's layout.
+ *
+ *  Coot gives the bare wheel to the contour level, because in map work that is the most
+ *  adjusted control there is, and zoom to a right-drag. Mol* does the opposite: the
+ *  wheel zooms, the right button pans, and dragZoom is not bound at all. So taking the
+ *  wheel for contouring is not a swap — zoom has to be given somewhere to live first,
+ *  or it simply disappears.
+ *
+ *      left drag        rotate        (Mol* and Coot agree)
+ *      ctrl + left      pan           (Mol* and Coot agree)
+ *      right drag       zoom          (Coot; was pan in Mol*)
+ *      wheel            contour       (Coot; was zoom in Mol*)
+ *      ctrl + wheel     zoom          (ours: see below)
+ *
+ *  ctrl+wheel is the one thing here Coot does not have. On a laptop trackpad a
+ *  right-drag is a two-finger click and drag, which is a poor home for the one control
+ *  you cannot work without — so zoom keeps a scroll binding as well.
+ */
+async function applyCootBindings(plugin: PluginContext) {
+    await plugin.canvas3dInitialized;
+    if (!plugin.canvas3d) return;
+    const { Binding } = await import('molstar/lib/mol-util/binding');
+    const { ButtonsType, ModifiersKeys } = await import('molstar/lib/mol-util/input/input-observer');
+    const trigger = Binding.Trigger;
+    // setAttribs, not setProps: bindings live in the trackball's *attribs*
+    // (DefaultTrackballControlsAttribs), and are not among its params — so setProps
+    // cannot reach them and quietly does nothing.
+    plugin.canvas3d.setAttribs({
+        trackball: {
+            bindings: {
+                // Pan loses the right button but keeps ctrl+left, which is Coot's anyway.
+                dragPan: Binding(
+                    [trigger(ButtonsType.Flag.Primary, ModifiersKeys.create({ control: true }))],
+                    'Pan', 'Drag using ${triggers}'),
+                dragZoom: Binding(
+                    [trigger(ButtonsType.Flag.Secondary, ModifiersKeys.create())],
+                    'Zoom', 'Drag using ${triggers}'),
+                // The wheel is the contour level now (taken in connectLive, before Mol*
+                // sees it); zoom keeps ctrl+wheel, which is what a trackpad has.
+                scrollZoom: Binding(
+                    [trigger(ButtonsType.Flag.Auxilary, ModifiersKeys.create({ control: true }))],
+                    'Zoom', 'Scroll using ${triggers}'),
+            },
+        },
+    } as any);
+}
+
 // -- clipping ------------------------------------------------------------
 //
 // A front/rear slab, per representation — so the density can be cut open while the
@@ -1337,6 +1384,7 @@ export interface LiveConnectionHandle {
 export function connectLive(plugin: PluginContext, url: string): LiveConnectionHandle {
     registerAttributeColorTheme(plugin);
     setAxis(plugin, false);  // XYZ axes off by default; the Settings toggle turns them on
+    void applyCootBindings(plugin);  // the mouse, as a crystallographer expects it
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;
@@ -1346,9 +1394,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // since they may arrive while it is still building.
     const attributeValues = new Map<string, Float32Array>();
 
-    // Shift+scroll steps the contour level of whichever volume the controls are
-    // pointing at — the wheel is a shortcut for the Level slider you can see, so the
-    // server names the target and we echo every change back to keep the two in step.
+    // The bare wheel steps the contour level of whichever volume the controls are
+    // pointing at — Coot's binding, and the wheel is a shortcut for the Level slider you
+    // can see, so the server names the target and we echo every change back to keep the
+    // two in step. See applyCootBindings for where zoom went.
     // Volumes clipped by this connection (models carry their own slab on the viewer).
     // Both must be re-aimed as the camera turns, so the slab stays square to the view.
     const volumeSlabs = new Map<string, Slab>();
@@ -1397,9 +1446,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     }
 
     const onWheel = (ev: WheelEvent) => {
-        if (!ev.shiftKey || !isoScrollTarget || isoScrollValue === null) return;
-        // Capture phase + stopPropagation so this never reaches Mol*'s zoom handler:
-        // plain scroll must keep zooming the camera.
+        // ctrl+wheel is zoom (see applyCootBindings), so leave it alone. A modifier held
+        // means the user is asking Mol* for something, not asking for a contour.
+        if (ev.ctrlKey || ev.shiftKey || ev.altKey || ev.metaKey) return;
+        if (!isoScrollTarget || isoScrollValue === null) return;
+        // Capture phase + stopPropagation so this never reaches Mol*'s own handlers.
         ev.preventDefault();
         ev.stopPropagation();
         const next = isoScrollValue - Math.sign(ev.deltaY) * ISO_WHEEL_STEP;

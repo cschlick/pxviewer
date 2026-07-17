@@ -32,7 +32,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "pick", "empty": bool, "atom": {...}} on click (atom omitted if empty)
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
-  - {"type": "volume-iso-changed", "ref": str, "value": float}  shift+scroll contouring
+  - {"type": "volume-iso-changed", "ref": str, "value": float}  wheel contouring
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
@@ -499,7 +499,7 @@ class LiveSession:
         self._click_mode = "off"
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
-        # Which volume shift+scroll contours. Not part of the MVSJ scene (unlike a
+        # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
         self._volume_scroll_target: Optional[str] = None
@@ -911,7 +911,7 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_volume_scroll_target(self, ref: Optional[str]) -> None:
-        """Name the volume that shift+scroll in the viewport adjusts (None = nothing).
+        """Name the volume the viewport's scroll wheel contours (None = nothing).
 
         The wheel is a shortcut for the contour control the user is looking at, so the
         target is whichever volume the controls are pointing at rather than anything the
@@ -925,7 +925,7 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def on_volume_iso(self, handler: Callable[[str, float], None]) -> None:
-        """Register a callback for contour levels changed in the viewport (shift+scroll).
+        """Register a callback for contour levels changed in the viewport (the wheel).
 
         Called with ``(ref, value)``. The viewer applies the change itself; this is how
         the controls hear about it, so the slider keeps telling the truth.

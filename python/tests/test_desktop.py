@@ -469,7 +469,7 @@ def test_volume_appearance_controls(qapp, tmp_path):
         # The scene composes from the entry, so a reload restores all of it.
         assert app._write_volume_scene() is not None
 
-        # Focusing the volume builds the controls and points shift+scroll at it.
+        # Focusing the volume builds the controls and points the wheel at it.
         ctl = app._controls
         ctl._update_appearance("volume", vid)
         assert ctl._iso_row is not None
@@ -530,7 +530,7 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
 
 
 def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
-    """Shift+scroll is applied in the viewer, so the level arrives here after the fact.
+    """The wheel is applied in the viewer, so the level arrives here after the fact.
     The widgets must follow it without writing it back — that would fight the scroll."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")

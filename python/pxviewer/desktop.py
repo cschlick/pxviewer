@@ -57,6 +57,10 @@ _MASK_RADIUS_DEFAULT = 3.0
 # from reflections fills the unit cell, so drawing all of it buries the model — those
 # open with a radius. A map read from a file is already a box around its subject, so it
 # does not. (Coot applies its radius to every map; ours can tell the two apart.)
+#
+# 15 A is a starting point rather than a considered convention — Coot's own default is
+# not something we confirmed — so it is the app's default and adjustable in Settings,
+# not a constant. Per-map, the Appearance pane has always been able to change it.
 _VIEW_RADIUS_DEFAULT = 15.0
 
 # The object list sizes itself to its contents between these. The floor keeps the empty
@@ -1287,7 +1291,9 @@ class ControlsWindow:
 
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
-        from PySide6.QtWidgets import QCheckBox, QGroupBox, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+        )
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -1299,6 +1305,25 @@ class ControlsWindow:
         self._axis_check.setChecked(False)  # the viewer hides them by default
         self._axis_check.toggled.connect(lambda on: self._desktop.set_axis(on))
         vg.addWidget(self._axis_check)
+
+        # How much density a map from reflections opens with. 15 A is a starting point,
+        # not a convention we can point at, so it is adjustable rather than baked in.
+        # Any map's own radius is on its Appearance pane; this is only what new ones get.
+        radius_row = QHBoxLayout()
+        radius_row.addWidget(QLabel("Map radius for new maps:"))
+        radius_spin = QDoubleSpinBox()
+        radius_spin.setRange(1.0, 200.0)
+        radius_spin.setDecimals(0)
+        radius_spin.setSingleStep(5.0)
+        radius_spin.setSuffix(" Å")
+        radius_spin.setValue(self._desktop.view_radius_default)
+        radius_spin.setToolTip(
+            "How much density around the view centre a map made from reflections opens "
+            "with. Each map's own radius is on its Appearance pane.")
+        radius_spin.valueChanged.connect(self._desktop.set_view_radius_default)
+        radius_row.addWidget(radius_spin)
+        radius_row.addStretch()
+        vg.addLayout(radius_row)
         layout.addWidget(viewer)
 
         layout.addStretch()
@@ -1426,7 +1451,7 @@ class ControlsWindow:
         else:  # volume
             vid = it["id"]
             # Read the live values, not this snapshot: the level in particular can have
-            # moved since (shift+scroll, or the console) without a new summary.
+            # moved since (the scroll wheel, or the console) without a new summary.
             live = {**it, **self._desktop.volume_appearance(vid)}
 
             def _set_style(v, it=it):
@@ -1471,13 +1496,13 @@ class ControlsWindow:
             self._add_mask_row(live.get("mask_radius"),
                                self._desktop.can_mask_volume(vid), _set_mask)
 
-        # Shift+scroll contours whatever the Level slider above is showing, so the
+        # The wheel contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
         self._safe(lambda: self._desktop.set_volume_scroll_target(
             it["id"] if it["kind"] == "volume" else None))
 
     def _on_volume_iso_changed(self, payload) -> None:
-        """A contour level was changed in the viewport (shift+scroll): show it here.
+        """A contour level was changed in the viewport (the wheel): show it here.
 
         The viewer already applied it, so the widgets are moved with their signals
         suppressed — writing it back would round-trip the user's own scroll.
@@ -1743,7 +1768,7 @@ class ControlsWindow:
         spin.setSuffix(" σ")
         spin.setValue(value)
         spin.setToolTip(
-            "Contour level in sigma. Shift+scroll over the viewport steps this too.")
+            "Contour level in sigma. The scroll wheel over the viewport steps it too.")
 
         # The two drive each other, so guard against the echo coming back.
         syncing = {"on": False}
@@ -2679,7 +2704,9 @@ class DesktopApp:
         self._sigint_installed = False
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
-        self._volume_scroll_target: Optional[str] = None  # volume shift+scroll contours
+        self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
+        # The radius new maps from reflections open with (Settings changes it).
+        self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
 
         self.bridge = _make_bridge()
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
@@ -3492,7 +3519,7 @@ class DesktopApp:
         """A volume's current style/colour/opacity/level.
 
         The Loaded summary is a snapshot taken when it was emitted, and these can change
-        without one — from the console, or by shift+scroll in the viewport — so the
+        without one — from the console, or by the wheel in the viewport — so the
         Appearance pane reads them from the entry rather than trusting the snapshot.
         """
         entry = self._volume_entry(vid)
@@ -3510,6 +3537,14 @@ class DesktopApp:
             return
         entry["clip"] = clip
         self._send_volume_clip(entry)
+
+    def set_view_radius_default(self, radius: float) -> None:
+        """How much density a map made from reflections opens with.
+
+        Only what *new* maps get: a map already on screen has its own radius, which the
+        user may have set, and reaching in to change it would be presumptuous.
+        """
+        self.view_radius_default = float(radius)
 
     def set_volume_radius(self, vid: str, radius: Optional[float]) -> None:
         """Draw only density within ``radius`` A of the view centre (None = all of it).
@@ -3573,10 +3608,11 @@ class DesktopApp:
         return {} if entry is None else {"clip": entry.get("clip")}
 
     def set_volume_scroll_target(self, vid: Optional[str]) -> None:
-        """Point shift+scroll contouring at a volume (None = nothing).
+        """Point the scroll wheel's contouring at a volume (None = nothing).
 
         The wheel adjusts whatever the Appearance pane's Level slider is showing, so
         this follows the focused object rather than the viewport picking for itself.
+        (Coot's binding: in map work the contour level is what you reach for most.)
         """
         entry = self._volume_entry(vid) if vid else None
         # Always re-assert: the viewport reloads on any scene change, and the session
@@ -3591,7 +3627,7 @@ class DesktopApp:
                 pass
 
     def _on_volume_iso_changed(self, ref: str, value: float) -> None:
-        """A contour level changed in the viewport (shift+scroll): follow it here.
+        """A contour level changed in the viewport (the wheel): follow it here.
 
         The viewer has already applied it, so this only records the value and lets the
         controls catch up — sending it back would fight the user's next scroll.
@@ -3971,7 +4007,7 @@ class DesktopApp:
                                 mmm.get_map_manager_by_id(map_type),
                                 name=map_type, map_id=map_type),
                             map_type, group=gid, color=colour, iso=iso,
-                            radius=_VIEW_RADIUS_DEFAULT, negative_color=negative)
+                            radius=self.view_radius_default, negative_color=negative)
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
                     f" — maps: {', '.join(types)}")
@@ -4088,7 +4124,7 @@ class DesktopApp:
                 # A map from reflections fills the unit cell: open it with a radius,
                 # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
-                                 color=colour, iso=iso, radius=_VIEW_RADIUS_DEFAULT,
+                                 color=colour, iso=iso, radius=self.view_radius_default,
                                  negative_color=negative)
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")
