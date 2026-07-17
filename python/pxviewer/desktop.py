@@ -3529,6 +3529,11 @@ class DesktopApp:
         """Apply one drag message. On the tug worker's thread."""
         entry = self._model_entry(mid)
         if entry is None:
+            # The model was unloaded mid-drag. Nothing left to move — and if this was the
+            # model being dragged, close the drag out so its Tug (which holds the now-gone
+            # model) is not left dangling for the free-run loop to keep stepping.
+            if self._tug is not None and self._tug_model == mid:
+                self._end_tug()
             return
         session = entry["session"]
         if action == "begin":
@@ -3731,7 +3736,7 @@ class DesktopApp:
             reflections = self.reflections_for_model(entry["id"])
             if reflections is not None:
                 self.bridge.run_on_main.emit(
-                    lambda rid=reflections["id"]: self.update_maps(rid))
+                    lambda rid=reflections["id"]: self._update_maps_if_live(rid))
 
         self.bridge.minimizing_changed.emit(True)
         threading.Thread(target=work, name="pxviewer-minimize", daemon=True).start()
@@ -4317,6 +4322,14 @@ class DesktopApp:
                 return
 
             def add_on_main():
+                # Phasing took a second on a thread; the model or reflections may have
+                # been unloaded in the meantime. The maps belong to objects that no
+                # longer exist, so drop them rather than leave a group paired to a model
+                # that is gone. (Runs on the GUI thread, as does the unload, so once this
+                # starts the check cannot be undercut.)
+                if self._model_entry(mid) is None or self._reflection_entry(rid) is None:
+                    self._status("maps discarded: the model or reflections were unloaded")
+                    return
                 types = list(out["maps"])
                 # The model and its maps in one manager: the phases came from it, so
                 # cctbx holds them together and everything that needs a pair — masking,
@@ -4417,6 +4430,24 @@ class DesktopApp:
             self.bridge.run_on_main.emit(swap)
 
         threading.Thread(target=work, name="pxviewer-rephasing", daemon=True).start()
+
+    def _update_maps_if_live(self, rid: str) -> None:
+        """Re-phase from the post-minimization auto-chain, but only if it still applies.
+
+        A minimization emits this to run on the GUI thread once it finishes; by the time
+        it lands the user may have unloaded the reflections, the model, or the whole
+        group. :meth:`update_maps` raises on those (it is written for a direct UI call
+        with a live pairing), and an exception here escapes into the event loop. So the
+        chain checks the same preconditions first and quietly does nothing if they no
+        longer hold. Safe on the GUI thread: the unload runs there too, so this cannot be
+        undercut mid-check."""
+        entry = self._reflection_entry(rid)
+        if entry is None or entry.get("r_work") is None:
+            return
+        mmm = self.group_mmm(entry.get("group"))
+        if mmm is None or mmm.model() is None:
+            return
+        self.update_maps(rid)
 
     def _add_reflections(self, data, name: str, *, group: Optional[str] = None) -> str:
         """Register a reflection file. Nothing is drawn: there is nothing drawable yet."""
