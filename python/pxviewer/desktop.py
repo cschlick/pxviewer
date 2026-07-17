@@ -1387,7 +1387,14 @@ class ControlsWindow:
             child = layout.takeAt(0)
             widget = child.widget()
             if widget is not None:
+                # Hide *before* un-parenting: setParent(None) on a still-visible widget
+                # turns it into a floating top-level window, which is how a rebuilt
+                # Appearance pane spawned stray little combo-box windows. Un-parenting
+                # then still removes it from the tree at once (so a rebuild does not see
+                # the old widgets), and deleteLater frees it.
+                widget.hide()
                 widget.setParent(None)
+                widget.deleteLater()
             elif child.layout() is not None:
                 self._clear_layout(child.layout())
 
@@ -4528,10 +4535,11 @@ class DesktopApp:
         dataset.add_miller_array(flags, column_root_label="R-free-flags")
         dataset.mtz_object().write(mtz)
 
-        # Loaded separately: pairing them is the demo. The Reflections pane's Make maps
-        # phases the reflections against the model and produces the density.
-        self._load_model_file(str(sample))
-        self._load_reflection_file(mtz)
+        # Loaded separately (not paired — pairing them is the demo), but in one batch so
+        # the viewport reloads and the pane rebuilds once rather than twice.
+        with self._batch_load():
+            self._load_model_file(str(sample))
+            self._load_reflection_file(mtz)
         self._status(
             f"X-ray demo: {SAMPLE_STRUCTURE[0]} + reflections — open the reflections and "
             "click Make maps")

@@ -1634,3 +1634,38 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert [tabs.tabText(i) for i in range(4)] == ["Scene", "Tools", "Validation", "Geometry"]
     finally:
         app.stop()
+
+
+def test_rebuilding_appearance_spawns_no_stray_windows(qapp):
+    """Orphaning a still-visible widget (setParent(None)) turns it into a floating
+    top-level window — which is how a rebuilt Appearance pane spawned stray little
+    combo-box windows when a model and reflections loaded in succession. Clearing the
+    pane must hide-and-delete, not orphan."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QApplication, QComboBox
+
+    from pxviewer.desktop import DesktopApp
+
+    def stray_combos():
+        return [w for w in QApplication.topLevelWidgets()
+                if isinstance(w, QComboBox) and w.parent() is None and w.isVisible()]
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._controls.widget().show()
+        app.load_xray_demo(d_min=2.5)
+        QApplication.processEvents()
+        assert stray_combos() == []
+
+        # And the flow that orphaned them directly: rebuild the pane across kinds.
+        ctl = app._controls
+        ctl._update_appearance("model", app._models[0]["id"])
+        ctl._update_appearance("reflections", app._reflections[0]["id"])
+        ctl._update_appearance("model", app._models[0]["id"])
+        QApplication.processEvents()
+        assert stray_combos() == []
+    finally:
+        app.stop()
