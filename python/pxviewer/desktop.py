@@ -3495,10 +3495,10 @@ class DesktopApp:
         Shakes as it minimizes, so a held drag keeps moving instead of freezing at the
         first minimum — a warm, living settle rather than a cold stop.
         """
-        from .tug import JIGGLE_AMPLITUDE
+        from .tug import JIGGLE_AMPLITUDE, JIGGLE_STEPS
 
         try:
-            self._push_tug(self._tug.step(jiggle=JIGGLE_AMPLITUDE))
+            self._push_tug(self._tug.step(jiggle=JIGGLE_AMPLITUDE, steps=JIGGLE_STEPS))
         except Exception as exc:  # pragma: no cover - runtime errors
             self._status(f"drag failed: {exc}")
             self._end_tug()

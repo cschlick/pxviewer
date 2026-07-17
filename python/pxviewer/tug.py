@@ -23,7 +23,9 @@ from typing import Any, List, Optional
 
 import numpy as np
 
-__all__ = ["Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA", "JIGGLE_AMPLITUDE"]
+__all__ = [
+    "Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA", "JIGGLE_AMPLITUDE", "JIGGLE_STEPS",
+]
 
 #: How much of the structure gives way, in Angstrom around the dragged atom. Big enough
 #: that a residue can move without its neighbours fighting it; small enough to stay
@@ -43,10 +45,14 @@ ANCHOR_SIGMA = 0.01
 #: few enough to leave the frame budget alone.
 STEPS_PER_FRAME = 20
 
-#: Shake amplitude for continuous "living" dragging, in Angstrom. Small on purpose:
-#: 0.05 was harmless in testing (a held drag settled into density about as well as with
-#: no shake, adding a ~0.007 A wander), while 0.1+ began to hold the fit back.
-JIGGLE_AMPLITUDE = 0.05
+#: Shake amplitude for continuous "living" dragging, in Angstrom, and the (few) minimizer
+#: steps that follow it. The two go together: shake then fully minimize and the shake is
+#: undone — 20 steps damped 0.05 A down to a sub-pixel 0.04 A/frame, invisible. A larger
+#: shake only lightly damped leaves real motion: 0.1 A + 5 steps is ~0.11 A/frame, a
+#: visible shimmer, with the interior breathing ~0.6 A and geometry intact. More than
+#: this and it wanders off; this is the "shake + a few minimize" the drag wants.
+JIGGLE_AMPLITUDE = 0.1
+JIGGLE_STEPS = 5
 
 
 def flex_vec3(array):
@@ -112,7 +118,7 @@ class Tug:
         free-running drag, where the target moves under a minimizer that never stops."""
         self._tug(target)
 
-    def step(self, jiggle: float = 0.0) -> np.ndarray:
+    def step(self, jiggle: float = 0.0, steps: Optional[int] = None) -> np.ndarray:
         """One burst of minimizer steps toward the current target. Returns all sites.
 
         The atom will not reach the target, and should not: what comes back is where the
@@ -127,7 +133,7 @@ class Tug:
         if jiggle > 0:
             noise = np.random.normal(0.0, jiggle, (self._sites.size(), 3))
             self._sites = self._sites + flex_vec3(noise)
-        self._minimize()
+        self._minimize(steps)
         self._full_sites.set_selected(self._zone, self._sites)
         self.model.set_sites_cart(self._full_sites)
         return self._full_sites.as_numpy_array()
@@ -181,10 +187,12 @@ class Tug:
                 selection=flex.size_t([self._local]),
                 sigma=TUG_SIGMA))
 
-    def _minimize(self) -> None:
+    def _minimize(self, steps: Optional[int] = None) -> None:
         import scitbx.lbfgs
         from cctbx import geometry_restraints
         from mmtbx.refinement import geometry_minimization
+
+        n = self.steps if steps is None else int(steps)
 
         if self.map_data is not None:
             from cctbx.maptbx import real_space_refinement_simple
@@ -202,7 +210,7 @@ class Tug:
                 real_space_target_weight=self.map_weight,
                 real_space_gradients_delta=0.25,
                 lbfgs_termination_params=scitbx.lbfgs.termination_parameters(
-                    max_iterations=self.steps),
+                    max_iterations=n),
             )
             self._sites = refined.sites_cart
             return
@@ -211,7 +219,7 @@ class Tug:
             geometry_restraints_manager=self._grm,
             geometry_restraints_flags=geometry_restraints.flags.flags(default=True),
             lbfgs_termination_params=scitbx.lbfgs.termination_parameters(
-                max_iterations=self.steps),
+                max_iterations=n),
             correct_special_position_tolerance=1.0,
         )
 
