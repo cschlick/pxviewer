@@ -303,6 +303,105 @@ def test_difference_maps_get_a_negative_contour(tmp_path):
         app.stop()
 
 
+def _phase(app, tmp_path):
+    """Load a data MTZ + the model, phase them, and return (rid, mid)."""
+    import time
+
+    from PySide6.QtCore import QCoreApplication
+
+    app.load_file(str(_mtz(tmp_path, coefficients=False)))
+    app.load_file(str(MODEL))
+    rid, mid = app._reflections[0]["id"], app._models[0]["id"]
+    app.make_maps(rid, mid)
+    deadline = time.time() + 90
+    while not app._volumes and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.05)
+    QCoreApplication.processEvents()
+    return rid, mid
+
+
+def test_updating_maps_replaces_them_in_place(tmp_path):
+    """Why the reflections are kept at all: once the model moves, the maps describe a
+    model that no longer exists — the difference map most of all, since it answers "what
+    does the density have that the model does not" about the old positions.
+
+    Replaced in place, so a level or a colour set on them survives."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    import time
+
+    import numpy as np
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        rid, mid = _phase(app, tmp_path)
+        volume = next(v for v in app._volumes if v["name"] == "mFo-DFc")
+        vid = volume["id"]
+        app.set_volume_iso(vid, 4.25)  # a setting the user made
+        before_map = volume["data"].map_manager.map_data().as_numpy_array().copy()
+        before_r = app._reflection_entry(rid)["r_work"]
+
+        # The model moves — as Minimize, or anything else, would move it.
+        model = app._models[0]["session"].model
+        xrs = model.get_xray_structure().deep_copy_scatterers()
+        xrs.shake_sites_in_place(mean_distance=0.3)
+        model.set_sites_cart(xrs.sites_cart())
+
+        app.update_maps(rid)
+        deadline = time.time() + 90
+        while app._reflection_entry(rid)["r_work"] == before_r and time.time() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.05)
+        QCoreApplication.processEvents()
+
+        # The density is of the model as it now is, not as it was.
+        after = next(v for v in app._volumes if v["name"] == "mFo-DFc")
+        assert after["id"] == vid                       # the same object
+        assert after["iso"] == 4.25                     # the user's setting survived
+        assert not np.array_equal(
+            before_map, after["data"].map_manager.map_data().as_numpy_array())
+        assert app._reflection_entry(rid)["r_work"] != before_r
+
+        # And the map minimizing refines into is the fresh one, not the stale one.
+        mmm = app.group_mmm(app._models[0]["group"])
+        assert np.array_equal(
+            mmm.map_manager().map_data().as_numpy_array(),
+            next(v for v in app._volumes if v["name"] == "2mFo-DFc")
+            ["data"].map_manager.map_data().as_numpy_array())
+    finally:
+        app.stop()
+
+
+def test_a_moved_model_knows_which_reflections_phased_it(tmp_path):
+    """What lets Minimize recompute without being asked."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(MODEL))
+        assert app.reflections_for_model(app._models[0]["id"]) is None  # nothing phased it
+
+        app._clear_all()
+        rid, mid = _phase(app, tmp_path)
+        found = app.reflections_for_model(mid)
+        assert found is not None and found["id"] == rid
+    finally:
+        app.stop()
+
+
 def test_a_data_mtz_makes_no_maps(tmp_path):
     """Amplitudes cannot become density on their own — the phases have to be computed
     against a model. Loading one draws nothing rather than guessing."""

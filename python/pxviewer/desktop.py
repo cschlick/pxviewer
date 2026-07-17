@@ -1320,7 +1320,7 @@ class ControlsWindow:
 
     def _update_appearance(self, kind=None, ident=None):
         """Rebuild the Appearance box for the focused object (or an empty-state hint)."""
-        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel
+        from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton
 
         self._clear_layout(self._appearance_layout)
         it = self._find_item(kind, ident) if ident else None
@@ -1377,7 +1377,19 @@ class ControlsWindow:
                 fit = QLabel(f"R-work {it['r_work']:.4f} · R-free {it['r_free']:.4f}")
                 self._appearance_layout.addWidget(fit)
             if not it.get("has_map_coefficients"):
-                self._add_phasing_row(it["id"])
+                if it.get("r_work") is None:
+                    self._add_phasing_row(it["id"])
+                else:
+                    # Already phased: the useful action is now recomputing, for when the
+                    # model has moved by some route that does not do it for you.
+                    update = QPushButton("Update maps")
+                    update.setToolTip(
+                        "Recompute the density from the model as it now stands. "
+                        "Minimize does this for you.")
+                    update.clicked.connect(
+                        lambda _c=False, r=it["id"]:
+                        self._safe(lambda: self._desktop.update_maps(r)))
+                    self._appearance_layout.addWidget(update)
         elif it["kind"] == "model":
             mid = it["id"]
 
@@ -3351,6 +3363,12 @@ class DesktopApp:
                 + (f", map weight {stats['weight']:.1f}" if stats["weight"] else "")
                 + (" — stopped" if stats["stopped"] else ""))
             entry.pop("validation", None)  # stale: the coordinates just moved
+            # So is the density, if this model was phased: it describes where the atoms
+            # were. Once per run, never per step — each update is two transforms.
+            reflections = self.reflections_for_model(entry["id"])
+            if reflections is not None:
+                self.bridge.run_on_main.emit(
+                    lambda rid=reflections["id"]: self.update_maps(rid))
 
         self.bridge.minimizing_changed.emit(True)
         threading.Thread(target=work, name="pxviewer-minimize", daemon=True).start()
@@ -3933,10 +3951,10 @@ class DesktopApp:
                 # minimizing into density — now works on them. The primary map is the
                 # 2mFo-DFc one, which is the map you refine into.
                 mmm = map_model_manager(model=model, map_manager=out["maps"][types[0]])
-                managers = {types[0]: mmm.map_manager()}
-                for extra in types[1:]:
-                    mmm.add_map_manager_by_id(out["maps"][extra], extra)
-                    managers[extra] = mmm.get_map_manager_by_id(extra)
+                for map_type in types:
+                    # Also by its own id, so recomputing can put each new map back where
+                    # the old one was. The primary keeps cctbx's 'map_manager' id too.
+                    mmm.add_map_manager_by_id(out["maps"][map_type], map_type)
                 gid = self._new_group(f"{mentry['name']} + {rentry['name']}",
                                       mmm=mmm, label="phased from reflections")
                 mentry["group"] = gid
@@ -3946,10 +3964,12 @@ class DesktopApp:
                 rentry["r_work"] = out["r_work"]
                 rentry["r_free"] = out["r_free"]
                 with self._batch_load():
-                    for map_type, manager in managers.items():
+                    for map_type in types:
                         colour, iso, negative = MAP_STYLE[map_type in DIFFERENCE_MAP_TYPES]
                         self._add_volume(
-                            VolumeData.from_map_manager(manager, name=map_type),
+                            VolumeData.from_map_manager(
+                                mmm.get_map_manager_by_id(map_type),
+                                name=map_type, map_id=map_type),
                             map_type, group=gid, color=colour, iso=iso,
                             radius=_VIEW_RADIUS_DEFAULT, negative_color=negative)
                 self._status(
@@ -3959,6 +3979,72 @@ class DesktopApp:
             self.bridge.run_on_main.emit(add_on_main)
 
         threading.Thread(target=work, name="pxviewer-phasing", daemon=True).start()
+
+    def reflections_for_model(self, mid: Optional[str] = None) -> Optional[dict]:
+        """The reflections this model was phased against, if it was."""
+        entry = self._model_entry(self._active_model_id if mid is None else mid)
+        if entry is None or entry.get("group") is None:
+            return None
+        return next((r for r in self._reflections
+                     if r["group"] == entry["group"] and r.get("r_work") is not None), None)
+
+    def update_maps(self, rid: str) -> None:
+        """Recompute the density from the model as it now stands.
+
+        This is what keeping the reflections is *for*. The moment the model moves — a
+        minimization, a flip, anything — the maps describe a model that no longer
+        exists. The difference map especially: it is the answer to "what does the
+        density have that the model does not", and after the model moves it is the
+        answer to that question about the old one.
+
+        The maps are replaced in place, so a level, a colour or a radius set on them
+        survives. Runs on a background thread.
+        """
+        rentry = self._reflection_entry(rid)
+        if rentry is None or rentry.get("r_work") is None:
+            raise ValueError("these reflections have not been phased against a model")
+        mmm = self.group_mmm(rentry.get("group"))
+        if mmm is None or mmm.model() is None:
+            raise ValueError("no model to phase against")
+        model = mmm.model()
+        volumes = [v for v in self._volumes if v["group"] == rentry["group"]]
+
+        def work():
+            from .reflections import PHASED_MAP_TYPES, phased_maps
+            from .volume_io import VolumeData
+
+            try:
+                self._status(f"recomputing maps from {rentry['name']}…")
+                out = phased_maps(model, rentry["data"].path)
+            except Exception as exc:  # pragma: no cover - cctbx/data errors
+                self._status(f"could not update maps: {exc}")
+                return
+
+            def swap():
+                for entry in volumes:
+                    map_type = entry["data"].map_id
+                    fresh = out["maps"].get(map_type)
+                    if fresh is None:
+                        continue
+                    mmm.add_map_manager_by_id(fresh, map_type)
+                    if map_type == PHASED_MAP_TYPES[0]:
+                        # The primary as well: it is what minimizing refines into, and
+                        # refining into stale density would undo the point of this.
+                        mmm.set_map_manager(fresh)
+                    entry["data"] = VolumeData.from_map_manager(
+                        fresh, name=map_type, map_id=map_type)
+                    self._write_display_map(entry["id"], self._display_map_data(entry))
+                rentry["r_work"] = out["r_work"]
+                rentry["r_free"] = out["r_free"]
+                self._reload_viewport()
+                self._emit_loaded_changed()
+                self._status(
+                    f"{rentry['name']}: R-work {out['r_work']:.4f}, "
+                    f"R-free {out['r_free']:.4f} — maps updated")
+
+            self.bridge.run_on_main.emit(swap)
+
+        threading.Thread(target=work, name="pxviewer-rephasing", daemon=True).start()
 
     def _add_reflections(self, data, name: str, *, group: Optional[str] = None) -> str:
         """Register a reflection file. Nothing is drawn: there is nothing drawable yet."""
