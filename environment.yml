@@ -10,12 +10,22 @@
 # Note the numpy pin: cctbx works with numpy 2.4, but numba (pulled in by
 # ciftools for BinaryCIF encoding) requires numpy <= 2.4, so the two together
 # cap numpy below 2.5.
+#
+# chem_data ships the monomer library (geostd + mon_lib) that minimization,
+# tugging and validation build restraints from. It lives on cctbx's own
+# anaconda.org channel, not conda-forge — a free community channel, not
+# Anaconda's `defaults`, so no commercial ToS applies. It only carries the
+# latest build. Installing it here means the restraints data comes with the
+# env instead of a separately-managed geostd checkout; point
+# MMTBX_CCP4_MONOMER_LIB at its geostd dir (see README) so cctbx finds it.
 name: pxviewer
 channels:
   - conda-forge
+  - chem_data
 dependencies:
   - python=3.12
   - cctbx-base
+  - chem_data
   - "numpy<2.5"
   - pyside6>=6.5
   - websockets>=12.0
