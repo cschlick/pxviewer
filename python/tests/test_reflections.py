@@ -195,6 +195,90 @@ def test_maps_from_reflections_open_with_a_view_radius(tmp_path):
         app.stop()
 
 
+def test_phased_maps_takes_a_live_model_and_scales(tmp_path):
+    """Two things the density depends on. The model is a live object, not a filename —
+    the viewer's model is often nowhere on disk (reduce2 built it, Minimize moved it),
+    and recomputing density after it moves is why the reflections are kept. And the
+    fmodel must be scaled: get_fmodel returns one that is not, and 2mFo-DFc from an
+    unscaled fmodel is wrong in a way that looks plausible."""
+    import numpy as np
+
+    from pxviewer.cctbx_io import read_model
+    from pxviewer.reflections import PHASED_MAP_TYPES, phased_maps
+
+    model = read_model(str(MODEL))  # in memory only
+    out = phased_maps(model, str(_mtz(tmp_path, coefficients=False)))
+
+    assert set(out["maps"]) == set(PHASED_MAP_TYPES)
+    assert 0.0 <= out["r_work"] <= 1.0 and 0.0 <= out["r_free"] <= 1.0
+    for mm in out["maps"].values():
+        grid = mm.map_data().as_numpy_array()
+        assert grid.std() == pytest.approx(1.0, abs=1e-6)  # sigma-scaled, like the rest
+        assert mm.is_compatible_model(model)               # in the model's frame
+
+
+def test_2mfo_dfc_is_not_the_difference_map():
+    """The same trap as the label table, in the map-type names: "2mFo-DFc" ends with
+    "mFo-DFc", so a prefix or substring test styles the main map as a difference map."""
+    from pxviewer.reflections import DIFFERENCE_MAP_TYPES
+
+    assert "2mFo-DFc" not in DIFFERENCE_MAP_TYPES
+    assert "mFo-DFc" in DIFFERENCE_MAP_TYPES
+
+
+def test_making_maps_pairs_them_with_the_model_that_phased_them(tmp_path):
+    """The phases came from the model, so the maps and the model are inseparable — one
+    map_model_manager. Which is also what makes them usable together: masking, and
+    minimizing into the density, work on X-ray maps the moment they exist."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    import time
+
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(_mtz(tmp_path, coefficients=False)))
+        app.load_file(str(MODEL))
+        rid, mid = app._reflections[0]["id"], app._models[0]["id"]
+        assert [m["id"] for m in app.models_for_phasing()] == [mid]
+        assert app._volumes == []  # amplitudes alone make nothing
+
+        app.make_maps(rid, mid)
+        deadline = time.time() + 90
+        while not app._volumes and time.time() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.05)
+        QCoreApplication.processEvents()
+
+        by_name = {v["name"]: v for v in app._volumes}
+        assert set(by_name) == {"2mFo-DFc", "mFo-DFc"}
+        assert by_name["2mFo-DFc"]["color"] == "dodgerblue"
+        assert (by_name["mFo-DFc"]["color"], by_name["mFo-DFc"]["iso"]) == ("green", 3.0)
+
+        gid = app._models[0]["group"]
+        assert gid is not None and app._reflections[0]["group"] == gid
+        mmm = app.group_mmm(gid)
+        assert mmm is not None  # cctbx really paired them
+
+        # The payoff: everything that needs a pair now works on X-ray maps.
+        assert app.map_for_model(mid) is not None       # minimize into density
+        assert app.can_mask_volume(by_name["2mFo-DFc"]["id"])  # mask around the model
+
+        # The fit is reported, and a paired model is no longer on offer to phase again.
+        assert app._reflections[0]["r_work"] is not None
+        assert app.models_for_phasing() == []
+        with pytest.raises(ValueError, match="already paired"):
+            app.make_maps(rid, mid)
+    finally:
+        app.stop()
+
+
 def test_a_data_mtz_makes_no_maps(tmp_path):
     """Amplitudes cannot become density on their own — the phases have to be computed
     against a model. Loading one draws nothing rather than guessing."""

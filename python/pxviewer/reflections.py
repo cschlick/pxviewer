@@ -21,6 +21,9 @@ from typing import Any, List, Optional, Sequence
 __all__ = [
     "DEFAULT_RESOLUTION_FACTOR",
     "MAP_STYLE",
+    "DIFFERENCE_MAP_TYPES",
+    "PHASED_MAP_TYPES",
+    "phased_maps",
     "ReflectionData",
     "is_difference_map",
     "map_from_coefficients",
@@ -94,6 +97,58 @@ def map_from_coefficients(
         unit_cell_crystal_symmetry=coefficients.crystal_symmetry(),
         wrapping=True,
     )
+
+
+#: The maps to compute from amplitudes and a model: the density, and what the model does
+#: not account for. Both, because a difference map is how you find what the density says
+#: and the model does not — reading one without the other is half the job.
+PHASED_MAP_TYPES = ("2mFo-DFc", "mFo-DFc")
+
+#: Which of those is a difference map. We name these, rather than reading them off a
+#: file, so this is knowledge and not a guess like _DIFFERENCE_ROOTS. Spelled as a set
+#: rather than a prefix test for the same reason that table matches whole roots:
+#: "2mFo-DFc" ends with "mFo-DFc".
+DIFFERENCE_MAP_TYPES = frozenset({"mFo-DFc"})
+
+
+def phased_maps(
+    model: Any,
+    reflection_file: Any,
+    *,
+    map_types: Sequence[str] = PHASED_MAP_TYPES,
+    resolution_factor: float = DEFAULT_RESOLUTION_FACTOR,
+    scattering_table: str = "n_gaussian",
+    data_manager: Any = None,
+) -> dict:
+    """Compute density from amplitudes and a model, which is where the phases come from.
+
+    Returns ``{"maps": {map_type: map_manager}, "r_work": float, "r_free": float}``.
+
+    ``model`` is a live ``mmtbx.model.manager``, not a filename: the model the viewer
+    holds often exists nowhere on disk — reduce2 built it, or Minimize moved it — and
+    recomputing density after the model moves is the point of keeping the reflections
+    around at all. The DataManager takes it directly (``add_model``), and ``get_fmodel``
+    then gathers it with the diffraction data.
+
+    ``update_all_scales`` is not optional. ``get_fmodel`` returns an unscaled fmodel —
+    no bulk solvent, no overall scaling — and 2mFo-DFc computed from that is wrong for
+    real data, in a way that looks plausible rather than broken.
+    """
+    from .cctbx_io import data_manager as _dm
+
+    dm = _dm(data_manager)
+    dm.add_model("model", model)
+    dm.process_miller_array_file(str(reflection_file))
+
+    fmodel = dm.get_fmodel(scattering_table=scattering_table)
+    fmodel.update_all_scales()
+    density = fmodel.electron_density_map()
+    maps = {
+        map_type: map_from_coefficients(
+            density.map_coefficients(map_type=map_type), resolution_factor=resolution_factor)
+        for map_type in map_types
+    }
+    return {"maps": maps, "r_work": fmodel.r_work(), "r_free": fmodel.r_free()}
 
 
 class ReflectionData:

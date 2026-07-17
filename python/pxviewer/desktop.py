@@ -1373,6 +1373,11 @@ class ControlsWindow:
             note.setWordWrap(True)
             note.setStyleSheet("color: #888;")
             self._appearance_layout.addWidget(note)
+            if it.get("r_work") is not None:
+                fit = QLabel(f"R-work {it['r_work']:.4f} · R-free {it['r_free']:.4f}")
+                self._appearance_layout.addWidget(fit)
+            if not it.get("has_map_coefficients"):
+                self._add_phasing_row(it["id"])
         elif it["kind"] == "model":
             mid = it["id"]
 
@@ -1479,6 +1484,36 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None:
             item["iso"] = value
+
+    def _add_phasing_row(self, rid: str) -> None:
+        """Offer to compute density from these reflections and a model.
+
+        The model is chosen rather than assumed: it is where the phases come from, so it
+        decides what the density says. Only unpaired models are on offer — the maps end
+        up in a manager with whichever one phased them.
+        """
+        from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton
+
+        models = self._desktop.models_for_phasing()
+        row = QHBoxLayout()
+        button = QPushButton("Make maps")
+        combo = QComboBox()
+        for m in models:
+            combo.addItem(m["name"], m["id"])
+        if not models:
+            combo.addItem("no unpaired model loaded", None)
+            combo.setEnabled(False)
+            button.setEnabled(False)
+            button.setToolTip("Load a model to phase against, or unpair one.")
+        else:
+            button.setToolTip(
+                "Compute 2mFo-DFc and mFo-DFc from these amplitudes and the chosen "
+                "model, and pair the maps with it.")
+        button.clicked.connect(
+            lambda: self._safe(lambda: self._desktop.make_maps(rid, combo.currentData())))
+        row.addWidget(button)
+        row.addWidget(combo, stretch=1)
+        self._appearance_layout.addLayout(row)
 
     def _add_radius_row(self, current, on_change):
         """How much density to draw around the view centre.
@@ -3792,7 +3827,8 @@ class DesktopApp:
             {"kind": "reflections", "id": r["id"], "name": r["name"], "visible": None,
              "active": False, "group": r["group"], "summary": r["data"].summary(),
              "labels": list(r["data"].labels),
-             "has_map_coefficients": r["data"].has_map_coefficients}
+             "has_map_coefficients": r["data"].has_map_coefficients,
+             "r_work": r.get("r_work"), "r_free": r.get("r_free")}
             for r in self._reflections
         ]
         groups = [{"id": gid, "name": g["name"], "label": g.get("label", "")}
@@ -3837,6 +3873,88 @@ class DesktopApp:
         from .live import LiveSession
 
         return LiveSession.from_cctbx_model(model)
+
+    def models_for_phasing(self) -> list:
+        """Models that could phase a set of reflections: unpaired, and really models.
+
+        Unpaired because the maps that come out belong with the model that phased them,
+        and they go into a manager together — a model already in one cannot be moved out
+        from under it.
+        """
+        return [m for m in self._models
+                if m.get("group") is None
+                and getattr(m["session"], "model", None) is not None]
+
+    def make_maps(self, rid: str, mid: str) -> None:
+        """Compute density from reflections and a model, and pair the result with it.
+
+        The phases come from the model, so these maps and that model are inseparable:
+        they go into one map_model_manager, which is also what makes them usable together
+        — masking, and minimizing into the density.
+
+        Runs on a background thread (scaling and two transforms), and adds its results on
+        the GUI thread.
+        """
+        rentry = self._reflection_entry(rid)
+        mentry = self._model_entry(mid)
+        if rentry is None or mentry is None:
+            raise ValueError("pick reflections and a model")
+        if rentry["data"].has_map_coefficients:
+            raise ValueError("this file already carries maps; nothing to phase")
+        if rentry["data"].path is None:
+            raise ValueError("these reflections did not come from a file")
+        if mentry.get("group") is not None:
+            raise ValueError("that model is already paired with something")
+        model = getattr(mentry["session"], "model", None)
+        if model is None:
+            raise ValueError("that object has no cctbx model to phase with")
+
+        def work():
+            from iotbx.map_model_manager import map_model_manager
+
+            from .reflections import DIFFERENCE_MAP_TYPES, MAP_STYLE, phased_maps
+            from .volume_io import VolumeData
+
+            try:
+                self._status(f"phasing {rentry['name']} against {mentry['name']}…")
+                out = phased_maps(model, rentry["data"].path)
+            except Exception as exc:  # pragma: no cover - cctbx/data errors
+                self._status(f"could not compute maps: {exc}")
+                return
+
+            def add_on_main():
+                types = list(out["maps"])
+                # The model and its maps in one manager: the phases came from it, so
+                # cctbx holds them together and everything that needs a pair — masking,
+                # minimizing into density — now works on them. The primary map is the
+                # 2mFo-DFc one, which is the map you refine into.
+                mmm = map_model_manager(model=model, map_manager=out["maps"][types[0]])
+                managers = {types[0]: mmm.map_manager()}
+                for extra in types[1:]:
+                    mmm.add_map_manager_by_id(out["maps"][extra], extra)
+                    managers[extra] = mmm.get_map_manager_by_id(extra)
+                gid = self._new_group(f"{mentry['name']} + {rentry['name']}",
+                                      mmm=mmm, label="phased from reflections")
+                mentry["group"] = gid
+                rentry["group"] = gid
+                # Before the batch: leaving it opens _emit_loaded_changed publishes the
+                # summary, and the pane reads the fit from there.
+                rentry["r_work"] = out["r_work"]
+                rentry["r_free"] = out["r_free"]
+                with self._batch_load():
+                    for map_type, manager in managers.items():
+                        colour, iso = MAP_STYLE[map_type in DIFFERENCE_MAP_TYPES]
+                        self._add_volume(
+                            VolumeData.from_map_manager(manager, name=map_type),
+                            map_type, group=gid, color=colour, iso=iso,
+                            radius=_VIEW_RADIUS_DEFAULT)
+                self._status(
+                    f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
+                    f" — maps: {', '.join(types)}")
+
+            self.bridge.run_on_main.emit(add_on_main)
+
+        threading.Thread(target=work, name="pxviewer-phasing", daemon=True).start()
 
     def _add_reflections(self, data, name: str, *, group: Optional[str] = None) -> str:
         """Register a reflection file. Nothing is drawn: there is nothing drawable yet."""
