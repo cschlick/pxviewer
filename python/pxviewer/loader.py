@@ -17,6 +17,7 @@ __all__ = [
     "MODEL_FORMATS",
     "VOLUME_FORMATS",
     "FILE_DIALOG_FILTER",
+    "REFLECTION_FORMATS",
     "SAMPLE_STRUCTURE",
     "file_kind",
     "sample_structure_path",
@@ -60,6 +61,14 @@ VOLUME_FORMATS = {
     ".ccp4": "map",
 }
 
+# Reflection formats. Nothing here is drawable: these carry the density a viewer shows,
+# but only as coefficients (see pxviewer.reflections). mmCIF structure factors are not
+# listed because .cif already means "model" above and the suffix cannot tell them apart —
+# cctbx has to read the file to know, which a suffix table cannot do.
+REFLECTION_FORMATS = {
+    ".mtz": "mtz",
+}
+
 
 def _filter(label: str, suffixes) -> str:
     patterns = " ".join(f"*{s}" for s in sorted(suffixes))
@@ -68,22 +77,26 @@ def _filter(label: str, suffixes) -> str:
 
 FILE_DIALOG_FILTER = ";;".join(
     [
-        _filter("Models and volumes", list(MODEL_FORMATS) + list(VOLUME_FORMATS)),
+        _filter("All supported",
+                list(MODEL_FORMATS) + list(VOLUME_FORMATS) + list(REFLECTION_FORMATS)),
         _filter("Models", MODEL_FORMATS),
         _filter("Volumes", VOLUME_FORMATS),
+        _filter("Reflections", REFLECTION_FORMATS),
         "All files (*)",
     ]
 )
 
 
 def file_kind(path: str | Path) -> str:
-    """Classify a path as ``"model"`` or ``"volume"`` by its suffix."""
+    """Classify a path as ``"model"``, ``"volume"`` or ``"reflections"`` by its suffix."""
     suffix = Path(path).suffix.lower()
     if suffix in MODEL_FORMATS:
         return "model"
     if suffix in VOLUME_FORMATS:
         return "volume"
-    known = ", ".join(sorted(set(MODEL_FORMATS) | set(VOLUME_FORMATS)))
+    if suffix in REFLECTION_FORMATS:
+        return "reflections"
+    known = ", ".join(sorted(set(MODEL_FORMATS) | set(VOLUME_FORMATS) | set(REFLECTION_FORMATS)))
     raise ValueError(f"unsupported file type '{suffix or path}'. Supported: {known}")
 
 

@@ -1349,7 +1349,25 @@ class ControlsWindow:
             self._appearance_layout.addLayout(r)
             return combo
 
-        if it["kind"] == "model":
+        if it["kind"] == "reflections":
+            # Nothing to style — reflections are not drawn. The pane is still where an
+            # object says what it is, so it says what the file holds and what that
+            # means for getting density out of it.
+            summary = QLabel(it.get("summary", ""))
+            summary.setWordWrap(True)
+            self._appearance_layout.addWidget(summary)
+            arrays = QLabel("Arrays: " + ", ".join(it.get("labels") or []))
+            arrays.setWordWrap(True)
+            arrays.setStyleSheet("color: #888;")
+            self._appearance_layout.addWidget(arrays)
+            note = QLabel(
+                "Carries map coefficients — density needs no model."
+                if it.get("has_map_coefficients")
+                else "Amplitudes only — density needs a model to phase against.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #888;")
+            self._appearance_layout.addWidget(note)
+        elif it["kind"] == "model":
             mid = it["id"]
 
             def _set_rep(v, it=it):
@@ -2327,9 +2345,14 @@ class ControlsWindow:
                 # [visible check] col 0, [active radio] col 1, [name] col 2 (elides).
                 node = QTreeWidgetItem(parent)
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
-                node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                node.setToolTip(0, "Visible")
-                node.setCheckState(0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
+                if it["visible"] is None:
+                    # Reflections: nothing drawable, so nothing to show or hide.
+                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                else:
+                    node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    node.setToolTip(0, "Visible")
+                    node.setCheckState(
+                        0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
                 if it["kind"] == "model":
                     radio = QRadioButton()
                     radio.setToolTip("Active model — drives the atoms table, geometry and selection.")
@@ -2337,7 +2360,8 @@ class ControlsWindow:
                     self._active_group.addButton(radio)
                     radio.setChecked(bool(it.get("active")))  # won't fire buttonClicked
                     self._loaded_tree.setItemWidget(node, 1, radio)
-                name = it["name"] + ("   [map]" if it["kind"] == "volume" else "")
+                suffix = {"volume": "   [map]", "reflections": "   [data]"}
+                name = it["name"] + suffix.get(it["kind"], "")
                 node.setText(2, name)
                 node.setToolTip(2, it["name"])  # full name on hover when elided
                 if it.get("active"):
@@ -2424,6 +2448,7 @@ class ControlsWindow:
             self._desktop.set_model_visible(ident, visible)
         elif kind == "volume":
             self._desktop.set_volume_visible(ident, visible)
+        # reflections have no visibility to change
 
     def _on_active_radio(self, button) -> None:
         """A model's active radio was clicked -> make it the active model."""
@@ -2446,6 +2471,8 @@ class ControlsWindow:
             self._desktop.remove_model(ident)
         elif kind == "volume":
             self._desktop.remove_volume(ident)
+        elif kind == "reflections":
+            self._desktop.remove_reflections(ident)
         elif kind == "group":
             self._desktop.remove_group(ident)
 
@@ -2518,6 +2545,13 @@ class DesktopApp:
         # as an MVSJ scene composed alongside the model ws in the one viewport.
         self._volumes: List[dict] = []
         self._volume_counter = 0
+        # Loaded reflections: {id, name, data(ReflectionData), group}. The one loaded
+        # thing that cannot be drawn — density is an FFT away, and for amplitudes a
+        # model away too — so these have no visibility, no representation and no scene.
+        # They are kept rather than consumed into maps: recomputing density after the
+        # model moves is the point, and that needs the reflections still here.
+        self._reflections: List[dict] = []
+        self._reflection_counter = 0
         # Groups (a map_model_manager loaded together): {group_id: name}. Membership
         # is authoritative from cctbx — we never infer it.
         self._groups: dict = {}
@@ -2713,6 +2747,9 @@ class DesktopApp:
 
     def _volume_entry(self, vid):
         return next((v for v in self._volumes if v["id"] == vid), None)
+
+    def _reflection_entry(self, rid):
+        return next((r for r in self._reflections if r["id"] == rid), None)
 
     @contextmanager
     def _batch_load(self):
@@ -3547,6 +3584,15 @@ class DesktopApp:
         self._reload_viewport()
         self._emit_loaded_changed()
 
+    def remove_reflections(self, rid: str) -> None:
+        """Unload a reflection file. Nothing is drawn from it, so nothing to reload."""
+        entry = self._reflection_entry(rid)
+        if entry is None:
+            return
+        self._reflections.remove(entry)
+        self._prune_group(entry["group"])
+        self._emit_loaded_changed()
+
     # -- groups --
 
     def remove_group(self, gid: str) -> None:
@@ -3556,12 +3602,19 @@ class DesktopApp:
                 self.remove_model(m["id"])
             for v in [v for v in self._volumes if v["group"] == gid]:
                 self.remove_volume(v["id"])
+            for r in [r for r in self._reflections if r["group"] == gid]:
+                self.remove_reflections(r["id"])
 
     def _prune_group(self, gid: Optional[str]) -> None:
         """Drop a group's name once it has no members left."""
         if gid is None:
             return
-        if not any(m["group"] == gid for m in self._models) and not any(v["group"] == gid for v in self._volumes):
+        members = (
+            any(m["group"] == gid for m in self._models)
+            or any(v["group"] == gid for v in self._volumes)
+            or any(r["group"] == gid for r in self._reflections)
+        )
+        if not members:
             self._groups.pop(gid, None)
 
     def _clear_all(self) -> None:
@@ -3573,6 +3626,7 @@ class DesktopApp:
                 pass
         self._models.clear()
         self._volumes.clear()
+        self._reflections.clear()
         self._groups.clear()
         self._active_model_id = None
         with self._scene_lock:
@@ -3604,10 +3658,17 @@ class DesktopApp:
             snapshot = {k: list(v) for k, v in self._scene_selection.items()}
         self.bridge.scene_selection_changed.emit(snapshot)
 
+    def _emitted_items(self) -> list:
+        """The Loaded-tree items as published (models, volumes, reflections)."""
+        return self._loaded_summary()["items"]
+
     def _emit_loaded_changed(self) -> None:
-        """Publish the Loaded tree: groups + flat items (models and volumes)."""
+        """Publish the Loaded tree: groups + flat items (models, volumes, reflections)."""
         if self._batching:
             return
+        self.bridge.loaded_changed.emit(self._loaded_summary())
+
+    def _loaded_summary(self) -> dict:
         items = [
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
@@ -3619,9 +3680,16 @@ class DesktopApp:
              "active": False, "group": v["group"], "style": v.get("style"),
              "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso")}
             for v in self._volumes
+        ] + [
+            # visible=None: not drawable, so the tree gives it no visibility box.
+            {"kind": "reflections", "id": r["id"], "name": r["name"], "visible": None,
+             "active": False, "group": r["group"], "summary": r["data"].summary(),
+             "labels": list(r["data"].labels),
+             "has_map_coefficients": r["data"].has_map_coefficients}
+            for r in self._reflections
         ]
         groups = [{"id": gid, "name": g["name"]} for gid, g in self._groups.items()]
-        self.bridge.loaded_changed.emit({"groups": groups, "items": items})
+        return {"groups": groups, "items": items}
 
     def session_for(self, mid: Optional[str]):
         """The LiveSession for a model id (or None) — used by the atoms table."""
@@ -3641,8 +3709,11 @@ class DesktopApp:
         through cctbx's map_manager. To load a map + model *as a group*, use
         :meth:`load_files` with both paths.
         """
-        if file_kind(path) == "volume":
+        kind = file_kind(path)
+        if kind == "volume":
             return self._load_volume_file(path)
+        if kind == "reflections":
+            return self._load_reflection_file(path)
         return self._load_model_file(path)
 
     def load_files(self, paths) -> str:
@@ -3658,6 +3729,28 @@ class DesktopApp:
         from .live import LiveSession
 
         return LiveSession.from_cctbx_model(model)
+
+    def _add_reflections(self, data, name: str, *, group: Optional[str] = None) -> str:
+        """Register a reflection file. Nothing is drawn: there is nothing drawable yet."""
+        self._reflection_counter += 1
+        rid = f"reflections-{self._reflection_counter}"
+        self._reflections.append({"id": rid, "name": name, "data": data, "group": group})
+        self._emit_loaded_changed()
+        return rid
+
+    def _load_reflection_file(self, path: str) -> str:
+        """Read reflections with cctbx and register them (no density yet).
+
+        Loading them draws nothing on purpose: what a viewer shows is the density they
+        imply, and getting there needs either map coefficients in the file or a model to
+        phase against. That step is explicit rather than guessed at.
+        """
+        from .reflections import ReflectionData
+
+        data = ReflectionData.from_file(path)
+        self._add_reflections(data, Path(path).name)
+        self._status(f"Loaded reflections: {data.name} — {data.summary()}")
+        return "reflections"
 
     def _load_model_file(self, path: str) -> str:
         """Read a model with cctbx and add it to the viewport (alongside any others)."""

@@ -36,8 +36,12 @@ def test_unsupported_suffix_names_the_supported_ones():
 
 
 def test_dialog_filter_offers_a_combined_and_an_all_files_entry():
-    assert FILE_DIALOG_FILTER.startswith("Models and volumes (")
-    assert "*.pdb" in FILE_DIALOG_FILTER and "*.mrc" in FILE_DIALOG_FILTER
+    """The first entry accepts everything pxviewer reads, so Open just works; the
+    per-kind entries and All files follow."""
+    assert FILE_DIALOG_FILTER.startswith("All supported (")
+    for suffix in ("*.pdb", "*.mrc", "*.mtz"):  # a model, a map, reflections
+        assert suffix in FILE_DIALOG_FILTER.split(";;")[0]
+    assert "Reflections (*.mtz)" in FILE_DIALOG_FILTER
     assert FILE_DIALOG_FILTER.endswith("All files (*)")
 
 
