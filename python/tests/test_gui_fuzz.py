@@ -227,3 +227,131 @@ def test_random_gui_walk_keeps_the_model_consistent(seed, guarded_modals):
                     f"  {trail}\n-> {exc}") from exc
     finally:
         app.stop()
+
+
+# -- widget monkey: real clicks through the controls -------------------------
+#
+# The backend walk above never touches a Qt signal; this does. It clicks buttons, cycles
+# combos, toggles checkboxes and drags sliders in the real controls window, which is where
+# the wiring bugs live (the colour dialog reopening on OK was one). Modals are auto-closed
+# so nothing blocks, and the invariant bank runs after every interaction.
+#
+# The threaded buttons (Minimize/Stop/Add H + analyze) are left out: they start background
+# work whose races are a separate concern from signal wiring.
+
+_THREADED_BUTTONS = {"Minimize", "Stop", "Add H + analyze"}
+
+
+@pytest.fixture
+def modal_autocloser():
+    """Reject any modal dialog that appears, so a click that opens one does not hang.
+
+    Runs on a timer, so it fires inside the nested event loop a modal's exec() spins —
+    the click handler gets its (cancelled) answer and carries on.
+    """
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog
+
+    def close_modals():
+        for w in QApplication.topLevelWidgets():
+            if isinstance(w, QDialog) and w.isVisible() and w.isModal():
+                w.reject()
+
+    timer = QTimer()
+    timer.setInterval(20)
+    timer.timeout.connect(close_modals)
+    timer.start()
+    yield
+    timer.stop()
+
+
+def _interactive_widgets(ctl):
+    """(label, callable) for each enabled, visible control worth poking."""
+    from PySide6.QtWidgets import QAbstractSlider, QCheckBox, QComboBox, QPushButton
+
+    root = ctl.widget()
+    actions = []
+
+    for button in root.findChildren(QPushButton):
+        if not (button.isEnabled() and button.isVisibleTo(root)):
+            continue
+        if button.text() in _THREADED_BUTTONS:
+            continue
+        # Skip menu buttons (Demos): their actions are heavy loads the backend walk
+        # already covers, and triggering them in a tight loop just reloads slow demos.
+        if button.menu() is not None:
+            continue
+        actions.append((f"click:{button.text()}", button.click))
+
+    for combo in root.findChildren(QComboBox):
+        if combo.isEnabled() and combo.isVisibleTo(root) and combo.count() > 1:
+            actions.append((
+                "combo", lambda c=combo: c.setCurrentIndex(
+                    (c.currentIndex() + 1) % c.count())))
+
+    for check in root.findChildren(QCheckBox):
+        if check.isEnabled() and check.isVisibleTo(root):
+            actions.append(("check", lambda w=check: w.toggle()))
+
+    for slider in root.findChildren(QAbstractSlider):
+        if slider.isEnabled() and slider.isVisibleTo(root):
+            mid = (slider.minimum() + slider.maximum()) // 2
+            actions.append(("slider", lambda w=slider, v=mid: w.setValue(v)))
+
+    return actions
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_widget_monkey_keeps_the_model_consistent(seed, guarded_modals, modal_autocloser):
+    """Set up a rich scene, then click/toggle/drag random real controls, asserting the
+    invariant bank after each. A failure prints the widget it poked."""
+    import os
+    import random
+
+    from PySide6.QtWidgets import QApplication
+
+    from pxviewer.desktop import DesktopApp
+
+    rng = random.Random(seed)
+    np.random.seed(seed)
+    data = os.path.join(os.path.dirname(__file__), "..", "pxviewer", "data")
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    app._controls.widget().show()
+    try:
+        # A scene with something of every kind to poke.
+        app.load_file(os.path.join(data, "1ubq.pdb"))
+        app.load_map_model_demo(d_min=4.0)
+        app.load_xray_demo(d_min=3.0)
+        QApplication.processEvents()
+
+        ctl = app._controls
+        poked = []
+        for _ in range(80):
+            # Focus a random object first, so the Appearance controls exist to poke.
+            summary = app._loaded_summary()["items"]
+            if summary:
+                it = rng.choice(summary)
+                if it["kind"] == "model":
+                    app.set_active_model(it["id"])
+                else:
+                    ctl._update_appearance(it["kind"], it["id"])
+                QApplication.processEvents()
+
+            actions = _interactive_widgets(ctl)
+            if not actions:
+                continue
+            label, act = rng.choice(actions)
+            poked.append(label)
+            act()
+            QApplication.processEvents()
+            try:
+                assert_viewer_consistent(app)
+            except AssertionError as exc:
+                trail = "\n  ".join(poked[-15:])
+                raise AssertionError(
+                    f"invariant broke after {len(poked)} widget pokes (seed {seed}):\n"
+                    f"  {trail}\n-> {exc}") from exc
+    finally:
+        app.stop()
