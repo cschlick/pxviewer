@@ -2318,7 +2318,7 @@ class ControlsWindow:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QRadioButton, QTreeWidgetItem
 
-        groups = {g["id"]: g["name"] for g in summary.get("groups", [])}
+        groups = {g["id"]: g for g in summary.get("groups", [])}
         items = summary.get("items", [])
         self._items = items
         model_items = [it for it in items if it["kind"] == "model"]
@@ -2335,7 +2335,11 @@ class ControlsWindow:
             for it in items:
                 gid = it["group"]
                 if gid and gid not in group_nodes:
-                    node = QTreeWidgetItem(self._loaded_tree, [f"{groups.get(gid, gid)}  (map+model group)"])
+                    g = groups.get(gid) or {}
+                    heading = g.get("name", gid)
+                    if g.get("label"):
+                        heading += f"  ({g['label']})"
+                    node = QTreeWidgetItem(self._loaded_tree, [heading])
                     node.setData(0, Qt.ItemDataRole.UserRole, ("group", gid))
                     node.setFirstColumnSpanned(True)  # the header spans the whole row
                     node.setExpanded(True)
@@ -2762,7 +2766,7 @@ class DesktopApp:
             self._reload_viewport()
             self._emit_loaded_changed()
 
-    def _new_group(self, name: str, *, mmm: Any = None) -> str:
+    def _new_group(self, name: str, *, mmm: Any = None, label: str = "map+model group") -> str:
         """Register a group of loaded objects.
 
         ``mmm`` is the cctbx ``map_model_manager`` the group was built from, when there
@@ -2771,7 +2775,7 @@ class DesktopApp:
         """
         self._group_counter += 1
         gid = f"group-{self._group_counter}"
-        self._groups[gid] = {"name": name, "mmm": mmm}
+        self._groups[gid] = {"name": name, "mmm": mmm, "label": label}
         return gid
 
     def group_mmm(self, gid: Optional[str]) -> Any:
@@ -3552,15 +3556,21 @@ class DesktopApp:
         mmm = self.group_mmm(entry.get("group"))
         return mmm is not None and mmm.model() is not None
 
-    def _add_volume(self, data, name: str, *, group: Optional[str] = None) -> str:
-        """Register + show a volume: write its map (via cctbx) and compose the scene."""
+    def _add_volume(self, data, name: str, *, group: Optional[str] = None,
+                    color: Optional[str] = None, iso: Optional[float] = None) -> str:
+        """Register + show a volume: write its map (via cctbx) and compose the scene.
+
+        ``color``/``iso`` override the defaults for maps that have a convention — a
+        difference map is green at 3 sigma whatever colour the palette is up to.
+        """
         self._volume_counter += 1
         vid = f"volume-{self._volume_counter}"
         self._write_display_map(vid, data)
         self._volumes.append({
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
-            "iso": data.suggested_iso(), "color": _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
+            "iso": data.suggested_iso() if iso is None else float(iso),
+            "color": color or _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
         })
         self._reload_viewport()
@@ -3688,7 +3698,8 @@ class DesktopApp:
              "has_map_coefficients": r["data"].has_map_coefficients}
             for r in self._reflections
         ]
-        groups = [{"id": gid, "name": g["name"]} for gid, g in self._groups.items()]
+        groups = [{"id": gid, "name": g["name"], "label": g.get("label", "")}
+                  for gid, g in self._groups.items()]
         return {"groups": groups, "items": items}
 
     def session_for(self, mid: Optional[str]):
@@ -3739,17 +3750,40 @@ class DesktopApp:
         return rid
 
     def _load_reflection_file(self, path: str) -> str:
-        """Read reflections with cctbx and register them (no density yet).
+        """Read reflections with cctbx; make their maps when the file already has them.
 
-        Loading them draws nothing on purpose: what a viewer shows is the density they
-        imply, and getting there needs either map coefficients in the file or a model to
-        phase against. That step is explicit rather than guessed at.
+        A file carrying map coefficients is a refinement result, and the density is what
+        it is *for* — so the maps are made on load rather than asked about, which is what
+        Coot's Auto Open MTZ gets right and why it is the way most people open one. A
+        file of amplitudes cannot do this: its phases have to be computed against a
+        model, which is a separate step.
         """
-        from .reflections import ReflectionData
+        from .reflections import (
+            MAP_STYLE, ReflectionData, is_difference_map, map_from_coefficients,
+            root_label,
+        )
+        from .volume_io import VolumeData
 
         data = ReflectionData.from_file(path)
-        self._add_reflections(data, Path(path).name)
-        self._status(f"Loaded reflections: {data.name} — {data.summary()}")
+        name = Path(path).name
+        if not data.has_map_coefficients:
+            self._add_reflections(data, name)
+            self._status(f"Loaded reflections: {name} — {data.summary()}")
+            return "reflections"
+
+        gid = self._new_group(name, label="reflections + maps")
+        made = []
+        with self._batch_load():
+            self._add_reflections(data, name, group=gid)
+            for coefficients in data.map_coefficient_arrays():
+                label = coefficients.info().label_string()
+                colour, iso = MAP_STYLE[is_difference_map(label)]
+                volume = VolumeData.from_map_manager(
+                    map_from_coefficients(coefficients), name=root_label(label))
+                self._add_volume(volume, root_label(label), group=gid,
+                                 color=colour, iso=iso)
+                made.append(root_label(label))
+        self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")
         return "reflections"
 
     def _load_model_file(self, path: str) -> str:

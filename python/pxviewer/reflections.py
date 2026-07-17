@@ -18,7 +18,82 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, List, Optional, Sequence
 
-__all__ = ["ReflectionData"]
+__all__ = [
+    "DEFAULT_RESOLUTION_FACTOR",
+    "MAP_STYLE",
+    "ReflectionData",
+    "is_difference_map",
+    "map_from_coefficients",
+    "root_label",
+]
+
+#: Grid spacing for transforming coefficients, as a fraction of the resolution. cctbx's
+#: own default, and the same spacing as Coot's default sampling rate of 1.5 (clipper
+#: states it as a rate r, which is this at 1/(2r)) — so the map is gridded the way a
+#: crystallographer expects. 0.25 is smoother at ~2.2x the voxels, which we pay for
+#: twice: writing the file and isosurfacing it on the GPU.
+DEFAULT_RESOLUTION_FACTOR = 1.0 / 3.0
+
+#: How each kind of map is shown, following crystallographic convention (and Coot):
+#: a 2Fo-Fc map in blue at 1.5 sigma, a difference map in green at 3 sigma. The
+#: difference map's negative lobe (-3 sigma, red) needs a second contour per volume,
+#: which the viewer does not have yet.
+MAP_STYLE = {
+    False: ("dodgerblue", 1.5),  # a regular map
+    True: ("green", 3.0),        # a difference map
+}
+
+# Map-coefficient label conventions. cctbx knows an array *is* coefficients but not what
+# they mean — no format records "this is a difference map" — so, like every other viewer,
+# we keep the table. phenix writes 2FOFCWT/FOFCWT, refmac FWT/DELFWT.
+#
+# Matched on the whole root, never as a substring: "2FOFCWT" contains "FOFCWT", so a
+# substring test calls the 2Fo-Fc map a difference map. test_2fofc_is_not_a_difference_map.
+_DIFFERENCE_ROOTS = frozenset({
+    "FOFCWT", "FOFCWT_NO_FILL",  # phenix
+    "DELFWT",                     # refmac
+})
+
+
+def root_label(label: str) -> str:
+    """The amplitude column's root, e.g. '2FOFCWT,PHI2FOFCWT' -> '2FOFCWT'.
+
+    What a crystallographer calls the map, and short enough for the object list.
+    """
+    return label.split(",")[0].strip()
+
+
+def _root_label(label: str) -> str:
+    return root_label(label).upper()
+
+
+def is_difference_map(label: str) -> bool:
+    """Whether a map-coefficient label names a difference map, by convention.
+
+    A guess, and unavoidably so — the file does not say. It decides how the map is
+    contoured and coloured, not what it contains, so being wrong is cosmetic.
+    """
+    return _root_label(label) in _DIFFERENCE_ROOTS
+
+
+def map_from_coefficients(
+    coefficients: Any, *, resolution_factor: float = DEFAULT_RESOLUTION_FACTOR
+) -> Any:
+    """Transform map coefficients into a cctbx ``map_manager``.
+
+    Sigma-scaled, so a contour level means the same thing here as it does everywhere
+    else in crystallography: "1.5 sigma" is 1.5 standard deviations of this map.
+    """
+    from iotbx.map_manager import map_manager
+
+    fft = coefficients.fft_map(resolution_factor=resolution_factor)
+    fft.apply_sigma_scaling()
+    return map_manager(
+        map_data=fft.real_map_unpadded(),
+        unit_cell_grid=fft.n_real(),
+        unit_cell_crystal_symmetry=coefficients.crystal_symmetry(),
+        wrapping=True,
+    )
 
 
 class ReflectionData:
