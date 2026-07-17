@@ -1033,6 +1033,12 @@ class ControlsWindow:
         sl.addWidget(self._selection_label)
         layout.addWidget(sel_box)
 
+        # -- Mouse reference ---------------------------------------------
+        # Zoom moved off the scroll wheel (which now contours) when the bindings went
+        # Coot-style, and an invisible zoom is a real trap — so the whole map is spelled
+        # out here on the home tab.
+        layout.addWidget(self._build_mouse_legend())
+
         layout.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1794,6 +1800,45 @@ class ControlsWindow:
         self._appearance_layout.addLayout(row)
         return slider
 
+    def _build_mouse_legend(self):
+        """A compact reference of the viewport's mouse and key bindings (Coot's layout).
+
+        The gesture on the left, what it does on the right — the same key-cap chips the
+        sliders use, so "scroll" beside the Level slider reads as the same thing here.
+        """
+        from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel
+
+        box = QGroupBox("Mouse")
+        grid = QGridLayout(box)
+        grid.setSpacing(4)
+        grid.setColumnStretch(1, 1)
+        bindings = [
+            ("drag", "Rotate"),
+            ("Ctrl + drag", "Pan"),
+            ("right-drag", "Zoom"),
+            ("Ctrl + scroll", "Zoom"),
+            ("scroll", "Contour level"),
+            ("Shift + drag", "Pull an atom"),
+        ]
+        for r, (gesture, action) in enumerate(bindings):
+            chip = self._gesture_chip(gesture)
+            chip.setToolTip("")  # the action label beside it already says what it does
+            grid.addWidget(chip, r, 0)
+            grid.addWidget(QLabel(action), r, 1)
+        return box
+
+    def _gesture_chip(self, text: str):
+        """A small key-cap-style badge naming a mouse gesture, for placing beside the
+        control it drives — so a slider says how to reach it without opening a manual."""
+        from PySide6.QtWidgets import QLabel
+
+        chip = QLabel(text)
+        chip.setToolTip("Do this over the viewport to change the control on its right.")
+        chip.setStyleSheet(
+            "QLabel { border: 1px solid palette(mid); border-radius: 4px;"
+            " padding: 1px 5px; color: palette(dark); background: palette(midlight); }")
+        return chip
+
     def _add_iso_row(self, current, on_change):
         """Contour level: a slider to hunt with, a spinbox for the exact value.
 
@@ -1810,8 +1855,11 @@ class ControlsWindow:
         value = DEFAULT_ISO_SIGMA if current is None else float(current)
         row = QHBoxLayout()
         lab = QLabel("Level")
-        lab.setMinimumWidth(80)
+        lab.setMinimumWidth(44)  # room for the gesture chip beside it, same total width
         row.addWidget(lab)
+        # The bare scroll wheel adjusts this — say so right where the control is, since
+        # that is the one gesture people miss (it is also why scroll no longer zooms).
+        row.addWidget(self._gesture_chip("scroll"))
 
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, int(round(_ISO_SLIDER_MAX / _ISO_RESOLUTION)))

@@ -1669,3 +1669,37 @@ def test_rebuilding_appearance_spawns_no_stray_windows(qapp):
         assert stray_combos() == []
     finally:
         app.stop()
+
+
+def test_mouse_bindings_are_shown_in_the_gui(qapp):
+    """Zoom moved off the scroll wheel when the bindings went Coot-style, so it has to be
+    spelled out or it is unfindable. The Mouse legend lists every gesture, and the Level
+    slider carries a chip naming the wheel that drives it."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+    from PySide6.QtWidgets import QLabel
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        ctl = app._controls
+        legend = ctl._build_mouse_legend()
+        texts = {w.text() for w in legend.findChildren(QLabel)}
+        # The gesture and its action are both present, zoom especially.
+        assert "Zoom" in texts
+        assert "right-drag" in texts and "Ctrl + scroll" in texts   # both ways to zoom
+        assert "scroll" in texts and "Contour level" in texts
+        assert "Shift + drag" in texts and "Pull an atom" in texts
+
+        # The Level slider names its gesture right beside it.
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
+        ctl._update_appearance("volume", vid)
+        chips = [w.text() for w in ctl._appearance_box.findChildren(QLabel) if w.text() == "scroll"]
+        assert chips == ["scroll"]
+    finally:
+        app.stop()
