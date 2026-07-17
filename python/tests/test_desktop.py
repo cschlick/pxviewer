@@ -1738,3 +1738,36 @@ def test_custom_colour_previews_live_not_only_on_close(qapp):
         assert live == ["#112233", "#445566", "#778899"]  # fired live, one per move
     finally:
         app.stop()
+
+
+def test_committing_a_custom_colour_does_not_reopen_the_dialog(qapp):
+    """Pressing OK looked like it closed the dialog and immediately reopened it. The
+    cause: inserting the picked colour into the combo shifts the still-selected "Custom…"
+    entry, which re-fires currentIndexChanged with the sentinel and reopens the picker.
+    The commit re-indexes with the combo's signals blocked to stop exactly that."""
+    from PySide6.QtWidgets import QComboBox
+
+    from pxviewer.desktop import _CUSTOM_COLOR
+
+    combo = QComboBox()
+    for i in range(3):
+        combo.addItem(f"preset{i}", f"p{i}")
+    combo.addItem("Custom…", _CUSTOM_COLOR)
+    combo.setCurrentIndex(combo.findData(_CUSTOM_COLOR))  # as if opening the picker
+
+    fired = []
+    combo.currentIndexChanged.connect(lambda i: fired.append(combo.itemData(i)))
+
+    # Unguarded, inserting before "Custom…" re-fires with the sentinel — the reopen.
+    combo.insertItem(combo.count() - 1, "#abcabc", "#abcabc")
+    combo.setCurrentIndex(combo.count() - 2)
+    assert _CUSTOM_COLOR in fired  # this is the bug the guard prevents
+
+    # Guarded (what the commit does): no signal, so no reopen.
+    combo.setCurrentIndex(combo.findData(_CUSTOM_COLOR))
+    fired.clear()
+    combo.blockSignals(True)
+    combo.insertItem(combo.count() - 1, "#defdef", "#defdef")
+    combo.setCurrentIndex(combo.count() - 2)
+    combo.blockSignals(False)
+    assert fired == []

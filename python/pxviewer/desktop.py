@@ -1748,17 +1748,25 @@ class ControlsWindow:
             # you close the dialog, which is exactly when you have given up on it.
             dialog.currentColorChanged.connect(
                 lambda c: on_pick(c.name()) if c.isValid() else None)
+            # Re-index the combo with its signals blocked, then apply once by hand:
+            # inserting an item shifts the still-selected "Custom…" entry, which would
+            # otherwise re-fire this handler with _CUSTOM_COLOR and reopen the dialog the
+            # instant it closed.
+            combo.blockSignals(True)
             if dialog.exec() == QColorDialog.DialogCode.Accepted:
                 name = dialog.selectedColor().name()  # '#rrggbb', which Mol* decodes
                 committed["value"] = name
                 at = combo.count() - 1
                 combo.insertItem(at, swatch(name), name, name)
-                combo.setCurrentIndex(at)  # re-enters here and commits the pick
+                combo.setCurrentIndex(at)
+                applied = name
             else:
                 # Cancelled: undo the preview and put the selection back where it was.
-                on_pick(revert_to)
                 back = combo.findData(revert_to)
                 combo.setCurrentIndex(back if back >= 0 else 0)
+                applied = revert_to
+            combo.blockSignals(False)
+            on_pick(applied)
 
         combo.currentIndexChanged.connect(picked)
         row.addWidget(combo, stretch=1)
