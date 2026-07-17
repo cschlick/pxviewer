@@ -260,3 +260,34 @@ def test_desktop_continuous_free_runs_and_dedups(qapp=None):
         assert app._tug is None
     finally:
         app.stop()
+
+
+def test_settle_comes_to_rest_in_place():
+    """A released fling should visibly wind down to rest, not stop dead mid-motion. The
+    settle is one continuous minimization (not stepped restarts, which jitter): it holds
+    the atom where it was let go and relaxes the fragment, decelerating to a stop."""
+    _require_restraints()
+    import numpy as np
+    from pxviewer.tug import Tug
+
+    model = _model()
+    tug = Tug(model, 300)
+    start = model.get_sites_cart().as_numpy_array()[300].copy()
+    tug.set_target((start + [4.0, 0.0, 0.0]).tolist())
+    tug.step()  # fling partway
+    released = model.get_sites_cart().as_numpy_array()[300].copy()
+
+    frames = []
+    tug.settle(on_frame=lambda c: frames.append(c.copy()))
+    tug.finish()
+
+    assert len(frames) > 20  # a real wind-down, not one jump
+    zone = tug._indices
+    motion = np.linalg.norm(np.diff(np.stack(frames), axis=0), axis=2)[:, zone].max(axis=1)
+    assert motion[-1] < 0.02          # decelerated to rest
+    assert motion[-1] < motion[0]     # it actually slowed down
+
+    # It settled where it was let go, not on toward the 4 A pull.
+    final = model.get_sites_cart().as_numpy_array()[300]
+    assert np.linalg.norm(final - released) < 0.5
+    assert np.linalg.norm(final - start) > 1.0  # the drag was kept, not undone

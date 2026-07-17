@@ -45,14 +45,16 @@ ANCHOR_SIGMA = 0.01
 #: few enough to leave the frame budget alone.
 STEPS_PER_FRAME = 20
 
-#: Shake amplitude for continuous "living" dragging, in Angstrom, and the (few) minimizer
-#: steps that follow it. The two go together: shake then fully minimize and the shake is
-#: undone — 20 steps damped 0.05 A down to a sub-pixel 0.04 A/frame, invisible. A larger
-#: shake only lightly damped leaves real motion: 0.1 A + 5 steps is ~0.11 A/frame, a
-#: visible shimmer, with the interior breathing ~0.6 A and geometry intact. More than
-#: this and it wanders off; this is the "shake + a few minimize" the drag wants.
-JIGGLE_AMPLITUDE = 0.1
-JIGGLE_STEPS = 5
+#: Shake amplitude for continuous "living" dragging, in Angstrom, and the minimizer steps
+#: that follow it. The two are a balance: shake then fully minimize and the shake is
+#: undone. Kept faint on purpose. A big shake lightly damped (0.1 A, 5 steps ~0.11 A/frame)
+#: reads as harsh vibration, because the shake is white noise per atom while the plain
+#: minimizer moves atoms coherently. This is tuned down close to the plain minimizer's own
+#: residual motion (~0.016 A/frame): just enough that a held drag does not look frozen,
+#: not so much that it buzzes. The clean "it has come to rest" signal is the settle after
+#: release, not the shake.
+JIGGLE_AMPLITUDE = 0.03
+JIGGLE_STEPS = 10
 
 
 def flex_vec3(array):
@@ -142,6 +144,45 @@ class Tug:
         """Aim at ``target`` and take one step. The whole of a discrete drag frame."""
         self.set_target(target)
         return self.step()
+
+    def settle(self, on_frame=None, max_iterations: int = 200) -> np.ndarray:
+        """Relax the fragment to rest, holding the atom where it was let go.
+
+        Not the same as stepping in a loop: each :meth:`step` restarts the minimizer, so
+        it jitters around the minimum instead of reaching it. This is one continuous
+        minimization to convergence, which decelerates cleanly to a stop — a released
+        fling visibly settles rather than freezing mid-motion. ``on_frame`` receives each
+        intermediate conformation (the whole model's sites), for streaming the wind-down.
+        """
+        import scitbx.lbfgs
+        from cctbx import geometry_restraints
+        from mmtbx.refinement import geometry_minimization
+
+        # Hold the atom where it now is, so the fragment settles in place rather than
+        # continuing toward wherever the pull was last aimed.
+        self.set_target(tuple(self._sites[self._local]))
+
+        owner = self
+
+        class _Stream:
+            def add(self, sites_cart=None, hierarchy=None):
+                if sites_cart is None or on_frame is None:
+                    return
+                owner._full_sites.set_selected(owner._zone, sites_cart)
+                on_frame(owner._full_sites.as_numpy_array())
+
+        geometry_minimization.lbfgs(
+            sites_cart=self._sites,
+            geometry_restraints_manager=self._grm,
+            geometry_restraints_flags=geometry_restraints.flags.flags(default=True),
+            lbfgs_termination_params=scitbx.lbfgs.termination_parameters(
+                max_iterations=max_iterations),
+            correct_special_position_tolerance=1.0,
+            states_collector=_Stream(),
+        )
+        self._full_sites.set_selected(self._zone, self._sites)
+        self.model.set_sites_cart(self._full_sites)
+        return self._full_sites.as_numpy_array()
 
     def finish(self) -> np.ndarray:
         """End the drag, leaving the model where it stands."""

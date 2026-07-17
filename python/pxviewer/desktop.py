@@ -58,6 +58,11 @@ _MASK_RADIUS_DEFAULT = 3.0
 # caps the rate (~20 fps) and keeps the picture current rather than queued.
 _TUG_PUSH_INTERVAL = 0.05
 
+# How long the post-release wind-down plays for. The minimization itself converges in a
+# fraction of a second; this stretches its states over a watchable settle so a released
+# fling comes visibly to rest — the clearest signal that the fragment is done, not broken.
+_TUG_SETTLE_DURATION = 1.2
+
 # How much density to draw around the view centre, for maps that need it. A map made
 # from reflections fills the unit cell, so drawing all of it buries the model — those
 # open with a radius. A map read from a file is already a box around its subject, so it
@@ -3486,14 +3491,15 @@ class DesktopApp:
             else:
                 self._push_tug(self._tug.move_to(target))
         elif action == "end":
+            self._settle_tug()   # let go, and watch it come to rest
             self._end_tug()
             entry.pop("validation", None)  # stale: the atoms just moved
 
     def _tug_relax(self) -> None:
         """One free-running step, for continuous mode. On the worker's thread.
 
-        Shakes as it minimizes, so a held drag keeps moving instead of freezing at the
-        first minimum — a warm, living settle rather than a cold stop.
+        A faint shake as it minimizes, so a held drag stays in motion rather than
+        freezing at the first minimum — kept subtle; the clean stop is the settle below.
         """
         from .tug import JIGGLE_AMPLITUDE, JIGGLE_STEPS
 
@@ -3503,21 +3509,53 @@ class DesktopApp:
             self._status(f"drag failed: {exc}")
             self._end_tug()
 
-    def _push_tug(self, coords) -> None:
+    def _settle_tug(self) -> None:
+        """After release, relax the fragment to rest before letting go of it.
+
+        Fling an atom and let go and it should visibly come to rest, not stop dead
+        wherever it happened to be — which is what makes it possible to tell a settled
+        fragment from a broken or frozen one. The pull is kept on at its last target so
+        the atom stays where you left it while the neighbourhood relaxes around it; the
+        loop ends when the motion dies away, and the resting frame is forced out past the
+        pacing so the final position always shows. On the worker's thread.
+        """
+        if self._tug is None:
+            return
+        try:
+            trajectory: list = []
+            self._tug.settle(on_frame=lambda c: trajectory.append(c.copy()))
+        except Exception as exc:  # pragma: no cover - runtime errors
+            self._status(f"settle failed: {exc}")
+            return
+        if not trajectory:
+            return
+        # The minimization converges in a fraction of a second — far too fast to see. Play
+        # it back in real time so the fling visibly winds down to rest, thinning the many
+        # optimizer states to what shows at the frame rate. A new grab aborts it.
+        shown = min(len(trajectory), max(1, int(_TUG_SETTLE_DURATION / _TUG_PUSH_INTERVAL)))
+        for i in np.linspace(0, len(trajectory) - 1, shown).astype(int):
+            if self._tug_queue is not None and not self._tug_queue.empty():
+                break  # the user grabbed again; do not make them wait out the wind-down
+            self._push_tug(trajectory[i], force=True)
+            time.sleep(_TUG_PUSH_INTERVAL)
+        self._push_tug(trajectory[-1], force=True)  # the resting position, always shown
+
+    def _push_tug(self, coords, force: bool = False) -> None:
         """Stream a drag frame — paced, and never a repeat of the last.
 
         Each frame is a whole set of coordinates and the viewer re-derives geometry from
         it; pushing them as fast as cctbx computes floods the render, and the frames back
         up into visible lag. Capping the rate keeps the picture current instead. A frame
         identical to the last is dropped outright — a settled geometry drag would
-        otherwise send the same conformation over and over.
+        otherwise send the same conformation over and over. ``force`` bypasses the pacing
+        (not the de-dup) so a final resting frame is never dropped for arriving too soon.
         """
         if self._tug_session is None:
             return
         if self._tug_last is not None and np.array_equal(coords, self._tug_last):
             return
         now = time.monotonic()
-        if now - self._tug_last_push < _TUG_PUSH_INTERVAL:
+        if not force and now - self._tug_last_push < _TUG_PUSH_INTERVAL:
             return  # too soon; the next frame supersedes this one
         self._tug_last = coords
         self._tug_last_push = now
