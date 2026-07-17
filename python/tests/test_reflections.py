@@ -164,6 +164,37 @@ def test_refinement_mtz_opens_its_maps(tmp_path):
         app.stop()
 
 
+def test_maps_from_reflections_open_with_a_view_radius(tmp_path):
+    """A map made from reflections fills the unit cell, so drawing all of it buries the
+    model in density — Coot has a radius for exactly this. A map read from a file is
+    already a box around its subject, so it gets none."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    import numpy as np
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import _VIEW_RADIUS_DEFAULT, DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(_mtz(tmp_path, coefficients=True)))
+        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
+
+        # A map from a file is already boxed: no radius.
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "cryoem")
+        assert app._volume_entry(vid)["radius"] is None
+
+        app.set_volume_radius(vid, 20.0)
+        assert app.volume_appearance(vid)["radius"] == 20.0
+        app.set_volume_radius(vid, None)
+        assert app.volume_appearance(vid)["radius"] is None
+    finally:
+        app.stop()
+
+
 def test_a_data_mtz_makes_no_maps(tmp_path):
     """Amplitudes cannot become density on their own — the phases have to be computed
     against a model. Loading one draws nothing rather than guessing."""

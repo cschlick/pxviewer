@@ -53,6 +53,12 @@ _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in ste
 # reach, which is what "the density belonging to this model" usually means.
 _MASK_RADIUS_DEFAULT = 3.0
 
+# How much density to draw around the view centre, for maps that need it. A map made
+# from reflections fills the unit cell, so drawing all of it buries the model — those
+# open with a radius. A map read from a file is already a box around its subject, so it
+# does not. (Coot applies its radius to every map; ours can tell the two apart.)
+_VIEW_RADIUS_DEFAULT = 15.0
+
 # The object list sizes itself to its contents between these. The floor keeps the empty
 # state from collapsing to nothing; past the ceiling the list scrolls itself rather than
 # taking the whole pane.
@@ -1435,6 +1441,12 @@ class ControlsWindow:
 
             self._add_clip_row(live.get("clip"), _set_clip)
 
+            def _set_radius(radius, it=it):
+                it["radius"] = radius
+                self._safe(lambda: self._desktop.set_volume_radius(vid, radius))
+
+            self._add_radius_row(live.get("radius"), _set_radius)
+
             def _set_mask(radius, it=it):
                 it["mask_radius"] = radius
                 self._safe(lambda: self._desktop.set_volume_mask(vid, radius))
@@ -1467,6 +1479,43 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None:
             item["iso"] = value
+
+    def _add_radius_row(self, current, on_change):
+        """How much density to draw around the view centre.
+
+        The map is untouched — this only stops it being drawn everywhere at once, which
+        is what Coot's map radius is for. It follows the view, so it is closer to
+        clipping than to the mask above it.
+        """
+        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel
+
+        row = QHBoxLayout()
+        lab = QLabel("Radius")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        check = QCheckBox("within")
+        check.setToolTip("Draw only the density near the middle of the view.")
+        check.setChecked(current is not None)
+        spin = QDoubleSpinBox()
+        spin.setRange(1.0, 200.0)
+        spin.setDecimals(0)
+        spin.setSingleStep(5.0)
+        spin.setSuffix(" Å")
+        spin.setValue(_VIEW_RADIUS_DEFAULT if current is None else float(current))
+        spin.setEnabled(current is not None)
+
+        def toggled(on):
+            spin.setEnabled(on)
+            on_change(spin.value() if on else None)
+
+        check.toggled.connect(toggled)
+        spin.valueChanged.connect(
+            lambda v: on_change(v) if check.isChecked() else None)
+        row.addWidget(check)
+        row.addWidget(spin)
+        row.addStretch()
+        self._appearance_layout.addLayout(row)
+        return {"check": check, "spin": spin}
 
     def _add_mask_row(self, current, enabled, on_change):
         """Hide density away from the model: a switch and the distance.
@@ -2900,6 +2949,7 @@ class DesktopApp:
         if not model_ws:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
+        self._reassert_volume_clips()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -3395,12 +3445,56 @@ class DesktopApp:
         if entry is None:
             return {}
         return {key: entry.get(key)
-                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius")}
+                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
+                            "radius")}
 
     def set_volume_clip(self, vid: str, front: float, back: float) -> None:
         """Clip a volume to a front/rear slab (see LiveSession.set_clip)."""
-        self._volume_command(vid, "clip", (float(front), float(back)),
-                             lambda c, ref, v: c.set_clip(v[0], v[1], ref=ref))
+        entry = self._volume_entry(vid)
+        clip = (float(front), float(back))
+        if entry is None or entry.get("clip") == clip:
+            return
+        entry["clip"] = clip
+        self._send_volume_clip(entry)
+
+    def set_volume_radius(self, vid: str, radius: Optional[float]) -> None:
+        """Draw only density within ``radius`` A of the view centre (None = all of it).
+
+        A crystallographic map fills the unit cell, and contouring the whole thing buries
+        the model in density — this is the control Coot has for that, and it follows the
+        view. Unlike the mask it edits nothing: the map is whole, just not all drawn.
+        """
+        entry = self._volume_entry(vid)
+        radius = None if radius is None else float(radius)
+        if entry is None or entry.get("radius") == radius:
+            return
+        entry["radius"] = radius
+        self._send_volume_clip(entry)
+
+    def _reassert_volume_clips(self) -> None:
+        """Re-tell the control session every volume's clip, before the page reloads.
+
+        A clip is worked out from the camera and re-aimed as it moves, so unlike a
+        colour or a level it cannot be baked into the scene — the session has to replay
+        it when the fresh page connects. Both ends of that move underneath it: the
+        session carrying volume commands changes (dummy <-> active model), and the page
+        is new. So the clips are re-asserted on every reload rather than sent once.
+        """
+        for entry in self._volumes:
+            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+                self._send_volume_clip(entry)
+
+    def _send_volume_clip(self, entry) -> None:
+        """Push a volume's whole clip: the slab and the radius are one thing to the
+        viewer, so a change to either re-sends both."""
+        control = self._control_session()
+        if control is None:
+            return
+        front, back = entry.get("clip") or (0.0, 1.0)
+        try:
+            control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
+        except Exception:  # pragma: no cover - defensive
+            pass
 
     def set_model_clip(self, mid: str, front: float, back: float) -> None:
         """Clip a model's representations to a front/rear slab.
@@ -3557,11 +3651,13 @@ class DesktopApp:
         return mmm is not None and mmm.model() is not None
 
     def _add_volume(self, data, name: str, *, group: Optional[str] = None,
-                    color: Optional[str] = None, iso: Optional[float] = None) -> str:
+                    color: Optional[str] = None, iso: Optional[float] = None,
+                    radius: Optional[float] = None) -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
         difference map is green at 3 sigma whatever colour the palette is up to.
+        ``radius`` limits drawing to near the view centre (see :meth:`set_volume_radius`).
         """
         self._volume_counter += 1
         vid = f"volume-{self._volume_counter}"
@@ -3572,8 +3668,9 @@ class DesktopApp:
             "iso": data.suggested_iso() if iso is None else float(iso),
             "color": color or _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
+            "radius": radius,
         })
-        self._reload_viewport()
+        self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()
         return vid
 
@@ -3780,8 +3877,10 @@ class DesktopApp:
                 colour, iso = MAP_STYLE[is_difference_map(label)]
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
+                # A map from reflections fills the unit cell: open it with a radius,
+                # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
-                                 color=colour, iso=iso)
+                                 color=colour, iso=iso, radius=_VIEW_RADIUS_DEFAULT)
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")
         return "reflections"

@@ -1101,15 +1101,20 @@ const ISO_MAX_SIGMA = 100;
 // simply follow the camera the way a viewer's clipping is expected to.
 
 export interface Slab {
-    /** Both in [0, 1] across the scene's depth. front=0/back=1 clips nothing; when the
-     *  two meet, everything is clipped and the object disappears. */
+    /** front/back are in [0, 1] across the scene's depth. front=0/back=1 clips nothing;
+     *  when the two meet, everything is clipped and the object disappears. */
     front: number;
     back: number;
+    /** Angstrom around the view centre; null draws the whole thing. A crystallographic
+     *  map fills the unit cell, and contouring all of it buries the model in density —
+     *  which is what Coot's map radius exists to stop. */
+    radius?: number | null;
 }
 
-const SLAB_OPEN: Slab = { front: 0, back: 1 };
+const SLAB_OPEN: Slab = { front: 0, back: 1, radius: null };
 
-const slabIsOpen = (s: Slab) => s.front <= 0 && s.back >= 1;
+const slabIsOpen = (s: Slab) =>
+    s.front <= 0 && s.back >= 1 && (s.radius === null || s.radius === undefined);
 
 /** A clip plane discarding everything on the far side of `at` along `normal`. */
 function clipPlane(normal: Vec3, at: Vec3) {
@@ -1133,6 +1138,20 @@ function clipPlane(normal: Vec3, at: Vec3) {
     };
 }
 
+/** A sphere keeping only what is within `radius` of the view centre.
+ *
+ *  `invert` because the shader discards where the signed distance is negative — which
+ *  for a sphere is its inside — and we want the opposite. `scale` is twice the radius:
+ *  the shader halves it (getSignedDistance passes scale * 0.5 as the size).
+ */
+function clipRadius(centre: Vec3, radius: number) {
+    return {
+        type: 'sphere', invert: true, position: Vec3.clone(centre),
+        rotation: { axis: Vec3.create(1, 0, 0), angle: 0 },
+        scale: Vec3.create(radius * 2, radius * 2, radius * 2), transform: Mat4.identity(),
+    };
+}
+
 /** The clip params for a slab, aimed down the current view direction. */
 function slabClip(plugin: PluginContext, slab: Slab) {
     if (slabIsOpen(slab)) return { variant: 'pixel', objects: [] };  // no shader cost
@@ -1140,17 +1159,20 @@ function slabClip(plugin: PluginContext, slab: Slab) {
     if (!camera) return { variant: 'pixel', objects: [] };
     const dir = Vec3.sub(Vec3(), camera.state.target, camera.state.position);
     Vec3.normalize(dir, dir);
-    const radius = plugin.canvas3d?.boundingSphere.radius || 50;
+    const extent = plugin.canvas3d?.boundingSphere.radius || 50;
     // Handles span the scene's depth: 0 is the near edge, 1 the far edge.
     const at = (t: number) =>
-        Vec3.scaleAndAdd(Vec3(), camera.state.target, dir, (t * 2 - 1) * radius);
-    return {
-        variant: 'pixel',
-        objects: [
-            clipPlane(Vec3.negate(Vec3(), dir), at(slab.front)),  // drop what is nearer
-            clipPlane(dir, at(slab.back)),                        // drop what is further
-        ],
-    };
+        Vec3.scaleAndAdd(Vec3(), camera.state.target, dir, (t * 2 - 1) * extent);
+    const objects: any[] = [];
+    if (!(slab.front <= 0 && slab.back >= 1)) {
+        objects.push(clipPlane(Vec3.negate(Vec3(), dir), at(slab.front)));  // drop nearer
+        objects.push(clipPlane(dir, at(slab.back)));                        // drop further
+    }
+    if (slab.radius !== null && slab.radius !== undefined && slab.radius > 0) {
+        // Centred on what the camera is looking at, so it follows the view like Coot's.
+        objects.push(clipRadius(camera.state.target, slab.radius));
+    }
+    return { variant: 'pixel', objects };
 }
 
 /** Apply a slab to a state cell whose params carry geometry `clip`. */
@@ -1408,7 +1430,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 }
                 ws.send(JSON.stringify({ type: 'screenshot-result', reqId: msg.reqId, dataUri, error }));
             } else if (msg.type === 'clip') {
-                const slab: Slab = { front: msg.front ?? 0, back: msg.back ?? 1 };
+                const slab: Slab = {
+                    front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,
+                };
                 if (typeof msg.ref === 'string') {
                     if (slabIsOpen(slab)) volumeSlabs.delete(msg.ref);
                     else volumeSlabs.set(msg.ref, slab);

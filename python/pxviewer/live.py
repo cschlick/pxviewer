@@ -503,6 +503,10 @@ class LiveSession:
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
         self._volume_scroll_target: Optional[str] = None
+        # Clips, keyed by ref (None = this session's model). Replayed to late clients for
+        # the same reason: a clip is worked out from the camera and re-aimed as it moves,
+        # so it cannot be baked into the scene — a viewport reload would drop it.
+        self._clips: dict = {}
         self._selection_handlers: List[Callable[[Selection], None]] = []
         self._measure_handlers: List[Callable[[Primitive], None]] = []
         self._selection_changed = threading.Event()
@@ -872,19 +876,36 @@ class LiveSession:
             return None
         return base64.b64decode(uri.split(",", 1)[1])
 
-    def set_clip(self, front: float, back: float, *, ref: Optional[str] = None) -> None:
-        """Clip a representation to a front/rear slab.
+    def set_clip(
+        self,
+        front: float,
+        back: float,
+        *,
+        radius: Optional[float] = None,
+        ref: Optional[str] = None,
+    ) -> None:
+        """Clip a representation: a front/rear slab, a radius around the view, or both.
 
         ``front`` and ``back`` run 0..1 across the scene's depth: ``(0, 1)`` clips
         nothing, and when the two meet everything is clipped and the object disappears.
-        ``ref`` names a volume; without one this session's own model is clipped. The slab
-        is per representation deliberately — it is what lets density be cut open while
-        the model inside stays whole — and it follows the camera. Thread-safe.
+        ``radius`` (Angstrom) draws only what is near the view centre; None draws it all.
+        ``ref`` names a volume; without one this session's own model is clipped.
+
+        Both follow the camera, and both are per representation deliberately — it is
+        what lets density be cut open, or thinned out, while the model inside stays
+        whole. Thread-safe.
         """
-        message = json.dumps({
-            "type": "clip", "ref": None if ref is None else str(ref),
+        key = None if ref is None else str(ref)
+        clip = {
+            "type": "clip", "ref": key,
             "front": float(front), "back": float(back),
-        })
+            "radius": None if radius is None else float(radius),
+        }
+        if clip["front"] <= 0 and clip["back"] >= 1 and clip["radius"] is None:
+            self._clips.pop(key, None)  # nothing to restore
+        else:
+            self._clips[key] = clip
+        message = json.dumps(clip)
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1665,6 +1686,8 @@ class LiveSession:
                     websocket,
                     json.dumps({"type": "volume_scroll_target", "ref": self._volume_scroll_target}),
                 )
+            for clip in list(self._clips.values()):
+                await self._locked_send(websocket, json.dumps(clip))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})

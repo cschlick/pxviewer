@@ -403,6 +403,36 @@ def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
     asyncio.run(scenario())
 
 
+def test_clip_is_replayed_to_late_clients(session):
+    """A clip is worked out from the camera and re-aimed as it moves, so unlike a
+    colour or a level it cannot be baked into the MVSJ scene. The session has to replay
+    it, or every viewport reload silently drops it."""
+    async def scenario():
+        session.set_clip(0.2, 0.8, radius=12.0, ref="vol9")  # before anyone connects
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clip", "ref": "vol9", "front": 0.2, "back": 0.8,
+                             "radius": 12.0}
+
+    asyncio.run(scenario())
+
+
+def test_an_open_clip_is_not_replayed(session):
+    """Restoring a clip that clips nothing is just shader cost for no effect."""
+    async def scenario():
+        session.set_clip(0.2, 0.8, ref="vol10")
+        session.set_clip(0.0, 1.0, ref="vol10")  # opened again
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(ws.recv(), timeout=0.5)
+
+    asyncio.run(scenario())
+
+
 def test_screenshot_round_trips(session):
     """The scene only exists in the browser, so the picture is taken there and comes
     back over the wire — which is what makes this work for a remote viewer too."""
@@ -483,11 +513,20 @@ def test_set_clip_command_reaches_client(session):
             await ws.recv()  # topology
             session.set_clip(0.25, 0.75, ref="vol8")
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert event == {"type": "clip", "ref": "vol8", "front": 0.25, "back": 0.75}
+            assert event == {"type": "clip", "ref": "vol8", "front": 0.25, "back": 0.75,
+                             "radius": None}
 
             session.set_clip(0.0, 1.0)  # no ref -> this session's model
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
-            assert event == {"type": "clip", "ref": None, "front": 0.0, "back": 1.0}
+            assert event == {"type": "clip", "ref": None, "front": 0.0, "back": 1.0,
+                             "radius": None}
+
+            # A radius rides the same message: to the viewer the slab and the radius are
+            # one clip, so either changing re-sends both.
+            session.set_clip(0.0, 1.0, radius=12.0, ref="vol8")
+            event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert event == {"type": "clip", "ref": "vol8", "front": 0.0, "back": 1.0,
+                             "radius": 12.0}
 
     asyncio.run(scenario())
 
