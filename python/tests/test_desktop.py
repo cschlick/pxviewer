@@ -652,6 +652,67 @@ def test_masking_density_around_the_model(qapp):
         app.stop()
 
 
+def test_object_list_fits_its_contents(qapp):
+    """A QTreeWidget's sizeHint is a fixed ~256px whatever it holds; left to it, the list
+    reserves room for ten objects while showing two and pushes the rest of the pane into
+    a scrollbar. On a 13" screen that space decides whether the pane fits."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import _TREE_MAX_HEIGHT, _TREE_MIN_HEIGHT, DesktopApp
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        ctl = app._controls
+        tree = ctl._loaded_tree
+        assert tree.maximumHeight() == _TREE_MIN_HEIGHT  # empty: no reserved space
+
+        for i in range(30):
+            app._add_volume(VolumeData.from_numpy(np.ones((4, 4, 4))), f"v{i}")
+        # Many objects: it grows, but only to the ceiling — then it scrolls itself.
+        assert tree.maximumHeight() == _TREE_MAX_HEIGHT
+        assert tree.verticalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    finally:
+        app.stop()
+
+
+def test_scene_actions_are_one_grid(qapp):
+    """The eight actions live in one 4x2 grid under the object list, and none of them
+    forces a height — a QPushButton only gets its native macOS chrome at the height the
+    style asks for."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QGridLayout, QPushButton
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        ctl = app._controls
+        labels = {"Open…", "Sample", "Demos", "Write…",
+                  "Pair…", "Remove", "Reset view", "Picture…"}
+        buttons = {b.text(): b for b in ctl.widget().findChildren(QPushButton)
+                   if b.text() in labels}
+        assert set(buttons) == labels
+
+        # No forced geometry anywhere in the grid: that is what broke Open's chrome.
+        for name, button in buttons.items():
+            assert button.minimumHeight() == 0, f"{name} forces a height"
+
+        grid = next(g for g in ctl.widget().findChildren(QGridLayout)
+                    if {i.widget().text() for i in
+                        (g.itemAt(n) for n in range(g.count())) if i.widget()} == labels)
+        assert grid.rowCount() == 2 and grid.columnCount() == 4
+    finally:
+        app.stop()
+
+
 def test_range_slider_two_handles(qapp):
     """The clipping slab's control. Handles may meet — that is not degenerate here, it
     is the point at which the object is fully clipped."""

@@ -53,6 +53,12 @@ _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in ste
 # reach, which is what "the density belonging to this model" usually means.
 _MASK_RADIUS_DEFAULT = 3.0
 
+# The object list sizes itself to its contents between these. The floor keeps the empty
+# state from collapsing to nothing; past the ceiling the list scrolls itself rather than
+# taking the whole pane.
+_TREE_MIN_HEIGHT = 66
+_TREE_MAX_HEIGHT = 320
+
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
 # The model values must be types the LiveSession API accepts (see live.py's
 # _STRUCTURE_REPR_TYPES / _REPR_ALIASES) — test_model_rep_options_are_valid guards this.
@@ -137,6 +143,8 @@ def _check_qt() -> None:
 
 
 _ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+_SPLASH_SIDE = 320  # logical px; scaled from the 512px icon for the screen's pixel ratio
+_SPLASH_MAX_MS = 15000  # never leave the splash up if the page never reports a load
 
 
 def _app_icon():
@@ -144,6 +152,37 @@ def _app_icon():
     from PySide6.QtGui import QIcon
 
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
+
+
+def _show_splash():
+    """Put the icon on screen before the slow part of starting up.
+
+    Qt's web engine and the Mol* bundle take a few seconds to come up, during which
+    nothing is visible and the launch reads as having failed. This goes up as soon as
+    there is a QApplication to draw it with — everything expensive happens after.
+
+    Drawn from the full-resolution icon and marked with the screen's pixel ratio, so it
+    is crisp rather than an upscaled dock icon.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QApplication, QSplashScreen
+
+    if not _ICON_PATH.exists():
+        return None
+    pixmap = QPixmap(str(_ICON_PATH))
+    if pixmap.isNull():
+        return None
+    ratio = QApplication.primaryScreen().devicePixelRatio() if QApplication.primaryScreen() else 1.0
+    side = int(_SPLASH_SIDE * ratio)
+    pixmap = pixmap.scaled(
+        side, side, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    pixmap.setDevicePixelRatio(ratio)
+    splash = QSplashScreen(pixmap)
+    splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    splash.show()
+    QApplication.processEvents()  # paint it now; the caller is about to get busy
+    return splash
 
 
 def _make_bridge():
@@ -797,6 +836,7 @@ class ControlsWindow:
         desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
         self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
         self._update_pair_button()
+        self._fit_tree_height()  # the empty list must not reserve space either
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -805,6 +845,7 @@ class ControlsWindow:
         """Home: open files, the object list, appearance of the focused object, selection."""
         from PySide6.QtWidgets import (
             QButtonGroup,
+            QGridLayout,
             QGroupBox,
             QHBoxLayout,
             QHeaderView,
@@ -822,51 +863,17 @@ class ControlsWindow:
         ol.setContentsMargins(0, 0, 0, 0)
         ol.setSpacing(8)
 
-        # -- Open bar -----------------------------------------------------
-        open_row = QHBoxLayout()
-        self._open_btn = QPushButton("Open…")
-        self._open_btn.setToolTip("Open a structure or map (models via cctbx; maps as .mrc/.map/.ccp4)")
-        self._open_btn.setMinimumHeight(38)
-        self._open_btn.clicked.connect(self._on_open_file)
-        open_row.addWidget(self._open_btn, stretch=1)
-        self._sample_btn = QPushButton("Sample")  # a menu button (native dropdown arrow)
-        self._sample_btn.setToolTip("Load a bundled sample structure")
-        self._sample_btn.setMenu(self._build_samples_menu())
-        if all(sample_structure_path(f) is None for f, _ in SAMPLES):
-            self._sample_btn.setEnabled(False)
-        open_row.addWidget(self._sample_btn)
-        demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
-        demos_btn.setMenu(self._build_demos_menu())
-        open_row.addWidget(demos_btn)
-        ol.addLayout(open_row)
-
-        reset_row = QHBoxLayout()
-        picture_btn = QPushButton("Save picture…")
-        picture_btn.setToolTip("Render the viewport to a PNG.")
-        picture_btn.clicked.connect(self._on_save_picture)
-        reset_btn = QPushButton("Reset view")
-        reset_btn.setToolTip("Reframe the camera to fit the whole scene.")
-        reset_btn.clicked.connect(lambda: self._desktop.reset_view())
-        reset_row.addWidget(reset_btn)
-        reset_row.addWidget(picture_btn)
-        reset_row.addStretch()
-        ol.addLayout(reset_row)
-
-        self._file_label = QLabel("")
-        self._file_label.setWordWrap(True)
-        self._file_label.setStyleSheet("color: #888;")
-        ol.addWidget(self._file_label)
-
-        # Everything below scrolls, so a busy scene never clips the controls.
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setSpacing(10)
-
-        # -- Objects (the spine) -----------------------------------------
-        layout.addWidget(QLabel("<b>Objects</b>"))
+        # -- Objects (the spine), pinned above everything else -------------
+        # No forced heights anywhere here: a QPushButton only gets its native macOS
+        # chrome at the height the style wants, and overriding it drops the button to a
+        # squared-off fallback that looks nothing like the rest of the app.
+        ol.addWidget(QLabel("<b>Objects</b>"))
         self._loaded_tree = QTreeWidget()
-        self._loaded_tree.setMinimumHeight(90)
-        self._loaded_tree.setMaximumHeight(200)
+        # Height follows the contents (see _fit_tree_height): a QTreeWidget's sizeHint is
+        # a fixed ~256px whatever it holds, and given a stretch it takes that much and
+        # pushes the rest of the pane into a scrollbar. On a 13" screen that space is the
+        # difference between the pane fitting and not.
+        self._loaded_tree.setMinimumHeight(_TREE_MIN_HEIGHT)
         # Columns: [visible] [active] [name]. Toggles on the left; name last, elides.
         self._loaded_tree.setColumnCount(3)
         self._loaded_tree.setHeaderHidden(True)
@@ -880,24 +887,59 @@ class ControlsWindow:
         self._active_group = QButtonGroup(self._window)  # exclusive active-model radios
         self._active_group.setExclusive(True)
         self._active_group.buttonClicked.connect(self._on_active_radio)
-        layout.addWidget(self._loaded_tree)
-        obj_row = QHBoxLayout()
+        ol.addWidget(self._loaded_tree, stretch=1)
+
+        # -- Actions on the objects: one grid, two rows of four ------------
+        # Row 1 gets data in and out; row 2 acts on what is loaded and on the view.
+        self._open_btn = QPushButton("Open…")
+        self._open_btn.setToolTip("Open a structure or map (models via cctbx; maps as .mrc/.map/.ccp4)")
+        self._open_btn.clicked.connect(self._on_open_file)
+        self._sample_btn = QPushButton("Sample")  # a menu button (native dropdown arrow)
+        self._sample_btn.setToolTip("Load a bundled sample structure")
+        self._sample_btn.setMenu(self._build_samples_menu())
+        if all(sample_structure_path(f) is None for f, _ in SAMPLES):
+            self._sample_btn.setEnabled(False)
+        demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
+        demos_btn.setMenu(self._build_demos_menu())
         self._write_btn = QPushButton("Write…")
         self._write_btn.setToolTip("Write the focused object to disk (model coordinates or map).")
         self._write_btn.clicked.connect(self._on_write_object)
-        obj_row.addWidget(self._write_btn)
         self._pair_btn = QPushButton("Pair…")
         self._pair_btn.setToolTip(
             "Pair a model with a map so they can be used together. cctbx moves them into "
             "a common frame, which is what a map+model group already has from loading.")
         self._pair_btn.clicked.connect(self._on_pair)
-        obj_row.addWidget(self._pair_btn)
-        obj_row.addStretch()
         self._remove_model_btn = QPushButton("Remove")
         self._remove_model_btn.setToolTip("Remove the highlighted object")
         self._remove_model_btn.clicked.connect(self._on_remove_selected)
-        obj_row.addWidget(self._remove_model_btn)
-        layout.addLayout(obj_row)
+        reset_btn = QPushButton("Reset view")
+        reset_btn.setToolTip("Reframe the camera to fit the whole scene.")
+        reset_btn.clicked.connect(lambda: self._desktop.reset_view())
+        picture_btn = QPushButton("Picture…")  # short: the grid's columns are equal
+        picture_btn.setToolTip("Save a picture of the viewport as a PNG.")
+        picture_btn.clicked.connect(self._on_save_picture)
+
+        actions = QGridLayout()
+        actions.setSpacing(6)
+        rows = (
+            (self._open_btn, self._sample_btn, demos_btn, self._write_btn),
+            (self._pair_btn, self._remove_model_btn, reset_btn, picture_btn),
+        )
+        for r, row in enumerate(rows):
+            for c, button in enumerate(row):
+                actions.addWidget(button, r, c)
+                actions.setColumnStretch(c, 1)  # equal columns, so it reads as a grid
+        ol.addLayout(actions)
+
+        self._file_label = QLabel("")
+        self._file_label.setWordWrap(True)
+        self._file_label.setStyleSheet("color: #888;")
+        ol.addWidget(self._file_label)
+
+        # Everything below scrolls, so a busy scene never clips the controls.
+        body = QWidget()
+        layout = QVBoxLayout(body)
+        layout.setSpacing(10)
 
         # -- Appearance of the focused object ----------------------------
         self._appearance_box = QGroupBox("Appearance")
@@ -931,7 +973,7 @@ class ControlsWindow:
         expr_row.addWidget(self._select_expr_btn)
         sl.addLayout(expr_row)
 
-        from PySide6.QtWidgets import QGridLayout, QSizePolicy
+        from PySide6.QtWidgets import QSizePolicy
 
         sl.addWidget(QLabel("Quick select:"))
         chips = QGridLayout()
@@ -2235,6 +2277,25 @@ class ControlsWindow:
 
     # -- loaded tree (models + volumes + groups) -------------------------
 
+    def _fit_tree_height(self) -> None:
+        """Make the object list exactly as tall as what it holds, within limits.
+
+        A list holding two objects should not reserve room for ten: on a small screen
+        that space is what decides whether the rest of the pane fits without scrolling.
+        Past the ceiling the list keeps its own scrollbar, so nothing is unreachable.
+        """
+        tree = self._loaded_tree
+        rows = 0
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            rows += 1
+            if item.isExpanded():
+                rows += item.childCount()
+        row_height = tree.sizeHintForRow(0) if rows else 0
+        wanted = rows * row_height + 2 * tree.frameWidth() + 4
+        tree.setMaximumHeight(
+            max(_TREE_MIN_HEIGHT, min(wanted, _TREE_MAX_HEIGHT)))
+
     def _on_loaded_changed(self, summary) -> None:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QRadioButton, QTreeWidgetItem
@@ -2285,6 +2346,7 @@ class ControlsWindow:
                 self._loaded_tree.setCurrentItem(active_item)
         finally:
             self._suppress_model_events = False
+        self._fit_tree_height()
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
         self._update_minimize_map()  # the active model may now have (or have lost) a map
@@ -2436,6 +2498,9 @@ class DesktopApp:
         icon = _app_icon()  # dock/taskbar icon for the whole app
         if icon is not None:
             self._app.setWindowIcon(icon)
+        # Before anything slow: the web engine and the Mol* bundle take seconds, and an
+        # empty screen for that long looks like a launch that failed.
+        self._splash = _show_splash()
 
         self._webapp = Webapp(host=host, port=port)
 
@@ -2520,6 +2585,7 @@ class DesktopApp:
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
         self._reload_viewport()  # nothing loaded -> a dummy-backed blank viewer
+        self._dismiss_splash()
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
         print("Press Ctrl-C (or close a window) to stop.", flush=True)
@@ -2531,6 +2597,30 @@ class DesktopApp:
             return 0
         finally:
             self._restore_sigint_handler()
+
+    def _dismiss_splash(self) -> None:
+        """Take the splash down once the viewport has really loaded.
+
+        Tied to the page load rather than to the windows appearing: the window exists
+        long before Mol* is up, and closing on that would just move the blank wait.
+        """
+        splash = getattr(self, "_splash", None)
+        if splash is None:
+            return
+        self._splash = None
+
+        def finished(_ok=True):
+            splash.finish(self._viewport.widget())
+
+        view = getattr(self._viewport, "_view", None)
+        if view is None:
+            finished()
+            return
+        view.loadFinished.connect(finished)
+        # ...but never leave it up if the page never reports back.
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(_SPLASH_MAX_MS, finished)
 
     def _install_sigint_handler(self) -> None:
         """Make Ctrl-C quit the Qt event loop instead of raising out of `exec()`.
