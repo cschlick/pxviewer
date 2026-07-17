@@ -1191,11 +1191,18 @@ const STYLE_VISUALS: Record<string, string[]> = {
 };
 
 /** Update a volume's representation params in place — no scene rebuild, so this is
- *  cheap enough to drive from a slider being dragged. */
+ *  cheap enough to drive from a slider being dragged.
+ *
+ *  Applies to both contours of a difference map: they are one object, and anything but
+ *  the level (which mirrors) and the colour (which differs) is shared.
+ */
 async function updateVolumeRepr(plugin: PluginContext, ref: string, mutate: (old: any) => void) {
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
-    await plugin.state.data.build().to(repr.transform.ref).update(mutate).commit();
+    const build = plugin.state.data.build().to(repr.transform.ref).update(mutate);
+    const negative = findVolumeNegativeReprCell(plugin, ref);
+    if (negative) build.to(negative.transform.ref).update(mutate);
+    await build.commit();
 }
 
 async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
@@ -1212,13 +1219,23 @@ async function setVolumeStyle(plugin: PluginContext, ref: string, style: string)
 }
 
 /** Contour level, in sigma. Mol* does the sigma scaling, so the value means the same
- *  thing for any map — which is why a fixed slider range works. */
+ *  thing for any map — which is why a fixed slider range works.
+ *
+ *  A difference map's second contour takes the negative of it: one level, read both
+ *  ways, which is what "contour at 3 sigma" means for such a map.
+ */
 async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
-    await updateVolumeRepr(plugin, ref, (old: any) => {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    const setTo = (v: number) => (old: any) => {
         if (old.type?.name === 'isosurface') {
-            old.type.params.isoValue = { kind: 'relative', relativeValue: value };
+            old.type.params.isoValue = { kind: 'relative', relativeValue: v };
         }
-    });
+    };
+    const build = plugin.state.data.build().to(repr.transform.ref).update(setTo(value));
+    const negative = findVolumeNegativeReprCell(plugin, ref);
+    if (negative) build.to(negative.transform.ref).update(setTo(-value));
+    await build.commit();
 }
 
 async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
@@ -1233,9 +1250,13 @@ async function setVolumeColor(plugin: PluginContext, ref: string, color: string)
         console.warn('Unknown volume colour:', color);
         return;
     }
-    await updateVolumeRepr(plugin, ref, (old: any) => {
+    // Only the positive contour: a difference map's negative lobe keeps its own colour,
+    // and the pair being different colours is the whole point of drawing both.
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
         old.colorTheme = { name: 'uniform', params: { value: decoded } };
-    });
+    }).commit();
 }
 
 /** Clip a volume (an MVSJ representation) to a front/rear slab. */
@@ -1282,14 +1303,27 @@ async function findVolumeCell(plugin: PluginContext, ref: string) {
     return undefined;
 }
 
+/** A difference map is drawn twice from one download: +level in green, -level in red.
+ *  The scene names the second `<ref>-repr-neg` (see pxviewer.volume). */
+const NEGATIVE_SUFFIX = '-repr-neg';
+
+function findCellByTag(plugin: PluginContext, tag: string) {
+    const cells = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(tag));
+    return cells.length ? cells[0] : undefined;
+}
+
 async function findVolumeReprCell(plugin: PluginContext, ref: string) {
-    const tag = `mvs-ref:${ref}-repr`;
     for (let i = 0; i < 200; i++) {
-        const cells = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(tag));
-        if (cells.length) return cells[0];
+        const cell = findCellByTag(plugin, `mvs-ref:${ref}-repr`);
+        if (cell) return cell;
         await new Promise((r) => setTimeout(r, 25));
     }
     return undefined;
+}
+
+/** A volume's negative contour, when it has one (only difference maps do). */
+function findVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
+    return findCellByTag(plugin, `mvs-ref:${ref}${NEGATIVE_SUFFIX}`);
 }
 
 export interface LiveConnectionHandle {

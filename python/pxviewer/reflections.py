@@ -38,12 +38,13 @@ __all__ = [
 DEFAULT_RESOLUTION_FACTOR = 1.0 / 3.0
 
 #: How each kind of map is shown, following crystallographic convention (and Coot):
-#: a 2Fo-Fc map in blue at 1.5 sigma, a difference map in green at 3 sigma. The
-#: difference map's negative lobe (-3 sigma, red) needs a second contour per volume,
-#: which the viewer does not have yet.
+#: ``(colour, level, negative colour)``. A 2Fo-Fc map is blue at 1.5 sigma and has no
+#: negative side worth drawing. A difference map is read at both signs at once — green
+#: where the density wants more than the model has, red where it wants less — so it is
+#: drawn twice, at +level and -level, and is only half a map without both.
 MAP_STYLE = {
-    False: ("dodgerblue", 1.5),  # a regular map
-    True: ("green", 3.0),        # a difference map
+    False: ("dodgerblue", 1.5, None),  # a regular map
+    True: ("green", 3.0, "red"),       # a difference map
 }
 
 # Map-coefficient label conventions. cctbx knows an array *is* coefficients but not what

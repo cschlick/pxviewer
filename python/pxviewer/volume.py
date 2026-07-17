@@ -45,6 +45,11 @@ class Volume:
     grid_slice_index: float | None = None
     grid_slice_index_kind: Literal["absolute", "relative"] = "relative"
     color: str | None = "gold"
+    #: A second isosurface at the negative of ``isosurface_value``, in its own colour.
+    #: A difference map is only readable as a pair — green where the density wants more
+    #: than the model has, red where it wants less — so both contours are one object,
+    #: sharing one download and one level.
+    negative_color: str | None = None
     opacity: float | None = 1.0
     style: VolumeStyle | None = "surface"
     position: tuple[float, float, float] | None = None
@@ -54,6 +59,11 @@ class Volume:
     instances: list[dict] | None = None
     clip: dict | None = None
     focus: bool = True
+
+
+#: Ref suffix for a volume's negative isosurface. The live commands address the pair by
+#: it: a difference map's two contours are one object and move together.
+NEGATIVE_REF_SUFFIX = "-repr-neg"
 
 
 def _normalize_volume_data(data: np.ndarray) -> np.ndarray:
@@ -220,6 +230,18 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         repr = repr.opacity(opacity=volume.opacity)
     if volume.clip is not None:
         repr = repr.clip(**volume.clip)
+
+    if volume.negative_color is not None and volume.isosurface_value is not None:
+        # A sibling of the first, so the map is downloaded and parsed once.
+        negative_kwargs = dict(repr_kwargs)
+        key = "absolute_isovalue" if volume.isosurface_kind == "absolute" else "relative_isovalue"
+        negative_kwargs[key] = -volume.isosurface_value
+        negative = mvs_volume.representation(**negative_kwargs, ref=f"{ref}{NEGATIVE_REF_SUFFIX}")
+        negative = negative.color(color=volume.negative_color)
+        if volume.opacity is not None:
+            negative = negative.opacity(opacity=volume.opacity)
+        if volume.clip is not None:
+            negative = negative.clip(**volume.clip)
 
     if volume.focus:
         mvs_volume.focus()

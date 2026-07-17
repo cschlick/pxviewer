@@ -279,6 +279,30 @@ def test_making_maps_pairs_them_with_the_model_that_phased_them(tmp_path):
         app.stop()
 
 
+def test_difference_maps_get_a_negative_contour(tmp_path):
+    """Green where the density wants more than the model has, red where it wants less.
+    A difference map read at one sign is half a map, so it opens with both."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(_mtz(tmp_path, coefficients=True)))
+        by_name = {v["name"]: v for v in app._volumes}
+        # The difference map is drawn at both signs; the 2Fo-Fc map is not — its
+        # negative side is noise, and a second isosurface is not free.
+        assert by_name["FOFCWT"]["negative_color"] == "red"
+        assert by_name["2FOFCWT"]["negative_color"] is None
+        assert app._write_volume_scene() is not None
+    finally:
+        app.stop()
+
+
 def test_a_data_mtz_makes_no_maps(tmp_path):
     """Amplitudes cannot become density on their own — the phases have to be computed
     against a model. Loading one draws nothing rather than guessing."""

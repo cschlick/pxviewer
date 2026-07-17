@@ -2965,7 +2965,8 @@ class DesktopApp:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
-                color=v["color"], opacity=v["opacity"], style=v["style"],
+                color=v["color"], negative_color=v.get("negative_color"),
+                opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and i == 0),
             ))
         self._scene_counter += 1
@@ -3687,12 +3688,15 @@ class DesktopApp:
 
     def _add_volume(self, data, name: str, *, group: Optional[str] = None,
                     color: Optional[str] = None, iso: Optional[float] = None,
-                    radius: Optional[float] = None) -> str:
+                    radius: Optional[float] = None,
+                    negative_color: Optional[str] = None) -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
         difference map is green at 3 sigma whatever colour the palette is up to.
         ``radius`` limits drawing to near the view centre (see :meth:`set_volume_radius`).
+        ``negative_color`` draws a second contour at the negative of the level, which is
+        how a difference map is read (see MAP_STYLE).
         """
         self._volume_counter += 1
         vid = f"volume-{self._volume_counter}"
@@ -3703,7 +3707,7 @@ class DesktopApp:
             "iso": data.suggested_iso() if iso is None else float(iso),
             "color": color or _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
-            "radius": radius,
+            "radius": radius, "negative_color": negative_color,
         })
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()
@@ -3943,11 +3947,11 @@ class DesktopApp:
                 rentry["r_free"] = out["r_free"]
                 with self._batch_load():
                     for map_type, manager in managers.items():
-                        colour, iso = MAP_STYLE[map_type in DIFFERENCE_MAP_TYPES]
+                        colour, iso, negative = MAP_STYLE[map_type in DIFFERENCE_MAP_TYPES]
                         self._add_volume(
                             VolumeData.from_map_manager(manager, name=map_type),
                             map_type, group=gid, color=colour, iso=iso,
-                            radius=_VIEW_RADIUS_DEFAULT)
+                            radius=_VIEW_RADIUS_DEFAULT, negative_color=negative)
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
                     f" — maps: {', '.join(types)}")
@@ -3992,13 +3996,14 @@ class DesktopApp:
             self._add_reflections(data, name, group=gid)
             for coefficients in data.map_coefficient_arrays():
                 label = coefficients.info().label_string()
-                colour, iso = MAP_STYLE[is_difference_map(label)]
+                colour, iso, negative = MAP_STYLE[is_difference_map(label)]
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
                 # A map from reflections fills the unit cell: open it with a radius,
                 # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
-                                 color=colour, iso=iso, radius=_VIEW_RADIUS_DEFAULT)
+                                 color=colour, iso=iso, radius=_VIEW_RADIUS_DEFAULT,
+                                 negative_color=negative)
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")
         return "reflections"
