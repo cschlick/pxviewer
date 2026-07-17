@@ -5,7 +5,9 @@
 #
 #   conda env create -f environment.yml
 #   conda activate pxviewer
-#   pip install -e ./python
+#   ./scripts/setup_monomer_lib.sh              # wire cctbx to the monomer library
+#   conda deactivate && conda activate pxviewer # pick up the hook it wrote
+#   pip install -e ./python                     # the pxviewer package itself
 #
 # Note the numpy pin: cctbx works with numpy 2.4, but numba (pulled in by
 # ciftools for BinaryCIF encoding) requires numpy <= 2.4, so the two together
@@ -18,6 +20,16 @@
 # latest build. Installing it here means the restraints data comes with the
 # env instead of a separately-managed geostd checkout; point
 # MMTBX_CCP4_MONOMER_LIB at its geostd dir (see README) so cctbx finds it.
+# qt6-webengine: PySide6 carries the Python bindings for QtWebEngine (the desktop
+# app's Mol* viewport), but conda-forge splits the native Qt WebEngine module into
+# its own package that pyside6 does not pull in — without it the viewport import
+# fails with `libQt6WebEngineCore.so.6: cannot open shared object file`. conda
+# matches its version to qt6-main, so no pin is needed.
+#
+# Everything here is conda (conda-forge / chem_data), which is what makes the env
+# reproducible across platforms — cctbx is conda-only to begin with. The one
+# exception is ciftools (BinaryCIF encoding), which is published only on PyPI, so
+# it stays under pip:; it is a pure-Python wheel, so that is still cross-platform.
 name: pxviewer
 channels:
   - conda-forge
@@ -28,6 +40,8 @@ dependencies:
   - chem_data
   - "numpy<2.5"
   - pyside6>=6.5
+  - qt6-webengine
+  - molviewspec>=1.8.0
   - websockets>=12.0
   - qtconsole>=5.5
   - ipykernel>=6.0
@@ -35,5 +49,4 @@ dependencies:
   - pytest-asyncio>=0.23
   - pip
   - pip:
-      - molviewspec>=1.8.0
       - ciftools>=0.2.0
