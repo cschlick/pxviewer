@@ -110,8 +110,24 @@ class EmbeddedConsole:
 
 
 def default_banner() -> str:
-    """The greeting shown at the top of the console."""
+    """The greeting shown at the top of the console.
+
+    It says what the two names in scope actually are and where the cctbx objects live.
+    Anyone reading it is already in the console and knows what it is, so it does not
+    spend its first line saying so.
+    """
     return (
-        "pxviewer console.  session = active model · app = desktop · np = numpy\n"
-        "Type  api  for all commands · session.name? for help · session.<Tab> to explore.\n"
+        "session  the active model, live\n"
+        "app      the desktop, everything in it\n"
+        "cctbx    session.model → mmtbx model\n"
+        "         app.group_mmm(g) → map+model\n"
+        "\n"
+        "api  every command · session.<Tab>\n"
+        "obj?  help on anything\n"
     )
+
+
+#: The console sits in the controls pane, which is a third of the screen — about 38
+#: monospace columns. A banner wider than that wraps mid-sentence and reads as a mess,
+#: which is worse than saying less. test_console_banner_fits_the_pane holds this.
+BANNER_MAX_COLUMNS = 38

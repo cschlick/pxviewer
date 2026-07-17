@@ -57,3 +57,24 @@ def test_console_suppresses_kernel_banner(qapp):
         assert console.widget.kernel_banner == ""
     finally:
         console.shutdown()
+
+
+def test_console_banner_fits_the_pane():
+    """The console sits in the controls pane — about 38 monospace columns. A wider
+    banner wraps mid-sentence, which reads as a mess and is worse than saying less."""
+    from pxviewer.console import BANNER_MAX_COLUMNS, default_banner
+
+    too_wide = [l for l in default_banner().splitlines() if len(l) > BANNER_MAX_COLUMNS]
+    assert not too_wide, f"these wrap in the console: {too_wide}"
+
+
+def test_console_banner_points_at_the_names_in_scope():
+    """It names what is actually bound, and where the cctbx objects are: a banner that
+    advertises something that is not there, or returns None, is worse than none."""
+    from pxviewer.console import default_banner
+
+    banner = default_banner()
+    assert "session" in banner and "app" in banner
+    assert "session.model" in banner        # the cctbx mmtbx.model.manager
+    assert "group_mmm" in banner            # the cctbx map_model_manager
+    assert "numpy" not in banner and "np =" not in banner
