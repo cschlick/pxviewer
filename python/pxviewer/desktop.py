@@ -782,6 +782,27 @@ def _make_close_filter(on_close):
     return _CloseFilter()
 
 
+def _make_dock_close_filter(dock, host_alive):
+    """Re-dock the controls when their detached window is closed, rather than lose them.
+
+    When the controls float they get a real window frame with a close button; closing it
+    should bring them back into the main window, not hide them. Only while the app is up
+    (``host_alive``) — during shutdown the window must be allowed to close so quitting is
+    not blocked.
+    """
+    from PySide6.QtCore import QEvent, QObject
+
+    class _DockCloseFilter(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.Type.Close and dock.isFloating() and host_alive():
+                dock.setFloating(False)  # re-dock instead of closing
+                event.ignore()
+                return True
+            return False
+
+    return _DockCloseFilter()
+
+
 def _make_dock_title_bar(dock):
     """A title bar for the controls dock that stays usable when it is floated.
 
@@ -3015,7 +3036,7 @@ class DesktopApp:
         # button pops the controls out to their own window for a second monitor (drag it
         # across, maximize the viewport). Re-dock with the float button or by dragging back.
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QDockWidget, QMainWindow
+        from PySide6.QtWidgets import QDockWidget, QMainWindow, QWidget
 
         self._main = QMainWindow()
         self._main.setWindowTitle("pxviewer")
@@ -3026,14 +3047,22 @@ class DesktopApp:
         self._controls_dock = QDockWidget("Controls", self._main)
         self._controls_dock.setObjectName("pxviewer-controls")
         self._controls_dock.setWidget(self._controls.widget())
-        # Movable + floatable, but not closable: floating detaches it to its own window
-        # (for a second screen); it should never be closed and lost.
+        # Movable + floatable (detach for a second screen). Not closable via the dock;
+        # closing the *detached* window re-docks it instead, so it is never lost.
         self._controls_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        # A custom title bar so the floated window can still be moved on Wayland (which
-        # gives a floated dock no decorations to grab) and toggled dock/float.
-        self._controls_dock.setTitleBarWidget(_make_dock_title_bar(self._controls_dock))
+        # Header: our painted bar when docked (with a detach button); a real window frame
+        # when floated — Wayland gives a bare floated dock no decorations, so we promote it
+        # to a normal Window to get the compositor/Qt title bar. _reframe_dock swaps them.
+        self._dock_header = _make_dock_title_bar(self._controls_dock)
+        self._dock_header_hidden = QWidget()  # an empty title bar hides our header
+        self._controls_dock.setTitleBarWidget(self._dock_header)
+        self._reframing_dock = False
+        self._controls_dock.topLevelChanged.connect(self._reframe_dock)
+        self._dock_close_filter = _make_dock_close_filter(
+            self._controls_dock, lambda: self._main.isVisible())
+        self._controls_dock.installEventFilter(self._dock_close_filter)
         self._main.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._controls_dock)
 
         # Closing the window quits the app; tear the backend down on the way out so
@@ -3179,6 +3208,31 @@ class DesktopApp:
         width = self._main.width() or 1600
         self._main.resizeDocks(
             [self._controls_dock], [max(320, width // 3)], Qt.Orientation.Horizontal)
+
+    def _reframe_dock(self, floating: bool) -> None:
+        """Native window chrome for the detached controls; our painted header when docked.
+
+        A floated ``QDockWidget`` is a decorationless Tool window on Wayland — nothing to
+        grab. Promoting it to a normal ``Qt.Window`` gets a compositor/Qt title bar, so we
+        hide our own header then (else there would be two). Reentrancy-guarded, since
+        ``setWindowFlags`` hides and reshows the window.
+        """
+        if self._reframing_dock:
+            return
+        from PySide6.QtCore import Qt
+
+        dock = self._controls_dock
+        self._reframing_dock = True
+        try:
+            if floating:
+                dock.setTitleBarWidget(self._dock_header_hidden)
+                dock.setWindowTitle("pxviewer — Controls")
+                dock.setWindowFlags(Qt.WindowType.Window)
+                dock.show()  # setWindowFlags hid it
+            else:
+                dock.setTitleBarWidget(self._dock_header)
+        finally:
+            self._reframing_dock = False
 
     # -- live session ----------------------------------------------------
 
