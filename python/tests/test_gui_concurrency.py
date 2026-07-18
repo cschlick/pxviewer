@@ -21,8 +21,6 @@ After every case, the invariant bank (see gui_invariants) must still hold.
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import threading
 import time
 

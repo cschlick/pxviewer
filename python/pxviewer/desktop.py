@@ -806,6 +806,26 @@ class ViewportWindow:
     def widget(self):
         return self._window
 
+    def close(self) -> None:
+        """Tear the viewport down, releasing its QtWebEngine render process.
+
+        A QWebEngineView keeps a Chromium render process alive for as long as it
+        exists. Left undisposed — as when many DesktopApps are built and stopped in one
+        process, e.g. a test run — those processes pile up, each still churning on the
+        Mol* scene. ``setPage(None)`` detaches the page and releases the render process;
+        the view and window are then scheduled for deletion. No event loop is pumped
+        here: this runs from ``DesktopApp.stop`` (on ``aboutToQuit`` in the real app),
+        where re-entering the loop would be unsafe.
+        """
+        try:
+            self._view.stop()
+            self._view.setPage(None)   # detaches and tears down the render process
+            self._view.deleteLater()
+            self._window.close()
+            self._window.deleteLater()
+        except Exception:  # pragma: no cover - defensive teardown
+            pass
+
 
 class ControlsWindow:
     """Controls for the viewport: open a file, or run a demo from the Demos tab."""
@@ -3006,6 +3026,7 @@ class DesktopApp:
         self.stop_demo()
         self._clear_all()  # stops all model sessions, volumes, and the dummy
         self._webapp.stop()
+        self._viewport.close()  # release the QtWebEngine render process (see close())
 
     def _arrange_windows(self) -> None:
         """Place the two windows side by side on the primary screen."""

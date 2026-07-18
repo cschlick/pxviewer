@@ -17,8 +17,6 @@ prints the exact sequence that produced it.
 
 import os
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import random
 
 import numpy as np
