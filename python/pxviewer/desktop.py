@@ -71,6 +71,12 @@ _TUG_SETTLE_DURATION = 1.2
 # not a constant. Per-map, the Appearance pane has always been able to change it.
 _VIEW_RADIUS_DEFAULT = 15.0
 
+# Markers dropped in the viewport ("place a marker" → click). Drawn as spheres on a
+# markup channel well clear of the probe (0, 1) and validation (10+) channels.
+_MARKER_CHANNEL = 90
+_MARKER_RADIUS = 0.5
+_MARKER_COLOR = [255, 90, 90]
+
 # The object list sizes itself to its contents between these. The floor keeps the empty
 # state from collapsing to nothing; past the ceiling the list scrolls itself rather than
 # taking the whole pane.
@@ -1187,6 +1193,24 @@ class ControlsWindow:
         clear_m.clicked.connect(self._on_clear_measurements)
         mg.addWidget(clear_m)
         layout.addWidget(measure)
+
+        marker = QGroupBox("Marker")
+        mkg = QVBoxLayout(marker)
+        mkg.addWidget(QLabel("Drop a marker at a 3D point in the viewport:"))
+        mk_row = QHBoxLayout()
+        place_btn = QPushButton("Place marker")
+        place_btn.setToolTip(
+            "Arm placement, then click in the viewport: a sphere is dropped there — "
+            "snapped to the atom under the cursor, or the view plane in empty space — and "
+            "its 3D coordinate is sent back.")
+        place_btn.clicked.connect(self._desktop.arm_marker)
+        mk_row.addWidget(place_btn)
+        clear_mk = QPushButton("Clear")
+        clear_mk.setToolTip("Remove all placed markers.")
+        clear_mk.clicked.connect(self._desktop.clear_markers)
+        mk_row.addWidget(clear_mk)
+        mkg.addLayout(mk_row)
+        layout.addWidget(marker)
 
         minimization = QGroupBox("Minimization")
         ming = QVBoxLayout(minimization)
@@ -2931,6 +2955,7 @@ class DesktopApp:
         # Restraint-notation primitives currently drawn for the selected geometry rows.
         self._restraint_prim_ids: list = []
         self._restraint_prim_session = None
+        self._markers: list = []  # world-space [x, y, z] points placed in the viewport
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
@@ -3412,6 +3437,9 @@ class DesktopApp:
         # changes made in the viewport can come back on any of them.
         session.on_volume_iso(self._on_volume_iso_changed)
         session.on_tug(lambda action, atom, target, mid=mid: self._on_tug(mid, action, atom, target))
+        # Markers are a scene-level thing, not this model's — but only the armed (control)
+        # session's viewport reports one, so wiring every session is harmless.
+        session.on_marker(lambda position, atom: self._on_marker(position, atom))
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
@@ -3637,6 +3665,51 @@ class DesktopApp:
         still, which is what lets it flow into density rather than only bend. Next drag.
         """
         self._tug_continuous = bool(enabled)
+
+    # -- markers ---------------------------------------------------------
+
+    def arm_marker(self) -> None:
+        """Arm 'place a marker': the next click in the viewport drops a sphere and reports
+        its 3D coordinate (see :meth:`_on_marker`). One-shot — the viewer disarms after
+        the click. Rides the control session, so the marker is a scene-level point rather
+        than tied to one model."""
+        session = self._control_session()
+        if session is None:
+            self._status("load a model first to place a marker")
+            return
+        session.set_marker_mode(True)
+        self._status("Click in the viewport to place a marker…")
+
+    def _on_marker(self, position, atom) -> None:
+        """A marker was placed: record its world-space point and draw it. ``atom`` is the
+        picked atom index if the click landed on one, else None. This runs on a session's
+        event-loop thread, but the marker list and markup send are cheap and thread-safe."""
+        point = [float(c) for c in position]
+        self._markers.append(point)
+        self._draw_markers()
+        where = f" on atom {atom}" if atom is not None else ""
+        self._status(
+            f"Marker at ({point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f}){where} "
+            f"— {len(self._markers)} placed")
+
+    def _draw_markers(self) -> None:
+        """(Re)draw every marker as a sphere on the marker channel."""
+        session = self._control_session()
+        if session is None:
+            return
+        balls = [[[p[0], p[1], p[2]], _MARKER_RADIUS] for p in self._markers]
+        primitive = {"kind": "balls", "color": _MARKER_COLOR, "balls": balls}
+        session.show_markup(_MARKER_CHANNEL, [primitive] if balls else [])
+
+    def clear_markers(self) -> None:
+        """Remove every placed marker."""
+        had = bool(self._markers)
+        self._markers.clear()
+        session = self._control_session()
+        if session is not None:
+            session.clear_markup(_MARKER_CHANNEL)
+        if had:
+            self._status("Markers cleared")
 
     def _on_tug(self, mid: str, action: str, atom: int, target) -> None:
         """A drag in the viewport: queued, never served here.

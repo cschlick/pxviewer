@@ -501,6 +501,7 @@ class LiveSession:
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
         self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
+        self._marker_handlers: List[Callable[[list, Optional[int]], None]] = []
         # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
@@ -921,6 +922,25 @@ class LiveSession:
         pointer is, and what the model does about it is cctbx's business.
         """
         self._tug_handlers.append(handler)
+
+    def on_marker(self, handler: Callable[[list, Optional[int]], None]) -> None:
+        """Register a callback for a marker placed in the viewport: ``handler(position,
+        atom)``, where ``position`` is a world-space ``[x, y, z]`` and ``atom`` is the
+        picked atom index if the click landed on one, else ``None``. Armed one-shot with
+        :meth:`set_marker_mode`; the click reports a point rather than rotating.
+        """
+        self._marker_handlers.append(handler)
+
+    def set_marker_mode(self, on: bool) -> None:
+        """Arm (or disarm) 'place a marker' mode in the viewport. While on, the next
+        click reports a 3D point back via :meth:`on_marker` instead of rotating, then the
+        viewer disarms itself. The point snaps to the atom under the cursor, or falls to
+        the view-plane depth for a click in empty space. Thread-safe.
+        """
+        message = json.dumps({"type": "marker-mode", "on": bool(on)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_volume_scroll_target(self, ref: Optional[str]) -> None:
         """Name the volume the viewport's scroll wheel contours (None = nothing).
@@ -1753,6 +1773,17 @@ class LiveSession:
                 for handler in self._tug_handlers:
                     try:
                         handler(action, atom, target)
+                    except Exception:  # pragma: no cover - user callback errors
+                        pass
+        elif etype == "marker":
+            position = event.get("position")
+            atom = event.get("atom")
+            if isinstance(position, list) and len(position) == 3:
+                pos = [float(c) for c in position]
+                idx = atom if isinstance(atom, int) else None
+                for handler in self._marker_handlers:
+                    try:
+                        handler(pos, idx)
                     except Exception:  # pragma: no cover - user callback errors
                         pass
         elif etype == "volume-iso-changed":

@@ -1538,6 +1538,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let tugPending: Vec3 | null = null;
     let tugSending = false;
 
+    // Place-marker: armed one-shot by the server ('marker-mode'). While armed, the next
+    // left-click reports a 3D point back instead of rotating — snapped to the atom under
+    // the cursor, or unprojected at the camera's focus depth for a click in empty space.
+    let markerArmed = false;
+
     /** The pointer, as CSS pixels for picking and as canvas fractions for unprojecting.
      *  identify() wants the first (it is fed by Mol*'s own input observer); the camera
      *  wants the second, in device pixels. */
@@ -1572,6 +1577,19 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     };
 
     const onMouseDown = (ev: MouseEvent) => {
+        if (markerArmed && ev.button === 0 && viewer && plugin.canvas3d) {
+            const point = canvasPoint(ev);
+            const atom = atomAt(plugin, viewer, point.x, point.y);
+            // Snap to the atom under the cursor; for empty space, unproject at the
+            // camera's focus depth — the plane through the rotation centre.
+            let pos = atom !== undefined ? viewer.atomPosition(atom) : undefined;
+            if (!pos) pos = pointerInSpace(plugin, point.fx, point.fy, plugin.canvas3d!.camera.state.target);
+            markerArmed = false;  // one-shot
+            ev.preventDefault();
+            ev.stopPropagation();
+            ws.send(JSON.stringify({ type: 'marker', position: [pos[0], pos[1], pos[2]], atom: atom ?? null }));
+            return;
+        }
         if (!ev.shiftKey || ev.button !== 0 || !viewer || !plugin.canvas3d) return;
         const point = canvasPoint(ev);
         const atom = atomAt(plugin, viewer, point.x, point.y);
@@ -1685,6 +1703,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setAxis(plugin, msg.visible);
             } else if (msg.type === 'reset-view') {
                 plugin.managers.camera.reset();  // reframe the whole scene, default orientation
+            } else if (msg.type === 'marker-mode') {
+                markerArmed = !!msg.on;  // arm/disarm the next-click place-marker (see onMouseDown)
             } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
                 await setComputedInteractions(plugin, msg.visible);
             } else if (msg.type === 'interactions' && viewer) {
