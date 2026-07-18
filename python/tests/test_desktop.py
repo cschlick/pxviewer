@@ -568,9 +568,9 @@ def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
 
 def test_hiding_a_volume_is_a_live_toggle_not_a_page_reload(qapp):
     """Hiding a map must not reload the viewport (which blanks every object to drop one).
-    Every volume is emitted into the scene so the hide is a live state-cell toggle, and a
-    map hidden before a client connects is re-hidden on connect so a later reload cannot
-    resurrect it."""
+    Every volume stays in the scene and hiding drives its opacity to zero — a live change
+    over the map already in the render graph, nothing disposed (a software renderer does
+    not survive disposing a live volume mid-frame). The real opacity is preserved."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -585,25 +585,33 @@ def test_hiding_a_volume_is_a_live_toggle_not_a_page_reload(qapp):
     try:
         app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         v1 = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map1")
-        v2 = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8)) * 2), "map2")
+        entry = app._volume_entry(v1)
+        real_opacity = entry["opacity"]
 
-        # The scene carries every volume, hidden or not, so either can be toggled live.
-        scene = app._write_volume_scene()
-        txt = (app._webapp.volume_dir / scene.lstrip("/")).read_text()
-        for vid in (v1, v2):
-            assert app._volume_entry(vid)["ref"] in txt
-
-        loads = []
-        orig = app._viewport.load
-        app._viewport.load = lambda url, *a, **k: (loads.append(url), orig(url, *a, **k))[1]
+        # Every volume is in the scene; a hidden one is baked at zero opacity so a reload
+        # keeps it hidden without a re-hide message.
+        assert entry["ref"] in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
 
         control = app._control_session()
+        pushed = []
+        orig_op = control.set_volume_opacity
+        control.set_volume_opacity = lambda ref, op: (pushed.append((ref, op)), orig_op(ref, op))[1]
+        loads = []
+        orig_load = app._viewport.load
+        app._viewport.load = lambda url, *a, **k: (loads.append(url), orig_load(url, *a, **k))[1]
+
         app.set_volume_visible(v1, False)
         assert loads == [], "hiding a volume reloaded the viewport"
-        assert app._volume_entry(v1)["ref"] in control._hidden_volumes  # remembered for replay
+        assert pushed[-1] == (entry["ref"], 0.0)          # hidden -> opacity 0, live
+        assert entry["opacity"] == real_opacity           # real value preserved on the entry
+
+        # Editing opacity while hidden is stored, not pushed (would resurrect the map).
+        app.set_volume_opacity(v1, 0.5)
+        assert entry["opacity"] == 0.5 and pushed[-1] == (entry["ref"], 0.0)
+
         app.set_volume_visible(v1, True)
         assert loads == [], "showing a volume reloaded the viewport"
-        assert app._volume_entry(v1)["ref"] not in control._hidden_volumes
+        assert pushed[-1] == (entry["ref"], 0.5)          # restores the stored opacity, live
     finally:
         app.stop()
 

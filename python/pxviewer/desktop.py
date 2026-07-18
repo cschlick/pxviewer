@@ -3390,10 +3390,10 @@ class DesktopApp:
     def _write_volume_scene(self) -> Optional[str]:
         """Write an MVSJ composing every volume; return its URL path (or None).
 
-        Every volume is emitted, hidden ones included, so hiding/showing a map is a live
-        state-cell toggle rather than a scene rebuild (see ``set_volume_visible``); the
-        session re-hides the hidden ones as the fresh page connects. Only a visible volume
-        is ever focused."""
+        Every volume is emitted, hidden ones included but at zero opacity, so hiding or
+        showing a map is a live opacity change (see ``set_volume_visible``) rather than a
+        scene rebuild — and the map stays in the render graph, never disposed, which a
+        software renderer does not survive mid-frame. Only a visible volume is focused."""
         if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
@@ -3406,7 +3406,7 @@ class DesktopApp:
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
-                opacity=v["opacity"], style=v["style"],
+                opacity=v["opacity"] if v["visible"] else 0.0, style=v["style"],
                 focus=(focus_first and v is first_visible),
             ))
         self._scene_counter += 1
@@ -3426,7 +3426,6 @@ class DesktopApp:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
-        self._reassert_volume_visibility()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -4241,9 +4240,24 @@ class DesktopApp:
                              lambda c, ref, v: c.set_volume_iso(ref, v))
 
     def set_volume_opacity(self, vid: str, value: float) -> None:
-        """Set a volume's opacity (0-1) live."""
-        self._volume_command(vid, "opacity", float(value),
-                             lambda c, ref, v: c.set_volume_opacity(ref, v))
+        """Set a volume's opacity (0-1) live.
+
+        A hidden map is drawn at zero opacity (that is how hiding works), so a change to
+        its opacity is stored but not pushed — pushing it would make the hidden map
+        reappear. It takes effect when the map is shown again."""
+        entry = self._volume_entry(vid)
+        value = float(value)
+        if entry is None or entry.get("opacity") == value:
+            return
+        entry["opacity"] = value
+        if not entry["visible"]:
+            return
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_opacity(entry["ref"], value)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def set_volume_color(self, vid: str, color: str) -> None:
         """Set a volume's colour live."""
@@ -4338,23 +4352,6 @@ class DesktopApp:
         for entry in self._volumes:
             if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
-
-    def _reassert_volume_visibility(self) -> None:
-        """Re-tell the control session which volumes are hidden, before the page reloads.
-
-        The rebuilt scene draws every volume; the session re-hides its remembered set as
-        the new page connects. The session carrying volume commands can change across
-        reloads (dummy <-> active model), so the current one is handed the full hidden set
-        — otherwise a hidden map would reappear on the next reload."""
-        control = self._control_session()
-        if control is None:
-            return
-        for entry in self._volumes:
-            if not entry["visible"]:
-                try:
-                    control.set_volume_visible(entry["ref"], False)
-                except Exception:  # pragma: no cover - defensive
-                    pass
 
     def _send_volume_clip(self, entry) -> None:
         """Push a volume's whole clip: the slab and the radius are one thing to the
@@ -4555,9 +4552,10 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume — a live state-cell toggle over the shared scene, not a
-        page reload. Every volume is emitted into the scene (see _write_volume_scene), so
-        showing a hidden one is a message, not a rebuild that blanks every object."""
+        """Show or hide a volume — a live opacity change over the shared scene, not a page
+        reload. Hiding drives the map's opacity to zero and showing restores it; the map
+        stays in the scene the whole time (see _write_volume_scene), so nothing blanks and
+        nothing is disposed. The real opacity is preserved on the entry."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
@@ -4565,7 +4563,7 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             try:
-                control.set_volume_visible(entry["ref"], bool(visible))
+                control.set_volume_opacity(entry["ref"], entry["opacity"] if visible else 0.0)
             except Exception:  # pragma: no cover - defensive
                 pass
         self._emit_loaded_changed()

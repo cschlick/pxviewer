@@ -14,7 +14,6 @@
 import { PluginStateObject as SO, PluginStateTransform } from 'molstar/lib/mol-plugin-state/objects';
 import { StateObjectSelector, StateTransformer } from 'molstar/lib/mol-state';
 import { PluginContext } from 'molstar/lib/mol-plugin/context';
-import { setSubtreeVisibility } from 'molstar/lib/mol-plugin/behavior/static/state';
 import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
@@ -1313,16 +1312,6 @@ async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: num
     });
 }
 
-/** Show or hide a volume in place — both contours of a difference map. Toggling the
- *  state cell's visibility, not rebuilding the scene, so hiding a map from the objects
- *  list is instant and leaves every other object untouched. */
-async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boolean) {
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (repr) setSubtreeVisibility(plugin.state.data, repr.transform.ref, !visible);
-    const negative = findVolumeNegativeReprCell(plugin, ref);
-    if (negative) setSubtreeVisibility(plugin.state.data, negative.transform.ref, !visible);
-}
-
 async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
     const decoded = decodeColor(color);
     if (decoded === undefined) {
@@ -1730,8 +1719,6 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
-            } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.visible === 'boolean') {
-                await setVolumeVisible(plugin, msg.ref, msg.visible);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
             } else if (msg.type === 'screenshot') {
