@@ -803,78 +803,6 @@ def _make_dock_close_filter(dock, host_alive):
     return _DockCloseFilter()
 
 
-def _make_dock_title_bar(dock):
-    """A title bar for the controls dock that stays usable when it is floated.
-
-    A floated ``QDockWidget`` on Wayland has no window-manager decorations — nothing to
-    grab to move it. So this bar is always shown (docked and floating): dragging it moves
-    the floating window through the compositor (``startSystemMove`` — the Wayland-correct
-    way to move a window by a client widget), the button (and a double-click) toggles
-    docked/floating, and there is deliberately no close control so the controls cannot be
-    lost.
-    """
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
-
-    class _TitleBar(QWidget):
-        def __init__(self):
-            super().__init__(dock)
-            row = QHBoxLayout(self)
-            row.setContentsMargins(10, 5, 6, 5)
-            grip = QLabel("⠿")  # a dotted grip, the usual "draggable" affordance
-            grip.setStyleSheet("color: rgba(128,128,128,0.9);")
-            row.addWidget(grip)
-            label = QLabel("Controls")
-            label.setStyleSheet("font-weight: 600;")
-            row.addWidget(label)
-            row.addStretch(1)
-            self._toggle = QToolButton()
-            self._toggle.setAutoRaise(True)
-            self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-            self._toggle.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
-            row.addWidget(self._toggle)
-            dock.topLevelChanged.connect(self._sync)
-            self._sync(dock.isFloating())
-
-        def paintEvent(self, event):
-            # Painted directly, not via a stylesheet: a QWidget subclass won't paint a
-            # stylesheet background without WA_StyledBackground, and it varies by Qt style.
-            # This always draws — a header tint and, most importantly, a definite line at
-            # the bottom so the bar reads as its own region. Neutral gray works on light
-            # and dark themes alike.
-            from PySide6.QtGui import QColor, QPainter
-
-            painter = QPainter(self)
-            painter.fillRect(self.rect(), QColor(128, 128, 128, 38))
-            painter.setPen(QColor(128, 128, 128, 140))
-            y = self.height() - 1
-            painter.drawLine(0, y, self.width(), y)
-
-        def _sync(self, floating):
-            self._toggle.setText("⤓" if floating else "⤢")
-            self._toggle.setToolTip("Dock the controls" if floating
-                                    else "Detach the controls to their own window")
-            # A move cursor while floating hints that the bar drags the window.
-            self.setCursor(Qt.CursorShape.SizeAllCursor if floating
-                           else Qt.CursorShape.ArrowCursor)
-
-        def _move_window(self):
-            handle = dock.window().windowHandle()
-            if handle is not None:
-                handle.startSystemMove()
-
-        def mousePressEvent(self, event):
-            if event.button() == Qt.MouseButton.LeftButton and dock.isFloating():
-                self._move_window()
-            else:
-                super().mousePressEvent(event)
-
-        def mouseDoubleClickEvent(self, event):
-            dock.setFloating(not dock.isFloating())
-
-    return _TitleBar()
-
-
 class ViewportWindow:
     """A Qt window wrapping the Mol* viewer in a QWebEngineView."""
 
@@ -1007,7 +935,6 @@ class ControlsWindow:
         # the panel floats (it uses the native window frame then), so this is the reliable
         # way back — and the way out, from either state.
         self._dock_btn = QPushButton("Detach")
-        self._dock_btn.setFlat(True)
         self._dock_btn.setToolTip("Detach the controls to their own window, or re-dock them")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
@@ -3064,12 +2991,11 @@ class DesktopApp:
         self._controls_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
-        # Header: our painted bar when docked (with a detach button); a real window frame
-        # when floated — Wayland gives a bare floated dock no decorations, so we promote it
-        # to a normal Window to get the compositor/Qt title bar. _reframe_dock swaps them.
-        self._dock_header = _make_dock_title_bar(self._controls_dock)
-        self._dock_header_hidden = QWidget()  # an empty title bar hides our header
-        self._controls_dock.setTitleBarWidget(self._dock_header)
+        # No title bar when docked — the panel is obviously the controls, and the
+        # status-row Dock/Detach button toggles it (an empty widget hides the title bar).
+        # When floated, _reframe_dock promotes it to a normal Window so Wayland/Qt draw a
+        # real frame (a bare floated dock has none).
+        self._controls_dock.setTitleBarWidget(QWidget())
         self._reframing_dock = False
         self._controls_dock.topLevelChanged.connect(self._reframe_dock)
         self._controls_dock.topLevelChanged.connect(self._controls.reflect_dock_state)
@@ -3230,27 +3156,24 @@ class DesktopApp:
         dock.setFloating(not dock.isFloating())
 
     def _reframe_dock(self, floating: bool) -> None:
-        """Native window chrome for the detached controls; our painted header when docked.
+        """Give the detached controls a native window frame.
 
         A floated ``QDockWidget`` is a decorationless Tool window on Wayland — nothing to
-        grab. Promoting it to a normal ``Qt.Window`` gets a compositor/Qt title bar, so we
-        hide our own header then (else there would be two). Reentrancy-guarded, since
-        ``setWindowFlags`` hides and reshows the window.
+        grab. Promoting it to a normal ``Qt.Window`` gets a real compositor/Qt title bar.
+        Docked, the dock has no title bar at all; re-docking (via the Dock button or the
+        native close) restores that. Reentrancy-guarded, since ``setWindowFlags`` hides and
+        reshows the window.
         """
-        if self._reframing_dock:
+        if not floating or self._reframing_dock:
             return
         from PySide6.QtCore import Qt
 
         dock = self._controls_dock
         self._reframing_dock = True
         try:
-            if floating:
-                dock.setTitleBarWidget(self._dock_header_hidden)
-                dock.setWindowTitle("pxviewer — Controls")
-                dock.setWindowFlags(Qt.WindowType.Window)
-                dock.show()  # setWindowFlags hid it
-            else:
-                dock.setTitleBarWidget(self._dock_header)
+            dock.setWindowTitle("pxviewer — Controls")
+            dock.setWindowFlags(Qt.WindowType.Window)
+            dock.show()  # setWindowFlags hid it
         finally:
             self._reframing_dock = False
 
