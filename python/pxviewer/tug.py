@@ -220,8 +220,14 @@ class Tug:
         from cctbx.array_family import flex
         from mmtbx.geometry_restraints import reference
 
-        self._grm.remove_reference_coordinate_restraints_in_place(
-            selection=flex.size_t([self._local]))
+        # Only if there is anything to remove. remove-by-selection dereferences the
+        # proxy list, which stays None until the first reference restraint is added —
+        # and for a small, self-contained ligand there are no boundary atoms to pin, so
+        # nothing seeds it before the first tug. (The no-selection remove in finish() is
+        # already None-safe.)
+        if self._grm.reference_coordinate_proxies is not None:
+            self._grm.remove_reference_coordinate_restraints_in_place(
+                selection=flex.size_t([self._local]))
         self._grm.append_reference_coordinate_restraints_in_place(
             reference.add_coordinate_restraints(
                 sites_cart=flex.vec3_double([tuple(float(v) for v in target)]),

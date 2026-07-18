@@ -291,3 +291,27 @@ def test_settle_comes_to_rest_in_place():
     final = model.get_sites_cart().as_numpy_array()[300]
     assert np.linalg.norm(final - released) < 0.5
     assert np.linalg.norm(final - start) > 1.0  # the drag was kept, not undone
+
+
+def test_a_standalone_ligand_with_no_boundary_can_be_dragged():
+    """A small, self-contained ligand (a placed monomer) is a whole model with nothing
+    around it, so the drag zone reaches no boundary atoms to pin. That left the reference
+    restraint list uninitialised, and re-aiming the pull dereferenced it — a crash on the
+    first move, so a placed ligand could not be dragged at all. Here the atom follows and
+    the rest of the ligand comes with it via geometry."""
+    _require_restraints()
+    import numpy as np
+    from pxviewer import ligands
+    from pxviewer.tug import Tug
+
+    model = ligands.build_ligand_model("GOL", (5.0, 5.0, 5.0))
+    start = model.get_sites_cart().as_numpy_array().copy()
+    tug = Tug(model, 0)
+    for i in range(10):  # the move that used to raise on the first frame
+        tug.move_to((start[0] + np.array([1.5 * (i + 1) / 10, 0.0, 0.0])).tolist())
+    tug.finish()
+
+    now = model.get_sites_cart().as_numpy_array()
+    moved = np.linalg.norm(now - start, axis=1)
+    assert moved[0] > 0.5                       # the dragged atom followed
+    assert (moved > 0.05).sum() == len(moved)   # the whole ligand came along
