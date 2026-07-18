@@ -21,6 +21,12 @@ from typing import Any, Mapping, Optional
 # debugger; silence it so it never lands in the user's console.
 os.environ.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
 
+# Bind qtconsole (through qtpy) to PySide6. Left to itself qtpy selects whatever Qt
+# binding it finds first — historically PyQt5, which is GPL and so must not be loaded
+# into, or shipped with, a closed-source build. Set before qtconsole (hence qtpy) is
+# ever imported, which is why it sits at module top rather than inside the functions.
+os.environ.setdefault("QT_API", "pyside6")
+
 CONSOLE_MISSING_MESSAGE = (
     "The API console needs qtconsole and ipykernel.\n\n"
     "Install them with:\n    pip install 'pxviewer[console]'"

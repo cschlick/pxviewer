@@ -25,10 +25,14 @@
 # fails with `libQt6WebEngineCore.so.6: cannot open shared object file`. conda
 # matches its version to qt6-main, so no pin is needed.
 #
-# Every dependency is conda (conda-forge / chem_data), which is what makes the env
-# reproducible across platforms — cctbx is conda-only to begin with. BinaryCIF for
-# the browser is written by the in-tree pxviewer.bcif, which needs only msgpack
-# (msgpack-python on conda-forge), so there is no pip: block at all.
+# Nearly every dependency is conda (conda-forge / chem_data), which is what makes the
+# env reproducible across platforms — cctbx is conda-only to begin with.
+#
+# qtconsole is the exception, installed with pip: conda-forge's qtconsole pins `pyqt`
+# (PyQt5, GPL) as its Qt binding, which would drag GPL into the environment. Upstream
+# qtconsole needs only qtpy and works fine on PySide6 (LGPL) — console.py pins
+# QT_API=pyside6 so that is what it uses — so pip's qtconsole keeps the env
+# GPL-free. (BinaryCIF is written by the in-tree pxviewer.bcif; no dep needed for it.)
 name: pxviewer
 channels:
   - conda-forge
@@ -43,8 +47,9 @@ dependencies:
   - molviewspec>=1.8.0
   - msgpack-python>=1.0
   - websockets>=12.0
-  - qtconsole>=5.5
   - ipykernel>=6.0
   - pytest>=7.0
   - pytest-asyncio>=0.23
   - pip
+  - pip:
+      - qtconsole>=5.5
