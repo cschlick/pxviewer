@@ -798,12 +798,6 @@ def _make_dock_title_bar(dock):
     class _TitleBar(QWidget):
         def __init__(self):
             super().__init__(dock)
-            # Look like a title bar so it reads as a grabbable header, not blank space:
-            # a neutral gray tint + underline that works on both light and dark themes.
-            self.setObjectName("pxDockTitle")
-            self.setStyleSheet(
-                "#pxDockTitle { background: rgba(128,128,128,0.16);"
-                " border-bottom: 1px solid rgba(128,128,128,0.35); }")
             row = QHBoxLayout(self)
             row.setContentsMargins(10, 5, 6, 5)
             grip = QLabel("⠿")  # a dotted grip, the usual "draggable" affordance
@@ -820,6 +814,20 @@ def _make_dock_title_bar(dock):
             row.addWidget(self._toggle)
             dock.topLevelChanged.connect(self._sync)
             self._sync(dock.isFloating())
+
+        def paintEvent(self, event):
+            # Painted directly, not via a stylesheet: a QWidget subclass won't paint a
+            # stylesheet background without WA_StyledBackground, and it varies by Qt style.
+            # This always draws — a header tint and, most importantly, a definite line at
+            # the bottom so the bar reads as its own region. Neutral gray works on light
+            # and dark themes alike.
+            from PySide6.QtGui import QColor, QPainter
+
+            painter = QPainter(self)
+            painter.fillRect(self.rect(), QColor(128, 128, 128, 38))
+            painter.setPen(QColor(128, 128, 128, 140))
+            y = self.height() - 1
+            painter.drawLine(0, y, self.width(), y)
 
         def _sync(self, floating):
             self._toggle.setText("⤓" if floating else "⤢")
