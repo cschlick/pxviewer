@@ -938,13 +938,7 @@ class ControlsWindow:
         self._dock_btn.setToolTip("Detach the controls to their own window, or re-dock them")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
-        icon = _app_icon()
-        if icon is not None:
-            icon_label = QLabel()
-            icon_label.setPixmap(icon.pixmap(18, 18))
-            status_row.addWidget(icon_label)
         help_btn = QPushButton("Help…")
-        help_btn.setFlat(True)  # link-like, unobtrusive
         help_btn.setToolTip("Documentation (coming soon)")
         help_btn.clicked.connect(self._on_help)
         status_row.addWidget(help_btn)
