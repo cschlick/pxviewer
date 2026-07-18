@@ -1578,6 +1578,12 @@ class ControlsWindow:
             code_edit.setPlaceholderText("e.g. GOL, ATP, NAG")
             code_edit.setMaxLength(5)
             self._appearance_layout.addWidget(code_edit)
+            # …or draw it from a SMILES string, for anything not in the library. The code
+            # field above then just names the residue (defaults to LIG).
+            self._appearance_layout.addWidget(QLabel("or SMILES (code above names it):"))
+            smiles_edit = QLineEdit()
+            smiles_edit.setPlaceholderText("e.g. CC(=O)Oc1ccccc1C(=O)O")
+            self._appearance_layout.addWidget(smiles_edit)
             has_map = self._desktop.map_for_model() is not None
             fit_check = QCheckBox("Fit into density (explode-and-refine)")
             fit_check.setChecked(has_map)
@@ -1589,12 +1595,19 @@ class ControlsWindow:
             self._appearance_layout.addWidget(fit_check)
             place_btn = QPushButton("Fit ligand here")
             place_btn.setToolTip(
-                "Build the ideal ligand from the monomer library, centre it here, and "
-                "add it as a new object.")
+                "Build the ligand (from the monomer library, or from the SMILES string), "
+                "centre it here, and add it as a new object.")
+
+            def _place(m=it["id"], c=code_edit, s=smiles_edit, f=fit_check):
+                smiles = s.text().strip()
+                if smiles:  # SMILES wins; the code field is just the residue name
+                    self._desktop.fit_ligand_from_smiles_at_marker(
+                        m, smiles, c.text() or "LIG", fit=f.isChecked())
+                else:
+                    self._desktop.fit_ligand_at_marker(m, c.text(), fit=f.isChecked())
+
             place_btn.clicked.connect(
-                lambda _c=False, m=it["id"], e=code_edit, f=fit_check:
-                self._safe(lambda: self._desktop.fit_ligand_at_marker(
-                    m, e.text(), fit=f.isChecked())))
+                lambda _c=False: self._safe(_place))
             self._appearance_layout.addWidget(place_btn)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
@@ -3791,15 +3804,48 @@ class DesktopApp:
         (the fit takes seconds); adds its result on the GUI thread."""
         from . import ligands
 
-        marker = self._marker_entry(mid)
-        if marker is None:
-            return
         code = (code or "").strip().upper()
         if not code:
             self._status("enter a monomer code, e.g. GOL")
             return
         if not ligands.available(code):
             self._status(f"no monomer '{code}' in the library")
+            return
+        self._place_ligand(
+            mid, code,
+            lambda position, cs: ligands.build_ligand_model(
+                code, position, crystal_symmetry=cs),
+            fit=fit, trials=trials)
+
+    def fit_ligand_from_smiles_at_marker(self, mid: str, smiles: str, code: str, *,
+                                         fit: bool = True, trials: int = 20) -> None:
+        """Like :meth:`fit_ligand_at_marker` but for a ligand given as a SMILES string
+        rather than a library code — rdkit embeds a 3D conformer and its geometry supplies
+        both coordinates and (on-the-fly) restraints. ``code`` is the residue name the new
+        object is filed under."""
+        from . import ligands
+
+        smiles = (smiles or "").strip()
+        if not smiles:
+            self._status("enter a SMILES string, e.g. CCO")
+            return
+        code = (code or "LIG").strip().upper()[:3] or "LIG"
+        self._place_ligand(
+            mid, code,
+            lambda position, cs: ligands.build_ligand_from_smiles(
+                smiles, code, position, crystal_symmetry=cs),
+            fit=fit, trials=trials)
+
+    def _place_ligand(self, mid: str, code: str, builder, *, fit: bool = True,
+                      trials: int = 20) -> None:
+        """Shared machinery behind the ligand actions: build the model with ``builder``
+        (``builder(position, crystal_symmetry) -> model``) centred on the marker, fit it
+        into the active model's density if asked, and add it as a standalone object — all
+        off the GUI thread, the add marshalled back onto it."""
+        from . import ligands
+
+        marker = self._marker_entry(mid)
+        if marker is None:
             return
         position = list(marker["position"])
         # Fitting needs the active model's paired map and its frame, so the ligand is
@@ -3814,7 +3860,7 @@ class DesktopApp:
         def work():
             try:
                 self._status(f"building {code}…")
-                model = ligands.build_ligand_model(code, position, crystal_symmetry=cs)
+                model = builder(position, cs)
                 if map_data is not None:
                     self._status(f"fitting {code} into density ({trials} trials)…")
                     ligands.fit_into_density(

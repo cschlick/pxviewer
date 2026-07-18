@@ -1,17 +1,22 @@
-"""Place a small-molecule ligand from the monomer library, and fit it into density.
+"""Place a small-molecule ligand — from the monomer library or a SMILES string — and fit
+it into density.
 
-The ideal coordinates come from geostd — the same CIFs that carry the restraints — so any
-of its ~54,000 components can be dropped in centred on a chosen point (a marker), and,
-where a map is available, settled into the local density with a large radius of
-convergence via explode-and-refine (``mmtbx.refinement.real_space.explode_and_refine`` —
-the engine inside phenix/lifi's fit, but license-clean and needing no boxing).
+For a library component the ideal coordinates come from geostd (the same CIFs that carry
+the restraints), so any of its ~54,000 entries can be dropped in centred on a chosen point
+(a marker). For anything else, a SMILES string is embedded to a 3D conformer by rdkit and
+that conformer's geometry is written into a monomer restraint CIF on the fly, so a novel
+ligand is placed and restrained the same way. Either way, where a map is available the
+placed model is settled into the local density with a large radius of convergence via
+explode-and-refine (``mmtbx.refinement.real_space.explode_and_refine`` — the engine inside
+phenix/lifi's fit, but license-clean and needing no boxing).
 
-Everything here is cctbx (BSD-3-Clause-LBNL); no phenix. See :mod:`pxviewer.desktop` for
+Everything here is cctbx + rdkit (both BSD); no phenix. See :mod:`pxviewer.desktop` for
 the marker wiring.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import shutil
 import tempfile
@@ -19,8 +24,8 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-__all__ = ["available", "ideal_atoms", "build_ligand_model", "coarse_orient",
-           "fit_into_density"]
+__all__ = ["available", "ideal_atoms", "build_ligand_model",
+           "build_ligand_from_smiles", "coarse_orient", "fit_into_density"]
 
 
 def _monomer_root() -> Optional[str]:
@@ -77,30 +82,173 @@ def build_ligand_model(code: str, center, *, crystal_symmetry: Any = None,
     paired map's) so a later fit indexes the density correctly; without one a loose P1
     box around the ligand is used, which is fine for placing but not for fitting.
     """
-    from . import cctbx_io
-
     names, elements, xyz = ideal_atoms(code)
     center = np.asarray(center, dtype=float).reshape(3)
     placed = xyz - xyz.mean(axis=0) + center  # centroid -> center
+    # One residue whose name is the code, so cctbx finds its restraints in the same
+    # library the coordinates came from — no restraint CIF needed.
+    return _assemble_model(placed, names, elements, code.upper(),
+                           crystal_symmetry=crystal_symmetry, data_manager=data_manager)
 
-    code = code.upper()
+
+def build_ligand_from_smiles(smiles: str, code: str, center, *,
+                             crystal_symmetry: Any = None,
+                             data_manager: Any = None) -> Any:
+    """A restraints-ready cctbx model of an arbitrary ``smiles`` ligand, centroid at
+    ``center`` — for anything not in the monomer library.
+
+    rdkit parses the SMILES, adds hydrogens and embeds a 3D conformer (cleaned up with
+    MMFF); that single conformer supplies both the coordinates and — measured off it — the
+    ideal bond lengths and angles, which are written into a monomer restraint CIF that
+    cctbx reads to build the geometry. Coordinates and restraints therefore come from the
+    same source, so the placed model is immediately fit-ready, exactly like
+    :func:`build_ligand_model`. ``code`` is the (<=3-char) residue name it is filed under.
+
+    Raises ValueError if rdkit cannot parse or embed the SMILES.
+    """
+    code = (code or "LIG").strip().upper()[:3] or "LIG"
+    names, elements, xyz, cif_object = _smiles_restraints(smiles, code)
+    center = np.asarray(center, dtype=float).reshape(3)
+    placed = xyz - xyz.mean(axis=0) + center  # centroid -> center
+    return _assemble_model(placed, names, elements, code,
+                           crystal_symmetry=crystal_symmetry, data_manager=data_manager,
+                           restraint_objects=[(f"{code}.cif", cif_object)])
+
+
+def _assemble_model(placed: np.ndarray, names: List[str], elements: List[str], code: str,
+                    *, crystal_symmetry: Any = None, data_manager: Any = None,
+                    restraint_objects: Any = None) -> Any:
+    """A processed, restraints-ready one-residue model from placed coordinates.
+
+    ``crystal_symmetry`` should be the frame the model will live/refine in (e.g. the paired
+    map's) so a later fit indexes the density correctly; without one a loose P1 box around
+    the ligand is used, fine for placing but not for fitting. ``restraint_objects``, when
+    given, carries the ligand's own restraint CIF (the SMILES path); otherwise the residue
+    name must resolve in the monomer library.
+    """
+    from . import cctbx_io
+    import mmtbx.model
+
     n = len(names)
-    # One residue (all atoms share a resseq); the residue name is the code, so cctbx
-    # finds its restraints in the same library the coordinates came from.
     base = cctbx_io.model_from_sites(
         placed, elements=elements, names=names,
         resnames=[code] * n, chains=["A"] * n, resseqs=[900] * n,
         label=code, data_manager=data_manager)
-
-    import mmtbx.model
-
     model = mmtbx.model.manager(
         model_input=None,
         pdb_hierarchy=base.get_hierarchy(),
         crystal_symmetry=crystal_symmetry or base.crystal_symmetry(),
+        restraint_objects=restraint_objects,
         log=None)
     model.process(make_restraints=True)
     return model
+
+
+def _smiles_restraints(smiles: str, code: str
+                       ) -> Tuple[List[str], List[str], np.ndarray, Any]:
+    """``(names, elements, xyz, cif_object)`` for a SMILES ligand.
+
+    The atom names are generated once here and used for both the coordinates and the
+    restraint CIF, so cctbx maps the two together. ``cif_object`` is an in-memory
+    ``iotbx.cif`` monomer block (``comp_list`` + ``comp_<code>``) with ideal bond/angle
+    values read straight off the embedded conformer.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    from mmtbx.ligands import rdkit_utils
+    import iotbx.cif
+
+    if not (smiles or "").strip():
+        raise ValueError("empty SMILES")
+    try:
+        # embed3d + addHs: a hydrogen-complete 3D conformer.
+        mol = rdkit_utils.mol_from_smiles(smiles.strip(), embed3d=True)
+    except Exception as exc:
+        raise ValueError(f"rdkit could not build a 3D model from {smiles!r}: {exc}") from exc
+    if mol is None or mol.GetNumConformers() == 0:
+        raise ValueError(f"rdkit could not embed a conformer for {smiles!r}")
+    try:  # tidy the geometry so measured ideals are sensible; not fatal if it can't
+        AllChem.MMFFOptimizeMolecule(mol)
+    except Exception:  # pragma: no cover - force field just not parameterised
+        pass
+
+    conf = mol.GetConformer()
+    xyz = np.array([[conf.GetAtomPosition(i).x, conf.GetAtomPosition(i).y,
+                     conf.GetAtomPosition(i).z] for i in range(mol.GetNumAtoms())])
+    elements = [a.GetSymbol() for a in mol.GetAtoms()]
+    # Unique PDB-style names: element symbol + a per-element running index (C1, C2, O1…).
+    counts: dict = {}
+    names = []
+    for el in elements:
+        counts[el] = counts.get(el, 0) + 1
+        names.append(f"{el}{counts[el]}")
+
+    cif_object = iotbx.cif.reader(
+        input_string=_monomer_cif_text(mol, code, names, elements, xyz)).model()
+    return names, elements, xyz, cif_object
+
+
+_BOND_TYPES = None
+
+
+def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str],
+                      xyz: np.ndarray) -> str:
+    """A CCP4-monomer restraint CIF for ``mol`` — ideal bond/angle values off its
+    conformer. Enough for cctbx to build a full geometry restraints manager: atoms (with
+    the element as its own generic energy type, which the energy library accepts), bonds,
+    and every bond–bond angle."""
+    from rdkit import Chem
+
+    global _BOND_TYPES
+    if _BOND_TYPES is None:
+        _BOND_TYPES = {Chem.BondType.SINGLE: "single", Chem.BondType.DOUBLE: "double",
+                       Chem.BondType.TRIPLE: "triple", Chem.BondType.AROMATIC: "aromatic"}
+
+    def angle(i: int, j: int, k: int) -> float:
+        u, v = xyz[i] - xyz[j], xyz[k] - xyz[j]
+        c = float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)))
+        return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+    n_all = mol.GetNumAtoms()
+    n_nh = sum(1 for e in elements if e != "H")
+    out = [
+        "data_comp_list", "loop_",
+        "_chem_comp.id", "_chem_comp.three_letter_code", "_chem_comp.name",
+        "_chem_comp.group", "_chem_comp.number_atoms_all",
+        "_chem_comp.number_atoms_nh", "_chem_comp.desc_level",
+        f"{code} {code} 'ligand from SMILES' non-polymer {n_all} {n_nh} .",
+        f"data_comp_{code}", "loop_",
+        "_chem_comp_atom.comp_id", "_chem_comp_atom.atom_id", "_chem_comp_atom.type_symbol",
+        "_chem_comp_atom.type_energy", "_chem_comp_atom.x", "_chem_comp_atom.y",
+        "_chem_comp_atom.z",
+    ]
+    for i in range(n_all):
+        out.append(f"{code} {names[i]} {elements[i]} {elements[i]} "
+                   f"{xyz[i][0]:.4f} {xyz[i][1]:.4f} {xyz[i][2]:.4f}")
+
+    out += ["loop_", "_chem_comp_bond.comp_id", "_chem_comp_bond.atom_id_1",
+            "_chem_comp_bond.atom_id_2", "_chem_comp_bond.type",
+            "_chem_comp_bond.value_dist", "_chem_comp_bond.value_dist_esd"]
+    neighbours: dict = {i: set() for i in range(n_all)}
+    for b in mol.GetBonds():
+        i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
+        neighbours[i].add(j)
+        neighbours[j].add(i)
+        dist = float(np.linalg.norm(xyz[i] - xyz[j]))
+        out.append(f"{code} {names[i]} {names[j]} "
+                   f"{_BOND_TYPES.get(b.GetBondType(), 'single')} {dist:.4f} 0.020")
+
+    out += ["loop_", "_chem_comp_angle.comp_id", "_chem_comp_angle.atom_id_1",
+            "_chem_comp_angle.atom_id_2", "_chem_comp_angle.atom_id_3",
+            "_chem_comp_angle.value_angle", "_chem_comp_angle.value_angle_esd"]
+    for j in range(n_all):  # every pair of bonds sharing atom j is an angle about j
+        ns = sorted(neighbours[j])
+        for a in range(len(ns)):
+            for b in range(a + 1, len(ns)):
+                i, k = ns[a], ns[b]
+                out.append(f"{code} {names[i]} {names[j]} {names[k]} "
+                           f"{angle(i, j, k):.3f} 3.0")
+    return "\n".join(out) + "\n"
 
 
 def coarse_orient(model: Any, map_data: Any, *, step_deg: int = 30) -> Any:

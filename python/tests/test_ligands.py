@@ -41,6 +41,32 @@ def test_unknown_code_raises():
         ligands.ideal_atoms("NOTACODE")
 
 
+def test_build_from_smiles_is_centred_and_restraint_ready():
+    """A ligand not in the library, built from SMILES: rdkit embeds a conformer whose
+    geometry both places the atoms and supplies the on-the-fly restraints, so the model
+    comes out centred and with a real (bond + angle) geometry restraints manager."""
+    pytest.importorskip("rdkit")
+    from cctbx import crystal
+
+    cs = crystal.symmetry(unit_cell=(40, 40, 40, 90, 90, 90), space_group_symbol="P1")
+    m = ligands.build_ligand_from_smiles("c1ccccc1O", "IPH", (12.0, 8.0, 20.0),
+                                         crystal_symmetry=cs)
+    assert m.get_number_of_atoms() == 13  # phenol C6H5OH, hydrogens included
+    assert np.allclose(m.get_sites_cart().mean(), (12.0, 8.0, 20.0), atol=1e-6)
+    assert {ag.resname for ag in m.get_hierarchy().atom_groups()} == {"IPH"}
+    geo = m.get_restraints_manager().geometry
+    assert geo.pair_proxies().bond_proxies.simple.size() == 13
+    assert geo.angle_proxies.size() > 0
+
+
+def test_build_from_smiles_rejects_junk():
+    pytest.importorskip("rdkit")
+    with pytest.raises(ValueError):
+        ligands.build_ligand_from_smiles("not a smiles!!!", "LIG", (0, 0, 0))
+    with pytest.raises(ValueError):
+        ligands.build_ligand_from_smiles("", "LIG", (0, 0, 0))
+
+
 def test_coarse_orient_recovers_a_bad_orientation():
     """The rotational pre-search rotates a mis-oriented rigid ligand back toward its
     density — deterministic and fast, so it belongs in the suite (unlike the full fit)."""
