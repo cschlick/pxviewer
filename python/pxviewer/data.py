@@ -2,15 +2,19 @@
 
 Atom data is always columnar (:class:`AtomArrays`) — there is no per-atom object.
 The columns come from a cctbx model (see :mod:`pxviewer.cctbx_io`); this module
-maps them straight onto a minimal BinaryCIF ``_atom_site`` for the browser.
+maps them straight onto a minimal BinaryCIF ``_atom_site`` (plus the entity and
+secondary-structure categories Mol* needs for cartoon rendering) for the browser.
+
+The BinaryCIF writing itself is :mod:`pxviewer.bcif`, a self-contained encoder; this
+module is only the schema — which categories and columns a topology has.
 """
 
 import dataclasses
 from typing import List
 
 import numpy as np
-from ciftools.models.writer import CIFCategoryDesc, CIFFieldDesc
-from ciftools.serialization import create_binary_writer
+
+from . import bcif
 
 
 @dataclasses.dataclass
@@ -64,171 +68,6 @@ class AtomArrays:
         return np.stack([self.x, self.y, self.z], axis=1).astype("<f4")
 
 
-@dataclasses.dataclass
-class _Cell:
-    length_a: float = 1.0
-    length_b: float = 1.0
-    length_c: float = 1.0
-    angle_alpha: float = 90.0
-    angle_beta: float = 90.0
-    angle_gamma: float = 90.0
-    Z_PDB: int = 1
-
-
-class CellCategory(CIFCategoryDesc):
-    """CIF category for _cell."""
-
-    @property
-    def name(self) -> str:
-        return "cell"
-
-    @staticmethod
-    def get_row_count(_cell: _Cell) -> int:
-        return 1
-
-    @staticmethod
-    def get_field_descriptors(_cell: _Cell) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.number_array(
-                name="length_a",
-                dtype=np.float32,
-                array=lambda c: np.array([c.length_a], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="length_b",
-                dtype=np.float32,
-                array=lambda c: np.array([c.length_b], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="length_c",
-                dtype=np.float32,
-                array=lambda c: np.array([c.length_c], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="angle_alpha",
-                dtype=np.float32,
-                array=lambda c: np.array([c.angle_alpha], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="angle_beta",
-                dtype=np.float32,
-                array=lambda c: np.array([c.angle_beta], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="angle_gamma",
-                dtype=np.float32,
-                array=lambda c: np.array([c.angle_gamma], dtype=np.float32),
-            ),
-            CIFFieldDesc.number_array(
-                name="Z_PDB",
-                dtype=np.int32,
-                array=lambda c: np.array([c.Z_PDB], dtype=np.int32),
-            ),
-        ]
-
-
-@dataclasses.dataclass
-class _Symmetry:
-    space_group_name_H_M: str = "P 1"
-
-
-class SymmetryCategory(CIFCategoryDesc):
-    """CIF category for _symmetry."""
-
-    @property
-    def name(self) -> str:
-        return "symmetry"
-
-    @staticmethod
-    def get_row_count(_symmetry: _Symmetry) -> int:
-        return 1
-
-    @staticmethod
-    def get_field_descriptors(_symmetry: _Symmetry) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.string_array(
-                name="space_group_name_H-M",
-                array=lambda s: [s.space_group_name_H_M],
-            ),
-        ]
-
-
-class _RowsCategory(CIFCategoryDesc):
-    """Base for categories whose data is a list of row-tuples."""
-
-    @staticmethod
-    def get_row_count(rows: list) -> int:
-        return len(rows)
-
-
-class EntityCategory(_RowsCategory):
-    """_entity: rows = [(id, type), ...]."""
-
-    @property
-    def name(self) -> str:
-        return "entity"
-
-    @staticmethod
-    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[0] for r in rs]),
-            CIFFieldDesc.string_array(name="type", array=lambda rs: [r[1] for r in rs]),
-        ]
-
-
-class EntityPolyCategory(_RowsCategory):
-    """_entity_poly: rows = [(entity_id, type), ...]."""
-
-    @property
-    def name(self) -> str:
-        return "entity_poly"
-
-    @staticmethod
-    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.string_array(name="entity_id", array=lambda rs: [r[0] for r in rs]),
-            CIFFieldDesc.string_array(name="type", array=lambda rs: [r[1] for r in rs]),
-        ]
-
-
-class StructConfCategory(_RowsCategory):
-    """_struct_conf (helices): rows = [(id, chain, beg_seq, end_seq), ...]."""
-
-    @property
-    def name(self) -> str:
-        return "struct_conf"
-
-    @staticmethod
-    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[0] for r in rs]),
-            CIFFieldDesc.string_array(name="conf_type_id", array=lambda rs: ["HELX_P" for _ in rs]),
-            CIFFieldDesc.string_array(name="beg_label_asym_id", array=lambda rs: [r[1] for r in rs]),
-            CIFFieldDesc.number_array(name="beg_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[2] for r in rs], dtype=np.int32)),
-            CIFFieldDesc.string_array(name="end_label_asym_id", array=lambda rs: [r[1] for r in rs]),
-            CIFFieldDesc.number_array(name="end_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[3] for r in rs], dtype=np.int32)),
-        ]
-
-
-class StructSheetRangeCategory(_RowsCategory):
-    """_struct_sheet_range (strands): rows = [(sheet_id, id, chain, beg_seq, end_seq), ...]."""
-
-    @property
-    def name(self) -> str:
-        return "struct_sheet_range"
-
-    @staticmethod
-    def get_field_descriptors(rows: list) -> List[CIFFieldDesc]:
-        return [
-            CIFFieldDesc.string_array(name="sheet_id", array=lambda rs: [r[0] for r in rs]),
-            CIFFieldDesc.string_array(name="id", array=lambda rs: [r[1] for r in rs]),
-            CIFFieldDesc.string_array(name="beg_label_asym_id", array=lambda rs: [r[2] for r in rs]),
-            CIFFieldDesc.number_array(name="beg_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[3] for r in rs], dtype=np.int32)),
-            CIFFieldDesc.string_array(name="end_label_asym_id", array=lambda rs: [r[2] for r in rs]),
-            CIFFieldDesc.number_array(name="end_label_seq_id", dtype=np.int32, array=lambda rs: np.array([r[4] for r in rs], dtype=np.int32)),
-        ]
-
-
 _HELIX_KINDS = {"helix", "h", "helx", "helx_p"}
 _SHEET_KINDS = {"sheet", "strand", "e", "s", "beta"}
 
@@ -249,45 +88,75 @@ def _normalize_ss(secondary_structure) -> tuple:
     return helices, sheets
 
 
-class AtomSiteArraysCategory(CIFCategoryDesc):
-    """_atom_site built directly from :class:`AtomArrays` columns (no per-atom loop)."""
+def _atom_site_category(arrays: "AtomArrays", polymer: bool):
+    """``_atom_site`` built directly from the columns — no per-atom Python."""
+    cols = [
+        bcif.number_column("id", arrays.id, bcif.INT32),
+        bcif.string_column("type_symbol", arrays.element),
+        bcif.string_column("label_atom_id", arrays.name),
+        bcif.string_column("label_comp_id", arrays.resname),
+        bcif.number_column("label_seq_id", arrays.resseq, bcif.INT32),
+        bcif.string_column("label_asym_id", arrays.chain),
+        bcif.string_column("auth_asym_id", arrays.chain),
+        bcif.number_column("auth_seq_id", arrays.resseq, bcif.INT32),
+        bcif.number_column("Cartn_x", arrays.x, bcif.FLOAT32),
+        bcif.number_column("Cartn_y", arrays.y, bcif.FLOAT32),
+        bcif.number_column("Cartn_z", arrays.z, bcif.FLOAT32),
+    ]
+    # cctbx gives these cheaply; they enable alt-conf handling and b-factor /
+    # occupancy colouring in Mol*.
+    if any(alt for alt in (arrays.altloc or [])):
+        cols.append(bcif.string_column("label_alt_id", arrays.altloc))
+    if arrays.occ is not None:
+        cols.append(bcif.number_column("occupancy", arrays.occ, bcif.FLOAT32))
+    if arrays.b is not None:
+        cols.append(bcif.number_column("B_iso_or_equiv", arrays.b, bcif.FLOAT32))
+    if polymer:
+        cols.append(bcif.string_column("label_entity_id", ["1"] * len(arrays)))
+    return bcif.category("_atom_site", len(arrays), cols)
 
-    def __init__(self, polymer: bool = False):
-        self._polymer = polymer
 
-    @property
-    def name(self) -> str:
-        return "atom_site"
+def _struct_conf_category(helices: list):
+    """``_struct_conf`` — helix ranges. Rows are ``(id, chain, beg, end)``."""
+    return bcif.category("_struct_conf", len(helices), [
+        bcif.string_column("id", [r[0] for r in helices]),
+        bcif.string_column("conf_type_id", ["HELX_P"] * len(helices)),
+        bcif.string_column("beg_label_asym_id", [r[1] for r in helices]),
+        bcif.number_column("beg_label_seq_id", [r[2] for r in helices], bcif.INT32),
+        bcif.string_column("end_label_asym_id", [r[1] for r in helices]),
+        bcif.number_column("end_label_seq_id", [r[3] for r in helices], bcif.INT32),
+    ])
 
-    @staticmethod
-    def get_row_count(arrays: "AtomArrays") -> int:
-        return len(arrays)
 
-    def get_field_descriptors(self, arrays: "AtomArrays") -> List[CIFFieldDesc]:
-        fields = [
-            CIFFieldDesc.number_array(name="id", dtype=np.int32, array=lambda a: a.id),
-            CIFFieldDesc.string_array(name="type_symbol", array=lambda a: a.element),
-            CIFFieldDesc.string_array(name="label_atom_id", array=lambda a: a.name),
-            CIFFieldDesc.string_array(name="label_comp_id", array=lambda a: a.resname),
-            CIFFieldDesc.number_array(name="label_seq_id", dtype=np.int32, array=lambda a: a.resseq),
-            CIFFieldDesc.string_array(name="label_asym_id", array=lambda a: a.chain),
-            CIFFieldDesc.string_array(name="auth_asym_id", array=lambda a: a.chain),
-            CIFFieldDesc.number_array(name="auth_seq_id", dtype=np.int32, array=lambda a: a.resseq),
-            CIFFieldDesc.number_array(name="Cartn_x", dtype=np.float32, array=lambda a: a.x),
-            CIFFieldDesc.number_array(name="Cartn_y", dtype=np.float32, array=lambda a: a.y),
-            CIFFieldDesc.number_array(name="Cartn_z", dtype=np.float32, array=lambda a: a.z),
-        ]
-        # cctbx gives these cheaply; they enable alt-conf handling and b-factor /
-        # occupancy colouring in Mol*.
-        if any(alt for alt in (arrays.altloc or [])):
-            fields.append(CIFFieldDesc.string_array(name="label_alt_id", array=lambda a: a.altloc))
-        if arrays.occ is not None:
-            fields.append(CIFFieldDesc.number_array(name="occupancy", dtype=np.float32, array=lambda a: a.occ))
-        if arrays.b is not None:
-            fields.append(CIFFieldDesc.number_array(name="B_iso_or_equiv", dtype=np.float32, array=lambda a: a.b))
-        if self._polymer:
-            fields.append(CIFFieldDesc.string_array(name="label_entity_id", array=lambda a: ["1"] * len(a)))
-        return fields
+def _struct_sheet_range_category(sheets: list):
+    """``_struct_sheet_range`` — strands. Rows are ``(sheet_id, id, chain, beg, end)``."""
+    return bcif.category("_struct_sheet_range", len(sheets), [
+        bcif.string_column("sheet_id", [r[0] for r in sheets]),
+        bcif.string_column("id", [r[1] for r in sheets]),
+        bcif.string_column("beg_label_asym_id", [r[2] for r in sheets]),
+        bcif.number_column("beg_label_seq_id", [r[3] for r in sheets], bcif.INT32),
+        bcif.string_column("end_label_asym_id", [r[2] for r in sheets]),
+        bcif.number_column("end_label_seq_id", [r[4] for r in sheets], bcif.INT32),
+    ])
+
+
+def _cell_category():
+    """A placeholder P1 unit cell — Mol* expects the category to exist."""
+    return bcif.category("_cell", 1, [
+        bcif.number_column("length_a", [1.0], bcif.FLOAT32),
+        bcif.number_column("length_b", [1.0], bcif.FLOAT32),
+        bcif.number_column("length_c", [1.0], bcif.FLOAT32),
+        bcif.number_column("angle_alpha", [90.0], bcif.FLOAT32),
+        bcif.number_column("angle_beta", [90.0], bcif.FLOAT32),
+        bcif.number_column("angle_gamma", [90.0], bcif.FLOAT32),
+        bcif.number_column("Z_PDB", [1], bcif.INT32),
+    ])
+
+
+def _symmetry_category():
+    return bcif.category("_symmetry", 1, [
+        bcif.string_column("space_group_name_H-M", ["P 1"]),
+    ])
 
 
 def encode_bcif_arrays(
@@ -308,18 +177,22 @@ def encode_bcif_arrays(
     """
     if secondary_structure:
         polymer = True
-    writer = create_binary_writer()
-    writer.start_data_block(block_header)
-    writer.write_category(AtomSiteArraysCategory(polymer=polymer), [arrays])
+    cats = [_atom_site_category(arrays, polymer)]
     if polymer:
-        writer.write_category(EntityCategory(), [[("1", "polymer")]])
-        writer.write_category(EntityPolyCategory(), [[("1", "polypeptide(L)")]])
+        cats.append(bcif.category("_entity", 1, [
+            bcif.string_column("id", ["1"]),
+            bcif.string_column("type", ["polymer"]),
+        ]))
+        cats.append(bcif.category("_entity_poly", 1, [
+            bcif.string_column("entity_id", ["1"]),
+            bcif.string_column("type", ["polypeptide(L)"]),
+        ]))
     if secondary_structure:
         helices, sheets = _normalize_ss(secondary_structure)
         if helices:
-            writer.write_category(StructConfCategory(), [helices])
+            cats.append(_struct_conf_category(helices))
         if sheets:
-            writer.write_category(StructSheetRangeCategory(), [sheets])
-    writer.write_category(CellCategory(), [_Cell()])
-    writer.write_category(SymmetryCategory(), [_Symmetry()])
-    return writer.encode()
+            cats.append(_struct_sheet_range_category(sheets))
+    cats.append(_cell_category())
+    cats.append(_symmetry_category())
+    return bcif.encode(block_header, cats, encoder="pxviewer")

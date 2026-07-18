@@ -74,13 +74,12 @@ def test_polymer_and_secondary_structure():
 
 
 def test_arrays_encode_to_binarycif_roundtrip():
-    import ciftools.serialization as cif_io
+    from pxviewer import bcif
 
     arrays = model_to_arrays(read_model(UBIQUITIN))
-    block = cif_io.loads(encode_bcif_arrays(arrays, polymer=True), lazy=False)[0]
-    site = block["atom_site"]
-    assert site.n_rows == len(arrays)
-    assert site["label_comp_id"].get_string(0) == "MET"
+    site = bcif.decode(encode_bcif_arrays(arrays, polymer=True))["PXVIEWER"]["_atom_site"]
+    assert len(site["label_comp_id"]) == len(arrays)
+    assert site["label_comp_id"][0] == "MET"
 
 
 def test_live_session_from_model_file_streams_topology():

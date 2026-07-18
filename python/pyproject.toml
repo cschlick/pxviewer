@@ -9,8 +9,9 @@ description = "Python API for pxviewer"
 requires-python = ">=3.10"
 dependencies = [
     "molviewspec>=1.8.0",
-    "ciftools>=0.2.0",
-    # numba (via ciftools) needs numpy <= 2.4; cctbx is happy there too.
+    # BinaryCIF topology is written by pxviewer.bcif, which needs only msgpack.
+    "msgpack>=1.0",
+    # cctbx currently supports numpy <= 2.4.
     "numpy>=1.23,<2.5",
 ]
 # NOTE: atomic-model I/O needs cctbx (`cctbx-base`), which ships only on
