@@ -3351,6 +3351,12 @@ class DesktopApp:
     def _visible_model_ws(self) -> List[str]:
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
 
+    def _all_model_ws(self) -> List[str]:
+        """Every model's socket, hidden ones included — the page connects to all of them
+        so that hiding/showing is a live representation toggle, not a reload (see
+        ``_apply_model_rep``). A hidden model is connected but drawn empty."""
+        return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
+
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
         page non-blank when no model is visible. Nothing to pick, so no selection."""
@@ -3369,17 +3375,16 @@ class DesktopApp:
     def _control_session(self):
         """A session the viewport is actually connected to, for volume commands.
 
-        It has to be one of the sockets ``_reload_viewport`` put in the page: the visible
-        models', or the dummy when no model is visible. The *active* model is the wrong
-        answer when it is hidden — commands would be broadcast to a session with no
-        clients and vanish, so every volume control would quietly stop working.
+        It has to be one of the sockets ``_reload_viewport`` put in the page. Every model
+        now stays connected whether or not it is visible (a hidden model is just drawn
+        empty), so the active model is always a valid carrier; the dummy is only needed
+        when there is no model at all.
         """
         entry = self._model_entry(self._active_model_id)
-        if entry is not None and entry["visible"]:
+        if entry is not None:
             return entry["session"]
-        visible = next((m["session"] for m in self._models if m["visible"]), None)
-        if visible is not None:
-            return visible
+        if self._models:
+            return self._models[0]["session"]
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
@@ -3409,7 +3414,7 @@ class DesktopApp:
         """Compose the visible models (ws) and volumes (MVSJ) into one viewport URL."""
         if self._batching:
             return
-        model_ws = self._visible_model_ws()
+        model_ws = self._all_model_ws()  # all models stay connected; visibility is per-rep
         mvsj = self._write_volume_scene()
         ws = list(model_ws)
         if not model_ws:
@@ -3458,6 +3463,14 @@ class DesktopApp:
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
         color = entry.get("color") or _model_rep_color(rep)  # explicit colour overrides the default
+        # Hiding is a representation with nothing drawn, not a disconnect: the model stays
+        # in the page (see _reload_viewport) so showing it again is a live message, no page
+        # reload. An empty `on` set draws no atoms — the same trick the dummy uses. Because
+        # the representation is replayed to any client that (re)connects, visibility rides
+        # along with it and survives a reload triggered by something else.
+        if not entry["visible"]:
+            session.set_representation(rep, color=color, on=[])
+            return
         on = self._shown_indices(entry)  # restrict to shown structure types
         if on is not None:
             session.set_representation(rep, color=color, on=on)
@@ -4395,12 +4408,16 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
-        """Show or hide a loaded model in the viewport."""
+        """Show or hide a loaded model in the viewport.
+
+        A live representation toggle on a model that stays connected — not a page reload,
+        which would blank the whole viewport (every model and volume) for a beat and
+        rebuild it just to drop one object."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._reload_viewport()
+        self._apply_model_rep(entry)
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:

@@ -486,10 +486,9 @@ def test_volume_appearance_controls(qapp, tmp_path):
 
 
 def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
-    """Volume commands are broadcast on a model's socket, and the page only connects to
-    the *visible* models' sockets (or the dummy when none are). Sending on the active
-    model's socket while it is hidden broadcasts to nobody, and every volume control
-    silently stops working."""
+    """Volume commands are broadcast on a model's socket. The page keeps *every* model
+    connected (hiding one just draws it empty), so the active model always carries them,
+    visible or not; the dummy is only needed when there is no model at all."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -510,17 +509,55 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         assert app._active_model_id == b
         assert app._control_session() is app.session_for(b)
 
-        # Hide the active model -> the page drops its socket, so commands must move to
-        # one it still has.
+        # Hide the active model -> it stays connected (drawn empty), so it keeps carrying
+        # the commands; every model's socket remains in the page.
         app.set_model_visible(b, False)
-        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._visible_model_ws()
-        assert app._control_session() is app.session_for(a)
+        assert f"ws://{app._host}:{app.session_for(b).port}" in app._all_model_ws()
+        assert app._control_session() is app.session_for(b)
 
-        # Hide everything -> the page falls back to the dummy, and so must the commands.
-        app.set_model_visible(a, False)
-        assert app._visible_model_ws() == []
+        # Remove every model -> the page falls back to the dummy, and so must the commands.
+        app.remove_model(b)
+        app.remove_model(a)
         app._ensure_dummy_ws()
         assert app._control_session() is app._dummy
+    finally:
+        app.stop()
+
+
+def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
+    """Hiding a model must not reload the viewport: a reload blanks the whole page (every
+    model and volume) for a beat and rebuilds it just to drop one object. Instead the
+    model stays connected and is drawn empty (an empty representation), and showing it
+    restores the representation live."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+
+        reps = []
+        sess = app.session_for(a)
+        orig = sess.set_representation
+        sess.set_representation = lambda rep, **kw: (
+            reps.append("empty" if kw.get("on") == [] else "shown"), orig(rep, **kw))[1]
+
+        loads = []
+        orig_load = app._viewport.load
+        app._viewport.load = lambda url, *ar, **kw: (loads.append(url), orig_load(url, *ar, **kw))[1]
+
+        app.set_model_visible(a, False)
+        app.set_model_visible(a, True)
+
+        assert loads == [], "hiding/showing a model reloaded the viewport"
+        assert reps == ["empty", "shown"], f"expected a live hide then show, got {reps}"
+        # And every model's socket is in the page throughout — nothing was disconnected.
+        assert len(app._all_model_ws()) == 2
     finally:
         app.stop()
 
