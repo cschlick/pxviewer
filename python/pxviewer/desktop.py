@@ -1003,6 +1003,14 @@ class ControlsWindow:
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #666;")
         status_row.addWidget(self._status_label, stretch=1)
+        # Always-visible dock/detach control: the painted header's button is hidden while
+        # the panel floats (it uses the native window frame then), so this is the reliable
+        # way back — and the way out, from either state.
+        self._dock_btn = QPushButton("Detach")
+        self._dock_btn.setFlat(True)
+        self._dock_btn.setToolTip("Detach the controls to their own window, or re-dock them")
+        self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
+        status_row.addWidget(self._dock_btn)
         icon = _app_icon()
         if icon is not None:
             icon_label = QLabel()
@@ -2599,6 +2607,10 @@ class ControlsWindow:
         # Placeholder until the documentation is linked.
         self._set_status("Documentation coming soon.")
 
+    def reflect_dock_state(self, floating: bool) -> None:
+        """Keep the dock/detach button's label in step with the panel's state."""
+        self._dock_btn.setText("Dock" if floating else "Detach")
+
     def _on_analysis_ready(self, mid) -> None:
         """Analysis finished: enable and check both overlay toggles (both drawn)."""
         for toggle in (self._contacts_toggle, self._clashes_toggle):
@@ -3060,6 +3072,7 @@ class DesktopApp:
         self._controls_dock.setTitleBarWidget(self._dock_header)
         self._reframing_dock = False
         self._controls_dock.topLevelChanged.connect(self._reframe_dock)
+        self._controls_dock.topLevelChanged.connect(self._controls.reflect_dock_state)
         self._dock_close_filter = _make_dock_close_filter(
             self._controls_dock, lambda: self._main.isVisible())
         self._controls_dock.installEventFilter(self._dock_close_filter)
@@ -3208,6 +3221,13 @@ class DesktopApp:
         width = self._main.width() or 1600
         self._main.resizeDocks(
             [self._controls_dock], [max(320, width // 3)], Qt.Orientation.Horizontal)
+
+    def toggle_controls_dock(self) -> None:
+        """Detach the controls to their own window, or re-dock them. Bound to the
+        always-visible Dock/Detach button, so it works from either state — including when
+        the floated window's native frame provides no re-dock control."""
+        dock = self._controls_dock
+        dock.setFloating(not dock.isFloating())
 
     def _reframe_dock(self, floating: bool) -> None:
         """Native window chrome for the detached controls; our painted header when docked.
