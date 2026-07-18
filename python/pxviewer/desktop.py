@@ -798,14 +798,24 @@ def _make_dock_title_bar(dock):
     class _TitleBar(QWidget):
         def __init__(self):
             super().__init__(dock)
+            # Look like a title bar so it reads as a grabbable header, not blank space:
+            # a neutral gray tint + underline that works on both light and dark themes.
+            self.setObjectName("pxDockTitle")
+            self.setStyleSheet(
+                "#pxDockTitle { background: rgba(128,128,128,0.16);"
+                " border-bottom: 1px solid rgba(128,128,128,0.35); }")
             row = QHBoxLayout(self)
-            row.setContentsMargins(8, 3, 4, 3)
+            row.setContentsMargins(10, 5, 6, 5)
+            grip = QLabel("⠿")  # a dotted grip, the usual "draggable" affordance
+            grip.setStyleSheet("color: rgba(128,128,128,0.9);")
+            row.addWidget(grip)
             label = QLabel("Controls")
             label.setStyleSheet("font-weight: 600;")
             row.addWidget(label)
             row.addStretch(1)
             self._toggle = QToolButton()
             self._toggle.setAutoRaise(True)
+            self._toggle.setCursor(Qt.CursorShape.PointingHandCursor)
             self._toggle.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
             row.addWidget(self._toggle)
             dock.topLevelChanged.connect(self._sync)
@@ -815,6 +825,9 @@ def _make_dock_title_bar(dock):
             self._toggle.setText("⤓" if floating else "⤢")
             self._toggle.setToolTip("Dock the controls" if floating
                                     else "Detach the controls to their own window")
+            # A move cursor while floating hints that the bar drags the window.
+            self.setCursor(Qt.CursorShape.SizeAllCursor if floating
+                           else Qt.CursorShape.ArrowCursor)
 
         def _move_window(self):
             handle = dock.window().windowHandle()
