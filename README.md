@@ -21,16 +21,17 @@ installs via conda:
 ```bash
 conda env create -f environment.yml   # python, cctbx-base, chem_data, PySide6, …
 conda activate pxviewer
-./scripts/setup_monomer_lib.sh         # wire cctbx to chem_data's monomer library
-conda deactivate && conda activate pxviewer   # pick up the hook it wrote
+./scripts/setup_chem_data.sh           # monomer lib + validation caches (see below)
+conda deactivate && conda activate pxviewer   # pick up the monomer-lib hook it wrote
 pip install -e ./python                # the pxviewer package itself
 ```
 
-(cctbx pins numpy ≤ 2.4, matching numba/ciftools — `environment.yml` handles this.)
+(cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
 The `chem_data` package (installed by `environment.yml` from cctbx's own
 anaconda.org channel — a free community channel, not Anaconda's `defaults`) ships
-the geostd monomer library the restraints code needs; `setup_monomer_lib.sh` points
-`MMTBX_CCP4_MONOMER_LIB` at it, so there's no separate geostd checkout to manage
+the geostd monomer library the restraints code needs and the rotamer/CaBLAM
+validation data; `setup_chem_data.sh` points `MMTBX_CCP4_MONOMER_LIB` at geostd and
+builds the validation caches, so there's no separate geostd checkout to manage
 (see below).
 
 ### Frontend
@@ -456,10 +457,11 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
 
 The geometry restraints tables build with cctbx, which needs the CCP4/**geostd**
 monomer library. The conda env supplies it: `environment.yml` installs the
-`chem_data` package (which bundles geostd), and `scripts/setup_monomer_lib.sh`
-points `MMTBX_CCP4_MONOMER_LIB` at it via an activate.d hook — so the standard
-setup above needs nothing extra. The tables show a setup hint until the variable is
-set. Outside a conda env, or to use your own copy, point it at a checkout directly:
+`chem_data` package (which bundles geostd), and `scripts/setup_chem_data.sh`
+points `MMTBX_CCP4_MONOMER_LIB` at it via an activate.d hook (and builds the
+rotamer/CaBLAM validation caches) — so the standard setup above needs nothing extra.
+The tables show a setup hint until the variable is set. Outside a conda env, or to
+use your own copy, point it at a checkout directly:
 
 ```bash
 git clone https://github.com/phenix-project/geostd

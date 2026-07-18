@@ -5,7 +5,7 @@
 #
 #   conda env create -f environment.yml
 #   conda activate pxviewer
-#   ./scripts/setup_monomer_lib.sh              # wire cctbx to the monomer library
+#   ./scripts/setup_chem_data.sh                # monomer lib + validation caches
 #   conda deactivate && conda activate pxviewer # pick up the hook it wrote
 #   pip install -e ./python                     # the pxviewer package itself
 #
