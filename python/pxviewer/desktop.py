@@ -782,6 +782,57 @@ def _make_close_filter(on_close):
     return _CloseFilter()
 
 
+def _make_dock_title_bar(dock):
+    """A title bar for the controls dock that stays usable when it is floated.
+
+    A floated ``QDockWidget`` on Wayland has no window-manager decorations — nothing to
+    grab to move it. So this bar is always shown (docked and floating): dragging it moves
+    the floating window through the compositor (``startSystemMove`` — the Wayland-correct
+    way to move a window by a client widget), the button (and a double-click) toggles
+    docked/floating, and there is deliberately no close control so the controls cannot be
+    lost.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QWidget
+
+    class _TitleBar(QWidget):
+        def __init__(self):
+            super().__init__(dock)
+            row = QHBoxLayout(self)
+            row.setContentsMargins(8, 3, 4, 3)
+            label = QLabel("Controls")
+            label.setStyleSheet("font-weight: 600;")
+            row.addWidget(label)
+            row.addStretch(1)
+            self._toggle = QToolButton()
+            self._toggle.setAutoRaise(True)
+            self._toggle.clicked.connect(lambda: dock.setFloating(not dock.isFloating()))
+            row.addWidget(self._toggle)
+            dock.topLevelChanged.connect(self._sync)
+            self._sync(dock.isFloating())
+
+        def _sync(self, floating):
+            self._toggle.setText("⤓" if floating else "⤢")
+            self._toggle.setToolTip("Dock the controls" if floating
+                                    else "Detach the controls to their own window")
+
+        def _move_window(self):
+            handle = dock.window().windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+
+        def mousePressEvent(self, event):
+            if event.button() == Qt.MouseButton.LeftButton and dock.isFloating():
+                self._move_window()
+            else:
+                super().mousePressEvent(event)
+
+        def mouseDoubleClickEvent(self, event):
+            dock.setFloating(not dock.isFloating())
+
+    return _TitleBar()
+
+
 class ViewportWindow:
     """A Qt window wrapping the Mol* viewer in a QWebEngineView."""
 
@@ -2959,6 +3010,9 @@ class DesktopApp:
         self._controls_dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        # A custom title bar so the floated window can still be moved on Wayland (which
+        # gives a floated dock no decorations to grab) and toggled dock/float.
+        self._controls_dock.setTitleBarWidget(_make_dock_title_bar(self._controls_dock))
         self._main.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._controls_dock)
 
         # Closing the window quits the app; tear the backend down on the way out so
