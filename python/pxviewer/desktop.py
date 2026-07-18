@@ -1569,6 +1569,33 @@ class ControlsWindow:
             note.setWordWrap(True)
             note.setStyleSheet("color: #888;")
             self._appearance_layout.addWidget(note)
+
+            # Place a ligand here — the "do a thing right here" action on the marker.
+            from PySide6.QtWidgets import QLineEdit
+
+            self._appearance_layout.addWidget(QLabel("Add ligand (monomer code):"))
+            code_edit = QLineEdit()
+            code_edit.setPlaceholderText("e.g. GOL, ATP, NAG")
+            code_edit.setMaxLength(5)
+            self._appearance_layout.addWidget(code_edit)
+            has_map = self._desktop.map_for_model() is not None
+            fit_check = QCheckBox("Fit into density (explode-and-refine)")
+            fit_check.setChecked(has_map)
+            fit_check.setEnabled(has_map)
+            fit_check.setToolTip(
+                "Settle the ligand into the active model's map with a large radius of "
+                "convergence." if has_map else
+                "No map is paired with the active model — the ligand is just placed.")
+            self._appearance_layout.addWidget(fit_check)
+            place_btn = QPushButton("Fit ligand here")
+            place_btn.setToolTip(
+                "Build the ideal ligand from the monomer library, centre it here, and "
+                "add it as a new object.")
+            place_btn.clicked.connect(
+                lambda _c=False, m=it["id"], e=code_edit, f=fit_check:
+                self._safe(lambda: self._desktop.fit_ligand_at_marker(
+                    m, e.text(), fit=f.isChecked())))
+            self._appearance_layout.addWidget(place_btn)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
         if it["kind"] == "reflections":
@@ -3754,6 +3781,61 @@ class DesktopApp:
         self._emit_loaded_changed()
         if had:
             self._status("Markers cleared")
+
+    def fit_ligand_at_marker(self, mid: str, code: str, *, fit: bool = True,
+                             trials: int = 20) -> None:
+        """Place a monomer-library ligand at a marker, and — if a map is paired with the
+        active model and ``fit`` — settle it into that density with a large radius of
+        convergence (explode-and-refine). The result is added as a standalone model, so it
+        is fully editable (tug/minimize) and non-destructive. Runs on a background thread
+        (the fit takes seconds); adds its result on the GUI thread."""
+        from . import ligands
+
+        marker = self._marker_entry(mid)
+        if marker is None:
+            return
+        code = (code or "").strip().upper()
+        if not code:
+            self._status("enter a monomer code, e.g. GOL")
+            return
+        if not ligands.available(code):
+            self._status(f"no monomer '{code}' in the library")
+            return
+        position = list(marker["position"])
+        # Fitting needs the active model's paired map and its frame, so the ligand is
+        # built and refined in the same coordinates the marker was placed in.
+        map_data = self.map_for_model() if fit else None
+        cs = None
+        if map_data is not None:
+            entry = self._model_entry(self._active_model_id)
+            mmm = self.group_mmm(entry.get("group")) if entry else None
+            cs = mmm.crystal_symmetry() if mmm is not None else None
+
+        def work():
+            try:
+                self._status(f"building {code}…")
+                model = ligands.build_ligand_model(code, position, crystal_symmetry=cs)
+                if map_data is not None:
+                    self._status(f"fitting {code} into density ({trials} trials)…")
+                    ligands.fit_into_density(
+                        model, map_data, resolution=3.0, number_of_trials=trials)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                self._status(f"could not place {code}: {exc}")
+                return
+
+            def add_on_main():
+                from .live import LiveSession
+
+                session = LiveSession.from_cctbx_model(model)
+                self._add_model(session, name=f"{code} (ligand)")
+                self._status(
+                    f"placed {code}"
+                    + (" and fitted into density" if map_data is not None else "")
+                    + f" at ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})")
+
+            self.bridge.run_on_main.emit(add_on_main)
+
+        threading.Thread(target=work, name="pxviewer-ligand", daemon=True).start()
 
     def _on_tug(self, mid: str, action: str, atom: int, target) -> None:
         """A drag in the viewport: queued, never served here.
