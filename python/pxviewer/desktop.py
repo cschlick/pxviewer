@@ -3388,21 +3388,26 @@ class DesktopApp:
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing every visible volume; return its URL path (or None)."""
-        visible = [v for v in self._volumes if v["visible"]]
-        if not visible:
+        """Write an MVSJ composing every volume; return its URL path (or None).
+
+        Every volume is emitted, hidden ones included, so hiding/showing a map is a live
+        state-cell toggle rather than a scene rebuild (see ``set_volume_visible``); the
+        session re-hides the hidden ones as the fresh page connects. Only a visible volume
+        is ever focused."""
+        if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
+        first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
-        for i, v in enumerate(visible):
+        for v in self._volumes:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
-                focus=(focus_first and i == 0),
+                focus=(focus_first and v is first_visible),
             ))
         self._scene_counter += 1
         scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
@@ -3421,6 +3426,7 @@ class DesktopApp:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
+        self._reassert_volume_visibility()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -4333,6 +4339,23 @@ class DesktopApp:
             if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
+    def _reassert_volume_visibility(self) -> None:
+        """Re-tell the control session which volumes are hidden, before the page reloads.
+
+        The rebuilt scene draws every volume; the session re-hides its remembered set as
+        the new page connects. The session carrying volume commands can change across
+        reloads (dummy <-> active model), so the current one is handed the full hidden set
+        — otherwise a hidden map would reappear on the next reload."""
+        control = self._control_session()
+        if control is None:
+            return
+        for entry in self._volumes:
+            if not entry["visible"]:
+                try:
+                    control.set_volume_visible(entry["ref"], False)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
     def _send_volume_clip(self, entry) -> None:
         """Push a volume's whole clip: the slab and the radius are one thing to the
         viewer, so a change to either re-sends both."""
@@ -4532,11 +4555,19 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
+        """Show or hide a volume — a live state-cell toggle over the shared scene, not a
+        page reload. Every volume is emitted into the scene (see _write_volume_scene), so
+        showing a hidden one is a message, not a rebuild that blanks every object."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._reload_viewport()
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_visible(entry["ref"], bool(visible))
+            except Exception:  # pragma: no cover - defensive
+                pass
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:

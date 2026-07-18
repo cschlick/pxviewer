@@ -510,6 +510,10 @@ class LiveSession:
         # the same reason: a clip is worked out from the camera and re-aimed as it moves,
         # so it cannot be baked into the scene — a viewport reload would drop it.
         self._clips: dict = {}
+        # Volumes hidden from the shared scene, by ref. Replayed to late clients: hiding is
+        # a state-cell toggle over the MVSJ scene, which a reload rebuilds fresh (every
+        # volume visible), so a hidden one has to be re-hidden when the new page connects.
+        self._hidden_volumes: set = set()
         self._selection_handlers: List[Callable[[Selection], None]] = []
         self._measure_handlers: List[Callable[[Primitive], None]] = []
         self._selection_changed = threading.Event()
@@ -828,6 +832,24 @@ class LiveSession:
         Thread-safe: may be called from any thread.
         """
         message = json.dumps({"type": "volume_opacity", "ref": str(ref), "opacity": float(opacity)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_visible(self, ref: str, visible: bool) -> None:
+        """Broadcast a command to show or hide a volume by reference.
+
+        A state-cell toggle over the shared scene, not a rebuild: hiding a map leaves
+        every other object on screen untouched. The hidden set is remembered and replayed
+        to late clients, so a scene reload (which rebuilds every volume visible) re-hides
+        what should stay hidden. Thread-safe: may be called from any thread.
+        """
+        key = str(ref)
+        if visible:
+            self._hidden_volumes.discard(key)
+        else:
+            self._hidden_volumes.add(key)
+        message = json.dumps({"type": "volume_visible", "ref": key, "visible": bool(visible)})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1720,6 +1742,10 @@ class LiveSession:
                 )
             for clip in list(self._clips.values()):
                 await self._locked_send(websocket, json.dumps(clip))
+            for ref in list(self._hidden_volumes):
+                # The rebuilt scene draws every volume; re-hide the ones that were hidden.
+                await self._locked_send(
+                    websocket, json.dumps({"type": "volume_visible", "ref": ref, "visible": False}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})

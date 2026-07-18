@@ -224,10 +224,14 @@ def test_volume_registry_and_grouping(qapp, tmp_path):
         assert app._write_volume_scene() is not None
         assert (app._webapp.volume_dir / "vols" / f"{vid}.map").exists()
 
+        # Hiding is a live toggle, not a rebuild: the volume stays in the scene (drawn
+        # hidden) so it can be shown again without reloading. The scene is empty of
+        # volumes only once there are none at all.
         app.set_volume_visible(vid, False)
-        assert app._write_volume_scene() is None  # nothing visible -> no scene
+        assert app._write_volume_scene() is not None
         app.remove_volume(vid)
         assert not app._volumes
+        assert app._write_volume_scene() is None
 
         # A map + model loaded together -> one cctbx group (model + its map).
         kind = app.load_files([str(model_path), str(map_path)])
@@ -558,6 +562,48 @@ def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
         assert reps == ["empty", "shown"], f"expected a live hide then show, got {reps}"
         # And every model's socket is in the page throughout — nothing was disconnected.
         assert len(app._all_model_ws()) == 2
+    finally:
+        app.stop()
+
+
+def test_hiding_a_volume_is_a_live_toggle_not_a_page_reload(qapp):
+    """Hiding a map must not reload the viewport (which blanks every object to drop one).
+    Every volume is emitted into the scene so the hide is a live state-cell toggle, and a
+    map hidden before a client connects is re-hidden on connect so a later reload cannot
+    resurrect it."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        v1 = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map1")
+        v2 = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8)) * 2), "map2")
+
+        # The scene carries every volume, hidden or not, so either can be toggled live.
+        scene = app._write_volume_scene()
+        txt = (app._webapp.volume_dir / scene.lstrip("/")).read_text()
+        for vid in (v1, v2):
+            assert app._volume_entry(vid)["ref"] in txt
+
+        loads = []
+        orig = app._viewport.load
+        app._viewport.load = lambda url, *a, **k: (loads.append(url), orig(url, *a, **k))[1]
+
+        control = app._control_session()
+        app.set_volume_visible(v1, False)
+        assert loads == [], "hiding a volume reloaded the viewport"
+        assert app._volume_entry(v1)["ref"] in control._hidden_volumes  # remembered for replay
+        app.set_volume_visible(v1, True)
+        assert loads == [], "showing a volume reloaded the viewport"
+        assert app._volume_entry(v1)["ref"] not in control._hidden_volumes
     finally:
         app.stop()
 
