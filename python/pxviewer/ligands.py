@@ -19,7 +19,8 @@ from typing import Any, List, Optional, Tuple
 
 import numpy as np
 
-__all__ = ["available", "ideal_atoms", "build_ligand_model", "fit_into_density"]
+__all__ = ["available", "ideal_atoms", "build_ligand_model", "coarse_orient",
+           "fit_into_density"]
 
 
 def _monomer_root() -> Optional[str]:
@@ -102,16 +103,61 @@ def build_ligand_model(code: str, center, *, crystal_symmetry: Any = None,
     return model
 
 
+def coarse_orient(model: Any, map_data: Any, *, step_deg: int = 30) -> Any:
+    """Rotate the rigid ligand about its centroid to the best-scoring orientation in the
+    density, centroid held where it is. Gives explode-and-refine a good starting
+    orientation — the thing it can otherwise get trapped away from for a compact ligand,
+    since it perturbs and refines but does not itself do a global rotation search.
+
+    A coarse Euler grid, each orientation scored by summed density at the atoms
+    (``maptbx.real_space_target_simple``). Rigid + a C++ score, so a few hundred–thousand
+    evaluations stay well under a second. Writes the winning orientation onto ``model``.
+    """
+    from cctbx import maptbx
+    from cctbx.array_family import flex
+    from scitbx.math import euler_angles
+
+    unit_cell = model.crystal_symmetry().unit_cell()
+    sites = model.get_sites_cart()
+    centered = sites.as_numpy_array() - sites.as_numpy_array().mean(axis=0)
+    center = sites.as_numpy_array().mean(axis=0)
+
+    def score(sc):
+        return maptbx.real_space_target_simple(
+            unit_cell=unit_cell, density_map=map_data, sites_cart=sc)
+
+    best_score, best_sites = score(sites), sites  # baseline: leave it as placed
+    for a in range(0, 360, step_deg):
+        for b in range(0, 181, step_deg):
+            for c in range(0, 360, step_deg):
+                rot = np.array(euler_angles.xyz_matrix(a, b, c)).reshape(3, 3)
+                cand = flex.vec3_double(
+                    np.ascontiguousarray(centered @ rot.T + center))
+                s = score(cand)
+                if s > best_score:
+                    best_score, best_sites = s, cand
+    model.set_sites_cart(best_sites)
+    return model
+
+
 def fit_into_density(model: Any, map_data: Any, *, resolution: float = 3.0,
-                     number_of_trials: int = 20, nproc: int = 1) -> Any:
+                     number_of_trials: int = 20, nproc: int = 1,
+                     presearch: bool = True) -> Any:
     """Fit ``model`` into ``map_data`` with a large radius of convergence.
 
-    ``mmtbx.refinement.real_space.explode_and_refine``: many trials of a big random
+    First a coarse rotational pre-search (``presearch``) rotates the rigid ligand to the
+    best-scoring orientation in the density, then
+    ``mmtbx.refinement.real_space.explode_and_refine`` does many trials of a big random
     perturbation ('explode') then real-space refine, scored by map correlation, best
-    kept — so orientation and conformation are searched, not just nudged. ``map_data``
-    and ``model`` must share a crystal symmetry (frame). Returns the fitted sites as an
-    ``(N, 3)`` numpy array (also written back onto ``model``). No boxing needed.
+    kept — so orientation *and* conformation are searched. The pre-search matters because
+    explode perturbs from wherever it starts; a badly-oriented compact ligand can trap
+    it. ``map_data`` and ``model`` must share a crystal symmetry (frame). Returns the
+    fitted sites as an ``(N, 3)`` numpy array (also written back onto ``model``). No
+    boxing needed.
     """
+    if presearch:
+        coarse_orient(model, map_data)
+
     from mmtbx.refinement.real_space import explode_and_refine
 
     # explode_and_refine writes scratch PDBs (merged.pdb, …) to the current directory, so

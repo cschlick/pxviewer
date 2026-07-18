@@ -39,3 +39,28 @@ def test_build_model_is_centred_and_restraint_ready():
 def test_unknown_code_raises():
     with pytest.raises(ValueError):
         ligands.ideal_atoms("NOTACODE")
+
+
+def test_coarse_orient_recovers_a_bad_orientation():
+    """The rotational pre-search rotates a mis-oriented rigid ligand back toward its
+    density — deterministic and fast, so it belongs in the suite (unlike the full fit)."""
+    from cctbx import crystal
+    from cctbx.array_family import flex
+    from scitbx.math import euler_angles
+
+    cs = crystal.symmetry(unit_cell=(40, 40, 40, 90, 90, 90), space_group_symbol="P1")
+    target = ligands.build_ligand_model("GOL", (20, 20, 20), crystal_symmetry=cs)
+    tgt = target.get_sites_cart().as_numpy_array()
+    map_data = target.get_xray_structure().structure_factors(d_min=2.0).f_calc().fft_map(
+        resolution_factor=0.25).apply_sigma_scaling().real_map_unpadded()
+
+    mis = ligands.build_ligand_model("GOL", (20, 20, 20), crystal_symmetry=cs)
+    rot = np.array(euler_angles.xyz_matrix(120, 80, 40)).reshape(3, 3)
+    c = mis.get_sites_cart().as_numpy_array().mean(0)
+    mis.set_sites_cart(flex.vec3_double(
+        np.ascontiguousarray((mis.get_sites_cart().as_numpy_array() - c) @ rot.T + c)))
+
+    before = np.sqrt(((mis.get_sites_cart().as_numpy_array() - tgt) ** 2).sum(1).mean())
+    ligands.coarse_orient(mis, map_data, step_deg=30)
+    after = np.sqrt(((mis.get_sites_cart().as_numpy_array() - tgt) ** 2).sum(1).mean())
+    assert after < before / 2, f"pre-search did not improve orientation: {before:.2f} -> {after:.2f}"
