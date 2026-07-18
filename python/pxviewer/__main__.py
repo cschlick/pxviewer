@@ -113,6 +113,11 @@ def main() -> None:
     )
     desktop.add_argument("--host", default="127.0.0.1", help="Host to bind")
     desktop.add_argument("--port", type=int, default=5173, help="Port for the embedded webapp server")
+    desktop.add_argument(
+        "--gpu", choices=["auto", "hardware", "software"], default=None,
+        help="WebGL backend: auto (detect, fall back to software), hardware (force GPU, "
+             "show raw errors), software (force SwiftShader). Default auto; also "
+             "settable with PXVIEWER_GPU.")
 
     args = parser.parse_args()
 
@@ -239,7 +244,7 @@ def main() -> None:
 
     elif args.command == "desktop":
         from .desktop import run_desktop
-        sys.exit(run_desktop(host=args.host, port=args.port))
+        sys.exit(run_desktop(host=args.host, port=args.port, gpu=args.gpu))
 
 
 if __name__ == "__main__":

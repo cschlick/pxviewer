@@ -424,6 +424,20 @@ python -m pxviewer desktop
 Opens two windows — a **viewport** (the Mol\* viewer) and a native **controls**
 window with tabs:
 
+### GPU / WebGL
+
+The viewport renders with WebGL through QtWebEngine. On many VMs the only GPU is a
+virtual adapter whose WebGL Chromium blocklists, which would otherwise leave the viewer
+blank (`Could not create a WebGL rendering context`). By default (`--gpu auto`) pxviewer
+notices this after the first load and **restarts once into software rendering**
+(SwiftShader — slower, but works anywhere), remembering the verdict so later launches go
+straight there. Override when you need to:
+
+```bash
+python -m pxviewer desktop --gpu software   # force SwiftShader (or PXVIEWER_GPU=software)
+python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw errors (debugging)
+```
+
 - **File** — open a model (read by cctbx) or a volume, and manage *loaded models*.
   Several models can be shown at once (check to show/hide) or switched between; the
   selected row is the *active* model.

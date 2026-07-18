@@ -775,10 +775,27 @@ class ViewportWindow:
         settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
         layout.addWidget(self._view)
+        self._view.loadFinished.connect(self._verify_webgl)
 
     def load(self, url: str) -> None:
         from PySide6.QtCore import QUrl
         self._view.load(QUrl(url))
+
+    def _verify_webgl(self, ok: bool) -> None:
+        """Once the page has loaded, confirm it actually got a WebGL context.
+
+        Only when :mod:`pxviewer.gpu` armed the check (the auto path, outcome unknown):
+        if the real viewport has no WebGL, the app restarts on software rendering rather
+        than showing a blank viewer; if it does, that is remembered so no future launch
+        pays for the check.
+        """
+        from . import gpu
+
+        if not ok or not gpu.autofix_enabled():
+            return
+        self._view.page().runJavaScript(
+            gpu.webgl_probe_js,
+            lambda has_webgl: gpu.mark_hardware_ok() if has_webgl else gpu.on_webgl_missing())
 
     def show(self) -> None:
         self._window.show()
@@ -4971,8 +4988,15 @@ class DesktopApp:
         return len(sel)
 
 
-def run_desktop(host: str = "127.0.0.1", port: int = 5173) -> int:
+def run_desktop(host: str = "127.0.0.1", port: int = 5173,
+                gpu: Optional[str] = None) -> int:
     """Start the desktop app with viewport and controls windows."""
+    from . import gpu as gpu_backend
+
+    # Before any QtWebEngine/QApplication exists: choose the GL backend. On a machine
+    # whose GPU cannot provide WebGL (common on VMs) this arms a one-time restart into
+    # software rendering rather than leaving the viewport blank. See pxviewer.gpu.
+    gpu_backend.configure(gpu)
     _check_qt()
 
     desktop = DesktopApp(host=host, port=port)
