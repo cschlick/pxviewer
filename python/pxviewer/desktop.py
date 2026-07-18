@@ -1556,6 +1556,21 @@ class ControlsWindow:
             self._appearance_layout.addLayout(r)
             return combo
 
+        if it["kind"] == "marker":
+            # Not styled — a marker is a 3D point. The pane is where it says what it is:
+            # its coordinate (the handle to act on) and what it snapped to.
+            pos = it.get("position") or [0.0, 0.0, 0.0]
+            coord = QLabel(f"x  {pos[0]:.3f}\ny  {pos[1]:.3f}\nz  {pos[2]:.3f}    Å")
+            coord.setStyleSheet("font-family: monospace;")
+            self._appearance_layout.addWidget(coord)
+            snapped = ("on atom " + str(it["atom"])) if it.get("atom") is not None \
+                else "in the view plane (empty space)"
+            note = QLabel("Placed " + snapped)
+            note.setWordWrap(True)
+            note.setStyleSheet("color: #888;")
+            self._appearance_layout.addWidget(note)
+            self._safe(lambda: self._desktop.set_volume_scroll_target(None))
+            return
         if it["kind"] == "reflections":
             # Nothing to style — reflections are not drawn. The pane is still where an
             # object says what it is, so it says what the file holds and what that
@@ -2739,7 +2754,7 @@ class ControlsWindow:
                     self._active_group.addButton(radio)
                     radio.setChecked(bool(it.get("active")))  # won't fire buttonClicked
                     self._loaded_tree.setItemWidget(node, 1, radio)
-                suffix = {"volume": "   [map]", "reflections": "   [data]"}
+                suffix = {"volume": "   [map]", "reflections": "   [data]", "marker": "   [marker]"}
                 name = it["name"] + suffix.get(it["kind"], "")
                 node.setText(2, name)
                 node.setToolTip(2, it["name"])  # full name on hover when elided
@@ -2828,6 +2843,8 @@ class ControlsWindow:
             self._desktop.set_model_visible(ident, visible)
         elif kind == "volume":
             self._desktop.set_volume_visible(ident, visible)
+        elif kind == "marker":
+            self._desktop.set_marker_visible(ident, visible)
         # reflections have no visibility to change
 
     def _on_active_radio(self, button) -> None:
@@ -2853,6 +2870,8 @@ class ControlsWindow:
             self._desktop.remove_volume(ident)
         elif kind == "reflections":
             self._desktop.remove_reflections(ident)
+        elif kind == "marker":
+            self._desktop.remove_marker(ident)
         elif kind == "group":
             self._desktop.remove_group(ident)
 
@@ -2955,7 +2974,8 @@ class DesktopApp:
         # Restraint-notation primitives currently drawn for the selected geometry rows.
         self._restraint_prim_ids: list = []
         self._restraint_prim_session = None
-        self._markers: list = []  # world-space [x, y, z] points placed in the viewport
+        self._markers: list = []  # placed markers: {id, name, position, atom, visible}
+        self._marker_counter = 0
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
@@ -3681,33 +3701,57 @@ class DesktopApp:
         self._status("Click in the viewport to place a marker…")
 
     def _on_marker(self, position, atom) -> None:
-        """A marker was placed: record its world-space point and draw it. ``atom`` is the
-        picked atom index if the click landed on one, else None. This runs on a session's
-        event-loop thread, but the marker list and markup send are cheap and thread-safe."""
+        """A marker was placed: register it (so it appears in the Objects list as a handle)
+        and draw it. ``atom`` is the picked atom index if the click landed on one, else
+        None. Runs on a session's event-loop thread; the list/markup are cheap and safe."""
+        self._marker_counter += 1
         point = [float(c) for c in position]
-        self._markers.append(point)
+        self._markers.append({
+            "id": f"marker-{self._marker_counter}", "name": f"Marker {self._marker_counter}",
+            "position": point, "atom": atom, "visible": True,
+        })
         self._draw_markers()
+        self._emit_loaded_changed()
         where = f" on atom {atom}" if atom is not None else ""
         self._status(
             f"Marker at ({point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f}){where} "
             f"— {len(self._markers)} placed")
 
+    def _marker_entry(self, mid):
+        return next((m for m in self._markers if m["id"] == mid), None)
+
     def _draw_markers(self) -> None:
-        """(Re)draw every marker as a sphere on the marker channel."""
+        """(Re)draw every visible marker as a sphere on the marker channel."""
         session = self._control_session()
         if session is None:
             return
-        balls = [[[p[0], p[1], p[2]], _MARKER_RADIUS] for p in self._markers]
+        balls = [[m["position"], _MARKER_RADIUS] for m in self._markers if m["visible"]]
         primitive = {"kind": "balls", "color": _MARKER_COLOR, "balls": balls}
         session.show_markup(_MARKER_CHANNEL, [primitive] if balls else [])
+
+    def set_marker_visible(self, mid: str, visible: bool) -> None:
+        entry = self._marker_entry(mid)
+        if entry is None or entry["visible"] == bool(visible):
+            return
+        entry["visible"] = bool(visible)
+        self._draw_markers()
+        self._emit_loaded_changed()
+
+    def remove_marker(self, mid: str) -> None:
+        """Unload a single marker (from the Objects list or its Remove)."""
+        entry = self._marker_entry(mid)
+        if entry is None:
+            return
+        self._markers.remove(entry)
+        self._draw_markers()
+        self._emit_loaded_changed()
 
     def clear_markers(self) -> None:
         """Remove every placed marker."""
         had = bool(self._markers)
         self._markers.clear()
-        session = self._control_session()
-        if session is not None:
-            session.clear_markup(_MARKER_CHANNEL)
+        self._draw_markers()  # empty list -> clears the markup channel
+        self._emit_loaded_changed()
         if had:
             self._status("Markers cleared")
 
@@ -4463,6 +4507,10 @@ class DesktopApp:
              "has_map_coefficients": r["data"].has_map_coefficients,
              "r_work": r.get("r_work"), "r_free": r.get("r_free")}
             for r in self._reflections
+        ] + [
+            {"kind": "marker", "id": m["id"], "name": m["name"], "visible": m["visible"],
+             "active": False, "group": None, "position": m["position"], "atom": m["atom"]}
+            for m in self._markers
         ]
         groups = [{"id": gid, "name": g["name"], "label": g.get("label", "")}
                   for gid, g in self._groups.items()]

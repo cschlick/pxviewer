@@ -62,7 +62,8 @@ def _focus_is_valid(app) -> None:
     if ident is None:
         return
     entry = {"model": app._model_entry, "volume": app._volume_entry,
-             "reflections": app._reflection_entry}.get(kind, lambda _i: None)(ident)
+             "reflections": app._reflection_entry,
+             "marker": app._marker_entry}.get(kind, lambda _i: None)(ident)
     assert entry is not None, f"focused {kind} {ident} no longer exists"
 
 
@@ -111,7 +112,7 @@ def _summary_round_trips(app) -> None:
     rebuilt from it without error."""
     summary = app._loaded_summary()
     resolve = {"model": app._model_entry, "volume": app._volume_entry,
-               "reflections": app._reflection_entry}
+               "reflections": app._reflection_entry, "marker": app._marker_entry}
     for item in summary["items"]:
         assert resolve[item["kind"]](item["id"]) is not None, \
             f"summary lists {item['kind']} {item['id']} which does not exist"
