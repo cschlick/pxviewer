@@ -13,6 +13,8 @@ the marker wiring.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from typing import Any, List, Optional, Tuple
 
 import numpy as np
@@ -112,21 +114,31 @@ def fit_into_density(model: Any, map_data: Any, *, resolution: float = 3.0,
     """
     from mmtbx.refinement.real_space import explode_and_refine
 
-    ear = explode_and_refine.run(
-        xray_structure=model.get_xray_structure(),
-        pdb_hierarchy=model.get_hierarchy(),
-        map_data=map_data,
-        restraints_manager=model.get_restraints_manager(),
-        resolution=float(resolution),
-        number_of_trials=int(number_of_trials),
-        nproc=int(nproc),
-        # Keep the single best-by-correlation trial. The default "merge_models" scoring
-        # averages the ensemble, and its merge step is broken under Python 3 in this
-        # mmtbx (an uncomparable-object sort); "cc" takes the best pose, which is what a
-        # ligand fit wants anyway.
-        score_method=["cc"],
-        show=False,
-        log=None)
+    # explode_and_refine writes scratch PDBs (merged.pdb, …) to the current directory, so
+    # run it in a throwaway temp dir. The app's own file I/O uses absolute paths, so the
+    # process-wide chdir does not disturb it, and the result is read from memory below.
+    cwd = os.getcwd()
+    tmp = tempfile.mkdtemp(prefix="pxviewer-ligand-")
+    try:
+        os.chdir(tmp)
+        ear = explode_and_refine.run(
+            xray_structure=model.get_xray_structure(),
+            pdb_hierarchy=model.get_hierarchy(),
+            map_data=map_data,
+            restraints_manager=model.get_restraints_manager(),
+            resolution=float(resolution),
+            number_of_trials=int(number_of_trials),
+            nproc=int(nproc),
+            # Keep the single best-by-correlation trial. The default "merge_models"
+            # scoring averages the ensemble, and its merge step is broken under Python 3
+            # in this mmtbx (an uncomparable-object sort); "cc" takes the best pose, which
+            # is what a ligand fit wants anyway.
+            score_method=["cc"],
+            show=False,
+            log=None)
+    finally:
+        os.chdir(cwd)
+        shutil.rmtree(tmp, ignore_errors=True)
     sites = ear.xray_structure.sites_cart()
     model.set_sites_cart(sites)
     return np.asarray(sites)
