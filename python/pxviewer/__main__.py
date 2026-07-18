@@ -119,6 +119,10 @@ def main() -> None:
              "show raw errors), software (force SwiftShader). Default auto; also "
              "settable with PXVIEWER_GPU.")
 
+    subparsers.add_parser(
+        "install-desktop-entry",
+        help="Install a Linux .desktop file so the launcher shows pxviewer's icon")
+
     args = parser.parse_args()
 
     if args.command == "create-example-view":
@@ -245,6 +249,13 @@ def main() -> None:
     elif args.command == "desktop":
         from .desktop import run_desktop
         sys.exit(run_desktop(host=args.host, port=args.port, gpu=args.gpu))
+
+    elif args.command == "install-desktop-entry":
+        from .desktop import install_desktop_entry
+
+        path = install_desktop_entry()
+        print(f"wrote {path}")
+        print("The launcher should pick up the icon; log out/in if it does not appear.")
 
 
 if __name__ == "__main__":

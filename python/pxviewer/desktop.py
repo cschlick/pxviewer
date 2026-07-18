@@ -172,6 +172,34 @@ def _app_icon():
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
 
 
+def install_desktop_entry() -> str:
+    """Write a Linux ``.desktop`` file so the launcher shows pxviewer's name and icon.
+
+    The launcher/taskbar (Wayland and X11) finds an app's icon by matching its running
+    window to a ``.desktop`` file — ``setWindowIcon`` only covers the title bar. This
+    drops one in the user's applications directory, with ``Exec`` pointing at this
+    interpreter, ``Icon`` at the bundled icon, and ``StartupWMClass`` matching the app id
+    the app sets at startup, so the running window is associated with it. Returns the
+    path written. Run once: ``pxviewer install-desktop-entry``.
+    """
+    apps = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share") / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    path = apps / "pxviewer.desktop"
+    icon = str(_ICON_PATH) if _ICON_PATH.exists() else "pxviewer"
+    path.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        "Name=pxviewer\n"
+        "GenericName=Molecular viewer\n"
+        f"Exec={sys.executable} -m pxviewer desktop\n"
+        f"Icon={icon}\n"
+        "Terminal=false\n"
+        "Categories=Science;Education;Graphics;\n"
+        "StartupWMClass=pxviewer\n"
+    )
+    return str(path)
+
+
 def _show_splash():
     """Put the icon on screen before the slow part of starting up.
 
@@ -199,7 +227,11 @@ def _show_splash():
     splash = QSplashScreen(pixmap)
     splash.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
     splash.show()
-    QApplication.processEvents()  # paint it now; the caller is about to get busy
+    # Several round-trips, not one: Wayland maps and paints a surface asynchronously, so a
+    # single processEvents can return before the splash is actually on screen — after
+    # which the caller blocks on the slow startup and it never appears.
+    for _ in range(3):
+        QApplication.processEvents()
     return splash
 
 
@@ -2820,6 +2852,13 @@ class DesktopApp:
         self._app = QApplication.instance()
         if self._app is None:
             self._app = QApplication(sys.argv[:1])
+        # App identity. On Linux — Wayland especially — the launcher/taskbar finds an
+        # app's icon by matching its running window to a .desktop file of this name;
+        # setWindowIcon alone only covers the title bar. `pxviewer install-desktop-entry`
+        # writes the matching file (StartupWMClass=pxviewer).
+        self._app.setApplicationName("pxviewer")
+        self._app.setApplicationDisplayName("pxviewer")
+        self._app.setDesktopFileName("pxviewer")
         icon = _app_icon()  # dock/taskbar icon for the whole app
         if icon is not None:
             self._app.setWindowIcon(icon)
@@ -2897,11 +2936,35 @@ class DesktopApp:
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
 
-        # Closing either window quits the app; tear the backend down on the way out
-        # so background threads stop before Qt destroys the widgets they signal.
+        # One coherent window: the viewport fills it, the controls ride in a dock on the
+        # right. Wayland forbids a client from positioning its own top-level windows, so
+        # two side-by-side windows cannot be arranged — but a single maximized window with
+        # a dock gives the same 2/3 + 1/3 default (see start()), and the dock's float
+        # button pops the controls out to their own window for a second monitor (drag it
+        # across, maximize the viewport). Re-dock with the float button or by dragging back.
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QDockWidget, QMainWindow
+
+        self._main = QMainWindow()
+        self._main.setWindowTitle("pxviewer")
+        if icon is not None:
+            self._main.setWindowIcon(icon)
+        self._main.setCentralWidget(self._viewport.widget())
+
+        self._controls_dock = QDockWidget("Controls", self._main)
+        self._controls_dock.setObjectName("pxviewer-controls")
+        self._controls_dock.setWidget(self._controls.widget())
+        # Movable + floatable, but not closable: floating detaches it to its own window
+        # (for a second screen); it should never be closed and lost.
+        self._controls_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable)
+        self._main.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._controls_dock)
+
+        # Closing the window quits the app; tear the backend down on the way out so
+        # background threads stop before Qt destroys the widgets they signal.
         self._close_filter = _make_close_filter(self._app.quit)
-        self._viewport.widget().installEventFilter(self._close_filter)
-        self._controls.widget().installEventFilter(self._close_filter)
+        self._main.installEventFilter(self._close_filter)
         self._app.aboutToQuit.connect(self.stop)
 
         # Space / Shift+Space step the focused residue forward / back along its chain,
@@ -2922,9 +2985,11 @@ class DesktopApp:
     def start(self) -> int:
         self._webapp.start()
 
-        self._viewport.show()
-        self._controls.show()
-        self._arrange_windows()
+        # Maximize is honoured on Wayland (unlike window positioning), so this fills the
+        # screen; the dock is sized to ~1/3 once the maximized width is known.
+        self._main.showMaximized()
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._size_controls_dock)
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
         self._reload_viewport()  # nothing loaded -> a dummy-backed blank viewer
@@ -2953,7 +3018,7 @@ class DesktopApp:
         self._splash = None
 
         def finished(_ok=True):
-            splash.finish(self._viewport.widget())
+            splash.finish(self._main)
 
         view = getattr(self._viewport, "_view", None)
         if view is None:
@@ -3028,25 +3093,17 @@ class DesktopApp:
         self._webapp.stop()
         self._viewport.close()  # release the QtWebEngine render process (see close())
 
-    def _arrange_windows(self) -> None:
-        """Place the two windows side by side on the primary screen."""
-        from PySide6.QtCore import QRect
-        from PySide6.QtWidgets import QApplication
+    def _size_controls_dock(self) -> None:
+        """Give the controls dock ~1/3 of the width, the viewport the rest.
 
-        app = QApplication.instance()
-        screen = app.primaryScreen()
-        if screen is None:
-            # Fallback geometry if no screen is reported.
-            rect = QRect(0, 0, 1920, 1080)
-        else:
-            rect = screen.availableGeometry()
+        Run after the window is up (a queued call) so the maximized width is known; the
+        separator stays draggable, so this is only the starting proportion.
+        """
+        from PySide6.QtCore import Qt
 
-        x, y, total_width, total_height = rect.x(), rect.y(), rect.width(), rect.height()
-        # Viewer gets 2/3, the controls 1/3.
-        view_width = total_width * 2 // 3
-
-        self._viewport.set_geometry(QRect(x, y, view_width, total_height))
-        self._controls.set_geometry(QRect(x + view_width, y, total_width - view_width, total_height))
+        width = self._main.width() or 1600
+        self._main.resizeDocks(
+            [self._controls_dock], [max(320, width // 3)], Qt.Orientation.Horizontal)
 
     # -- live session ----------------------------------------------------
 
