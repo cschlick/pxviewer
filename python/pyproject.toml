@@ -38,8 +38,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["pxviewer"]
-# The bundled sample model (pxviewer/data/1aki.pdb) is included automatically as
-# it lives inside the package directory.
+# Bundled data — the sample model (pxviewer/data/1aki.pdb), the app icon and the Lucide
+# tab icons (pxviewer/assets/**) — is included automatically as it lives inside the
+# package directory.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

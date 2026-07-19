@@ -1821,7 +1821,9 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert "Sample" not in texts and "Demos" in texts
 
         tabs = ctl.widget().findChild(QTabWidget)
-        assert [tabs.tabText(i) for i in range(4)] == ["Scene", "Tools", "Validation", "Geometry"]
+        # Tabs are icon-only; the label lives in the tooltip.
+        assert [tabs.tabToolTip(i) for i in range(4)] == ["Scene", "Tools", "Validation", "Geometry"]
+        assert all(not tabs.tabIcon(i).isNull() for i in range(tabs.count()))
     finally:
         app.stop()
 

@@ -172,6 +172,7 @@ def _check_qt() -> None:
 
 
 _ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+_ICONS_DIR = Path(__file__).resolve().parent / "assets" / "icons"  # Lucide SVGs (ISC)
 _SPLASH_SIDE = 320  # logical px; scaled from the 512px icon for the screen's pixel ratio
 _SPLASH_MAX_MS = 15000  # never leave the splash up if the page never reports a load
 
@@ -181,6 +182,30 @@ def _app_icon():
     from PySide6.QtGui import QIcon
 
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
+
+
+def _line_icon(name: str, color, size: int = 20):
+    """A monochrome Lucide SVG (assets/icons/<name>.svg) tinted to ``color`` as a QIcon.
+
+    The icons draw with ``stroke="currentColor"``, which Qt's SVG renderer does not resolve
+    on its own, so the colour is substituted in before rendering. Rendered at 3x the display
+    size so it stays crisp on a HiDPI screen. Returns None if the asset is missing."""
+    from PySide6.QtCore import QByteArray, Qt
+    from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+    from PySide6.QtSvg import QSvgRenderer
+
+    path = _ICONS_DIR / f"{name}.svg"
+    if not path.exists():  # pragma: no cover - packaging guard
+        return None
+    svg = path.read_text().replace("currentColor", QColor(color).name())
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+    pm = QPixmap(size * 3, size * 3)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    renderer.render(painter)
+    painter.end()
+    pm.setDevicePixelRatio(3.0)
+    return QIcon(pm)
 
 
 def install_desktop_entry() -> str:
@@ -923,24 +948,34 @@ class ControlsWindow:
         self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
         self._focused: tuple = (None, None)  # (kind, id) currently shown in Appearance
 
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import Qt, QSize
 
         tabs = QTabWidget()
         # The controls pane is narrow — a third of the window, down to 300px, narrower
-        # still when floated — so six tabs overflow on a modest screen. By default Qt hides
-        # the overflow behind scroll arrows; instead let the bar shrink every tab to fit
-        # (eliding a label only when it must) and drop the heavy frame, so all six stay
-        # visible and clickable at any width.
+        # still when floated — so six text tabs overflow. Use an icon per tab instead (the
+        # label becomes its tooltip): icon-only tabs are compact enough that all six fit at
+        # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
-        tabs.setElideMode(Qt.TextElideMode.ElideRight)
         tabs.tabBar().setUsesScrollButtons(False)
-        tabs.addTab(self._build_scene_tab(), "Scene")
-        tabs.addTab(self._build_tools_tab(), "Tools")
-        tabs.addTab(self._build_validation_tab(), "Validation")
-        tabs.addTab(self._build_geometry_tab(), "Geometry")
-        console_tab = self._build_console_tab()
-        self._console_tab_index = tabs.addTab(console_tab, "Console")
-        tabs.addTab(self._build_settings_tab(), "Settings")
+        tabs.setIconSize(QSize(20, 20))
+        # Lucide line icons, tinted to the tab text colour so they read in light and dark.
+        tint = self._window.palette().color(self._window.foregroundRole())
+        specs = [
+            (self._build_scene_tab(), "Scene", "layers"),
+            (self._build_tools_tab(), "Tools", "wrench"),
+            (self._build_validation_tab(), "Validation", "shapes"),
+            (self._build_geometry_tab(), "Geometry", "drafting-compass"),
+            (self._build_console_tab(), "Console", "square-terminal"),
+            (self._build_settings_tab(), "Settings", "sliders-horizontal"),
+        ]
+        for widget, label, icon_name in specs:
+            icon = _line_icon(icon_name, tint)
+            # Fall back to the text label if the icon asset is somehow missing.
+            index = tabs.addTab(widget, icon, "") if icon is not None \
+                else tabs.addTab(widget, label)
+            tabs.setTabToolTip(index, label)
+            if label == "Console":
+                self._console_tab_index = index
         # The console spins up an IPython kernel, so defer that cost until the tab
         # is actually opened.
         tabs.currentChanged.connect(self._on_tab_changed)
