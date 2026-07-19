@@ -224,14 +224,10 @@ def test_volume_registry_and_grouping(qapp, tmp_path):
         assert app._write_volume_scene() is not None
         assert (app._webapp.volume_dir / "vols" / f"{vid}.map").exists()
 
-        # Hiding is a live toggle, not a rebuild: the volume stays in the scene (drawn
-        # hidden) so it can be shown again without reloading. The scene is empty of
-        # volumes only once there are none at all.
         app.set_volume_visible(vid, False)
-        assert app._write_volume_scene() is not None
+        assert app._write_volume_scene() is None  # nothing visible -> no scene
         app.remove_volume(vid)
         assert not app._volumes
-        assert app._write_volume_scene() is None
 
         # A map + model loaded together -> one cctbx group (model + its map).
         kind = app.load_files([str(model_path), str(map_path)])
@@ -490,9 +486,10 @@ def test_volume_appearance_controls(qapp, tmp_path):
 
 
 def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
-    """Volume commands are broadcast on a model's socket. The page keeps *every* model
-    connected (hiding one just draws it empty), so the active model always carries them,
-    visible or not; the dummy is only needed when there is no model at all."""
+    """Volume commands are broadcast on a model's socket, and the page only connects to
+    the *visible* models' sockets (or the dummy when none are). Sending on the active
+    model's socket while it is hidden broadcasts to nobody, and every volume control
+    silently stops working."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -513,137 +510,17 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         assert app._active_model_id == b
         assert app._control_session() is app.session_for(b)
 
-        # Hide the active model -> it stays connected (drawn empty), so it keeps carrying
-        # the commands; every model's socket remains in the page.
+        # Hide the active model -> the page drops its socket, so commands must move to
+        # one it still has.
         app.set_model_visible(b, False)
-        assert f"ws://{app._host}:{app.session_for(b).port}" in app._all_model_ws()
-        assert app._control_session() is app.session_for(b)
+        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._visible_model_ws()
+        assert app._control_session() is app.session_for(a)
 
-        # Remove every model -> the page falls back to the dummy, and so must the commands.
-        app.remove_model(b)
-        app.remove_model(a)
+        # Hide everything -> the page falls back to the dummy, and so must the commands.
+        app.set_model_visible(a, False)
+        assert app._visible_model_ws() == []
         app._ensure_dummy_ws()
         assert app._control_session() is app._dummy
-    finally:
-        app.stop()
-
-
-def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
-    """Hiding a model must not reload the viewport (a reload blanks the whole page for a
-    beat) and must not dispose its geometry (an empty representation deletes the model's
-    GPU buffers, which a software renderer does not survive). Instead the model's clip
-    slab is closed to nothing — an in-place shader change on a still-connected model — and
-    showing restores the real slab. The real clip stays on the entry."""
-    pytest.importorskip("websockets")
-    pytest.importorskip("PySide6.QtWebEngineWidgets")
-
-    from pxviewer.desktop import DesktopApp
-    from pxviewer.live import LiveSession
-
-    app = DesktopApp(port=0)
-    app._webapp.start()
-    try:
-        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
-
-        clips = []
-        reps = []
-        sess = app.session_for(a)
-        orig_clip = sess.set_clip
-        sess.set_clip = lambda f, b, **kw: (clips.append((f, b)), orig_clip(f, b, **kw))[1]
-        orig_rep = sess.set_representation
-        sess.set_representation = lambda rep, **kw: (reps.append(kw.get("on")), orig_rep(rep, **kw))[1]
-
-        loads = []
-        orig_load = app._viewport.load
-        app._viewport.load = lambda url, *ar, **kw: (loads.append(url), orig_load(url, *ar, **kw))[1]
-
-        app.set_model_visible(a, False)
-        app.set_model_visible(a, True)
-
-        assert loads == [], "hiding/showing a model reloaded the viewport"
-        assert reps == [], "hiding a model rebuilt its representation (disposes geometry)"
-        assert clips == [(1.0, 1.0), (0.0, 1.0)], f"expected close-then-open slab, got {clips}"
-        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
-        # And every model's socket is in the page throughout — nothing was disconnected.
-        assert len(app._all_model_ws()) == 2
-    finally:
-        app.stop()
-
-
-def test_editing_a_hidden_models_clip_does_not_reveal_it(qapp):
-    """A hidden model is held behind a closed slab; changing its clip stores the value but
-    must not push it (which would draw the model that the closed slab is hiding)."""
-    pytest.importorskip("websockets")
-    pytest.importorskip("PySide6.QtWebEngineWidgets")
-
-    from pxviewer.desktop import DesktopApp
-    from pxviewer.live import LiveSession
-
-    app = DesktopApp(port=0)
-    app._webapp.start()
-    try:
-        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        app.set_model_visible(a, False)
-        sess = app.session_for(a)
-        clips = []
-        orig_clip = sess.set_clip
-        sess.set_clip = lambda f, b, **kw: (clips.append((f, b)), orig_clip(f, b, **kw))[1]
-
-        app.set_model_clip(a, 0.2, 0.8)
-        assert clips == [], "clip was pushed while hidden -> the model would reappear"
-        assert app._model_entry(a)["clip"] == (0.2, 0.8)  # stored for when shown
-
-        app.set_model_visible(a, True)
-        assert clips == [(0.2, 0.8)], "showing did not restore the stored clip"
-    finally:
-        app.stop()
-
-
-def test_hiding_a_volume_is_a_live_toggle_not_a_page_reload(qapp):
-    """Hiding a map must not reload the viewport (which blanks every object to drop one)
-    and must not fade it to nothing (opacity 0 moves the isosurface to the transparent
-    pass and rebuilds/disposes it, which a software renderer does not survive). Instead
-    the map's clip slab is closed to nothing — an in-place shader change — and showing
-    restores the real clip. The map stays in the scene and its opacity is untouched."""
-    pytest.importorskip("websockets")
-    pytest.importorskip("PySide6.QtWebEngineWidgets")
-
-    import numpy as np
-
-    from pxviewer.desktop import DesktopApp
-    from pxviewer.live import LiveSession
-    from pxviewer.volume_io import VolumeData
-
-    app = DesktopApp(port=0)
-    app._webapp.start()
-    try:
-        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        v1 = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map1")
-        entry = app._volume_entry(v1)
-        ref = entry["ref"]
-
-        # Every volume is in the scene so a hidden one can be shown again live.
-        assert ref in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
-
-        control = app._control_session()
-        clips, opac = [], []
-        orig_clip = control.set_clip
-        control.set_clip = lambda f, b, **kw: (clips.append((f, b, kw.get("ref"))), orig_clip(f, b, **kw))[1]
-        orig_op = control.set_volume_opacity
-        control.set_volume_opacity = lambda r, o: (opac.append((r, o)), orig_op(r, o))[1]
-        loads = []
-        orig_load = app._viewport.load
-        app._viewport.load = lambda url, *a, **k: (loads.append(url), orig_load(url, *a, **k))[1]
-
-        app.set_volume_visible(v1, False)
-        assert loads == [], "hiding a volume reloaded the viewport"
-        assert opac == [], "hiding a volume changed its opacity (risks a transparent-pass rebuild)"
-        assert clips[-1] == (1.0, 1.0, ref)               # hidden -> closed slab, live
-
-        app.set_volume_visible(v1, True)
-        assert loads == [], "showing a volume reloaded the viewport"
-        assert clips[-1] == (0.0, 1.0, ref)               # restores the open slab, live
     finally:
         app.stop()
 

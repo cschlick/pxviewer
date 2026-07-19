@@ -79,16 +79,15 @@ def _active_model_is_valid(app) -> None:
 
 
 def _control_session_is_reachable(app) -> None:
-    """Volume commands ride the control session, and the page connects to every model's
-    socket (hidden ones are just drawn empty) or the dummy when there is no model. A
-    control session the page is not listening on means every volume control silently does
-    nothing — the hidden-model bug."""
+    """Volume commands ride the control session, and the page only connects to the
+    visible models' sockets (or the dummy). A control session the page is not listening
+    on means every volume control silently does nothing — the hidden-model bug."""
     control = app._control_session()
     if control is None:
         return
     if control is app._dummy:
         return
-    reachable = {m["session"] for m in app._models}
+    reachable = {m["session"] for m in app._models if m["visible"]}
     assert control in reachable, \
         "control session is not a socket the viewport is connected to"
 

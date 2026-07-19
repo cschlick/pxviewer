@@ -3351,12 +3351,6 @@ class DesktopApp:
     def _visible_model_ws(self) -> List[str]:
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
 
-    def _all_model_ws(self) -> List[str]:
-        """Every model's socket, hidden ones included — the page connects to all of them
-        so that hiding/showing is a live representation toggle, not a reload (see
-        ``_apply_model_rep``). A hidden model is connected but drawn empty."""
-        return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
-
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
         page non-blank when no model is visible. Nothing to pick, so no selection."""
@@ -3375,40 +3369,35 @@ class DesktopApp:
     def _control_session(self):
         """A session the viewport is actually connected to, for volume commands.
 
-        It has to be one of the sockets ``_reload_viewport`` put in the page. Every model
-        now stays connected whether or not it is visible (a hidden model is just drawn
-        empty), so the active model is always a valid carrier; the dummy is only needed
-        when there is no model at all.
+        It has to be one of the sockets ``_reload_viewport`` put in the page: the visible
+        models', or the dummy when no model is visible. The *active* model is the wrong
+        answer when it is hidden — commands would be broadcast to a session with no
+        clients and vanish, so every volume control would quietly stop working.
         """
         entry = self._model_entry(self._active_model_id)
-        if entry is not None:
+        if entry is not None and entry["visible"]:
             return entry["session"]
-        if self._models:
-            return self._models[0]["session"]
+        visible = next((m["session"] for m in self._models if m["visible"]), None)
+        if visible is not None:
+            return visible
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing every volume; return its URL path (or None).
-
-        Every volume is emitted, hidden ones included, so hiding or showing a map is a
-        live clip change (see ``set_volume_visible``) rather than a scene rebuild — and the
-        map stays in the render graph, never disposed, which a software renderer does not
-        survive mid-frame. A hidden map is clipped to nothing on connect (its closed slab
-        rides the clip replay), not left out. Only a visible volume is focused."""
-        if not self._volumes:
+        """Write an MVSJ composing every visible volume; return its URL path (or None)."""
+        visible = [v for v in self._volumes if v["visible"]]
+        if not visible:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
-        first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
-        for v in self._volumes:
+        for i, v in enumerate(visible):
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
-                focus=(focus_first and v is first_visible),
+                focus=(focus_first and i == 0),
             ))
         self._scene_counter += 1
         scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
@@ -3420,7 +3409,7 @@ class DesktopApp:
         """Compose the visible models (ws) and volumes (MVSJ) into one viewport URL."""
         if self._batching:
             return
-        model_ws = self._all_model_ws()  # all models stay connected; visibility is per-rep
+        model_ws = self._visible_model_ws()
         mvsj = self._write_volume_scene()
         ws = list(model_ws)
         if not model_ws:
@@ -4294,9 +4283,7 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        if entry["visible"]:
-            self._send_volume_clip(entry)
-        # hidden behind a closed slab; the real clip applies when shown
+        self._send_volume_clip(entry)
 
     def set_view_radius_default(self, radius: float) -> None:
         """How much density a map made from reflections opens with.
@@ -4318,9 +4305,7 @@ class DesktopApp:
         if entry is None or entry.get("radius") == radius:
             return
         entry["radius"] = radius
-        if entry["visible"]:
-            self._send_volume_clip(entry)
-        # hidden behind a closed slab; the real radius applies when shown
+        self._send_volume_clip(entry)
 
     def _reassert_volume_clips(self) -> None:
         """Re-tell the control session every volume's clip, before the page reloads.
@@ -4332,9 +4317,7 @@ class DesktopApp:
         is new. So the clips are re-asserted on every reload rather than sent once.
         """
         for entry in self._volumes:
-            if not entry["visible"]:
-                self._send_volume_hidden(entry)  # a hidden map rides the same clip channel
-            elif entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
     def _send_volume_clip(self, entry) -> None:
@@ -4346,18 +4329,6 @@ class DesktopApp:
         front, back = entry.get("clip") or (0.0, 1.0)
         try:
             control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
-        except Exception:  # pragma: no cover - defensive
-            pass
-
-    def _send_volume_hidden(self, entry) -> None:
-        """Clip a volume to nothing — a full-scene plane so no isosurface is drawn. The
-        hide; the map stays in the scene and its geometry is untouched (see
-        ``set_volume_visible``)."""
-        control = self._control_session()
-        if control is None:
-            return
-        try:
-            control.set_clip(1.0, 1.0, ref=entry["ref"])
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -4373,8 +4344,6 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        if not entry["visible"]:
-            return  # hidden behind a closed slab; the real clip applies when shown
         try:
             entry["session"].set_clip(front, back)
         except Exception:  # pragma: no cover - defensive
@@ -4426,26 +4395,12 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
-        """Show or hide a loaded model in the viewport.
-
-        Hiding closes the model's clip slab to nothing (a full-scene clip plane), which
-        makes every atom disappear without touching its geometry; showing restores the
-        real slab. This is a live, in-place shader change on a model that stays connected
-        — not a page reload (which blanks the whole viewport for a beat) and not an empty
-        representation (which disposes the model's GPU buffers, and a software renderer
-        does not survive that mid-frame). The real clip is kept on the entry."""
+        """Show or hide a loaded model in the viewport."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        try:
-            if visible:
-                front, back = entry.get("clip") or (0.0, 1.0)
-                entry["session"].set_clip(front, back)
-            else:
-                entry["session"].set_clip(1.0, 1.0)  # closed slab -> nothing drawn
-        except Exception:  # pragma: no cover - defensive
-            pass
+        self._reload_viewport()
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
@@ -4560,21 +4515,11 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume — a live clip change over the shared scene, not a page
-        reload. Hiding closes the map's clip slab to nothing (a full-scene clip plane),
-        which makes the isosurface disappear while leaving its geometry in place; showing
-        restores the real slab. Driving opacity to zero instead would move the isosurface
-        to the transparent render pass and rebuild it, and a software renderer does not
-        survive that disposal (same reason models hide by clip). The real clip is kept on
-        the entry."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        if visible:
-            self._send_volume_clip(entry)     # restore the real slab / radius
-        else:
-            self._send_volume_hidden(entry)   # closed slab -> nothing drawn
+        self._reload_viewport()
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
