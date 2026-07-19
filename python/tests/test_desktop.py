@@ -1712,6 +1712,41 @@ def test_checkable_combo_requires_click_inside_popup(qapp):
     assert fired == [("Protein", False)]
 
 
+def test_hide_and_show_selected_atoms(qapp):
+    """Hide/show-selected drops the selection from (or restores it to) the drawn atoms —
+    a partial representation, the same mechanism as the structure-type toggles."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_sites([[i, 0, 0] for i in range(6)]), "M")
+        entry = app._model_entry(mid)
+        assert entry["hidden_atoms"] == set()
+        assert app._shown_indices(entry) is None  # all shown
+
+        ctl = app._controls
+        assert not ctl._hide_sel_btn.isEnabled()  # nothing selected yet
+
+        app._scene_selection = {mid: [1, 2, 3]}
+        ctl._on_scene_selection_changed(app._scene_selection)
+        assert ctl._hide_sel_btn.isEnabled() and ctl._show_sel_btn.isEnabled()
+
+        app.hide_selected()
+        assert entry["hidden_atoms"] == {1, 2, 3}
+        assert app._shown_indices(entry) == [0, 4, 5]  # the rest still drawn
+
+        app.show_selected()
+        assert entry["hidden_atoms"] == set()
+        assert app._shown_indices(entry) is None
+    finally:
+        app.stop()
+
+
 def test_hide_structure_types(qapp):
     """Show/hide structure types (cctbx classes) by restricting the representation."""
     pytest.importorskip("iotbx.data_manager")

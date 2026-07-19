@@ -1217,6 +1217,21 @@ class ControlsWindow:
             self._sel_chips.append((chip, expr))
         sl.addLayout(chips)
 
+        # Hide / show the selected atoms (a partial representation, like the type toggles).
+        vis_row = QHBoxLayout()
+        self._hide_sel_btn = self._make_icon_button(
+            "eye-off", "Hide", "Hide the selected atoms")
+        self._hide_sel_btn.clicked.connect(lambda: self._desktop.hide_selected())
+        vis_row.addWidget(self._hide_sel_btn)
+        self._show_sel_btn = self._make_icon_button(
+            "eye", "Show", "Show (un-hide) the selected atoms")
+        self._show_sel_btn.clicked.connect(lambda: self._desktop.show_selected())
+        vis_row.addWidget(self._show_sel_btn)
+        vis_row.addStretch(1)
+        self._hide_sel_btn.setEnabled(False)  # enabled once there is a selection
+        self._show_sel_btn.setEnabled(False)
+        sl.addLayout(vis_row)
+
         self._selection_label = QLabel("none selected")
         self._selection_label.setWordWrap(True)
         self._selection_label.setStyleSheet("color: #666;")
@@ -2774,6 +2789,9 @@ class ControlsWindow:
         self._scene_selection = scene or {}
         total = sum(len(v) for v in self._scene_selection.values())
         n_models = len(self._scene_selection)
+        # Hide/show-selected only make sense with a selection.
+        self._hide_sel_btn.setEnabled(total > 0)
+        self._show_sel_btn.setEnabled(total > 0)
         if total:
             across = f" across {n_models} models" if n_models > 1 else ""
             self._selection_label.setText(f"{total} atom(s) selected{across}")
@@ -3672,14 +3690,14 @@ class DesktopApp:
         return entry["type_groups"]
 
     def _shown_indices(self, entry) -> Optional[list]:
-        """Atom indices to show given the model's hidden types, or None for all."""
-        hidden = entry.get("hidden_types") or set()
-        if not hidden:
-            return None
-        groups = self._type_groups(entry)
-        drop = set()
-        for label in hidden:
-            drop.update(groups.get(label, []))
+        """Atom indices to show given the model's hidden types and hidden atoms, or None for
+        all."""
+        hidden_types = entry.get("hidden_types") or set()
+        drop = set(entry.get("hidden_atoms") or set())  # atoms hidden by "hide selected"
+        if hidden_types:
+            groups = self._type_groups(entry)
+            for label in hidden_types:
+                drop.update(groups.get(label, []))
         if not drop:
             return None
         mask = np.ones(entry["session"]._n_atoms, dtype=bool)
@@ -3714,8 +3732,8 @@ class DesktopApp:
         mid = f"model-{self._model_counter}"
         rep = rep or self._default_model_rep(session)
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
-                 "rep": rep, "color": None, "hidden_types": set(), "type_groups": None,
-                 "clip": (0.0, 1.0),
+                 "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
+                 "type_groups": None, "clip": (0.0, 1.0),
                  "interactions": False}
         self._models.append(entry)
         self._apply_model_rep(entry)
@@ -3756,6 +3774,35 @@ class DesktopApp:
             return
         types.add(label) if hidden else types.discard(label)
         self._apply_model_rep(entry)
+
+    def hide_selected(self) -> None:
+        """Hide the currently-selected atoms (draw everything else)."""
+        self._set_selected_hidden(True)
+
+    def show_selected(self) -> None:
+        """Show (un-hide) the currently-selected atoms."""
+        self._set_selected_hidden(False)
+
+    def _set_selected_hidden(self, hide: bool) -> None:
+        """Add the selection to (or remove it from) each model's hidden-atoms set and
+        redraw — the same partial-representation path structure-type hiding uses."""
+        changed = False
+        for mid, indices in self._scene_selection.items():
+            entry = self._model_entry(mid)
+            if entry is None or not indices:
+                continue
+            hidden = entry.setdefault("hidden_atoms", set())
+            before = len(hidden)
+            if hide:
+                hidden.update(indices)
+            else:
+                hidden.difference_update(indices)
+            if len(hidden) != before:
+                self._apply_model_rep(entry)
+                changed = True
+        if not changed:
+            self._status("select some atoms first" if not self._scene_selection
+                         else ("already hidden" if hide else "already shown"))
 
     def model_structure_types(self, mid: str) -> list:
         """The structure types present in a model (for the show/hide menu)."""
