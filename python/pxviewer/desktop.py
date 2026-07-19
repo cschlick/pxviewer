@@ -3177,11 +3177,26 @@ class DesktopApp:
     def start(self) -> int:
         self._webapp.start()
 
-        # Maximize is honoured on Wayland (unlike window positioning), so this fills the
-        # screen; the dock is sized to ~1/3 once the maximized width is known.
+        # Fill the screen. showMaximized() is enough on X11 and most compositors, but some
+        # Wayland compositors drop a maximized state requested before the surface is mapped,
+        # leaving the window at its default size. So also size it to the available screen
+        # area (a size request Wayland does honour) as a floor, and re-assert the maximized
+        # state once the window is really up — hence the delayed pass as well as the
+        # immediate one. Re-applying is idempotent where the first request already took.
+        screen = self._app.primaryScreen()
+        if screen is not None:
+            self._main.resize(screen.availableGeometry().size())
         self._main.showMaximized()
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, self._size_controls_dock)
+
+        from PySide6.QtCore import QTimer, Qt
+
+        def _fill_screen() -> None:
+            if not (self._main.windowState() & Qt.WindowState.WindowMaximized):
+                self._main.showMaximized()
+            self._size_controls_dock()  # ~1/3, worked out from the now-known width
+
+        QTimer.singleShot(0, _fill_screen)
+        QTimer.singleShot(250, _fill_screen)  # after a slow compositor has mapped the surface
 
         # Land on an empty viewer: the main screen is "load a file", not a demo.
         self._reload_viewport()  # nothing loaded -> a dummy-backed blank viewer
