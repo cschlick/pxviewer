@@ -659,17 +659,19 @@ def test_hiding_a_map_parks_it_empty_showing_reloads_it_populated(qapp):
         app.stop()
 
 
-def test_software_refuses_to_hide_a_map(qapp):
-    """On software WebGL every way to hide a map's isosurface segfaults, so it is refused
-    outright (and its checkbox disabled) — the map stays visible rather than risk the app.
-    Models still hide on software; only maps are pinned."""
+def test_software_refuses_to_hide_a_map_and_says_why(qapp):
+    """On software WebGL every way to hide a map's isosurface segfaults, so it is refused —
+    the map stays visible rather than risk the app. But the refusal must be visible, not a
+    dead nothing: the checkbox stays interactive so the click reaches the refusal, which
+    flashes the reason in the status line and snaps the box back. Models still hide on
+    software; only maps are pinned."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
     import numpy as np
+    from PySide6.QtCore import Qt
 
     from pxviewer.desktop import DesktopApp
-    from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
     app = DesktopApp(port=0, hide_in_place=False)  # software
@@ -677,17 +679,33 @@ def test_software_refuses_to_hide_a_map(qapp):
     try:
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
         control = app._control_session()
-        parks, loads = [], []
+        parks, loads, warned = [], [], []
         op = control.set_volume_hidden
         control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+        app.bridge.status_warned.connect(warned.append)
+
+        # The tree offers an interactive checkbox (not a dead disabled one).
+        ctl = app._controls
+        node = next(n for n in _iter_tree_items(ctl._loaded_tree)
+                    if n.data(0, Qt.ItemDataRole.UserRole) == ("volume", vid))
+        assert bool(node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
         app.set_volume_visible(vid, False)
         assert app._volume_entry(vid)["visible"] is True   # stayed visible; refused
         assert parks == [] and loads == []                 # nothing touched the isosurface
+        assert warned and "hardware WebGL" in warned[-1]    # and it said why, flashed
     finally:
         app.stop()
+
+
+def _iter_tree_items(tree):
+    stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(node.child(i) for i in range(node.childCount()))
 
 
 def test_in_place_hidden_object_clip_edits_are_deferred(qapp):

@@ -300,6 +300,7 @@ def _make_bridge():
     class _Bridge(QObject):
         scene_selection_changed = Signal(object)  # {model_id: [atom indices]} across all models
         status_changed = Signal(str)
+        status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
         structure_changed = Signal(object)  # the active LiveSession (or None)
         loaded_changed = Signal(object)     # {groups, items} for the Loaded tree
@@ -1040,6 +1041,7 @@ class ControlsWindow:
         self._suppress_table_model_combo = False
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
         desktop.bridge.status_changed.connect(self._set_status)
+        desktop.bridge.status_warned.connect(self._flash_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
@@ -2489,10 +2491,25 @@ class ControlsWindow:
     def widget(self):
         return self._window
 
+    _STATUS_STYLE = "color: #666;"
+    _STATUS_WARN_STYLE = "color: #b26a00; font-weight: 600;"  # amber, to catch the eye
+
     def _set_status(self, text: str) -> None:
         self._real_status = text
+        self._status_label.setStyleSheet(self._STATUS_STYLE)  # a new message clears a flash
         if not self._tab_hover:  # don't stomp a tab label the pointer is showing
             self._status_label.setText(text)
+
+    def _flash_status(self, text: str) -> None:
+        """Show a status message with a brief amber highlight, so a refused action is
+        noticed rather than reading as a silent nothing-happened."""
+        from PySide6.QtCore import QTimer
+
+        self._real_status = text
+        self._status_label.setText(text)
+        self._status_label.setStyleSheet(self._STATUS_WARN_STYLE)
+        QTimer.singleShot(
+            4000, lambda: self._status_label.setStyleSheet(self._STATUS_STYLE))
 
     def _on_tab_hover(self, index: int) -> None:
         """Name the hovered tab in the status line; restore the real status on leave."""
@@ -2875,13 +2892,15 @@ class ControlsWindow:
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                 elif it["kind"] == "volume" and not self._desktop._hide_in_place:
                     # Software WebGL (this VM's SwiftShader) segfaults when a map's
-                    # isosurface is hidden — there is no safe way to do it, unlike a model
-                    # — so the map is pinned visible here rather than offered a control that
-                    # crashes. It hides normally on hardware WebGL.
-                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                    node.setCheckState(0, Qt.CheckState.Checked)
+                    # isosurface is hidden, so hiding a map is refused here — but keep the
+                    # box interactive so the click reaches that refusal, which explains why
+                    # in the status line and snaps the box back. A disabled box would just
+                    # sit dead with no reason. Maps hide normally on hardware WebGL.
+                    node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     node.setToolTip(0, "Hiding maps needs hardware WebGL "
                                        "(not available on software rendering)")
+                    node.setCheckState(
+                        0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
                 else:
                     node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     node.setToolTip(0, "Visible")
@@ -4749,8 +4768,8 @@ class DesktopApp:
         if entry is None or entry["visible"] == bool(visible):
             return
         if not self._hide_in_place:
-            self._status("Hiding maps needs hardware WebGL — not available on software "
-                         "rendering.")
+            self._warn("Hiding maps needs hardware WebGL — not available on software "
+                       "rendering.")
             self._emit_loaded_changed()  # snap the checkbox back to shown
             return
         entry["visible"] = bool(visible)
@@ -4838,6 +4857,11 @@ class DesktopApp:
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
+
+    def _warn(self, text: str) -> None:
+        """A status message that briefly stands out — for when an action was refused and
+        the user needs to know why (not just a quiet nothing-happened)."""
+        self.bridge.status_warned.emit(text)
 
     def _on_model_selection(self, mid: str, selection) -> None:
         """A model reported its picked atoms (WS thread). Fold into the scene selection."""
