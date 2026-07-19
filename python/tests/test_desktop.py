@@ -224,10 +224,10 @@ def test_volume_registry_and_grouping(qapp, tmp_path):
         assert app._write_volume_scene() is not None
         assert (app._webapp.volume_dir / "vols" / f"{vid}.map").exists()
 
-        # Hiding a map contours it out of sight but leaves it in the scene (removing the
-        # isosurface on reload segfaults a software renderer), so the scene is non-empty
-        # until the map is actually unloaded.
+        # This is a software app (the default), where hiding a map is refused, so it stays
+        # in the scene; the scene is empty of volumes only once the map is unloaded.
         app.set_volume_visible(vid, False)
+        assert app._volume_entry(vid)["visible"] is True
         assert app._write_volume_scene() is not None
         app.remove_volume(vid)
         assert not app._volumes
@@ -615,47 +615,79 @@ def test_hiding_a_map_parks_it_empty_showing_reloads_it_populated(qapp):
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    for hip in (False, True):  # software and hardware hide a map the same way
-        app = DesktopApp(port=0, hide_in_place=hip)
-        app._webapp.start()
-        try:
-            app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-            vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
-            entry = app._volume_entry(vid)
-            ref = entry["ref"]
-            real_iso = entry["iso"]
+    # Only on hardware (hide_in_place): on software the isosurface operations segfault, so
+    # hiding a map is refused there entirely — see the software test below.
+    app = DesktopApp(port=0, hide_in_place=True)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+        entry = app._volume_entry(vid)
+        ref = entry["ref"]
+        real_iso = entry["iso"]
 
-            control = app._control_session()
-            parks = []
-            op = control.set_volume_hidden
-            control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
-            loads = []
-            ol = app._viewport.load
-            app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+        control = app._control_session()
+        parks = []
+        op = control.set_volume_hidden
+        control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
+        loads = []
+        ol = app._viewport.load
+        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
-            # The scene always bakes the real level, so a reload never loads the map empty.
-            scene = (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
-            assert ref in scene and str(_HIDDEN_VOLUME_ISO) not in scene
+        # The scene always bakes the real level, so a reload never loads the map empty.
+        scene = (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
+        assert ref in scene and str(_HIDDEN_VOLUME_ISO) not in scene
 
-            app.set_volume_visible(vid, False)
-            assert loads == [], f"[hip={hip}] hiding a map reloaded the viewport"
-            assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)     # parked empty, in place
-            assert entry["iso"] == real_iso                   # real level preserved
+        app.set_volume_visible(vid, False)
+        assert loads == [], "hiding a map reloaded the viewport"
+        assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)     # parked empty, in place
+        assert entry["iso"] == real_iso                   # real level preserved
 
-            # A reload while hidden re-parks it empty (after loading it populated).
-            control.set_volume_hidden(ref, None)              # forget, so the reassert re-sets it
-            app._reassert_hidden_volumes()
-            assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)
+        # A reload while hidden re-parks it empty (after loading it populated).
+        control.set_volume_hidden(ref, None)              # forget, so the reassert re-sets it
+        app._reassert_hidden_volumes()
+        assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)
 
-            # Level edits while hidden are stored, not pushed (would bring the map back).
-            app.set_volume_iso(vid, 2.5)
-            assert entry["iso"] == 2.5
+        # Level edits while hidden are stored, not pushed (would bring the map back).
+        app.set_volume_iso(vid, 2.5)
+        assert entry["iso"] == 2.5
 
-            app.set_volume_visible(vid, True)
-            assert len(loads) == 1                            # showing reloads once (loads populated)
-            assert parks[-1] == (ref, None)                   # park released
-        finally:
-            app.stop()
+        app.set_volume_visible(vid, True)
+        assert len(loads) == 1                            # showing reloads once (loads populated)
+        assert parks[-1] == (ref, None)                   # park released
+    finally:
+        app.stop()
+
+
+def test_software_refuses_to_hide_a_map(qapp):
+    """On software WebGL every way to hide a map's isosurface segfaults, so it is refused
+    outright (and its checkbox disabled) — the map stays visible rather than risk the app.
+    Models still hide on software; only maps are pinned."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0, hide_in_place=False)  # software
+    app._webapp.start()
+    try:
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+        control = app._control_session()
+        parks, loads = [], []
+        op = control.set_volume_hidden
+        control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
+        ol = app._viewport.load
+        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+
+        app.set_volume_visible(vid, False)
+        assert app._volume_entry(vid)["visible"] is True   # stayed visible; refused
+        assert parks == [] and loads == []                 # nothing touched the isosurface
+    finally:
+        app.stop()
 
 
 def test_in_place_hidden_object_clip_edits_are_deferred(qapp):

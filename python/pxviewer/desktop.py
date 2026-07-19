@@ -2790,6 +2790,15 @@ class ControlsWindow:
                 if it["visible"] is None:
                     # Reflections: nothing drawable, so nothing to show or hide.
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                elif it["kind"] == "volume" and not self._desktop._hide_in_place:
+                    # Software WebGL (this VM's SwiftShader) segfaults when a map's
+                    # isosurface is hidden — there is no safe way to do it, unlike a model
+                    # — so the map is pinned visible here rather than offered a control that
+                    # crashes. It hides normally on hardware WebGL.
+                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    node.setCheckState(0, Qt.CheckState.Checked)
+                    node.setToolTip(0, "Hiding maps needs hardware WebGL "
+                                       "(not available on software rendering)")
                 else:
                     node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     node.setToolTip(0, "Visible")
@@ -4627,14 +4636,24 @@ class DesktopApp:
         """Show or hide a volume by moving its contour, never by removing its isosurface.
 
         Hiding parks the map at an empty contour (far past any density) — a live
-        populated->empty level change, in place, which a software renderer survives.
+        populated->empty level change, in place, which a *hardware* renderer survives.
         Showing goes the other way, but an empty->populated rebuild *in place* segfaults
         it, so showing instead reloads the page, which loads the map fresh at its real
         level (the way it first appeared). The map is always in the scene at its real
         level, so a reload never loads it empty and never removes its isosurface — the two
-        things that crash. The real level is kept on the entry."""
+        things that crash. The real level is kept on the entry.
+
+        On **software** WebGL every one of those isosurface operations eventually corrupts
+        the GL command buffer and segfaults, with no safe alternative, so hiding a map is
+        refused there (and its checkbox is disabled) rather than risking the whole app. It
+        works on hardware; ``hide_in_place`` marks that."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
+            return
+        if not self._hide_in_place:
+            self._status("Hiding maps needs hardware WebGL — not available on software "
+                         "rendering.")
+            self._emit_loaded_changed()  # snap the checkbox back to shown
             return
         entry["visible"] = bool(visible)
         control = self._control_session()
