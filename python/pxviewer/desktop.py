@@ -208,6 +208,24 @@ def _line_icon(name: str, color, size: int = 20):
     return QIcon(pm)
 
 
+def _tab_hover_filter(tabbar, on_hover):
+    """A QObject event filter, parented to ``tabbar``, that calls ``on_hover(index)`` with
+    the tab under the pointer (or -1 on leave). Defined lazily so the module imports without
+    a running QApplication."""
+    from PySide6.QtCore import QEvent, QObject
+
+    class _TabHoverFilter(QObject):
+        def eventFilter(self, obj, event):
+            etype = event.type()
+            if etype == QEvent.Type.MouseMove:
+                on_hover(tabbar.tabAt(event.position().toPoint()))
+            elif etype in (QEvent.Type.Leave, QEvent.Type.HoverLeave):
+                on_hover(-1)
+            return False
+
+    return _TabHoverFilter(tabbar)
+
+
 def install_desktop_entry() -> str:
     """Write a Linux ``.desktop`` file so the launcher shows pxviewer's name and icon.
 
@@ -968,21 +986,33 @@ class ControlsWindow:
             (self._build_console_tab(), "Console", "square-terminal"),
             (self._build_settings_tab(), "Settings", "sliders-horizontal"),
         ]
+        self._tab_labels: list = []
         for widget, label, icon_name in specs:
             icon = _line_icon(icon_name, tint)
             # Fall back to the text label if the icon asset is somehow missing.
             index = tabs.addTab(widget, icon, "") if icon is not None \
                 else tabs.addTab(widget, label)
             tabs.setTabToolTip(index, label)
+            self._tab_labels.append(label)
             if label == "Console":
                 self._console_tab_index = index
+        # The icons need a label too. A tooltip is set above, but it is slow to appear and
+        # unreliable on Wayland, so also name the hovered tab in the always-visible status
+        # line — immediate and never hidden. See _on_tab_hover / _set_status.
+        bar = tabs.tabBar()
+        bar.setMouseTracking(True)
+        self._tab_hover_filter = _tab_hover_filter(bar, self._on_tab_hover)
+        bar.installEventFilter(self._tab_hover_filter)
         # The console spins up an IPython kernel, so defer that cost until the tab
         # is actually opened.
         tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(tabs, stretch=1)
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
+        # It doubles as the tab labeller on hover, so remember the real status underneath.
         status_row = QHBoxLayout()
+        self._real_status = "Ready"
+        self._tab_hover = False
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: #666;")
@@ -2101,12 +2131,9 @@ class ControlsWindow:
 
         value = DEFAULT_ISO_SIGMA if current is None else float(current)
         row = QHBoxLayout()
-        lab = QLabel("Level")
-        lab.setMinimumWidth(44)  # room for the gesture chip beside it, same total width
-        row.addWidget(lab)
-        # The bare scroll wheel adjusts this — say so right where the control is, since
-        # that is the one gesture people miss (it is also why scroll no longer zooms).
-        row.addWidget(self._gesture_chip("scroll"))
+        row.addWidget(QLabel("Level"))
+        # (The scroll wheel adjusts this — said once in the gesture legend at the bottom
+        # and in the spin box's tooltip, rather than a chip that eats space on every map.)
 
         slider = QSlider(Qt.Orientation.Horizontal)
         slider.setRange(0, int(round(_ISO_SLIDER_MAX / _ISO_RESOLUTION)))
@@ -2463,7 +2490,18 @@ class ControlsWindow:
         return self._window
 
     def _set_status(self, text: str) -> None:
-        self._status_label.setText(text)
+        self._real_status = text
+        if not self._tab_hover:  # don't stomp a tab label the pointer is showing
+            self._status_label.setText(text)
+
+    def _on_tab_hover(self, index: int) -> None:
+        """Name the hovered tab in the status line; restore the real status on leave."""
+        if 0 <= index < len(self._tab_labels):
+            self._tab_hover = True
+            self._status_label.setText(self._tab_labels[index])
+        elif self._tab_hover:
+            self._tab_hover = False
+            self._status_label.setText(self._real_status)
 
     # -- handlers --------------------------------------------------------
 

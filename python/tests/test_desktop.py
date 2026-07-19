@@ -1888,11 +1888,12 @@ def test_mouse_bindings_are_shown_in_the_gui(qapp):
         assert "scroll" in texts and "Contour level" in texts
         assert "Shift + drag" in texts and "Pull an atom" in texts
 
-        # The Level slider names its gesture right beside it.
+        # The scroll-to-contour gesture is named once, in this legend — not repeated as a
+        # chip beside the Level slider on every map (it only ate space there).
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
         ctl._update_appearance("volume", vid)
         chips = [w.text() for w in ctl._appearance_box.findChildren(QLabel) if w.text() == "scroll"]
-        assert chips == ["scroll"]
+        assert chips == []
     finally:
         app.stop()
 
