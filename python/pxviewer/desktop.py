@@ -2949,13 +2949,21 @@ class ControlsWindow:
 class DesktopApp:
     """Run the pxviewer desktop app with viewport and controls windows."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 5173):
+    def __init__(self, host: str = "127.0.0.1", port: int = 5173,
+                 hide_in_place: bool = False):
         _check_qt()
 
         from PySide6.QtWidgets import QApplication
 
         self._host = host
         self._port = port
+        # How show/hide works. In place (a clip toggle on a still-connected object) is
+        # smooth but relies on the renderer surviving a live GPU state change; on this
+        # box's software WebGL it segfaults, so hardware-only. Off (the default) hides by
+        # recomposing and reloading the page — a flicker, but a clean context teardown
+        # that never disposes anything mid-frame. run_desktop sets this from the GL
+        # backend; the safe default is a reload. See pxviewer.gpu and [[gpu-webgl]].
+        self._hide_in_place = bool(hide_in_place)
 
         # Qt must be initialized before any widgets are created.
         self._app = QApplication.instance()
@@ -3351,6 +3359,16 @@ class DesktopApp:
     def _visible_model_ws(self) -> List[str]:
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
 
+    def _all_model_ws(self) -> List[str]:
+        """Every model's socket, hidden ones included. In-place hiding keeps them all
+        connected (a hidden model is clipped, not dropped) so showing is a live message."""
+        return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
+
+    def _model_ws(self) -> List[str]:
+        """The sockets the page connects to: all models when hiding in place (hidden ones
+        stay, clipped), else only the visible ones (a hidden model is dropped on reload)."""
+        return self._all_model_ws() if self._hide_in_place else self._visible_model_ws()
+
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
         page non-blank when no model is visible. Nothing to pick, so no selection."""
@@ -3369,12 +3387,18 @@ class DesktopApp:
     def _control_session(self):
         """A session the viewport is actually connected to, for volume commands.
 
-        It has to be one of the sockets ``_reload_viewport`` put in the page: the visible
-        models', or the dummy when no model is visible. The *active* model is the wrong
-        answer when it is hidden — commands would be broadcast to a session with no
-        clients and vanish, so every volume control would quietly stop working.
+        It has to be one of the sockets ``_reload_viewport`` put in the page. When hiding
+        in place every model stays connected (a hidden one is only clipped), so the active
+        model always carries commands; when reloading the page connects only to the
+        *visible* models, so a hidden active model is the wrong answer — its socket has no
+        clients and every volume command would quietly vanish. The dummy is the fallback
+        when there is no reachable model at all.
         """
         entry = self._model_entry(self._active_model_id)
+        if self._hide_in_place:
+            if entry is not None:
+                return entry["session"]
+            return self._models[0]["session"] if self._models else self._dummy
         if entry is not None and entry["visible"]:
             return entry["session"]
         visible = next((m["session"] for m in self._models if m["visible"]), None)
@@ -3383,21 +3407,26 @@ class DesktopApp:
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing every visible volume; return its URL path (or None)."""
-        visible = [v for v in self._volumes if v["visible"]]
-        if not visible:
+        """Write an MVSJ composing the volumes; return its URL path (or None).
+
+        Hiding in place keeps every volume in the scene (a hidden one is clipped to nothing
+        on connect, so it can be shown again live); reloading composes only the visible
+        ones (a hidden volume is dropped on reload). Only a visible volume is focused."""
+        composed = self._volumes if self._hide_in_place else [v for v in self._volumes if v["visible"]]
+        if not composed:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
+        first_visible = next((v for v in composed if v["visible"]), None)
         nodes = []
-        for i, v in enumerate(visible):
+        for v in composed:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
-                focus=(focus_first and i == 0),
+                focus=(focus_first and v is first_visible),
             ))
         self._scene_counter += 1
         scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
@@ -3406,10 +3435,10 @@ class DesktopApp:
         return f"/scene/{self._scene_counter}/scene.mvsj"
 
     def _reload_viewport(self) -> None:
-        """Compose the visible models (ws) and volumes (MVSJ) into one viewport URL."""
+        """Compose the models (ws) and volumes (MVSJ) into one viewport URL."""
         if self._batching:
             return
-        model_ws = self._visible_model_ws()
+        model_ws = self._model_ws()
         mvsj = self._write_volume_scene()
         ws = list(model_ws)
         if not model_ws:
@@ -4283,6 +4312,8 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
+        if self._hide_in_place and not entry["visible"]:
+            return  # hidden behind a closed slab; the real clip applies when shown
         self._send_volume_clip(entry)
 
     def set_view_radius_default(self, radius: float) -> None:
@@ -4305,6 +4336,8 @@ class DesktopApp:
         if entry is None or entry.get("radius") == radius:
             return
         entry["radius"] = radius
+        if self._hide_in_place and not entry["visible"]:
+            return  # hidden behind a closed slab; the real radius applies when shown
         self._send_volume_clip(entry)
 
     def _reassert_volume_clips(self) -> None:
@@ -4317,7 +4350,9 @@ class DesktopApp:
         is new. So the clips are re-asserted on every reload rather than sent once.
         """
         for entry in self._volumes:
-            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+            if self._hide_in_place and not entry["visible"]:
+                self._send_volume_hidden(entry)  # a hidden map rides the same clip channel
+            elif entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
     def _send_volume_clip(self, entry) -> None:
@@ -4329,6 +4364,17 @@ class DesktopApp:
         front, back = entry.get("clip") or (0.0, 1.0)
         try:
             control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _send_volume_hidden(self, entry) -> None:
+        """Clip a volume to nothing (a full-scene plane) so no isosurface is drawn — the
+        in-place hide; the map stays in the scene and its geometry is untouched."""
+        control = self._control_session()
+        if control is None:
+            return
+        try:
+            control.set_clip(1.0, 1.0, ref=entry["ref"])
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -4344,6 +4390,8 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
+        if self._hide_in_place and not entry["visible"]:
+            return  # hidden behind a closed slab; the real clip applies when shown
         try:
             entry["session"].set_clip(front, back)
         except Exception:  # pragma: no cover - defensive
@@ -4395,12 +4443,28 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
-        """Show or hide a loaded model in the viewport."""
+        """Show or hide a loaded model in the viewport.
+
+        In place (hardware WebGL): close/open the model's clip slab — a full-scene clip
+        plane makes every atom disappear without touching geometry, a live shader change
+        on a still-connected model, no flicker. Otherwise (software WebGL): recompose and
+        reload the page, since a live GPU state change segfaults a software renderer
+        mid-frame. See __init__'s ``hide_in_place``."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._reload_viewport()
+        if self._hide_in_place:
+            try:
+                if visible:
+                    front, back = entry.get("clip") or (0.0, 1.0)
+                    entry["session"].set_clip(front, back)   # restore the real slab
+                else:
+                    entry["session"].set_clip(1.0, 1.0)      # closed slab -> nothing drawn
+            except Exception:  # pragma: no cover - defensive
+                pass
+        else:
+            self._reload_viewport()
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
@@ -4515,11 +4579,20 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
+        """Show or hide a volume. In place (hardware WebGL): close/open its clip slab, the
+        same in-place trick models use. Otherwise (software WebGL): reload the page, since
+        an in-place hide segfaults a software renderer. See __init__'s ``hide_in_place``."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._reload_viewport()
+        if self._hide_in_place:
+            if visible:
+                self._send_volume_clip(entry)      # restore the real slab / radius
+            else:
+                self._send_volume_hidden(entry)    # closed slab -> nothing drawn
+        else:
+            self._reload_viewport()
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
@@ -5389,10 +5462,14 @@ def run_desktop(host: str = "127.0.0.1", port: int = 5173,
     # Before any QtWebEngine/QApplication exists: choose the GL backend. On a machine
     # whose GPU cannot provide WebGL (common on VMs) this arms a one-time restart into
     # software rendering rather than leaving the viewport blank. See pxviewer.gpu.
-    gpu_backend.configure(gpu)
+    mode = gpu_backend.configure(gpu)
     _check_qt()
 
-    desktop = DesktopApp(host=host, port=port)
+    # Hide/show in place only on hardware WebGL: it is a live GPU state change, which a
+    # software renderer (SwiftShader) segfaults on. Software and user-custom flags fall
+    # back to the reload-based hide, which is slower to the eye but never disposes
+    # anything mid-frame. See DesktopApp.__init__.
+    desktop = DesktopApp(host=host, port=port, hide_in_place=(mode == "hardware"))
     try:
         return desktop.start()
     finally:

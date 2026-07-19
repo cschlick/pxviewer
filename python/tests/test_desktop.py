@@ -525,6 +525,85 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         app.stop()
 
 
+def test_in_place_hide_is_a_clip_not_a_reload(qapp):
+    """On hardware WebGL (hide_in_place) hiding must not reload the viewport and must not
+    dispose geometry: a model closes its own clip slab, a map closes its slab on the
+    control session, and both stay connected/in-scene so showing restores the real slab
+    live. (On software the same actions reload instead — see the test above — because an
+    in-place GPU change segfaults SwiftShader.)"""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0, hide_in_place=True)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+        ref = app._volume_entry(vid)["ref"]
+
+        # Every model stays connected and every volume stays in the scene.
+        assert len(app._all_model_ws()) == 1
+        assert ref in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
+
+        mclips = []
+        sess = app.session_for(a)
+        om = sess.set_clip
+        sess.set_clip = lambda f, b, **k: (mclips.append((f, b, k.get("ref"))), om(f, b, **k))[1]
+        loads = []
+        ol = app._viewport.load
+        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+
+        app.set_model_visible(a, False)   # model clips itself (no ref)
+        app.set_volume_visible(vid, False)  # map clips on the control session (its ref)
+        assert loads == [], "in-place hide reloaded the viewport"
+        assert (1.0, 1.0, None) in mclips        # model closed its slab
+        assert (1.0, 1.0, ref) in mclips         # map closed its slab (control == model A)
+
+        app.set_model_visible(a, True)
+        app.set_volume_visible(vid, True)
+        assert loads == [], "in-place show reloaded the viewport"
+        assert (0.0, 1.0, None) in mclips        # model reopened
+        assert (0.0, 1.0, ref) in mclips         # map reopened
+        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
+    finally:
+        app.stop()
+
+
+def test_in_place_hidden_object_clip_edits_are_deferred(qapp):
+    """A hidden object is held behind a closed slab; editing its clip stores the value but
+    must not push it (which would draw what the closed slab is hiding). It applies on show."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0, hide_in_place=True)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        app.set_model_visible(a, False)
+        sess = app.session_for(a)
+        clips = []
+        oc = sess.set_clip
+        sess.set_clip = lambda f, b, **k: (clips.append((f, b)), oc(f, b, **k))[1]
+
+        app.set_model_clip(a, 0.2, 0.8)
+        assert clips == [], "clip pushed while hidden -> the model would reappear"
+        assert app._model_entry(a)["clip"] == (0.2, 0.8)
+
+        app.set_model_visible(a, True)
+        assert clips == [(0.2, 0.8)], "showing did not restore the stored clip"
+    finally:
+        app.stop()
+
+
 def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
     """The wheel is applied in the viewer, so the level arrives here after the fact.
     The widgets must follow it without writing it back — that would fight the scroll."""
