@@ -3390,10 +3390,11 @@ class DesktopApp:
     def _write_volume_scene(self) -> Optional[str]:
         """Write an MVSJ composing every volume; return its URL path (or None).
 
-        Every volume is emitted, hidden ones included but at zero opacity, so hiding or
-        showing a map is a live opacity change (see ``set_volume_visible``) rather than a
-        scene rebuild — and the map stays in the render graph, never disposed, which a
-        software renderer does not survive mid-frame. Only a visible volume is focused."""
+        Every volume is emitted, hidden ones included, so hiding or showing a map is a
+        live clip change (see ``set_volume_visible``) rather than a scene rebuild — and the
+        map stays in the render graph, never disposed, which a software renderer does not
+        survive mid-frame. A hidden map is clipped to nothing on connect (its closed slab
+        rides the clip replay), not left out. Only a visible volume is focused."""
         if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
@@ -3406,7 +3407,7 @@ class DesktopApp:
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
-                opacity=v["opacity"] if v["visible"] else 0.0, style=v["style"],
+                opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
             ))
         self._scene_counter += 1
@@ -4232,24 +4233,9 @@ class DesktopApp:
                              lambda c, ref, v: c.set_volume_iso(ref, v))
 
     def set_volume_opacity(self, vid: str, value: float) -> None:
-        """Set a volume's opacity (0-1) live.
-
-        A hidden map is drawn at zero opacity (that is how hiding works), so a change to
-        its opacity is stored but not pushed — pushing it would make the hidden map
-        reappear. It takes effect when the map is shown again."""
-        entry = self._volume_entry(vid)
-        value = float(value)
-        if entry is None or entry.get("opacity") == value:
-            return
-        entry["opacity"] = value
-        if not entry["visible"]:
-            return
-        control = self._control_session()
-        if control is not None:
-            try:
-                control.set_volume_opacity(entry["ref"], value)
-            except Exception:  # pragma: no cover - defensive
-                pass
+        """Set a volume's opacity (0-1) live."""
+        self._volume_command(vid, "opacity", float(value),
+                             lambda c, ref, v: c.set_volume_opacity(ref, v))
 
     def set_volume_color(self, vid: str, color: str) -> None:
         """Set a volume's colour live."""
@@ -4308,7 +4294,9 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        self._send_volume_clip(entry)
+        if entry["visible"]:
+            self._send_volume_clip(entry)
+        # hidden behind a closed slab; the real clip applies when shown
 
     def set_view_radius_default(self, radius: float) -> None:
         """How much density a map made from reflections opens with.
@@ -4330,7 +4318,9 @@ class DesktopApp:
         if entry is None or entry.get("radius") == radius:
             return
         entry["radius"] = radius
-        self._send_volume_clip(entry)
+        if entry["visible"]:
+            self._send_volume_clip(entry)
+        # hidden behind a closed slab; the real radius applies when shown
 
     def _reassert_volume_clips(self) -> None:
         """Re-tell the control session every volume's clip, before the page reloads.
@@ -4342,7 +4332,9 @@ class DesktopApp:
         is new. So the clips are re-asserted on every reload rather than sent once.
         """
         for entry in self._volumes:
-            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+            if not entry["visible"]:
+                self._send_volume_hidden(entry)  # a hidden map rides the same clip channel
+            elif entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
     def _send_volume_clip(self, entry) -> None:
@@ -4354,6 +4346,18 @@ class DesktopApp:
         front, back = entry.get("clip") or (0.0, 1.0)
         try:
             control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _send_volume_hidden(self, entry) -> None:
+        """Clip a volume to nothing — a full-scene plane so no isosurface is drawn. The
+        hide; the map stays in the scene and its geometry is untouched (see
+        ``set_volume_visible``)."""
+        control = self._control_session()
+        if control is None:
+            return
+        try:
+            control.set_clip(1.0, 1.0, ref=entry["ref"])
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -4556,20 +4560,21 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume — a live opacity change over the shared scene, not a page
-        reload. Hiding drives the map's opacity to zero and showing restores it; the map
-        stays in the scene the whole time (see _write_volume_scene), so nothing blanks and
-        nothing is disposed. The real opacity is preserved on the entry."""
+        """Show or hide a volume — a live clip change over the shared scene, not a page
+        reload. Hiding closes the map's clip slab to nothing (a full-scene clip plane),
+        which makes the isosurface disappear while leaving its geometry in place; showing
+        restores the real slab. Driving opacity to zero instead would move the isosurface
+        to the transparent render pass and rebuild it, and a software renderer does not
+        survive that disposal (same reason models hide by clip). The real clip is kept on
+        the entry."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        control = self._control_session()
-        if control is not None:
-            try:
-                control.set_volume_opacity(entry["ref"], entry["opacity"] if visible else 0.0)
-            except Exception:  # pragma: no cover - defensive
-                pass
+        if visible:
+            self._send_volume_clip(entry)     # restore the real slab / radius
+        else:
+            self._send_volume_hidden(entry)   # closed slab -> nothing drawn
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
