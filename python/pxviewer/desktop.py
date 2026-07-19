@@ -3417,10 +3417,10 @@ class DesktopApp:
     def _write_volume_scene(self) -> Optional[str]:
         """Write an MVSJ composing every volume; return its URL path (or None).
 
-        Every volume is always emitted — a hidden one at an empty contour, not left out —
-        because a reload that drops a map's isosurface from the scene segfaults a software
-        renderer, whereas one that keeps it (just contoured away) is fine. So hiding a map
-        never removes it; it only moves its level (see ``set_volume_visible``). Only a
+        Every volume is always emitted, at its real level — a reload that drops a map's
+        isosurface segfaults a software renderer, and so does loading it empty, so the map
+        always loads populated and hidden ones are re-parked empty afterwards by a live
+        level bump (see ``set_volume_visible`` and ``_reassert_hidden_volumes``). Only a
         visible volume is focused."""
         if not self._volumes:
             return None
@@ -3432,8 +3432,7 @@ class DesktopApp:
         for v in self._volumes:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
-                isosurface_kind="relative",
-                isosurface_value=v["iso"] if v["visible"] else _HIDDEN_VOLUME_ISO,
+                isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
@@ -3455,6 +3454,7 @@ class DesktopApp:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
+        self._reassert_hidden_volumes()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -4374,6 +4374,22 @@ class DesktopApp:
             if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
+    def _reassert_hidden_volumes(self) -> None:
+        """Re-tell the control session which maps are parked hidden, before the page
+        reloads. The rebuilt scene loads every map at its real, populated level; the
+        session re-parks the hidden ones empty on connect (a safe populated->empty bump).
+        The session carrying volume commands can change across reloads, so the current one
+        is handed the full state — hidden refs parked, visible refs released."""
+        control = self._control_session()
+        if control is None:
+            return
+        for entry in self._volumes:
+            try:
+                control.set_volume_hidden(
+                    entry["ref"], _HIDDEN_VOLUME_ISO if not entry["visible"] else None)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     def _send_volume_clip(self, entry) -> None:
         """Push a volume's whole clip: the slab and the radius are one thing to the
         viewer, so a change to either re-sends both."""
@@ -4587,24 +4603,32 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume by contouring it out of sight, not by reloading or
-        removing it.
+        """Show or hide a volume by moving its contour, never by removing its isosurface.
 
-        A map is hidden by pushing its contour level far past any density (an empty
-        isosurface) and shown by restoring the real level — a live iso change, the one map
-        edit a software renderer survives (removing the isosurface on reload, clipping it,
-        or fading it all segfault SwiftShader). The map therefore stays in the scene the
-        whole time; only its level moves. The real level is kept on the entry. Same on
-        both renderers — this needs no reload either way."""
+        Hiding parks the map at an empty contour (far past any density) — a live
+        populated->empty level change, in place, which a software renderer survives.
+        Showing goes the other way, but an empty->populated rebuild *in place* segfaults
+        it, so showing instead reloads the page, which loads the map fresh at its real
+        level (the way it first appeared). The map is always in the scene at its real
+        level, so a reload never loads it empty and never removes its isosurface — the two
+        things that crash. The real level is kept on the entry."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
         control = self._control_session()
-        if control is not None:
+        if visible:
+            # Release the park and reload: the fresh page draws the map populated. Doing
+            # this in place (empty->populated) is what segfaults, so it must be a reload.
+            if control is not None:
+                try:
+                    control.set_volume_hidden(entry["ref"], None)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            self._reload_viewport()
+        elif control is not None:
             try:
-                control.set_volume_iso(
-                    entry["ref"], entry["iso"] if visible else _HIDDEN_VOLUME_ISO)
+                control.set_volume_hidden(entry["ref"], _HIDDEN_VOLUME_ISO)  # park empty, live
             except Exception:  # pragma: no cover - defensive
                 pass
         self._emit_loaded_changed()

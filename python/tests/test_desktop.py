@@ -563,12 +563,13 @@ def test_in_place_model_hide_is_a_clip_not_a_reload(qapp):
         app.stop()
 
 
-def test_hiding_a_map_contours_it_out_never_reloads(qapp):
-    """A map hides by contouring it far past any density (an empty isosurface) and shows by
-    restoring the level — a live iso change, the one map edit a software renderer survives
-    (removing the isosurface on reload segfaults SwiftShader). Same on both renderers and
-    never a reload; the map stays in the scene throughout and its real level is preserved.
-    Editing the level while hidden is stored, not pushed."""
+def test_hiding_a_map_parks_it_empty_showing_reloads_it_populated(qapp):
+    """Hiding a map parks it at an empty contour in place (a safe populated->empty level
+    bump) with no reload; showing reloads the page, which loads the map fresh at its real
+    level (empty->populated in place segfaults a software renderer, so it must be a fresh
+    load). The scene always bakes the real level so a reload never loads it empty, and the
+    session remembers the park so a reload while hidden re-hides it. Same on both
+    renderers. Level edits while hidden are stored, not pushed."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -579,7 +580,7 @@ def test_hiding_a_map_contours_it_out_never_reloads(qapp):
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    for hip in (False, True):  # software and hardware both hide a map by contour
+    for hip in (False, True):  # software and hardware hide a map the same way
         app = DesktopApp(port=0, hide_in_place=hip)
         app._webapp.start()
         try:
@@ -589,29 +590,35 @@ def test_hiding_a_map_contours_it_out_never_reloads(qapp):
             ref = entry["ref"]
             real_iso = entry["iso"]
 
-            # The map is always in the scene, so a reload can never drop its isosurface.
-            assert ref in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
-
             control = app._control_session()
-            isos = []
-            oi = control.set_volume_iso
-            control.set_volume_iso = lambda r, v: (isos.append((r, v)), oi(r, v))[1]
+            parks = []
+            op = control.set_volume_hidden
+            control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
             loads = []
             ol = app._viewport.load
             app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
+            # The scene always bakes the real level, so a reload never loads the map empty.
+            scene = (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
+            assert ref in scene and str(_HIDDEN_VOLUME_ISO) not in scene
+
             app.set_volume_visible(vid, False)
             assert loads == [], f"[hip={hip}] hiding a map reloaded the viewport"
-            assert isos[-1] == (ref, _HIDDEN_VOLUME_ISO)      # contoured out of sight, live
+            assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)     # parked empty, in place
             assert entry["iso"] == real_iso                   # real level preserved
+
+            # A reload while hidden re-parks it empty (after loading it populated).
+            control.set_volume_hidden(ref, None)              # forget, so the reassert re-sets it
+            app._reassert_hidden_volumes()
+            assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)
 
             # Level edits while hidden are stored, not pushed (would bring the map back).
             app.set_volume_iso(vid, 2.5)
-            assert entry["iso"] == 2.5 and isos[-1] == (ref, _HIDDEN_VOLUME_ISO)
+            assert entry["iso"] == 2.5
 
             app.set_volume_visible(vid, True)
-            assert loads == [], f"[hip={hip}] showing a map reloaded the viewport"
-            assert isos[-1] == (ref, 2.5)                     # restores the stored level
+            assert len(loads) == 1                            # showing reloads once (loads populated)
+            assert parks[-1] == (ref, None)                   # park released
         finally:
             app.stop()
 
