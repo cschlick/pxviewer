@@ -1293,17 +1293,20 @@ class ControlsWindow:
         measure = QGroupBox("Measure")
         mg = QVBoxLayout(measure)
         mg.addWidget(QLabel("Select the atoms, then measure:"))
-        grid = QGridLayout()
-        grid.setSpacing(6)
+        mrow = QHBoxLayout()
+        mrow.setSpacing(6)
         specs = [("Distance", "distance", 2, "geo_bond"),
                  ("Angle", "angle", 3, "geo_angle"),
                  ("Dihedral", "dihedral", 4, "geo_dihedral")]
-        for i, (label, kind, n, icon_name) in enumerate(specs):
+        for label, kind, n, icon_name in specs:
+            # Square buttons with a large glyph — the geometry icons need the room to read.
             btn = self._make_icon_button(
-                icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
+                icon_name, label, f"Measure the {label.lower()} from {n} selected atoms",
+                icon_size=32, square=True)
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
-            grid.addWidget(btn, 0, i)
-        mg.addLayout(grid)
+            mrow.addWidget(btn)
+        mrow.addStretch(1)
+        mg.addLayout(mrow)
         clear_m = QPushButton("Clear measurements")
         clear_m.clicked.connect(self._on_clear_measurements)
         mg.addWidget(clear_m)
@@ -2749,20 +2752,27 @@ class ControlsWindow:
         """A Lucide icon tinted to the button text colour (or None if the asset is gone)."""
         return _line_icon(name, self._btn_tint, size=size)
 
-    def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False):
-        """An icon-only button (Lucide, tinted), falling back to text if the asset is gone."""
+    def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False,
+                          icon_size=18, square=False):
+        """An icon-only button (tinted SVG), falling back to text if the asset is gone.
+
+        ``icon_size`` is the glyph size; ``square`` fixes the button to a square just larger
+        than the glyph — for the detailed geometry icons that need room to read."""
         from PySide6.QtCore import QSize
         from PySide6.QtWidgets import QPushButton
 
         b = QPushButton()
         b.setCheckable(checkable)
-        icon = self._icon(icon_name)
+        icon = self._icon(icon_name, size=icon_size)
         if icon is not None:
             b.setIcon(icon)
-            b.setIconSize(QSize(18, 18))
+            b.setIconSize(QSize(icon_size, icon_size))
         else:
             b.setText(fallback_text)
         b.setToolTip(tooltip)
+        if square:
+            side = icon_size + 16
+            b.setFixedSize(side, side)
         return b
 
     def _on_help(self) -> None:
