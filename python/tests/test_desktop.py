@@ -224,10 +224,14 @@ def test_volume_registry_and_grouping(qapp, tmp_path):
         assert app._write_volume_scene() is not None
         assert (app._webapp.volume_dir / "vols" / f"{vid}.map").exists()
 
+        # Hiding a map contours it out of sight but leaves it in the scene (removing the
+        # isosurface on reload segfaults a software renderer), so the scene is non-empty
+        # until the map is actually unloaded.
         app.set_volume_visible(vid, False)
-        assert app._write_volume_scene() is None  # nothing visible -> no scene
+        assert app._write_volume_scene() is not None
         app.remove_volume(vid)
         assert not app._volumes
+        assert app._write_volume_scene() is None
 
         # A map + model loaded together -> one cctbx group (model + its map).
         kind = app.load_files([str(model_path), str(map_path)])
@@ -525,54 +529,91 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         app.stop()
 
 
-def test_in_place_hide_is_a_clip_not_a_reload(qapp):
-    """On hardware WebGL (hide_in_place) hiding must not reload the viewport and must not
-    dispose geometry: a model closes its own clip slab, a map closes its slab on the
-    control session, and both stay connected/in-scene so showing restores the real slab
-    live. (On software the same actions reload instead — see the test above — because an
-    in-place GPU change segfaults SwiftShader.)"""
+def test_in_place_model_hide_is_a_clip_not_a_reload(qapp):
+    """On hardware WebGL (hide_in_place) hiding a model must not reload the viewport and
+    must not dispose geometry: the model closes its own clip slab and stays connected, so
+    showing restores the real slab live. (On software this reloads instead — see the test
+    above — because an in-place GPU change segfaults SwiftShader.)"""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0, hide_in_place=True)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        assert len(app._all_model_ws()) == 1  # models stay connected
+
+        clips = []
+        sess = app.session_for(a)
+        om = sess.set_clip
+        sess.set_clip = lambda f, b, **k: (clips.append((f, b, k.get("ref"))), om(f, b, **k))[1]
+        loads = []
+        ol = app._viewport.load
+        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+
+        app.set_model_visible(a, False)
+        app.set_model_visible(a, True)
+        assert loads == [], "in-place model hide/show reloaded the viewport"
+        assert clips == [(1.0, 1.0, None), (0.0, 1.0, None)]  # close then reopen the slab
+        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
+    finally:
+        app.stop()
+
+
+def test_hiding_a_map_contours_it_out_never_reloads(qapp):
+    """A map hides by contouring it far past any density (an empty isosurface) and shows by
+    restoring the level — a live iso change, the one map edit a software renderer survives
+    (removing the isosurface on reload segfaults SwiftShader). Same on both renderers and
+    never a reload; the map stays in the scene throughout and its real level is preserved.
+    Editing the level while hidden is stored, not pushed."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
     import numpy as np
 
     from pxviewer.desktop import DesktopApp
+    from pxviewer.desktop import _HIDDEN_VOLUME_ISO
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    app = DesktopApp(port=0, hide_in_place=True)
-    app._webapp.start()
-    try:
-        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
-        ref = app._volume_entry(vid)["ref"]
+    for hip in (False, True):  # software and hardware both hide a map by contour
+        app = DesktopApp(port=0, hide_in_place=hip)
+        app._webapp.start()
+        try:
+            app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+            vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+            entry = app._volume_entry(vid)
+            ref = entry["ref"]
+            real_iso = entry["iso"]
 
-        # Every model stays connected and every volume stays in the scene.
-        assert len(app._all_model_ws()) == 1
-        assert ref in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
+            # The map is always in the scene, so a reload can never drop its isosurface.
+            assert ref in (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
 
-        mclips = []
-        sess = app.session_for(a)
-        om = sess.set_clip
-        sess.set_clip = lambda f, b, **k: (mclips.append((f, b, k.get("ref"))), om(f, b, **k))[1]
-        loads = []
-        ol = app._viewport.load
-        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+            control = app._control_session()
+            isos = []
+            oi = control.set_volume_iso
+            control.set_volume_iso = lambda r, v: (isos.append((r, v)), oi(r, v))[1]
+            loads = []
+            ol = app._viewport.load
+            app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
-        app.set_model_visible(a, False)   # model clips itself (no ref)
-        app.set_volume_visible(vid, False)  # map clips on the control session (its ref)
-        assert loads == [], "in-place hide reloaded the viewport"
-        assert (1.0, 1.0, None) in mclips        # model closed its slab
-        assert (1.0, 1.0, ref) in mclips         # map closed its slab (control == model A)
+            app.set_volume_visible(vid, False)
+            assert loads == [], f"[hip={hip}] hiding a map reloaded the viewport"
+            assert isos[-1] == (ref, _HIDDEN_VOLUME_ISO)      # contoured out of sight, live
+            assert entry["iso"] == real_iso                   # real level preserved
 
-        app.set_model_visible(a, True)
-        app.set_volume_visible(vid, True)
-        assert loads == [], "in-place show reloaded the viewport"
-        assert (0.0, 1.0, None) in mclips        # model reopened
-        assert (0.0, 1.0, ref) in mclips         # map reopened
-        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
-    finally:
-        app.stop()
+            # Level edits while hidden are stored, not pushed (would bring the map back).
+            app.set_volume_iso(vid, 2.5)
+            assert entry["iso"] == 2.5 and isos[-1] == (ref, _HIDDEN_VOLUME_ISO)
+
+            app.set_volume_visible(vid, True)
+            assert loads == [], f"[hip={hip}] showing a map reloaded the viewport"
+            assert isos[-1] == (ref, 2.5)                     # restores the stored level
+        finally:
+            app.stop()
 
 
 def test_in_place_hidden_object_clip_edits_are_deferred(qapp):

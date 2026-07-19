@@ -46,6 +46,11 @@ _CUSTOM_COLOR = "\x00custom"
 _ISO_SLIDER_MAX = 10.0
 _ISO_SPIN_MAX = 100.0
 _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in steps of this
+# Hiding a map = contouring it so high nothing is drawn. A live iso change is the one
+# in-place edit a software renderer (SwiftShader) survives — clipping or removing the
+# isosurface segfaults it — so this is how a map hides on every renderer. Far above any
+# real density (and the spin's own max), so the surface is reliably empty.
+_HIDDEN_VOLUME_ISO = 1000.0
 
 # Default radius for masking density around a model (A). 3 A is roughly one atom's
 # reach, which is what "the density belonging to this model" usually means.
@@ -1741,6 +1746,9 @@ class ControlsWindow:
         vid, value = payload
         if self._iso_row is None or self._focused != ("volume", vid):
             return
+        item = self._find_item("volume", vid)
+        if item is not None and not item.get("visible", True):
+            return  # a hidden map is parked at an empty contour; ignore stray wheel echoes
         row = self._iso_row
         row["syncing"]["on"] = True
         try:
@@ -3407,23 +3415,25 @@ class DesktopApp:
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing the volumes; return its URL path (or None).
+        """Write an MVSJ composing every volume; return its URL path (or None).
 
-        Hiding in place keeps every volume in the scene (a hidden one is clipped to nothing
-        on connect, so it can be shown again live); reloading composes only the visible
-        ones (a hidden volume is dropped on reload). Only a visible volume is focused."""
-        composed = self._volumes if self._hide_in_place else [v for v in self._volumes if v["visible"]]
-        if not composed:
+        Every volume is always emitted — a hidden one at an empty contour, not left out —
+        because a reload that drops a map's isosurface from the scene segfaults a software
+        renderer, whereas one that keeps it (just contoured away) is fine. So hiding a map
+        never removes it; it only moves its level (see ``set_volume_visible``). Only a
+        visible volume is focused."""
+        if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
-        first_visible = next((v for v in composed if v["visible"]), None)
+        first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
-        for v in composed:
+        for v in self._volumes:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
-                isosurface_kind="relative", isosurface_value=v["iso"],
+                isosurface_kind="relative",
+                isosurface_value=v["iso"] if v["visible"] else _HIDDEN_VOLUME_ISO,
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
@@ -4246,9 +4256,24 @@ class DesktopApp:
                              lambda c, ref, v: c.set_volume_style(ref, v))
 
     def set_volume_iso(self, vid: str, value: float) -> None:
-        """Set a volume's contour level, in sigma, live."""
-        self._volume_command(vid, "iso", float(value),
-                             lambda c, ref, v: c.set_volume_iso(ref, v))
+        """Set a volume's contour level, in sigma, live.
+
+        A hidden map is parked at an empty contour (that is how it hides), so a level
+        change is stored but not pushed — pushing it would bring the map back. It takes
+        effect when the map is shown again."""
+        entry = self._volume_entry(vid)
+        value = float(value)
+        if entry is None or entry.get("iso") == value:
+            return
+        entry["iso"] = value
+        if not entry["visible"]:
+            return
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_iso(entry["ref"], value)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def set_volume_opacity(self, vid: str, value: float) -> None:
         """Set a volume's opacity (0-1) live."""
@@ -4312,8 +4337,6 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        if self._hide_in_place and not entry["visible"]:
-            return  # hidden behind a closed slab; the real clip applies when shown
         self._send_volume_clip(entry)
 
     def set_view_radius_default(self, radius: float) -> None:
@@ -4336,8 +4359,6 @@ class DesktopApp:
         if entry is None or entry.get("radius") == radius:
             return
         entry["radius"] = radius
-        if self._hide_in_place and not entry["visible"]:
-            return  # hidden behind a closed slab; the real radius applies when shown
         self._send_volume_clip(entry)
 
     def _reassert_volume_clips(self) -> None:
@@ -4350,9 +4371,7 @@ class DesktopApp:
         is new. So the clips are re-asserted on every reload rather than sent once.
         """
         for entry in self._volumes:
-            if self._hide_in_place and not entry["visible"]:
-                self._send_volume_hidden(entry)  # a hidden map rides the same clip channel
-            elif entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
     def _send_volume_clip(self, entry) -> None:
@@ -4364,17 +4383,6 @@ class DesktopApp:
         front, back = entry.get("clip") or (0.0, 1.0)
         try:
             control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
-        except Exception:  # pragma: no cover - defensive
-            pass
-
-    def _send_volume_hidden(self, entry) -> None:
-        """Clip a volume to nothing (a full-scene plane) so no isosurface is drawn — the
-        in-place hide; the map stays in the scene and its geometry is untouched."""
-        control = self._control_session()
-        if control is None:
-            return
-        try:
-            control.set_clip(1.0, 1.0, ref=entry["ref"])
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -4579,20 +4587,26 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume. In place (hardware WebGL): close/open its clip slab, the
-        same in-place trick models use. Otherwise (software WebGL): reload the page, since
-        an in-place hide segfaults a software renderer. See __init__'s ``hide_in_place``."""
+        """Show or hide a volume by contouring it out of sight, not by reloading or
+        removing it.
+
+        A map is hidden by pushing its contour level far past any density (an empty
+        isosurface) and shown by restoring the real level — a live iso change, the one map
+        edit a software renderer survives (removing the isosurface on reload, clipping it,
+        or fading it all segfault SwiftShader). The map therefore stays in the scene the
+        whole time; only its level moves. The real level is kept on the entry. Same on
+        both renderers — this needs no reload either way."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        if self._hide_in_place:
-            if visible:
-                self._send_volume_clip(entry)      # restore the real slab / radius
-            else:
-                self._send_volume_hidden(entry)    # closed slab -> nothing drawn
-        else:
-            self._reload_viewport()
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_iso(
+                    entry["ref"], entry["iso"] if visible else _HIDDEN_VOLUME_ISO)
+            except Exception:  # pragma: no cover - defensive
+                pass
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
