@@ -529,10 +529,11 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
 
 
 def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
-    """Hiding a model must not reload the viewport: a reload blanks the whole page (every
-    model and volume) for a beat and rebuilds it just to drop one object. Instead the
-    model stays connected and is drawn empty (an empty representation), and showing it
-    restores the representation live."""
+    """Hiding a model must not reload the viewport (a reload blanks the whole page for a
+    beat) and must not dispose its geometry (an empty representation deletes the model's
+    GPU buffers, which a software renderer does not survive). Instead the model's clip
+    slab is closed to nothing — an in-place shader change on a still-connected model — and
+    showing restores the real slab. The real clip stays on the entry."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -545,11 +546,13 @@ def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
 
+        clips = []
         reps = []
         sess = app.session_for(a)
-        orig = sess.set_representation
-        sess.set_representation = lambda rep, **kw: (
-            reps.append("empty" if kw.get("on") == [] else "shown"), orig(rep, **kw))[1]
+        orig_clip = sess.set_clip
+        sess.set_clip = lambda f, b, **kw: (clips.append((f, b)), orig_clip(f, b, **kw))[1]
+        orig_rep = sess.set_representation
+        sess.set_representation = lambda rep, **kw: (reps.append(kw.get("on")), orig_rep(rep, **kw))[1]
 
         loads = []
         orig_load = app._viewport.load
@@ -559,9 +562,40 @@ def test_hiding_a_model_is_a_live_toggle_not_a_page_reload(qapp):
         app.set_model_visible(a, True)
 
         assert loads == [], "hiding/showing a model reloaded the viewport"
-        assert reps == ["empty", "shown"], f"expected a live hide then show, got {reps}"
+        assert reps == [], "hiding a model rebuilt its representation (disposes geometry)"
+        assert clips == [(1.0, 1.0), (0.0, 1.0)], f"expected close-then-open slab, got {clips}"
+        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
         # And every model's socket is in the page throughout — nothing was disconnected.
         assert len(app._all_model_ws()) == 2
+    finally:
+        app.stop()
+
+
+def test_editing_a_hidden_models_clip_does_not_reveal_it(qapp):
+    """A hidden model is held behind a closed slab; changing its clip stores the value but
+    must not push it (which would draw the model that the closed slab is hiding)."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        app.set_model_visible(a, False)
+        sess = app.session_for(a)
+        clips = []
+        orig_clip = sess.set_clip
+        sess.set_clip = lambda f, b, **kw: (clips.append((f, b)), orig_clip(f, b, **kw))[1]
+
+        app.set_model_clip(a, 0.2, 0.8)
+        assert clips == [], "clip was pushed while hidden -> the model would reappear"
+        assert app._model_entry(a)["clip"] == (0.2, 0.8)  # stored for when shown
+
+        app.set_model_visible(a, True)
+        assert clips == [(0.2, 0.8)], "showing did not restore the stored clip"
     finally:
         app.stop()
 

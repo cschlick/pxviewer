@@ -3468,14 +3468,6 @@ class DesktopApp:
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
         color = entry.get("color") or _model_rep_color(rep)  # explicit colour overrides the default
-        # Hiding is a representation with nothing drawn, not a disconnect: the model stays
-        # in the page (see _reload_viewport) so showing it again is a live message, no page
-        # reload. An empty `on` set draws no atoms — the same trick the dummy uses. Because
-        # the representation is replayed to any client that (re)connects, visibility rides
-        # along with it and survives a reload triggered by something else.
-        if not entry["visible"]:
-            session.set_representation(rep, color=color, on=[])
-            return
         on = self._shown_indices(entry)  # restrict to shown structure types
         if on is not None:
             session.set_representation(rep, color=color, on=on)
@@ -4377,6 +4369,8 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
+        if not entry["visible"]:
+            return  # hidden behind a closed slab; the real clip applies when shown
         try:
             entry["session"].set_clip(front, back)
         except Exception:  # pragma: no cover - defensive
@@ -4430,14 +4424,24 @@ class DesktopApp:
     def set_model_visible(self, mid: str, visible: bool) -> None:
         """Show or hide a loaded model in the viewport.
 
-        A live representation toggle on a model that stays connected — not a page reload,
-        which would blank the whole viewport (every model and volume) for a beat and
-        rebuild it just to drop one object."""
+        Hiding closes the model's clip slab to nothing (a full-scene clip plane), which
+        makes every atom disappear without touching its geometry; showing restores the
+        real slab. This is a live, in-place shader change on a model that stays connected
+        — not a page reload (which blanks the whole viewport for a beat) and not an empty
+        representation (which disposes the model's GPU buffers, and a software renderer
+        does not survive that mid-frame). The real clip is kept on the entry."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        self._apply_model_rep(entry)
+        try:
+            if visible:
+                front, back = entry.get("clip") or (0.0, 1.0)
+                entry["session"].set_clip(front, back)
+            else:
+                entry["session"].set_clip(1.0, 1.0)  # closed slab -> nothing drawn
+        except Exception:  # pragma: no cover - defensive
+            pass
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
