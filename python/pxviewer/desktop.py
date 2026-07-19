@@ -985,7 +985,7 @@ class ControlsWindow:
         specs = [
             (self._build_scene_tab(), "Scene", "layers"),
             (self._build_tools_tab(), "Tools", "wrench"),
-            (self._build_validation_tab(), "Validation", "shapes"),
+            (self._build_validation_tab(), "Validation", "award"),
             (self._build_geometry_tab(), "Geometry", "drafting-compass"),
             (self._build_console_tab(), "Console", "square-terminal"),
             (self._build_settings_tab(), "Settings", "sliders-horizontal"),
