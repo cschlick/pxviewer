@@ -957,6 +957,9 @@ class ControlsWindow:
         if icon is not None:
             self._window.setWindowIcon(icon)
         self._window.setMinimumSize(300, 480)  # compact — the viewer takes the space
+        from PySide6.QtGui import QPalette
+
+        self._btn_tint = self._window.palette().color(QPalette.ColorRole.ButtonText)
 
         layout = QVBoxLayout(self._window)
         layout.setSpacing(12)
@@ -1021,12 +1024,12 @@ class ControlsWindow:
         # Always-visible dock/detach control: the painted header's button is hidden while
         # the panel floats (it uses the native window frame then), so this is the reliable
         # way back — and the way out, from either state.
-        self._dock_btn = QPushButton("Detach")
-        self._dock_btn.setToolTip("Detach the controls to their own window, or re-dock them")
+        self._dock_btn = self._make_icon_button(
+            "maximize-2", "Detach", "Detach the controls to their own window")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
-        help_btn = QPushButton("Help…")
-        help_btn.setToolTip("Documentation (coming soon)")
+        help_btn = self._make_icon_button(
+            "circle-question-mark", "Help", "Documentation (coming soon)")
         help_btn.clicked.connect(self._on_help)
         status_row.addWidget(help_btn)
         layout.addLayout(status_row)
@@ -1108,20 +1111,8 @@ class ControlsWindow:
         # Icon-only (the words move to richer tooltips), one row in two groups: get data in
         # and out | act on what is loaded and the view. Lucide icons tinted to the button
         # text colour, with the old label kept as fallback text if an asset is missing.
-        from PySide6.QtCore import QSize
-        from PySide6.QtGui import QPalette
-
-        btn_tint = self._window.palette().color(QPalette.ColorRole.ButtonText)
-
         def _icon_button(icon_name, label, tooltip, on_click=None):
-            b = QPushButton()
-            icon = _line_icon(icon_name, btn_tint, size=18)
-            if icon is not None:
-                b.setIcon(icon)
-                b.setIconSize(QSize(18, 18))
-            else:
-                b.setText(label)
-            b.setToolTip(tooltip)
+            b = self._make_icon_button(icon_name, label, tooltip)
             if on_click is not None:
                 b.clicked.connect(on_click)
             return b
@@ -1181,27 +1172,28 @@ class ControlsWindow:
         sel_box = QGroupBox("Selection")
         sl = QVBoxLayout(sel_box)
         sl.setSpacing(6)
-        pick_row = QHBoxLayout()
-        self._pick_btn = QPushButton("Pick atoms")
-        self._pick_btn.setCheckable(True)
-        self._pick_btn.setToolTip("Click atoms in the 3D view to build a selection.")
-        self._pick_btn.toggled.connect(self._on_toggle_select)
-        pick_row.addWidget(self._pick_btn, stretch=1)
-        self._clear_btn = QPushButton("Clear")
-        self._clear_btn.clicked.connect(self._on_clear_selection)
-        pick_row.addWidget(self._clear_btn)
-        sl.addLayout(pick_row)
-
-        expr_row = QHBoxLayout()
+        # One row: the selection box, then a pick/apply button and a clear button.
+        sel_row = QHBoxLayout()
         self._select_expr = QLineEdit()
         self._select_expr.setPlaceholderText("selection, e.g. chain A and resseq 5:14")
         self._select_expr.setToolTip("A cctbx / Phenix selection string on the active model.")
         self._select_expr.returnPressed.connect(self._on_select_expression)
-        expr_row.addWidget(self._select_expr, stretch=1)
-        self._select_expr_btn = QPushButton("Select")
-        self._select_expr_btn.clicked.connect(self._on_select_expression)
-        expr_row.addWidget(self._select_expr_btn)
-        sl.addLayout(expr_row)
+        sel_row.addWidget(self._select_expr, stretch=1)
+
+        # One button, two jobs: with a string in the box it applies it; empty, it toggles
+        # picking atoms in the 3D view. Checkable, so pick mode shows as pressed.
+        self._pick_active = False
+        self._pick_btn = self._make_icon_button(
+            "mouse-pointer-click", "Pick",
+            "Apply the selection string in the box — or, with the box empty, pick atoms in "
+            "the 3D view to build a selection", checkable=True)
+        self._pick_btn.clicked.connect(self._on_pick_or_select)
+        sel_row.addWidget(self._pick_btn)
+
+        self._clear_btn = self._make_icon_button("x", "Clear", "Clear the selection")
+        self._clear_btn.clicked.connect(self._on_clear_selection)
+        sel_row.addWidget(self._clear_btn)
+        sl.addLayout(sel_row)
 
         from PySide6.QtWidgets import QSizePolicy
 
@@ -2703,6 +2695,18 @@ class ControlsWindow:
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
 
+    def _on_pick_or_select(self, _checked: bool = False) -> None:
+        """The one selection button: apply the box's string if it has one, else toggle
+        picking atoms in the 3D view."""
+        if self._select_expr.text().strip():
+            # Applying a string is a one-shot, not a mode change, so undo the checkable
+            # toggle this click just did and leave pick mode as it was.
+            self._pick_btn.setChecked(self._pick_active)
+            self._on_select_expression()
+        else:
+            self._pick_active = self._pick_btn.isChecked()
+            self._on_toggle_select(self._pick_active)
+
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
             self._desktop.enable_mouse_selection()
@@ -2727,13 +2731,40 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
+    def _icon(self, name: str, size: int = 18):
+        """A Lucide icon tinted to the button text colour (or None if the asset is gone)."""
+        return _line_icon(name, self._btn_tint, size=size)
+
+    def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False):
+        """An icon-only button (Lucide, tinted), falling back to text if the asset is gone."""
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QPushButton
+
+        b = QPushButton()
+        b.setCheckable(checkable)
+        icon = self._icon(icon_name)
+        if icon is not None:
+            b.setIcon(icon)
+            b.setIconSize(QSize(18, 18))
+        else:
+            b.setText(fallback_text)
+        b.setToolTip(tooltip)
+        return b
+
     def _on_help(self) -> None:
         # Placeholder until the documentation is linked.
         self._set_status("Documentation coming soon.")
 
     def reflect_dock_state(self, floating: bool) -> None:
-        """Keep the dock/detach button's label in step with the panel's state."""
-        self._dock_btn.setText("Dock" if floating else "Detach")
+        """Keep the dock/detach button in step with the panel's state: maximize-2 to detach
+        while docked, minimize-2 to re-dock while floating."""
+        icon = self._icon("minimize-2" if floating else "maximize-2")
+        if icon is not None:
+            self._dock_btn.setIcon(icon)
+        else:
+            self._dock_btn.setText("Dock" if floating else "Detach")
+        self._dock_btn.setToolTip(
+            "Re-dock the controls" if floating else "Detach the controls to their own window")
 
     def _on_analysis_ready(self, mid) -> None:
         """Analysis finished: enable and check both overlay toggles (both drawn)."""
