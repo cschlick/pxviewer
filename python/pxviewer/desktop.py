@@ -923,7 +923,17 @@ class ControlsWindow:
         self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
         self._focused: tuple = (None, None)  # (kind, id) currently shown in Appearance
 
+        from PySide6.QtCore import Qt
+
         tabs = QTabWidget()
+        # The controls pane is narrow — a third of the window, down to 300px, narrower
+        # still when floated — so six tabs overflow on a modest screen. By default Qt hides
+        # the overflow behind scroll arrows; instead let the bar shrink every tab to fit
+        # (eliding a label only when it must) and drop the heavy frame, so all six stay
+        # visible and clickable at any width.
+        tabs.setDocumentMode(True)
+        tabs.setElideMode(Qt.TextElideMode.ElideRight)
+        tabs.tabBar().setUsesScrollButtons(False)
         tabs.addTab(self._build_scene_tab(), "Scene")
         tabs.addTab(self._build_tools_tab(), "Tools")
         tabs.addTab(self._build_validation_tab(), "Validation")
