@@ -1303,15 +1303,12 @@ class ControlsWindow:
                 icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             mrow.addWidget(btn)
-        mrow.addStretch(1)
-        mg.addLayout(mrow)
-        clear_row = QHBoxLayout()
+        mrow.addStretch(1)  # push Clear to the right of the three measure buttons
         clear_m = self._make_icon_button(
             "circle-off", "Clear measurements", "Clear all measurements")
         clear_m.clicked.connect(self._on_clear_measurements)
-        clear_row.addWidget(clear_m)
-        clear_row.addStretch(1)
-        mg.addLayout(clear_row)
+        mrow.addWidget(clear_m)
+        mg.addLayout(mrow)
         layout.addWidget(measure)
 
         marker = QGroupBox("Marker")
@@ -1342,14 +1339,14 @@ class ControlsWindow:
             "the model as a group, so the two share a frame.")
         ming.addWidget(self._minimize_map_check)
         min_row = QHBoxLayout()
-        self._minimize_btn = QPushButton("Minimize")
-        self._minimize_btn.setToolTip(
+        self._minimize_btn = self._make_icon_button(
+            "play", "Minimize",
             "Minimize the active model against its geometry restraints (no map), "
-            "streaming each step into the viewport as it runs.")
+            "streaming each step into the viewport as it runs")
         self._minimize_btn.clicked.connect(self._on_minimize)
         min_row.addWidget(self._minimize_btn)
-        self._minimize_stop_btn = QPushButton("Stop")
-        self._minimize_stop_btn.setToolTip("Halt the run, keeping the progress so far.")
+        self._minimize_stop_btn = self._make_icon_button(
+            "pause", "Stop", "Halt the run, keeping the progress so far")
         self._minimize_stop_btn.setEnabled(False)
         self._minimize_stop_btn.clicked.connect(lambda: self._desktop.stop_minimization())
         min_row.addWidget(self._minimize_stop_btn)

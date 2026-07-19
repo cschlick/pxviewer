@@ -237,7 +237,10 @@ def test_random_gui_walk_keeps_the_model_consistent(seed, guarded_modals):
 # The threaded buttons (Minimize/Stop/Add H + analyze) are left out: they start background
 # work whose races are a separate concern from signal wiring.
 
-_THREADED_BUTTONS = {"Minimize", "Stop", "Add H + analyze"}
+# Buttons that start background work — Minimize, Stop, Add H + analyze. All icon-only now,
+# so they are recognised by their tooltip prefix.
+_THREADED_TOOLTIPS = (
+    "Minimize the active model", "Halt the run", "Add hydrogens with reduce2")
 
 
 @pytest.fixture
@@ -273,10 +276,9 @@ def _interactive_widgets(ctl):
     for button in root.findChildren(QPushButton):
         if not (button.isEnabled() and button.isVisibleTo(root)):
             continue
-        # Threaded buttons start background work; skip them. Some are icon-only now, so
-        # match on the tooltip too (Add H + analyze).
-        if button.text() in _THREADED_BUTTONS or button.toolTip().startswith(
-                "Add hydrogens with reduce2"):
+        # Threaded buttons start background work; skip them (recognised by tooltip since
+        # they are icon-only).
+        if button.toolTip().startswith(_THREADED_TOOLTIPS):
             continue
         # Skip menu buttons (Demos): their actions are heavy loads the backend walk
         # already covers, and triggering them in a tight loop just reloads slow demos.
