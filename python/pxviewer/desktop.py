@@ -1295,14 +1295,12 @@ class ControlsWindow:
         mg.addWidget(QLabel("Select the atoms, then measure:"))
         mrow = QHBoxLayout()
         mrow.setSpacing(6)
-        specs = [("Distance", "distance", 2, "geo_bond"),
-                 ("Angle", "angle", 3, "geo_angle"),
-                 ("Dihedral", "dihedral", 4, "geo_dihedral")]
+        specs = [("Distance", "distance", 2, "ruler"),
+                 ("Angle", "angle", 3, "triangle-right"),
+                 ("Dihedral", "dihedral", 4, "rotate-3d")]
         for label, kind, n, icon_name in specs:
-            # Square buttons with a large glyph — the geometry icons need the room to read.
             btn = self._make_icon_button(
-                icon_name, label, f"Measure the {label.lower()} from {n} selected atoms",
-                icon_size=32, square=True)
+                icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             mrow.addWidget(btn)
         mrow.addStretch(1)
