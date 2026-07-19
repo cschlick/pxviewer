@@ -1198,7 +1198,7 @@ class ControlsWindow:
         apply_btn.clicked.connect(self._on_select_expression)
         sel_row.addWidget(apply_btn)
 
-        self._clear_btn = self._make_icon_button("x", "Clear", "Clear the selection")
+        self._clear_btn = self._make_icon_button("circle-off", "Clear", "Clear the selection")
         self._clear_btn.clicked.connect(self._on_clear_selection)
         sel_row.addWidget(self._clear_btn)
         sl.addLayout(sel_row)
@@ -1305,9 +1305,13 @@ class ControlsWindow:
             mrow.addWidget(btn)
         mrow.addStretch(1)
         mg.addLayout(mrow)
-        clear_m = QPushButton("Clear measurements")
+        clear_row = QHBoxLayout()
+        clear_m = self._make_icon_button(
+            "circle-off", "Clear measurements", "Clear all measurements")
         clear_m.clicked.connect(self._on_clear_measurements)
-        mg.addWidget(clear_m)
+        clear_row.addWidget(clear_m)
+        clear_row.addStretch(1)
+        mg.addLayout(clear_row)
         layout.addWidget(measure)
 
         marker = QGroupBox("Marker")
@@ -1322,7 +1326,7 @@ class ControlsWindow:
         place_btn.clicked.connect(self._desktop.arm_marker)
         mk_row.addWidget(place_btn)
         clear_mk = self._make_icon_button(
-            "circle-slash-2", "Clear", "Remove all placed markers")
+            "circle-off", "Clear", "Remove all placed markers")
         clear_mk.clicked.connect(self._desktop.clear_markers)
         mk_row.addWidget(clear_mk)
         mk_row.addStretch(1)
