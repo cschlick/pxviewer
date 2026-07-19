@@ -902,14 +902,14 @@ def test_object_list_fits_its_contents(qapp):
         app.stop()
 
 
-def test_scene_actions_are_one_grid(qapp):
-    """The seven actions live in one grid under the object list (Sample is gone; Demos
-    is the only preload dropdown), and none forces a height — a QPushButton only gets
-    its native macOS chrome at the height the style asks for."""
+def test_scene_actions_are_icon_buttons(qapp):
+    """The seven object actions are a compact icon-only toolbar (labels moved to tooltips),
+    and none forces a height — a QPushButton only gets its native macOS chrome at the height
+    the style asks for."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-    from PySide6.QtWidgets import QGridLayout, QPushButton
+    from PySide6.QtWidgets import QPushButton
 
     from pxviewer.desktop import DesktopApp
 
@@ -917,20 +917,17 @@ def test_scene_actions_are_one_grid(qapp):
     app._webapp.start()
     try:
         ctl = app._controls
-        labels = {"Open…", "Demos", "Write…", "Pair…",
-                  "Remove", "Reset view", "Picture…"}
-        buttons = {b.text(): b for b in ctl.widget().findChildren(QPushButton)
-                   if b.text() in labels}
-        assert set(buttons) == labels
+        # The action buttons are icon-only now; find them by their tooltips.
+        tips = ("Open a structure", "Load a bundled", "Save the focused", "Pair a model",
+                "Remove the highlighted", "Reset the view", "Save a picture")
+        buttons = [b for b in ctl.widget().findChildren(QPushButton)
+                   if b.toolTip().startswith(tips)]
+        assert len(buttons) == 7
+        assert all(not b.icon().isNull() and b.text() == "" for b in buttons)
 
-        # No forced geometry anywhere in the grid: that is what broke Open's chrome.
-        for name, button in buttons.items():
-            assert button.minimumHeight() == 0, f"{name} forces a height"
-
-        grid = next(g for g in ctl.widget().findChildren(QGridLayout)
-                    if {i.widget().text() for i in
-                        (g.itemAt(n) for n in range(g.count())) if i.widget()} == labels)
-        assert grid.rowCount() == 2 and grid.columnCount() == 4
+        # No forced geometry anywhere: that is what broke Open's chrome.
+        for button in buttons:
+            assert button.minimumHeight() == 0, f"{button.toolTip()[:20]} forces a height"
     finally:
         app.stop()
 
@@ -1849,8 +1846,11 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert any("validation" in l for l in labels)
         assert any("X-ray" in l for l in labels)
 
-        texts = {b.text() for b in ctl.widget().findChildren(QPushButton)}
-        assert "Sample" not in texts and "Demos" in texts
+        # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
+        buttons = ctl.widget().findChildren(QPushButton)
+        assert not any("Sample" in b.text() or "Sample" in b.toolTip() for b in buttons)
+        demos = [b for b in buttons if b.toolTip().startswith("Load a bundled")]
+        assert len(demos) == 1 and demos[0].menu() is not None
 
         tabs = ctl.widget().findChild(QTabWidget)
         # Tabs are icon-only; the label lives in the tooltip.

@@ -1104,46 +1104,61 @@ class ControlsWindow:
         self._active_group.buttonClicked.connect(self._on_active_radio)
         ol.addWidget(self._loaded_tree, stretch=1)
 
-        # -- Actions on the objects: one grid, two rows of four ------------
-        # Row 1 gets data in and out; row 2 acts on what is loaded and on the view.
-        self._open_btn = QPushButton("Open…")
-        self._open_btn.setToolTip("Open a structure or map (models via cctbx; maps as .mrc/.map/.ccp4)")
-        self._open_btn.clicked.connect(self._on_open_file)
-        demos_btn = QPushButton("Demos")  # a menu button (native dropdown arrow)
-        demos_btn.setToolTip("Load a bundled example to try things out")
-        demos_btn.setMenu(self._build_demos_menu())
-        self._write_btn = QPushButton("Write…")
-        self._write_btn.setToolTip("Write the focused object to disk (model coordinates or map).")
-        self._write_btn.clicked.connect(self._on_write_object)
-        self._pair_btn = QPushButton("Pair…")
-        self._pair_btn.setToolTip(
-            "Pair a model with a map so they can be used together. cctbx moves them into "
-            "a common frame, which is what a map+model group already has from loading.")
-        self._pair_btn.clicked.connect(self._on_pair)
-        self._remove_model_btn = QPushButton("Remove")
-        self._remove_model_btn.setToolTip("Remove the highlighted object")
-        self._remove_model_btn.clicked.connect(self._on_remove_selected)
-        reset_btn = QPushButton("Reset view")
-        reset_btn.setToolTip("Reframe the camera to fit the whole scene.")
-        reset_btn.clicked.connect(lambda: self._desktop.reset_view())
-        picture_btn = QPushButton("Picture…")  # short: the grid's columns are equal
-        picture_btn.setToolTip("Save a picture of the viewport as a PNG.")
-        picture_btn.clicked.connect(self._on_save_picture)
+        # -- Actions on the objects: a compact icon toolbar -----------------
+        # Icon-only (the words move to richer tooltips), one row in two groups: get data in
+        # and out | act on what is loaded and the view. Lucide icons tinted to the button
+        # text colour, with the old label kept as fallback text if an asset is missing.
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QPalette
 
-        actions = QGridLayout()
-        actions.setSpacing(6)
-        # Row 1 gets data in and out; row 2 acts on what is loaded and on the view.
-        rows = (
-            (self._open_btn, demos_btn, self._write_btn, self._pair_btn),
-            (self._remove_model_btn, reset_btn, picture_btn),
-        )
-        for r, row in enumerate(rows):
-            for c, button in enumerate(row):
-                # The shorter second row spans its last button so both rows fill the width.
-                span = 2 if (r == 1 and c == len(row) - 1) else 1
-                actions.addWidget(button, r, c, 1, span)
-        for c in range(4):
-            actions.setColumnStretch(c, 1)  # equal columns, so it reads as a grid
+        btn_tint = self._window.palette().color(QPalette.ColorRole.ButtonText)
+
+        def _icon_button(icon_name, label, tooltip, on_click=None):
+            b = QPushButton()
+            icon = _line_icon(icon_name, btn_tint, size=18)
+            if icon is not None:
+                b.setIcon(icon)
+                b.setIconSize(QSize(18, 18))
+            else:
+                b.setText(label)
+            b.setToolTip(tooltip)
+            if on_click is not None:
+                b.clicked.connect(on_click)
+            return b
+
+        self._open_btn = _icon_button(
+            "folder-open", "Open",
+            "Open a structure or map — models via cctbx, maps as .mrc/.map/.ccp4",
+            self._on_open_file)
+        demos_btn = _icon_button(
+            "blocks", "Demos", "Load a bundled example to try things out")
+        demos_btn.setMenu(self._build_demos_menu())
+        self._write_btn = _icon_button(
+            "save", "Save", "Save the focused object to disk — model coordinates, or a map",
+            self._on_write_object)
+        self._pair_btn = _icon_button(
+            "combine", "Pair",
+            "Pair a model with a map so they work together — cctbx moves them into a common "
+            "frame (a map+model group already has one from loading)",
+            self._on_pair)
+        self._remove_model_btn = _icon_button(
+            "trash-2", "Remove", "Remove the highlighted object", self._on_remove_selected)
+        reset_btn = _icon_button(
+            "fullscreen", "Reset view",
+            "Reset the view — reframe the camera to fit the whole scene",
+            lambda: self._desktop.reset_view())
+        picture_btn = _icon_button(
+            "camera", "Picture", "Save a picture of the viewport as a PNG",
+            self._on_save_picture)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(4)
+        for button in (self._open_btn, demos_btn, self._write_btn, self._pair_btn):
+            actions.addWidget(button)
+        actions.addSpacing(14)  # separate "data in / out" from "act on it"
+        for button in (self._remove_model_btn, reset_btn, picture_btn):
+            actions.addWidget(button)
+        actions.addStretch(1)  # keep them a compact, left-packed toolbar
         ol.addLayout(actions)
 
         self._file_label = QLabel("")
