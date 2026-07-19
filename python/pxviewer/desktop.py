@@ -1306,17 +1306,18 @@ class ControlsWindow:
         mkg = QVBoxLayout(marker)
         mkg.addWidget(QLabel("Drop a marker at a 3D point in the viewport:"))
         mk_row = QHBoxLayout()
-        place_btn = QPushButton("Place marker")
-        place_btn.setToolTip(
+        place_btn = self._make_icon_button(
+            "circle-arrow-out-up-left", "Place marker",
             "Arm placement, then click in the viewport: a sphere is dropped there — "
             "snapped to the atom under the cursor, or the view plane in empty space — and "
             "its 3D coordinate is sent back.")
         place_btn.clicked.connect(self._desktop.arm_marker)
         mk_row.addWidget(place_btn)
-        clear_mk = QPushButton("Clear")
-        clear_mk.setToolTip("Remove all placed markers.")
+        clear_mk = self._make_icon_button(
+            "circle-slash-2", "Clear", "Remove all placed markers")
         clear_mk.clicked.connect(self._desktop.clear_markers)
         mk_row.addWidget(clear_mk)
+        mk_row.addStretch(1)
         mkg.addLayout(mk_row)
         layout.addWidget(marker)
 
