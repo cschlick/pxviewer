@@ -273,13 +273,16 @@ def _interactive_widgets(ctl):
     for button in root.findChildren(QPushButton):
         if not (button.isEnabled() and button.isVisibleTo(root)):
             continue
-        if button.text() in _THREADED_BUTTONS:
+        # Threaded buttons start background work; skip them. Some are icon-only now, so
+        # match on the tooltip too (Add H + analyze).
+        if button.text() in _THREADED_BUTTONS or button.toolTip().startswith(
+                "Add hydrogens with reduce2"):
             continue
         # Skip menu buttons (Demos): their actions are heavy loads the backend walk
         # already covers, and triggering them in a tight loop just reloads slow demos.
         if button.menu() is not None:
             continue
-        actions.append((f"click:{button.text()}", button.click))
+        actions.append((f"click:{button.text() or button.toolTip()[:20]}", button.click))
 
     for combo in root.findChildren(QComboBox):
         if combo.isEnabled() and combo.isVisibleTo(root) and combo.count() > 1:

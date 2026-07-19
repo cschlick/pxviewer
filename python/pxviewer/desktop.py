@@ -1424,24 +1424,27 @@ class ControlsWindow:
         box = QGroupBox("Clashes && contacts (probe2)")
         ag = QVBoxLayout(box)
         ag.addWidget(QLabel("Add hydrogens, then run MolProbity probe2:"))
-        analyze = QPushButton("Add H + analyze")
-        analyze.setToolTip(
+        analyze = self._make_icon_button(
+            "heading-1", "Add H + analyze",
             "Add hydrogens with reduce2 as a new object (hiding the original), then run "
-            "probe2 for MolProbity contacts and clashes.")
+            "probe2 for MolProbity contacts and clashes")
         analyze.clicked.connect(self._on_analyze)
-        ag.addWidget(analyze)
+        arow = QHBoxLayout()
+        arow.addWidget(analyze)
+        arow.addStretch(1)
+        ag.addLayout(arow)
 
         toggles = QHBoxLayout()
-        self._contacts_toggle = QPushButton("Contacts")
-        self._contacts_toggle.setToolTip("Show/hide the full probe2 contact-dot surface.")
-        self._contacts_toggle.setCheckable(True)
+        self._contacts_toggle = self._make_icon_button(
+            "fold-horizontal", "Contacts", "Show/hide the full probe2 contact-dot surface",
+            checkable=True)
         self._contacts_toggle.setEnabled(False)
         self._contacts_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
         toggles.addWidget(self._contacts_toggle)
-        self._clashes_toggle = QPushButton("Clashes")
-        self._clashes_toggle.setToolTip("Show/hide the bad-overlap (clash) spikes.")
-        self._clashes_toggle.setCheckable(True)
+        self._clashes_toggle = self._make_icon_button(
+            "triangle-alert", "Clashes", "Show/hide the bad-overlap (clash) spikes",
+            checkable=True)
         self._clashes_toggle.setEnabled(False)
         self._clashes_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
