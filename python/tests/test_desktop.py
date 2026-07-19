@@ -659,12 +659,11 @@ def test_hiding_a_map_parks_it_empty_showing_reloads_it_populated(qapp):
         app.stop()
 
 
-def test_software_refuses_to_hide_a_map_and_says_why(qapp):
-    """On software WebGL every way to hide a map's isosurface segfaults, so it is refused —
-    the map stays visible rather than risk the app. But the refusal must be visible, not a
-    dead nothing: the checkbox stays interactive so the click reaches the refusal, which
-    flashes the reason in the status line and snaps the box back. Models still hide on
-    software; only maps are pinned."""
+def test_software_pins_a_map_and_says_why_on_click(qapp):
+    """On software WebGL every way to hide a map's isosurface segfaults — including the
+    _emit_loaded_changed a snap-back would run — so the checkbox is non-checkable (toggling
+    it is what crashes). It is not a dead control though: clicking it flashes the reason,
+    a pure status message that touches nothing. Models still hide on software."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -678,24 +677,30 @@ def test_software_refuses_to_hide_a_map_and_says_why(qapp):
     app._webapp.start()
     try:
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+        ctl = app._controls
+        node = next(n for n in _iter_tree_items(ctl._loaded_tree)
+                    if n.data(0, Qt.ItemDataRole.UserRole) == ("volume", vid))
+        # The box is non-checkable — toggling it is the operation that segfaults.
+        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+        # Clicking the check column flashes why — and touches no viewer state.
+        warned, parks, loads = [], [], []
+        app.bridge.status_warned.connect(warned.append)
         control = app._control_session()
-        parks, loads, warned = [], [], []
         op = control.set_volume_hidden
         control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
-        app.bridge.status_warned.connect(warned.append)
 
-        # The tree offers an interactive checkbox (not a dead disabled one).
-        ctl = app._controls
-        node = next(n for n in _iter_tree_items(ctl._loaded_tree)
-                    if n.data(0, Qt.ItemDataRole.UserRole) == ("volume", vid))
-        assert bool(node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-
-        app.set_volume_visible(vid, False)
-        assert app._volume_entry(vid)["visible"] is True   # stayed visible; refused
+        ctl._on_tree_item_clicked(node, 0)
+        assert warned and "hardware WebGL" in warned[-1]
         assert parks == [] and loads == []                 # nothing touched the isosurface
-        assert warned and "hardware WebGL" in warned[-1]    # and it said why, flashed
+        assert app._volume_entry(vid)["visible"] is True   # still pinned visible
+
+        # A click off the check column (e.g. the name) says nothing.
+        warned.clear()
+        ctl._on_tree_item_clicked(node, 2)
+        assert warned == []
     finally:
         app.stop()
 

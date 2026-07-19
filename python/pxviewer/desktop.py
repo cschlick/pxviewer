@@ -1098,6 +1098,7 @@ class ControlsWindow:
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
+        self._loaded_tree.itemClicked.connect(self._on_tree_item_clicked)
         self._active_group = QButtonGroup(self._window)  # exclusive active-model radios
         self._active_group.setExclusive(True)
         self._active_group.buttonClicked.connect(self._on_active_radio)
@@ -2892,15 +2893,14 @@ class ControlsWindow:
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                 elif it["kind"] == "volume" and not self._desktop._hide_in_place:
                     # Software WebGL (this VM's SwiftShader) segfaults when a map's
-                    # isosurface is hidden, so hiding a map is refused here — but keep the
-                    # box interactive so the click reaches that refusal, which explains why
-                    # in the status line and snaps the box back. A disabled box would just
-                    # sit dead with no reason. Maps hide normally on hardware WebGL.
-                    node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    # isosurface is hidden, so the box is not checkable — toggling it would
+                    # run the very isosurface operation that crashes. It is not a dead
+                    # control though: a click on it flashes why (see _on_loaded_item_clicked),
+                    # a pure status message that touches nothing. Maps hide on hardware.
+                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    node.setCheckState(0, Qt.CheckState.Checked)
                     node.setToolTip(0, "Hiding maps needs hardware WebGL "
                                        "(not available on software rendering)")
-                    node.setCheckState(
-                        0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
                 else:
                     node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
                     node.setToolTip(0, "Visible")
@@ -3005,6 +3005,22 @@ class ControlsWindow:
         elif kind == "marker":
             self._desktop.set_marker_visible(ident, visible)
         # reflections have no visibility to change
+
+    def _on_tree_item_clicked(self, item, column: int) -> None:
+        """A map's visibility box is non-checkable on software (hiding a map segfaults the
+        renderer), so a click there does nothing — say why. Only the check column, and only
+        a pure status flash: no viewer message, so it cannot itself crash."""
+        from PySide6.QtCore import Qt
+
+        if column != 0:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        kind, _ident = data
+        if kind == "volume" and not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            self._desktop._warn("Hiding maps needs hardware WebGL — not available on "
+                                "software rendering.")
 
     def _on_active_radio(self, button) -> None:
         """A model's active radio was clicked -> make it the active model."""
@@ -4768,9 +4784,12 @@ class DesktopApp:
         if entry is None or entry["visible"] == bool(visible):
             return
         if not self._hide_in_place:
+            # No safe way to hide a map's isosurface here (see the class docstring), and
+            # even the _emit_loaded_changed that would snap a checkbox back re-runs the
+            # isosurface machinery and crashes. The UI keeps the box non-checkable so this
+            # is not reached from a click; refuse defensively for any other caller.
             self._warn("Hiding maps needs hardware WebGL — not available on software "
                        "rendering.")
-            self._emit_loaded_changed()  # snap the checkbox back to shown
             return
         entry["visible"] = bool(visible)
         control = self._control_session()
