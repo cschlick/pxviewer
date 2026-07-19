@@ -173,6 +173,7 @@ def _check_qt() -> None:
 
 _ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
 _ICONS_DIR = Path(__file__).resolve().parent / "assets" / "icons"  # Lucide SVGs (ISC)
+_CUSTOM_ICONS_DIR = Path(__file__).resolve().parent / "assets" / "icons_custom"  # our own
 _SPLASH_SIDE = 320  # logical px; scaled from the 512px icon for the screen's pixel ratio
 _SPLASH_MAX_MS = 15000  # never leave the splash up if the page never reports a load
 
@@ -185,16 +186,20 @@ def _app_icon():
 
 
 def _line_icon(name: str, color, size: int = 20):
-    """A monochrome Lucide SVG (assets/icons/<name>.svg) tinted to ``color`` as a QIcon.
+    """A monochrome line SVG (``<name>.svg``) tinted to ``color`` as a QIcon.
 
-    The icons draw with ``stroke="currentColor"``, which Qt's SVG renderer does not resolve
-    on its own, so the colour is substituted in before rendering. Rendered at 3x the display
-    size so it stays crisp on a HiDPI screen. Returns None if the asset is missing."""
+    Looked up in ``assets/icons_custom`` (our own icons) first, then ``assets/icons`` (the
+    Lucide set), so a custom icon can also override a stock name. The icons draw with
+    ``stroke="currentColor"``, which Qt's SVG renderer does not resolve on its own, so the
+    colour is substituted in before rendering. Rendered at 3x the display size so it stays
+    crisp on a HiDPI screen. Returns None if the asset is missing."""
     from PySide6.QtCore import QByteArray, Qt
     from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer
 
-    path = _ICONS_DIR / f"{name}.svg"
+    path = _CUSTOM_ICONS_DIR / f"{name}.svg"
+    if not path.exists():
+        path = _ICONS_DIR / f"{name}.svg"
     if not path.exists():  # pragma: no cover - packaging guard
         return None
     svg = path.read_text().replace("currentColor", QColor(color).name())
@@ -1290,10 +1295,12 @@ class ControlsWindow:
         mg.addWidget(QLabel("Select the atoms, then measure:"))
         grid = QGridLayout()
         grid.setSpacing(6)
-        specs = [("Distance", "distance", 2), ("Angle", "angle", 3), ("Dihedral", "dihedral", 4)]
-        for i, (label, kind, n) in enumerate(specs):
-            btn = QPushButton(label)
-            btn.setToolTip(f"Measure a {kind} from {n} selected atoms.")
+        specs = [("Distance", "distance", 2, "geo_bond"),
+                 ("Angle", "angle", 3, "geo_angle"),
+                 ("Dihedral", "dihedral", 4, "geo_dihedral")]
+        for i, (label, kind, n, icon_name) in enumerate(specs):
+            btn = self._make_icon_button(
+                icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             grid.addWidget(btn, 0, i)
         mg.addLayout(grid)
