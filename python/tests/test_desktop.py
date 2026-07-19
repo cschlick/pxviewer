@@ -490,10 +490,10 @@ def test_volume_appearance_controls(qapp, tmp_path):
 
 
 def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
-    """Volume commands are broadcast on a model's socket, and the page only connects to
-    the *visible* models' sockets (or the dummy when none are). Sending on the active
-    model's socket while it is hidden broadcasts to nobody, and every volume control
-    silently stops working."""
+    """Volume commands ride a model's socket, so the control session must be one the page
+    is connected to. On hardware every model stays connected (a hidden one is just clipped),
+    so the active model always carries them — hidden or not — and the dummy is the fallback
+    only when there is no model at all."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -503,40 +503,42 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    app = DesktopApp(port=0)
+    app = DesktopApp(port=0, hide_in_place=True)  # hardware: models can hide (in place)
     app._webapp.start()
     try:
         app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
 
-        # B is active and visible: commands ride its socket, which the page has.
+        # B is active: commands ride its socket, which the page has.
         assert app._active_model_id == b
         assert app._control_session() is app.session_for(b)
 
-        # Hide the active model -> the page drops its socket, so commands must move to
-        # one it still has.
+        # Hide the active model -> it stays connected (clipped), so it keeps carrying the
+        # commands; every model's socket remains in the page.
         app.set_model_visible(b, False)
-        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._visible_model_ws()
-        assert app._control_session() is app.session_for(a)
+        assert f"ws://{app._host}:{app.session_for(b).port}" in app._all_model_ws()
+        assert app._control_session() is app.session_for(b)
 
-        # Hide everything -> the page falls back to the dummy, and so must the commands.
-        app.set_model_visible(a, False)
-        assert app._visible_model_ws() == []
+        # Remove every model -> the page falls back to the dummy, and so must the commands.
+        app.remove_model(b)
+        app.remove_model(a)
         app._ensure_dummy_ws()
         assert app._control_session() is app._dummy
     finally:
         app.stop()
 
 
-def test_software_model_hide_clips_in_place_when_no_map(qapp):
-    """With no map loaded, even software hides a model in place (a clip), not by reloading.
-    Reloading a hidden model away when it is the last visible object blanks the page to the
-    dummy, and that transition segfaults software WebGL; an in-place clip is safe precisely
-    because there is no isosurface in the scene to fight. (Once a map is present the model
-    falls back to a reload — see the test above — which then cannot blank the page.)"""
+def test_software_pins_a_model_and_says_why_on_click(qapp):
+    """On software WebGL hiding a model segfaults too — the reload that would redraw the
+    scene re-touches the fragile GL just like a map — so models are pinned exactly like
+    maps: the checkbox is non-checkable and refused silently (an internal caller,
+    add-hydrogens, hides the H-less original and must not warn), and a click on the box
+    flashes why. Models and maps hide normally on hardware."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtCore import Qt
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
@@ -545,21 +547,28 @@ def test_software_model_hide_clips_in_place_when_no_map(qapp):
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        assert app._models_in_place()  # no map -> in place, even on software
+        ctl = app._controls
+        node = next(n for n in _iter_tree_items(ctl._loaded_tree)
+                    if n.data(0, Qt.ItemDataRole.UserRole) == ("model", a))
+        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)  # non-checkable
 
-        clips = []
+        warned, clips, loads = [], [], []
+        app.bridge.status_warned.connect(warned.append)
         sess = app.session_for(a)
         oc = sess.set_clip
         sess.set_clip = lambda f, b, **k: (clips.append((f, b)), oc(f, b, **k))[1]
-        loads = []
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
-        app.set_model_visible(a, False)   # hiding the only object must not reload to a dummy
-        app.set_model_visible(a, True)
-        assert loads == [], "model hide/show reloaded (would blank the page to a dummy)"
-        assert clips == [(1.0, 1.0), (0.0, 1.0)]  # closed then reopened in place
-        assert len(app._all_model_ws()) == 1     # the model stayed connected throughout
+        # The setter refuses silently (add-hydrogens relies on this — no warn, no crash).
+        app.set_model_visible(a, False)
+        assert app._model_entry(a)["visible"] is True
+        assert clips == [] and loads == [] and warned == []
+
+        # But a click on the check column flashes why — touching nothing.
+        ctl._on_tree_item_clicked(node, 0)
+        assert warned and "hardware WebGL" in warned[-1]
+        assert clips == [] and loads == []
     finally:
         app.stop()
 
@@ -1797,7 +1806,7 @@ def test_multi_model_registry(qapp):
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
 
-    app = DesktopApp(port=0)
+    app = DesktopApp(port=0, hide_in_place=True)  # hardware: models can hide
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")

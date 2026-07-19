@@ -2891,15 +2891,16 @@ class ControlsWindow:
                 if it["visible"] is None:
                     # Reflections: nothing drawable, so nothing to show or hide.
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                elif it["kind"] == "volume" and not self._desktop._hide_in_place:
-                    # Software WebGL (this VM's SwiftShader) segfaults when a map's
-                    # isosurface is hidden, so the box is not checkable — toggling it would
-                    # run the very isosurface operation that crashes. It is not a dead
-                    # control though: a click on it flashes why (see _on_loaded_item_clicked),
-                    # a pure status message that touches nothing. Maps hide on hardware.
+                elif it["kind"] in ("model", "volume") and not self._desktop._hide_in_place:
+                    # Software WebGL (this VM's SwiftShader) segfaults whenever a drawn
+                    # object is hidden — a map by touching its isosurface, a model by the
+                    # reload that redraws the scene — so the box is not checkable: toggling
+                    # it would run the very operation that crashes. Not a dead control,
+                    # though: a click flashes why (see _on_tree_item_clicked), a pure status
+                    # message that touches nothing. They hide normally on hardware WebGL.
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                     node.setCheckState(0, Qt.CheckState.Checked)
-                    node.setToolTip(0, "Hiding maps needs hardware WebGL "
+                    node.setToolTip(0, "Hiding needs hardware WebGL "
                                        "(not available on software rendering)")
                 else:
                     node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -3007,9 +3008,10 @@ class ControlsWindow:
         # reflections have no visibility to change
 
     def _on_tree_item_clicked(self, item, column: int) -> None:
-        """A map's visibility box is non-checkable on software (hiding a map segfaults the
-        renderer), so a click there does nothing — say why. Only the check column, and only
-        a pure status flash: no viewer message, so it cannot itself crash."""
+        """A model's or map's visibility box is non-checkable on software (hiding either
+        segfaults the renderer), so a click there does nothing — say why. Only the check
+        column, and only a pure status flash: no viewer message, so it cannot itself
+        crash."""
         from PySide6.QtCore import Qt
 
         if column != 0:
@@ -3018,9 +3020,9 @@ class ControlsWindow:
         if not data:
             return
         kind, _ident = data
-        if kind == "volume" and not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
-            self._desktop._warn("Hiding maps needs hardware WebGL — not available on "
-                                "software rendering.")
+        if kind in ("model", "volume") and not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            self._desktop._warn("Hiding needs hardware WebGL — not available on software "
+                                "rendering.")
 
     def _on_active_radio(self, button) -> None:
         """A model's active radio was clicked -> make it the active model."""
@@ -4622,15 +4624,19 @@ class DesktopApp:
     def set_model_visible(self, mid: str, visible: bool) -> None:
         """Show or hide a loaded model in the viewport.
 
-        In place (``_models_in_place``: hardware, or software with no map): close/open the
-        model's clip slab — a full-scene clip plane makes every atom disappear without
-        touching geometry, a live shader change on a still-connected model, no flicker.
-        Otherwise (software with a map): recompose and reload the page — a live clip is
-        unsafe here with an isosurface in the scene, and a reload cannot blank the page
-        while the map is present."""
+        On hardware WebGL, close/open the model's clip slab (a full-scene clip plane makes
+        every atom disappear without touching geometry) or reload — see ``_models_in_place``.
+
+        On **software** WebGL this is refused (silently — an internal caller, add-hydrogens,
+        hides the H-less original, and must not warn or crash): both the in-place clip and
+        the reload segfault this renderer once a map is in the scene, and there is no safe
+        alternative. The tree checkbox is non-checkable and a click on it flashes why. Maps
+        are pinned the same way; on this box nothing drawn can be hidden."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
+        if not self._hide_in_place:
+            return  # software: hiding any drawn object segfaults; the map/model stays shown
         entry["visible"] = bool(visible)
         if self._models_in_place():
             try:
@@ -4785,11 +4791,9 @@ class DesktopApp:
             return
         if not self._hide_in_place:
             # No safe way to hide a map's isosurface here (see the class docstring), and
-            # even the _emit_loaded_changed that would snap a checkbox back re-runs the
-            # isosurface machinery and crashes. The UI keeps the box non-checkable so this
-            # is not reached from a click; refuse defensively for any other caller.
-            self._warn("Hiding maps needs hardware WebGL — not available on software "
-                       "rendering.")
+            # even the _emit_loaded_changed a snap-back would run re-touches it and crashes.
+            # Refuse silently — the tree keeps the box non-checkable and its click handler
+            # is what flashes why (a pure status message that touches nothing).
             return
         entry["visible"] = bool(visible)
         control = self._control_session()
