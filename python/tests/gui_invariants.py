@@ -88,7 +88,7 @@ def _control_session_is_reachable(app) -> None:
         return
     if control is app._dummy:
         return
-    reachable = ({m["session"] for m in app._models} if app._hide_in_place
+    reachable = ({m["session"] for m in app._models} if app._models_in_place()
                  else {m["session"] for m in app._models if m["visible"]})
     assert control in reachable, \
         "control session is not a socket the viewport is connected to"

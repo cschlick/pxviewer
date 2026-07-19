@@ -529,6 +529,41 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         app.stop()
 
 
+def test_software_model_hide_clips_in_place_when_no_map(qapp):
+    """With no map loaded, even software hides a model in place (a clip), not by reloading.
+    Reloading a hidden model away when it is the last visible object blanks the page to the
+    dummy, and that transition segfaults software WebGL; an in-place clip is safe precisely
+    because there is no isosurface in the scene to fight. (Once a map is present the model
+    falls back to a reload — see the test above — which then cannot blank the page.)"""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0, hide_in_place=False)  # software
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        assert app._models_in_place()  # no map -> in place, even on software
+
+        clips = []
+        sess = app.session_for(a)
+        oc = sess.set_clip
+        sess.set_clip = lambda f, b, **k: (clips.append((f, b)), oc(f, b, **k))[1]
+        loads = []
+        ol = app._viewport.load
+        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+
+        app.set_model_visible(a, False)   # hiding the only object must not reload to a dummy
+        app.set_model_visible(a, True)
+        assert loads == [], "model hide/show reloaded (would blank the page to a dummy)"
+        assert clips == [(1.0, 1.0), (0.0, 1.0)]  # closed then reopened in place
+        assert len(app._all_model_ws()) == 1     # the model stayed connected throughout
+    finally:
+        app.stop()
+
+
 def test_in_place_model_hide_is_a_clip_not_a_reload(qapp):
     """On hardware WebGL (hide_in_place) hiding a model must not reload the viewport and
     must not dispose geometry: the model closes its own clip slab and stays connected, so

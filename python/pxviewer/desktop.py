@@ -3372,10 +3372,21 @@ class DesktopApp:
         connected (a hidden model is clipped, not dropped) so showing is a live message."""
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
 
+    def _models_in_place(self) -> bool:
+        """Whether models hide by an in-place clip (staying connected) rather than a reload.
+
+        In place on hardware WebGL always; on software only when no map is loaded. A live
+        clip is safe on software as long as no isosurface is in the scene — clipping *with*
+        a map present segfaults it — and reloading a model away is safe as long as the page
+        does not go blank, which it only does when the map is gone and the last model is
+        hidden. So the two cover each other: with a map, reload (the map keeps the page
+        non-blank); without one, clip in place (no isosurface to fight, no blank reload)."""
+        return self._hide_in_place or not self._volumes
+
     def _model_ws(self) -> List[str]:
         """The sockets the page connects to: all models when hiding in place (hidden ones
         stay, clipped), else only the visible ones (a hidden model is dropped on reload)."""
-        return self._all_model_ws() if self._hide_in_place else self._visible_model_ws()
+        return self._all_model_ws() if self._models_in_place() else self._visible_model_ws()
 
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
@@ -3403,7 +3414,7 @@ class DesktopApp:
         when there is no reachable model at all.
         """
         entry = self._model_entry(self._active_model_id)
-        if self._hide_in_place:
+        if self._models_in_place():
             if entry is not None:
                 return entry["session"]
             return self._models[0]["session"] if self._models else self._dummy
@@ -4414,7 +4425,7 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        if self._hide_in_place and not entry["visible"]:
+        if self._models_in_place() and not entry["visible"]:
             return  # hidden behind a closed slab; the real clip applies when shown
         try:
             entry["session"].set_clip(front, back)
@@ -4469,16 +4480,17 @@ class DesktopApp:
     def set_model_visible(self, mid: str, visible: bool) -> None:
         """Show or hide a loaded model in the viewport.
 
-        In place (hardware WebGL): close/open the model's clip slab — a full-scene clip
-        plane makes every atom disappear without touching geometry, a live shader change
-        on a still-connected model, no flicker. Otherwise (software WebGL): recompose and
-        reload the page, since a live GPU state change segfaults a software renderer
-        mid-frame. See __init__'s ``hide_in_place``."""
+        In place (``_models_in_place``: hardware, or software with no map): close/open the
+        model's clip slab — a full-scene clip plane makes every atom disappear without
+        touching geometry, a live shader change on a still-connected model, no flicker.
+        Otherwise (software with a map): recompose and reload the page — a live clip is
+        unsafe here with an isosurface in the scene, and a reload cannot blank the page
+        while the map is present."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         entry["visible"] = bool(visible)
-        if self._hide_in_place:
+        if self._models_in_place():
             try:
                 if visible:
                     front, back = entry.get("clip") or (0.0, 1.0)
@@ -4488,6 +4500,15 @@ class DesktopApp:
             except Exception:  # pragma: no cover - defensive
                 pass
         else:
+            # Reload drops a hidden model from the page. If it was clip-hidden in a
+            # no-map state that has since gained a map, clear that stale slab first, so it
+            # is not replayed closed when shown.
+            if visible:
+                try:
+                    front, back = entry.get("clip") or (0.0, 1.0)
+                    entry["session"].set_clip(front, back)
+                except Exception:  # pragma: no cover - defensive
+                    pass
             self._reload_viewport()
         self._emit_loaded_changed()
 
