@@ -1172,23 +1172,26 @@ class ControlsWindow:
         sel_box = QGroupBox("Selection")
         sl = QVBoxLayout(sel_box)
         sl.setSpacing(6)
-        # One row: the selection box, then a pick/apply button and a clear button.
+        # One row: pick-toggle | selection box | apply | clear. The two jobs are separate
+        # controls so neither is ambiguous — pick-mode on the left, apply-the-string on the
+        # right of the box it acts on.
         sel_row = QHBoxLayout()
+        self._pick_btn = self._make_icon_button(
+            "mouse-pointer-click", "Pick",
+            "Pick atoms in the 3D view to build a selection", checkable=True)
+        self._pick_btn.toggled.connect(self._on_toggle_select)
+        sel_row.addWidget(self._pick_btn)
+
         self._select_expr = QLineEdit()
         self._select_expr.setPlaceholderText("selection, e.g. chain A and resseq 5:14")
         self._select_expr.setToolTip("A cctbx / Phenix selection string on the active model.")
         self._select_expr.returnPressed.connect(self._on_select_expression)
         sel_row.addWidget(self._select_expr, stretch=1)
 
-        # One button, two jobs: with a string in the box it applies it; empty, it toggles
-        # picking atoms in the 3D view. Checkable, so pick mode shows as pressed.
-        self._pick_active = False
-        self._pick_btn = self._make_icon_button(
-            "mouse-pointer-click", "Pick",
-            "Apply the selection string in the box — or, with the box empty, pick atoms in "
-            "the 3D view to build a selection", checkable=True)
-        self._pick_btn.clicked.connect(self._on_pick_or_select)
-        sel_row.addWidget(self._pick_btn)
+        apply_btn = self._make_icon_button(
+            "arrow-right", "Apply", "Apply the selection string to the active model")
+        apply_btn.clicked.connect(self._on_select_expression)
+        sel_row.addWidget(apply_btn)
 
         self._clear_btn = self._make_icon_button("x", "Clear", "Clear the selection")
         self._clear_btn.clicked.connect(self._on_clear_selection)
@@ -2694,18 +2697,6 @@ class ControlsWindow:
 
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
-
-    def _on_pick_or_select(self, _checked: bool = False) -> None:
-        """The one selection button: apply the box's string if it has one, else toggle
-        picking atoms in the 3D view."""
-        if self._select_expr.text().strip():
-            # Applying a string is a one-shot, not a mode change, so undo the checkable
-            # toggle this click just did and leave pick mode as it was.
-            self._pick_btn.setChecked(self._pick_active)
-            self._on_select_expression()
-        else:
-            self._pick_active = self._pick_btn.isChecked()
-            self._on_toggle_select(self._pick_active)
 
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
