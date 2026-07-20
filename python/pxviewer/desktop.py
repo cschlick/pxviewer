@@ -1142,7 +1142,7 @@ class ControlsWindow:
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
         self._help_btn = self._make_icon_button(
-            "circle-question-mark", "Help", "Guided tutorials and documentation")
+            "circle-question-mark", "Help", "Documentation (coming soon)")
         self._help_btn.clicked.connect(self._on_help)
         status_row.addWidget(self._help_btn)
         layout.addLayout(status_row)
@@ -1236,7 +1236,7 @@ class ControlsWindow:
             "Open a structure or map — models via cctbx, maps as .mrc/.map/.ccp4",
             self._on_open_file)
         demos_btn = _icon_button(
-            "blocks", "Demos", "Load a bundled example to try things out")
+            "blocks", "Demos", "Load a bundled example, or start a guided tutorial")
         demos_btn.setMenu(self._build_demos_menu())
         self._demos_btn = demos_btn  # a tutorial highlight target
         self._write_btn = _icon_button(
@@ -1369,10 +1369,14 @@ class ControlsWindow:
         return outer
 
     def _build_demos_menu(self):
-        """A short list of bundled examples, each showing off one thing the app does."""
+        """Bundled examples to load, and guided tutorials to run — two labelled sections."""
         from PySide6.QtWidgets import QMenu
 
+        from . import tutorial
+
         menu = QMenu(self._window)
+        menu.setObjectName("demosMenu")
+        menu.addSection("Examples")
         menu.addAction("Ubiquitin (1UBQ)",
                        lambda: self._on_load_sample("1ubq.pdb"))
         menu.addAction("Ubiquitin — with density (map + model)",
@@ -1381,6 +1385,9 @@ class ControlsWindow:
                        lambda: self._on_load_sample("1tec.pdb"))
         menu.addAction("X-ray — model + reflections (make density)",
                        self._on_run_xray_demo)
+        menu.addSection("Tutorials")
+        for tut in tutorial.all_tutorials():
+            menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))
         return menu
 
     def _build_tools_tab(self):
@@ -3118,22 +3125,9 @@ class ControlsWindow:
         return b
 
     def _on_help(self) -> None:
-        from PySide6.QtWidgets import QMenu
-
-        from . import tutorial
-
-        menu = QMenu(self._window)
-        menu.setObjectName("tutorialMenu")
-        menu.addSection("Guided tutorials")
-        for tut in tutorial.all_tutorials():
-            act = menu.addAction(tut.title)
-            act.triggered.connect(lambda _c=False, t=tut: self._start_tutorial(t))
-        menu.addSeparator()
-        doc = menu.addAction("Documentation (coming soon)")
-        doc.setEnabled(False)
-        # popup(), not exec(): non-blocking, so it never freezes a headless/fuzzer run the
-        # way a modal exec() loop would. The menu is parented to the window, so it lives on.
-        menu.popup(self._help_btn.mapToGlobal(self._help_btn.rect().bottomLeft()))
+        # Placeholder until the documentation is linked. Guided tutorials live under the
+        # Demos button (Examples / Tutorials), not here.
+        self._set_status("Documentation coming soon. Tutorials are under the Demos button.")
 
     # -- guided tutorials: a non-modal coach that advances when a step is actually done ----
 

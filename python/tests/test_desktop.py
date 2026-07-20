@@ -1938,14 +1938,12 @@ def test_new_model_focuses_appearance(qapp):
         app.stop()
 
 
-def test_axis_off_by_default_and_help(qapp):
-    """XYZ axes start hidden (the Settings checkbox is unchecked) and the Help button opens
-    a non-modal menu of guided tutorials."""
+def test_axis_off_by_default_help_and_demos_menu(qapp):
+    """XYZ axes start hidden. Help is a docs placeholder now; guided tutorials live in the
+    Demos menu, in a labelled Tutorials section below the Examples."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
-
-    from PySide6.QtWidgets import QMenu
 
     from pxviewer.desktop import DesktopApp
 
@@ -1954,11 +1952,16 @@ def test_axis_off_by_default_and_help(qapp):
     try:
         controls = app._controls
         assert controls._axis_check.isChecked() is False  # axes off by default
-        controls._on_help()  # opens the tutorials menu (non-blocking; must not raise/hang)
-        menu = controls._window.findChild(QMenu, "tutorialMenu")
-        assert menu is not None
-        assert any("restraint" in a.text().lower() for a in menu.actions())
-        menu.close()
+        controls._on_help()
+        assert "documentation" in controls._status_label.text().lower()
+
+        menu = controls._build_demos_menu()
+        labels = [a.text() for a in menu.actions()]
+        assert "Examples" in labels and "Tutorials" in labels  # both labelled sections
+        assert any("ubiquitin" in t.lower() for t in labels)   # an example
+        assert any("restraint" in t.lower() for t in labels)   # a tutorial
+        # order: the Examples section header precedes the Tutorials section header
+        assert labels.index("Examples") < labels.index("Tutorials")
     finally:
         app.stop()
 
@@ -2240,12 +2243,22 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
     app._webapp.start()
     try:
         ctl = app._controls
-        labels = [a.text() for a in ctl._build_demos_menu().actions() if a.text()]
-        assert len(labels) == 4
-        assert any("1UBQ" in l for l in labels)
-        assert any("map + model" in l for l in labels)
-        assert any("validation" in l for l in labels)
-        assert any("X-ray" in l for l in labels)
+        actions = ctl._build_demos_menu().actions()
+        labels = [a.text() for a in actions]
+        # Two labelled sections, Examples above Tutorials.
+        assert "Examples" in labels and "Tutorials" in labels
+        ex_i, tut_i = labels.index("Examples"), labels.index("Tutorials")
+        assert ex_i < tut_i
+        # The four curated examples sit between the two section headers.
+        examples = [a.text() for a in actions[ex_i + 1:tut_i] if not a.isSeparator()]
+        assert len(examples) == 4
+        assert any("1UBQ" in l for l in examples)
+        assert any("map + model" in l for l in examples)
+        assert any("validation" in l for l in examples)
+        assert any("X-ray" in l for l in examples)
+        # ...and at least one tutorial follows.
+        tutorials = [a.text() for a in actions[tut_i + 1:] if not a.isSeparator()]
+        assert tutorials and any("restraint" in l.lower() for l in tutorials)
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
         buttons = ctl.widget().findChildren(QPushButton)
