@@ -1297,16 +1297,22 @@ class ControlsWindow:
         mrow.setSpacing(6)
         specs = [("Distance", "distance", 2, "ruler"),
                  ("Angle", "angle", 3, "triangle-right"),
-                 ("Dihedral", "dihedral", 4, "rotate-3d")]
+                 ("Dihedral", "dihedral", 4, "waypoints")]
         for label, kind, n, icon_name in specs:
             btn = self._make_icon_button(
                 icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             mrow.addWidget(btn)
+        from PySide6.QtWidgets import QFrame
+
+        sep = QFrame()  # divide the measures from Clear
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setFrameShadow(QFrame.Shadow.Sunken)
+        mrow.addWidget(sep)
         clear_m = self._make_icon_button(
             "circle-off", "Clear measurements", "Clear all measurements")
         clear_m.clicked.connect(self._on_clear_measurements)
-        mrow.addWidget(clear_m)  # the fourth button, beside the three measures
+        mrow.addWidget(clear_m)
         mrow.addStretch(1)
         mg.addLayout(mrow)
         layout.addWidget(measure)
