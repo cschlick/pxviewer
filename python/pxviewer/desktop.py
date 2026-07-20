@@ -936,8 +936,9 @@ class ViewportWindow:
         self.coach_text.setTextFormat(Qt.TextFormat.RichText)
         v.addWidget(self.coach_text, stretch=1)
         row = QHBoxLayout()
-        self.coach_action = QPushButton("")
-        row.addWidget(self.coach_action)
+        self.coach_show = QPushButton("Show me where")
+        self.coach_show.setToolTip("Flash the button this step is about — you still click it")
+        row.addWidget(self.coach_show)
         row.addStretch(1)
         self.coach_back = QPushButton("Back")
         row.addWidget(self.coach_back)
@@ -1034,6 +1035,8 @@ class ControlsWindow:
         self._tutorial = None            # active Tutorial (see pxviewer.tutorial)
         self._tutorial_step = 0
         self._tutorial_timer = None      # polls the step's done() predicate while active
+        self._hl_timer = None            # flashes a step's highlight target
+        self._hl_widget = None
         self._wire_coach()
 
         self._console = None  # EmbeddedConsole, created lazily on first tab view
@@ -1081,6 +1084,7 @@ class ControlsWindow:
         # The console spins up an IPython kernel, so defer that cost until the tab
         # is actually opened.
         tabs.currentChanged.connect(self._on_tab_changed)
+        self._tabs = tabs  # kept so a tutorial can reveal the tab holding a highlight target
         layout.addWidget(tabs, stretch=1)
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
@@ -1196,6 +1200,7 @@ class ControlsWindow:
         demos_btn = _icon_button(
             "blocks", "Demos", "Load a bundled example to try things out")
         demos_btn.setMenu(self._build_demos_menu())
+        self._demos_btn = demos_btn  # a tutorial highlight target
         self._write_btn = _icon_button(
             "save", "Save", "Save the focused object to disk — model coordinates, or a map",
             self._on_write_object)
@@ -1524,6 +1529,8 @@ class ControlsWindow:
                          "for phenix.refine.")
             b.clicked.connect(lambda _c=False, k=kind: self._on_add_edit(k))
             add_row.addWidget(b)
+            if kind == "bond":
+                self._edit_bond_btn = b  # a tutorial highlight target
         add_row.addStretch(1)
         v.addLayout(add_row)
 
@@ -1546,6 +1553,7 @@ class ControlsWindow:
         save = QPushButton("Save…")
         save.setToolTip("Write the active model's edits as a geometry_restraints.edits PHIL file")
         save.clicked.connect(self._on_save_edits)
+        self._edit_save_btn = save  # a tutorial highlight target
         for b in (remove, clear, load, save):
             file_row.addWidget(b)
         file_row.addStretch(1)
@@ -3097,7 +3105,7 @@ class ControlsWindow:
         so a tutorial splits the viewer, not this controls pane."""
         vp = self._desktop._viewport
         vp.coach_close.clicked.connect(lambda: self._tutorial_exit())
-        vp.coach_action.clicked.connect(self._run_tutorial_action)
+        vp.coach_show.clicked.connect(self._on_coach_show_me)
         vp.coach_back.clicked.connect(self._tutorial_back)
         vp.coach_next.clicked.connect(self._tutorial_next)
 
@@ -3126,6 +3134,7 @@ class ControlsWindow:
         self._show_tutorial_step()
 
     def _show_tutorial_step(self) -> None:
+        self._stop_highlight()  # clear any flash from the previous step
         tut = self._tutorial
         if tut is None:
             return
@@ -3134,11 +3143,7 @@ class ControlsWindow:
         vp.coach_title.setText(tut.title)
         vp.coach_progress.setText(f"Step {self._tutorial_step + 1} / {len(tut.steps)}")
         vp.coach_text.setText(self._coach_markup(step.text))
-        if step.action:
-            vp.coach_action.setText("▶  " + step.action[0])
-            vp.coach_action.setVisible(True)
-        else:
-            vp.coach_action.setVisible(False)
+        vp.coach_show.setVisible(step.target is not None)  # "Show me where" only if targeted
         vp.coach_back.setEnabled(self._tutorial_step > 0)
         last = self._tutorial_step == len(tut.steps) - 1
         vp.coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
@@ -3179,18 +3184,67 @@ class ControlsWindow:
         self._tutorial = None
         if self._tutorial_timer is not None:
             self._tutorial_timer.stop()
+        self._stop_highlight()
         self._desktop._viewport.coach_bar.setVisible(False)
         self._set_status("Tutorial complete — nicely done." if finished else "Tutorial closed.")
 
-    def _run_tutorial_action(self) -> None:
+    def _on_coach_show_me(self) -> None:
+        """Flash the control the current step is about — the coach points, it never acts."""
         if self._tutorial is None:
             return
         step = self._tutorial.steps[self._tutorial_step]
-        if step.action:
-            try:
-                step.action[1](self)
-            except Exception as exc:
-                self._flash_status(str(exc))
+        if step.target is None:
+            return
+        try:
+            widget = step.target(self)
+        except Exception:  # pragma: no cover - a target touching not-yet-built UI
+            widget = None
+        self._highlight_widget(widget)
+
+    def _highlight_widget(self, widget) -> None:
+        """Reveal the tab holding ``widget`` and flash a border on it a few times."""
+        from PySide6.QtCore import QTimer
+
+        if widget is None:
+            return
+        self._stop_highlight()
+        self._reveal_widget_tab(widget)
+        self._hl_widget = widget
+        self._hl_original = widget.styleSheet()
+        self._hl_n = 0
+        if self._hl_timer is None:
+            self._hl_timer = QTimer(self._window)
+            self._hl_timer.setInterval(180)
+            self._hl_timer.timeout.connect(self._highlight_tick)
+        self._highlight_tick()  # flash at once
+        self._hl_timer.start()
+
+    def _highlight_tick(self) -> None:
+        self._hl_n += 1
+        if self._hl_n > 6 or self._hl_widget is None:
+            self._stop_highlight()
+            return
+        self._hl_widget.setStyleSheet(
+            "border:2px solid #ff9800; border-radius:4px;"
+            if self._hl_n % 2 == 1 else self._hl_original)
+
+    def _stop_highlight(self) -> None:
+        if self._hl_timer is not None:
+            self._hl_timer.stop()
+        if self._hl_widget is not None:
+            self._hl_widget.setStyleSheet(getattr(self, "_hl_original", ""))
+            self._hl_widget = None
+
+    def _reveal_widget_tab(self, widget) -> None:
+        """If ``widget`` lives on one of the tabs, switch to that tab so it is visible."""
+        tabs = getattr(self, "_tabs", None)
+        if tabs is None:
+            return
+        for i in range(tabs.count()):
+            page = tabs.widget(i)
+            if page is widget or page.isAncestorOf(widget):
+                tabs.setCurrentIndex(i)
+                return
 
     def reflect_dock_state(self, floating: bool) -> None:
         """Keep the dock/detach button in step with the panel's state: maximize-2 to detach

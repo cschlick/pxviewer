@@ -581,9 +581,15 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
         cw._start_tutorial(tutorial.restraint_edits_tutorial())
         assert not coach.coach_bar.isHidden()
         assert coach.coach_progress.text() == "Step 1 / 4"
+        # Step 1 targets a control, so "Show me where" is offered — and only points, never
+        # acts (no model is loaded by clicking it).
+        assert not coach.coach_show.isHidden()
+        cw._on_coach_show_me()  # flashes the Demos button; must not raise or load anything
+        assert not app._models
 
-        # Step 1: the action loads the sample; the predicate then advances.
-        cw._run_tutorial_action()
+        # The user loads a structure themselves; the predicate then advances.
+        from pxviewer.loader import sample_structure_path
+        app.load_files([str(sample_structure_path())])
         deadline = time.time() + 30
         while time.time() < deadline and not app._models:
             qapp.processEvents()
