@@ -1833,6 +1833,7 @@ class ControlsWindow:
         run_btn = QPushButton("Run validation")
         run_btn.setToolTip("Run every MolProbity validator on the active model (background thread).")
         run_btn.clicked.connect(self._on_run_validation)
+        self._validate_btn = run_btn  # a tutorial highlight target
         layout.addWidget(run_btn)
 
         # One sub-tab per validator, (re)built as runs complete.

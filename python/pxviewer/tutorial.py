@@ -47,6 +47,38 @@ def _edit_count(cw: Any) -> int:
     return len(cw._desktop.model_edits(mid)) if mid else 0
 
 
+def _validation_ran(cw: Any) -> bool:
+    mid = _active(cw)
+    entry = cw._desktop._model_entry(mid) if mid else None
+    return bool(entry and entry.get("validation"))
+
+
+def validation_tutorial() -> Tutorial:
+    """Run MolProbity validation and read the results — find what looks wrong in a model."""
+    return Tutorial("Validate a structure", [
+        Step(
+            "MolProbity **validation** flags the parts of a model that look wrong — bad "
+            "rotamers, Ramachandran and C-beta outliers, backbone (CaBLAM) problems, odd "
+            "cis-peptides. Let's run it on a structure built to trip every check.\n\nOpen it: "
+            "click **Demos** and pick **Thermitase-eglin (1TEC)**.",
+            done=lambda cw: bool(cw._desktop._models),
+            target=lambda cw: cw._demos_btn,
+        ),
+        Step(
+            "Open the **Validation** tab and click **Run validation**. It runs every "
+            "validator on the active model in the background — give it a moment.",
+            done=_validation_ran,
+            target=lambda cw: cw._validate_btn,
+        ),
+        Step(
+            "Each validator now has its own sub-tab: a summary, a table of outliers, and a "
+            "**Markers** switch that draws the problems right in the viewport. Click any row "
+            "in a table to select and zoom to that residue.\n\nThat's the loop — find the "
+            "outliers, see them in 3D, fix them (drag or minimize), and re-run.",
+        ),
+    ])
+
+
 def load_edits_tutorial() -> Tutorial:
     """Load a shared restraint-edits file onto a structure — the reading half of the loop."""
     return Tutorial("Load restraint edits", [
@@ -109,5 +141,6 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — reading before writing."""
-    return [load_edits_tutorial(), restraint_edits_tutorial()]
+    """Every walkthrough offered, in menu order — validation first, then the edits pair
+    (reading before writing)."""
+    return [validation_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]

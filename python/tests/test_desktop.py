@@ -632,7 +632,7 @@ def test_metal_example_and_its_sample_edits_file(qapp):
     from pxviewer.loader import sample_structure_path
 
     assert [t.title for t in tutorial.all_tutorials()] == \
-        ["Load restraint edits", "Custom restraint edits"]
+        ["Validate a structure", "Load restraint edits", "Custom restraint edits"]
 
     site = sample_structure_path("zn_site.pdb")
     edits_file = sample_structure_path("zn_site_edits.phil")
@@ -658,6 +658,48 @@ def test_metal_example_and_its_sample_edits_file(qapp):
         assert skipped == 0
         loaded = app.model_edits(mid)
         assert len(loaded) == 1 and loaded[0]["kind"] == "bond"
+    finally:
+        app.stop()
+
+
+def test_validation_tutorial_advances_when_validation_runs(qapp):
+    """The validation walkthrough: load the demo, run validation, read the results. It
+    advances when a model is loaded and again once validation has cached results."""
+    import time
+
+    pytest.importorskip("iotbx.data_manager")
+    from pxviewer import tutorial
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.loader import sample_structure_path
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        cw = app._controls
+        coach = app._viewport
+        cw._start_tutorial(tutorial.validation_tutorial())
+        assert coach.coach_progress.text() == "Step 1 / 3"
+        assert cw._validate_btn.text() == "Run validation"  # the step-2 highlight target
+
+        # Step 1: load the validation demo.
+        app.load_files([str(sample_structure_path("1tec.pdb"))])
+        deadline = time.time() + 30
+        while time.time() < deadline and not app._models:
+            qapp.processEvents()
+            time.sleep(0.02)
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 2 / 3"
+
+        # Step 2: advances once validation has cached results (simulated — a real MolProbity
+        # run is exercised by the validation tests, and is too slow to repeat here).
+        mid = app._active_model_id
+        assert not app._model_entry(mid).get("validation")
+        app._model_entry(mid)["validation"] = {"rotalyze": object()}
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 3 / 3"
+        assert coach.coach_next.text() == "Finish"
+        cw._tutorial_next()
+        assert coach.coach_bar.isHidden()
     finally:
         app.stop()
 
@@ -2301,10 +2343,11 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert any("validation" in l for l in examples)
         assert any("X-ray" in l for l in examples)
         assert any("Metal site" in l for l in examples)
-        # ...and the two tutorials follow, loading before writing.
+        # ...and the tutorials follow: validation, then the edits pair (loading before writing).
         tutorials = [a.text() for a in actions[tut_i + 1:]
                      if not a.isSeparator() and a.text().strip()]
-        assert [t.lower() for t in tutorials] == ["load restraint edits", "custom restraint edits"]
+        assert [t.lower() for t in tutorials] == \
+            ["validate a structure", "load restraint edits", "custom restraint edits"]
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
         buttons = ctl.widget().findChildren(QPushButton)
