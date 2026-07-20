@@ -1303,11 +1303,11 @@ class ControlsWindow:
                 icon_name, label, f"Measure the {label.lower()} from {n} selected atoms")
             btn.clicked.connect(lambda _c=False, k=kind: self._on_measure(k))
             mrow.addWidget(btn)
-        mrow.addStretch(1)  # push Clear to the right of the three measure buttons
         clear_m = self._make_icon_button(
             "circle-off", "Clear measurements", "Clear all measurements")
         clear_m.clicked.connect(self._on_clear_measurements)
-        mrow.addWidget(clear_m)
+        mrow.addWidget(clear_m)  # the fourth button, beside the three measures
+        mrow.addStretch(1)
         mg.addLayout(mrow)
         layout.addWidget(measure)
 
@@ -1426,28 +1426,26 @@ class ControlsWindow:
             "Add hydrogens with reduce2 as a new object (hiding the original), then run "
             "probe2 for MolProbity contacts and clashes")
         analyze.clicked.connect(self._on_analyze)
-        arow = QHBoxLayout()
-        arow.addWidget(analyze)
-        arow.addStretch(1)
-        ag.addLayout(arow)
-
-        toggles = QHBoxLayout()
         self._contacts_toggle = self._make_icon_button(
             "fold-horizontal", "Contacts", "Show/hide the full probe2 contact-dot surface",
             checkable=True)
         self._contacts_toggle.setEnabled(False)
         self._contacts_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
-        toggles.addWidget(self._contacts_toggle)
         self._clashes_toggle = self._make_icon_button(
             "triangle-alert", "Clashes", "Show/hide the bad-overlap (clash) spikes",
             checkable=True)
         self._clashes_toggle.setEnabled(False)
         self._clashes_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
-        toggles.addWidget(self._clashes_toggle)
-        toggles.addStretch()
-        ag.addLayout(toggles)
+
+        # One row: add-H (the prerequisite) then the two result toggles.
+        prow = QHBoxLayout()
+        prow.addWidget(analyze)
+        prow.addWidget(self._contacts_toggle)
+        prow.addWidget(self._clashes_toggle)
+        prow.addStretch(1)
+        ag.addLayout(prow)
         return box
 
     def _build_validation_tab(self):
