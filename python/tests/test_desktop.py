@@ -395,6 +395,57 @@ def test_unpaired_objects_can_be_paired_explicitly(qapp, tmp_path):
         app.stop()
 
 
+def test_minimize_buttons_show_which_state_is_live(qapp):
+    """A glance at the play/pause pair should say whether a run is going: idle enables and
+    accents Minimize, running enables and accents Stop, and only the live one is styled."""
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    try:
+        ctrls = app._controls
+        play, stop = ctrls._minimize_btn, ctrls._minimize_stop_btn
+        # Idle at construction: Minimize live (enabled + accented), Stop quiet.
+        assert play.isEnabled() and not stop.isEnabled()
+        assert play.styleSheet() and not stop.styleSheet()
+        # Enter the running state: the accent moves to Stop, Minimize goes plain.
+        app.bridge.minimizing_changed.emit(True)
+        qapp.processEvents()
+        assert stop.isEnabled() and not play.isEnabled()
+        assert stop.styleSheet() and not play.styleSheet()
+        # Back to idle: the accent returns to Minimize.
+        app.bridge.minimizing_changed.emit(False)
+        qapp.processEvents()
+        assert play.styleSheet() and not stop.styleSheet()
+    finally:
+        app.stop()
+
+
+def test_shift_arm_preempts_a_running_minimization(qapp):
+    """Shift is pressed (a drag is imminent): the 'arm' message halts a running
+    minimization and flashes why, so a drag that can't grab yet is explained rather than
+    silently dead. With nothing running it is a no-op — no stop, no warning."""
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    try:
+        warned = []
+        app.bridge.status_warned.connect(warned.append)
+
+        # Nothing running: arm does nothing.
+        app._on_tug("m", "arm", -1, None)
+        qapp.processEvents()
+        assert not app._minimize_stop.is_set() and warned == []
+
+        # A run is going (idle cleared as minimize_model would): arm stops it and says why.
+        app._minimize_idle.clear()
+        app._on_tug("m", "arm", -1, None)
+        qapp.processEvents()
+        assert app._minimize_stop.is_set()
+        assert warned and "drag" in warned[-1].lower()
+    finally:
+        app.stop()
+
+
 def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
     """Pairing relocates the model into the map's frame — several angstrom for a boxed
     map. The map the browser is served has to move with it, or the model is drawn away

@@ -34,6 +34,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
   - {"type": "volume-iso-changed", "ref": str, "value": float}  wheel contouring
   - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  Shift-drag of an atom
+      (action "arm" — Shift pressed, drag imminent — carries no atom/target)
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
@@ -1793,7 +1794,15 @@ class LiveSession:
             self._on_measure(event)
         elif etype == "tug":
             action, atom = event.get("action"), event.get("atom")
-            if action in ("begin", "move", "end") and isinstance(atom, int):
+            if action == "arm":
+                # Shift pressed — a drag is imminent, no atom yet. Passed through so the
+                # app can clear the way (e.g. stop a running minimization) before the grab.
+                for handler in self._tug_handlers:
+                    try:
+                        handler("arm", -1, None)
+                    except Exception:  # pragma: no cover - user callback errors
+                        pass
+            elif action in ("begin", "move", "end") and isinstance(atom, int):
                 target = event.get("target") if action == "move" else None
                 for handler in self._tug_handlers:
                     try:

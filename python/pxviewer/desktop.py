@@ -1339,6 +1339,7 @@ class ControlsWindow:
         self._minimize_stop_btn.setEnabled(False)
         self._minimize_stop_btn.clicked.connect(lambda: self._desktop.stop_minimization())
         min_row.addWidget(self._minimize_stop_btn)
+        self._on_minimizing_changed(False)  # paint the idle look (Minimize green, Stop quiet)
         min_row.addStretch()
         ming.addLayout(min_row)
         layout.addWidget(minimization)
@@ -1474,9 +1475,30 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _on_minimizing_changed(self, running: bool) -> None:
-        """Stop is only meaningful while a run is going; Minimize only while one is not."""
+        """Stop is only meaningful while a run is going; Minimize only while one is not.
+
+        Beyond enable/disable, colour the live control so a glance tells you the state:
+        Minimize glows green (ready to run) while idle, Stop glows amber (a run is going)
+        while minimizing. The inactive one stays a plain, quiet button."""
         self._minimize_btn.setEnabled(not running)
         self._minimize_stop_btn.setEnabled(running)
+        self._paint_minimize_button(self._minimize_btn, "play", "#1a7f37", active=not running)
+        self._paint_minimize_button(self._minimize_stop_btn, "pause", "#b26a00", active=running)
+
+    def _paint_minimize_button(self, btn, icon_name: str, accent: str, *, active: bool) -> None:
+        """Give the active play/pause button a filled accent (white glyph on colour); leave
+        the inactive one in its default look. Falls back to the button's text if the icon
+        asset is gone (the accent style still applies)."""
+        if active:
+            btn.setStyleSheet(
+                f"QPushButton {{ background:{accent}; border:1px solid {accent}; "
+                f"border-radius:4px; }}")
+            icon = _line_icon(icon_name, "#ffffff", size=18)
+        else:
+            btn.setStyleSheet("")
+            icon = self._icon(icon_name)
+        if icon is not None:
+            btn.setIcon(icon)
 
     def _update_tug_density(self) -> None:
         """Tugging into density needs a map paired with the active model."""
@@ -3296,6 +3318,11 @@ class DesktopApp:
         self._sigint_installed = False
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
+        # Set while no minimization is running. A drag waits on this before it builds
+        # restraints on the model, so the minimizer's thread and the drag's never write the
+        # same coordinates at once — the drag takes the model over from a clean stop.
+        self._minimize_idle = threading.Event()
+        self._minimize_idle.set()
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
         # Dragging atoms: Shift-drag, one drag at a time (there is one pointer). Continuous
         # relaxation is on by default — a drag settles as a living motion, which reads better
@@ -4256,12 +4283,26 @@ class DesktopApp:
         takes the better part of a second, and stalling that loop for it means the
         viewer goes deaf and blind exactly as the drag begins.
         """
+        if action == "arm":
+            # Shift pressed: a drag is imminent. If a minimization is running, start halting
+            # it now — so by the time the pointer actually grabs an atom the model is free.
+            # Non-blocking (this is the socket thread); the drag's begin waits for the stop.
+            self._preempt_minimization_for_drag()
+            return
         if self._tug_queue is None:
             import queue
 
             self._tug_queue = queue.Queue()
             threading.Thread(target=self._tug_worker, name="pxviewer-tug", daemon=True).start()
         self._tug_queue.put((action, mid, atom, target))
+
+    def _preempt_minimization_for_drag(self) -> None:
+        """Signal any running minimization to stop, and say so — a drag is on its way and
+        the model can't be handed over until the minimizer lets go. Only the signal here;
+        the wait for it to actually finish happens on the tug worker, in _serve_tug."""
+        if not self._minimize_idle.is_set():
+            self._minimize_stop.set()
+            self._warn("Minimization in progress — stopping so you can drag")
 
     def _tug_worker(self) -> None:
         """Serve drags off the socket's thread.
@@ -4317,6 +4358,14 @@ class DesktopApp:
             if not monomer_library_available():
                 self._status("dragging atoms needs the monomer library")
                 return
+            # The drag takes the model over from any running minimization. Stop it and wait
+            # for its thread to let go before we build restraints on the same model, so the
+            # two never write the coordinates at once. It converges in well under a second;
+            # the timeout is a safety cap, not the expected wait. (Shift-keydown usually
+            # started this stop already, via _preempt_minimization_for_drag.)
+            if not self._minimize_idle.is_set():
+                self._minimize_stop.set()
+                self._minimize_idle.wait(timeout=2.0)
             from .tug import Tug
 
             try:
@@ -4474,6 +4523,7 @@ class DesktopApp:
                 "this model is not paired with a map — load the two together to pair them")
 
         self._minimize_stop.clear()
+        self._minimize_idle.clear()
 
         def work():
             from .geometry import monomer_library_available
@@ -4481,6 +4531,7 @@ class DesktopApp:
 
             if not monomer_library_available():
                 self._status("minimization needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+                self._minimize_idle.set()
                 self.bridge.minimizing_changed.emit(False)
                 return
             try:
@@ -4494,6 +4545,7 @@ class DesktopApp:
                 self._status(f"minimization failed: {exc}")
                 return
             finally:
+                self._minimize_idle.set()  # the model is the drag's to take now
                 self.bridge.minimizing_changed.emit(False)
             self._status(
                 f"{name}: bond rmsd {stats['bonds_before']:.3f} -> {stats['bonds_after']:.3f}, "

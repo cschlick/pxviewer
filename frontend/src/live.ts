@@ -1626,17 +1626,30 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         endTug();
     };
 
+    // Pressing Shift is the first sign a drag is coming — before any atom is grabbed. Tell
+    // the server now, once per hold, so it can clear the way (a running minimization has to
+    // stop and hand the model over first): by the time the pointer grabs, the model is free
+    // and the drag feels instant rather than dead-until-the-run-ends. Auto-repeat keydowns
+    // are ignored via shiftHeld.
+    let shiftHeld = false;
+    const onKeyDown = (ev: KeyboardEvent) => {
+        if (ev.key === 'Shift' && !shiftHeld) {
+            shiftHeld = true;
+            ws.send(JSON.stringify({ type: 'tug', action: 'arm' }));
+        }
+    };
     // The drag lives only while Shift is held: let go of Shift and it stops at once, so
     // the minimizer never keeps running under a hand that has moved on. Same for losing
     // the window — an alt-tab mid-drag must not strand it running.
     const onKeyUp = (ev: KeyboardEvent) => {
-        if (ev.key === 'Shift') endTug();
+        if (ev.key === 'Shift') { shiftHeld = false; endTug(); }
     };
-    const onBlur = () => endTug();
+    const onBlur = () => { shiftHeld = false; endTug(); };
 
     window.addEventListener('mousedown', onMouseDown, { capture: true });
     window.addEventListener('mousemove', onMouseMove, { capture: true });
     window.addEventListener('mouseup', onMouseUp, { capture: true });
+    window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
 
@@ -1855,6 +1868,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             window.removeEventListener('mousedown', onMouseDown, { capture: true });
             window.removeEventListener('mousemove', onMouseMove, { capture: true });
             window.removeEventListener('mouseup', onMouseUp, { capture: true });
+            window.removeEventListener('keydown', onKeyDown);
             window.removeEventListener('keyup', onKeyUp);
             window.removeEventListener('blur', onBlur);
             cameraSub?.unsubscribe();
