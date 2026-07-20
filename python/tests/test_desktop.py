@@ -2076,9 +2076,12 @@ def test_validation_subtabs_and_row_focus(qapp):
         )
         app._controls._on_validation_ready((mid, [res]))
         tabs = app._controls._validation_subtabs
-        assert tabs.count() == 1 and tabs.tabText(0) == "Ramachandran"
+        # Clashes & contacts is the permanent first tab; the validator follows it.
+        assert tabs.count() == 2
+        rama = next(i for i in range(tabs.count()) if tabs.tabText(i) == "Ramachandran")
+        assert rama == 1
 
-        table = tabs.widget(0).findChild(QTableWidget)
+        table = tabs.widget(rama).findChild(QTableWidget)
         assert table.selectionBehavior() == QTableWidget.SelectionBehavior.SelectRows
 
         # Selecting the row resolves the residue -> atoms and focuses it.

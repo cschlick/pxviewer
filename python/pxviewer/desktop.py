@@ -1773,16 +1773,23 @@ class ControlsWindow:
             self._minimize_map_check.setToolTip(
                 "Load a model and a map together to pair them, then minimize into density.")
 
-    def _build_clashes_group(self):
-        """All-atom contacts: add hydrogens with reduce2, then run probe2. Its two
-        overlays toggle independently once an analysis has produced dots."""
-        from PySide6.QtWidgets import QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+    def _build_clashes_page(self):
+        """The all-atom contacts (probe2) view — shown as a validator sub-tab, so it sits
+        beside the per-residue checks rather than in its own panel. It stays a separate run
+        from 'Run validation' because it is heavier: it adds hydrogens (a new object) and
+        shells out to probe2, so it is opt-in via its own Analyze button. The two overlays
+        toggle independently once an analysis has produced dots."""
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
         from .live import PROBE_CLASHES, PROBE_CONTACTS
 
-        box = QGroupBox("Clashes && contacts (probe2)")
-        ag = QVBoxLayout(box)
-        ag.addWidget(QLabel("Add hydrogens, then run MolProbity probe2:"))
+        page = QWidget()
+        ag = QVBoxLayout(page)
+        hint = QLabel("MolProbity all-atom contacts. Add hydrogens (reduce2), then run "
+                      "probe2, and toggle the overlays:")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666;")
+        ag.addWidget(hint)
         analyze = self._make_icon_button(
             "heading-1", "Add H + analyze",
             "Add hydrogens with reduce2 as a new object (hiding the original), then run "
@@ -1808,44 +1815,39 @@ class ControlsWindow:
         prow.addWidget(self._clashes_toggle)
         prow.addStretch(1)
         ag.addLayout(prow)
-        return box
+        ag.addStretch(1)
+        return page
 
     def _build_validation_tab(self):
-        """MolProbity validation: the hydrogen-based all-atom contact analysis, plus
-        the per-residue validators. The latter is data-driven from the validation
-        registry — one "Run validation" button runs every registered validator on the
-        active model and each result becomes its own sub-tab, so new validators appear
-        here automatically with no changes to this tab."""
-        from PySide6.QtWidgets import (
-            QLabel,
-            QPushButton,
-            QTabWidget,
-            QVBoxLayout,
-            QWidget,
-        )
+        """MolProbity validation, all in one place. 'Run validation' runs every registered
+        per-residue validator (data-driven from the validation registry) and each result
+        becomes a sub-tab. The all-atom contacts analysis (probe2) is a peer sub-tab —
+        'Clashes & contacts' — always present as the first tab, so both kinds of check live
+        in the same results area rather than in separate panels."""
+        from PySide6.QtWidgets import QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        layout.addWidget(self._build_clashes_group())
+        intro = QLabel("MolProbity validation of the active model. Run the per-residue "
+                       "checks below; the Clashes & contacts tab runs probe2 separately.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
         run_btn = QPushButton("Run validation")
-        run_btn.setToolTip("Run every MolProbity validator on the active model (background thread).")
+        run_btn.setToolTip("Run every MolProbity per-residue validator on the active model "
+                           "(background thread); each becomes a sub-tab below.")
         run_btn.clicked.connect(self._on_run_validation)
         self._validate_btn = run_btn  # a tutorial highlight target
         layout.addWidget(run_btn)
 
-        # One sub-tab per validator, (re)built as runs complete.
+        # One results area: the always-present Clashes & contacts tab, then a tab per
+        # validator, (re)built as runs complete.
         self._validation_subtabs = QTabWidget()
         self._validation_subtabs.setDocumentMode(True)
-        placeholder = QWidget()
-        pl = QVBoxLayout(placeholder)
-        hint = QLabel("Run validation to see results.")
-        hint.setStyleSheet("color: #666;")
-        pl.addWidget(hint)
-        pl.addStretch()
-        self._validation_subtabs.addTab(placeholder, "—")
+        self._clashes_page = self._build_clashes_page()
+        self._validation_subtabs.addTab(self._clashes_page, "Clashes && contacts")
         layout.addWidget(self._validation_subtabs, stretch=1)
         return tab
 
@@ -1919,20 +1921,15 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _on_validation_ready(self, payload) -> None:
-        """Validation finished (GUI thread): rebuild one sub-tab per result."""
-        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
-
+        """Validation finished (GUI thread): rebuild a sub-tab per result, keeping the
+        always-present Clashes & contacts tab (index 0) in place."""
         mid, results = payload
         tabs = self._validation_subtabs
         current = tabs.tabText(tabs.currentIndex())  # preserve the selected validator
-        tabs.clear()
-        if not results:
-            empty = QWidget()
-            el = QVBoxLayout(empty)
-            el.addWidget(QLabel("No validators registered."))
-            el.addStretch()
-            tabs.addTab(empty, "—")
-            return
+        while tabs.count() > 1:  # drop the previous run's validator tabs; keep Clashes (0)
+            page = tabs.widget(1)
+            tabs.removeTab(1)
+            page.deleteLater()
         for result in results:
             tabs.addTab(self._build_validation_section(mid, result), result.title)
         for i in range(tabs.count()):  # keep the user on the same validator across re-runs
