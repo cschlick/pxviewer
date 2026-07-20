@@ -192,6 +192,44 @@ def _edit_summary(edit: dict) -> str:
     return edits.summarize(edit)
 
 
+_HIGHLIGHT_OVERLAY_CLASS = None
+
+
+def _highlight_overlay_class():
+    """A transparent, click-through widget that paints a rounded ring at a set alpha — used
+    to emphasise a button *on top*, so it never touches the button's size or the layout
+    around it. Defined lazily (needs Qt) and cached."""
+    global _HIGHLIGHT_OVERLAY_CLASS
+    if _HIGHLIGHT_OVERLAY_CLASS is None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPainter, QPen
+        from PySide6.QtWidgets import QWidget
+
+        class _HighlightOverlay(QWidget):
+            def __init__(self, parent):
+                super().__init__(parent)
+                self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+                self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+                self._alpha = 0.0
+
+            def set_alpha(self, a: float) -> None:
+                self._alpha = max(0.0, min(1.0, a))
+                self.update()
+
+            def paintEvent(self, _event) -> None:
+                painter = QPainter(self)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+                colour = QColor(255, 152, 0)  # amber, matching the app's accents
+                colour.setAlphaF(self._alpha)
+                painter.setPen(QPen(colour, 3))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 7, 7)
+
+        _HIGHLIGHT_OVERLAY_CLASS = _HighlightOverlay
+    return _HIGHLIGHT_OVERLAY_CLASS
+
+
 def _line_icon(name: str, color, size: int = 20):
     """A monochrome line SVG (``<name>.svg``) tinted to ``color`` as a QIcon.
 
@@ -1035,8 +1073,8 @@ class ControlsWindow:
         self._tutorial = None            # active Tutorial (see pxviewer.tutorial)
         self._tutorial_step = 0
         self._tutorial_timer = None      # polls the step's done() predicate while active
-        self._hl_timer = None            # flashes a step's highlight target
-        self._hl_widget = None
+        self._hl_timer = None            # pulses a step's highlight target
+        self._hl_overlay = None          # a transparent ring drawn over it (no layout effect)
         self._wire_coach()
 
         self._console = None  # EmbeddedConsole, created lazily on first tab view
@@ -3202,38 +3240,49 @@ class ControlsWindow:
         self._highlight_widget(widget)
 
     def _highlight_widget(self, widget) -> None:
-        """Reveal the tab holding ``widget`` and flash a border on it a few times."""
-        from PySide6.QtCore import QTimer
+        """Pulse a fading ring *over* ``widget`` (revealing its tab first). An overlay, so it
+        never changes the button's size or nudges the widgets around it."""
+        from PySide6.QtCore import QPoint, QTimer
 
         if widget is None:
             return
         self._stop_highlight()
         self._reveal_widget_tab(widget)
-        self._hl_widget = widget
-        self._hl_original = widget.styleSheet()
-        self._hl_n = 0
+        window = widget.window()
+        if self._hl_overlay is None or self._hl_overlay.parent() is not window:
+            self._hl_overlay = _highlight_overlay_class()(window)
+        pad = 5
+        top_left = widget.mapTo(window, QPoint(0, 0))
+        self._hl_overlay.setGeometry(
+            top_left.x() - pad, top_left.y() - pad,
+            widget.width() + 2 * pad, widget.height() + 2 * pad)
+        self._hl_overlay.set_alpha(1.0)
+        self._hl_overlay.show()
+        self._hl_overlay.raise_()
+        self._hl_phase = 0
         if self._hl_timer is None:
             self._hl_timer = QTimer(self._window)
-            self._hl_timer.setInterval(180)
+            self._hl_timer.setInterval(30)
             self._hl_timer.timeout.connect(self._highlight_tick)
-        self._highlight_tick()  # flash at once
         self._hl_timer.start()
 
     def _highlight_tick(self) -> None:
-        self._hl_n += 1
-        if self._hl_n > 6 or self._hl_widget is None:
+        import math
+
+        self._hl_phase += 1
+        total = 50  # ~1.5 s at 30 ms: a couple of pulses that fade out
+        if self._hl_phase > total or self._hl_overlay is None:
             self._stop_highlight()
             return
-        self._hl_widget.setStyleSheet(
-            "border:2px solid #ff9800; border-radius:4px;"
-            if self._hl_n % 2 == 1 else self._hl_original)
+        envelope = 1.0 - self._hl_phase / total          # fade away over the run
+        pulse = 0.5 + 0.5 * math.sin(self._hl_phase * 0.45)  # ...while pulsing
+        self._hl_overlay.set_alpha(envelope * pulse)
 
     def _stop_highlight(self) -> None:
         if self._hl_timer is not None:
             self._hl_timer.stop()
-        if self._hl_widget is not None:
-            self._hl_widget.setStyleSheet(getattr(self, "_hl_original", ""))
-            self._hl_widget = None
+        if self._hl_overlay is not None:
+            self._hl_overlay.hide()
 
     def _reveal_widget_tab(self, widget) -> None:
         """If ``widget`` lives on one of the tabs, switch to that tab so it is visible."""
