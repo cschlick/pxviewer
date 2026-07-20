@@ -1738,6 +1738,9 @@ class ControlsWindow:
 
             place_btn.clicked.connect(
                 lambda _c=False: self._safe(_place))
+            # Enter in either field fits the ligand too, without reaching for the button.
+            code_edit.returnPressed.connect(lambda: self._safe(_place))
+            smiles_edit.returnPressed.connect(lambda: self._safe(_place))
             self._appearance_layout.addWidget(place_btn)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
