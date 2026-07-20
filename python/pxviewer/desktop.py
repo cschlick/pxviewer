@@ -1376,6 +1376,8 @@ class ControlsWindow:
 
         menu = QMenu(self._window)
         menu.setObjectName("demosMenu")
+        spacer = menu.addAction(" ")  # a blank line so "Examples" isn't flush to the top edge
+        spacer.setEnabled(False)
         menu.addSection("Examples")
         menu.addAction("Ubiquitin (1UBQ)",
                        lambda: self._on_load_sample("1ubq.pdb"))
