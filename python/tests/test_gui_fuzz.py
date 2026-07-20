@@ -240,7 +240,8 @@ def test_random_gui_walk_keeps_the_model_consistent(seed, guarded_modals):
 # Buttons that start background work — Minimize, Stop, Add H + analyze. All icon-only now,
 # so they are recognised by their tooltip prefix.
 _THREADED_TOOLTIPS = (
-    "Minimize the active model", "Halt the run", "Add hydrogens with reduce2")
+    "Minimize the active model", "Halt the run", "Add hydrogens with reduce2",
+    "Build the ligand")
 
 
 @pytest.fixture

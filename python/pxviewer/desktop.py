@@ -1317,25 +1317,7 @@ class ControlsWindow:
         mg.addLayout(mrow)
         layout.addWidget(measure)
 
-        marker = QGroupBox("Ligand placement")
-        mkg = QVBoxLayout(marker)
-        mkg.addWidget(QLabel(
-            "Drop a ligand marker in the viewport, then place a ligand at it from its panel:"))
-        mk_row = QHBoxLayout()
-        place_btn = self._make_icon_button(
-            "circle-arrow-out-up-left", "Place ligand marker",
-            "Arm placement, then click in the viewport: a ligand marker is dropped there — "
-            "snapped to the atom under the cursor, or the view plane in empty space. Select "
-            "it in the object list to place a ligand at that point.")
-        place_btn.clicked.connect(self._desktop.arm_marker)
-        mk_row.addWidget(place_btn)
-        clear_mk = self._make_icon_button(
-            "circle-off", "Clear", "Remove all ligand markers")
-        clear_mk.clicked.connect(self._desktop.clear_markers)
-        mk_row.addWidget(clear_mk)
-        mk_row.addStretch(1)
-        mkg.addLayout(mk_row)
-        layout.addWidget(marker)
+        layout.addWidget(self._build_ligand_placement_group())
 
         minimization = QGroupBox("Minimization")
         ming = QVBoxLayout(minimization)
@@ -1390,6 +1372,100 @@ class ControlsWindow:
             lambda: self._desktop.set_tug_continuous(on)))
         dg.addWidget(self._tug_continuous_check)
         return dragging
+
+    def _build_ligand_placement_group(self):
+        """Permanent 'Ligand placement' panel (Tools tab): drop a ligand marker, then build
+        a ligand at it — all in one place, rather than reaching into a marker's Appearance
+        pane. It acts on the most recently placed marker."""
+        from PySide6.QtWidgets import (
+            QCheckBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout)
+
+        box = QGroupBox("Ligand placement")
+        lg = QVBoxLayout(box)
+
+        mk_row = QHBoxLayout()
+        place_btn = self._make_icon_button(
+            "circle-arrow-out-up-left", "Place ligand marker",
+            "Arm placement, then click in the viewport: a ligand marker is dropped there — "
+            "snapped to the atom under the cursor, or the view plane in empty space.")
+        place_btn.clicked.connect(self._desktop.arm_marker)
+        mk_row.addWidget(place_btn)
+        clear_mk = self._make_icon_button("circle-off", "Clear", "Remove all ligand markers")
+        clear_mk.clicked.connect(self._desktop.clear_markers)
+        mk_row.addWidget(clear_mk)
+        mk_row.addStretch(1)
+        lg.addLayout(mk_row)
+
+        self._lig_target_label = QLabel("")
+        self._lig_target_label.setWordWrap(True)
+        self._lig_target_label.setStyleSheet("color: #888;")
+        lg.addWidget(self._lig_target_label)
+
+        lg.addWidget(QLabel("Ligand (monomer code):"))
+        self._lig_code_edit = QLineEdit()
+        self._lig_code_edit.setPlaceholderText("e.g. GOL, ATP, NAG")
+        self._lig_code_edit.setMaxLength(5)
+        self._lig_code_edit.returnPressed.connect(lambda: self._safe(self._on_fit_ligand))
+        lg.addWidget(self._lig_code_edit)
+
+        lg.addWidget(QLabel("or SMILES (code above names it):"))
+        self._lig_smiles_edit = QLineEdit()
+        self._lig_smiles_edit.setPlaceholderText("e.g. CC(=O)Oc1ccccc1C(=O)O")
+        self._lig_smiles_edit.returnPressed.connect(lambda: self._safe(self._on_fit_ligand))
+        lg.addWidget(self._lig_smiles_edit)
+
+        self._lig_fit_check = QCheckBox("Fit into density (explode-and-refine)")
+        self._lig_fit_check.setToolTip(
+            "Settle the ligand into the active model's map with a large radius of "
+            "convergence. Needs a map paired with the model.")
+        lg.addWidget(self._lig_fit_check)
+
+        self._lig_fit_btn = QPushButton("Fit ligand here")
+        self._lig_fit_btn.setToolTip(
+            "Build the ligand (from the monomer library, or the SMILES string), centre it "
+            "on the ligand marker, and add it as a new object.")
+        self._lig_fit_btn.clicked.connect(lambda: self._safe(self._on_fit_ligand))
+        lg.addWidget(self._lig_fit_btn)
+
+        self._lig_last_target = None
+        self._update_ligand_panel()
+        return box
+
+    def _on_fit_ligand(self) -> None:
+        """Build a ligand at the most recently placed ligand marker, from the panel fields."""
+        markers = self._desktop._markers
+        if not markers:
+            self._set_status("place a ligand marker first")
+            return
+        mid = markers[-1]["id"]
+        smiles = self._lig_smiles_edit.text().strip()
+        code = self._lig_code_edit.text()
+        fit = self._lig_fit_check.isChecked()
+        if smiles:  # SMILES wins; the code field just names the residue
+            self._desktop.fit_ligand_from_smiles_at_marker(mid, smiles, code or "LIG", fit=fit)
+        else:
+            self._desktop.fit_ligand_at_marker(mid, code, fit=fit)
+
+    def _update_ligand_panel(self) -> None:
+        """Enable the ligand fields only with a marker to place at, and reflect the current
+        target (the last-placed marker) and whether a map is available to fit into."""
+        if not hasattr(self, "_lig_target_label"):
+            return  # panel not built yet
+        markers = self._desktop._markers
+        target = markers[-1] if markers else None
+        has_map = self._desktop.map_for_model() is not None
+        for w in (self._lig_code_edit, self._lig_smiles_edit, self._lig_fit_btn):
+            w.setEnabled(target is not None)
+        self._lig_fit_check.setEnabled(target is not None and has_map)
+        target_id = target["id"] if target else None
+        if target_id != self._lig_last_target:  # a fresh target: default fit on if a map
+            self._lig_fit_check.setChecked(target is not None and has_map)
+            self._lig_last_target = target_id
+        elif not has_map:
+            self._lig_fit_check.setChecked(False)
+        self._lig_target_label.setText(
+            f"Placing at: {target['name']}" if target else
+            "Place a ligand marker to build a ligand at it.")
 
     def _on_minimize(self) -> None:
         try:
@@ -1687,61 +1763,20 @@ class ControlsWindow:
             return combo
 
         if it["kind"] == "marker":
-            # Not styled — a marker is a 3D point. The pane is where it says what it is:
-            # its coordinate (the handle to act on) and what it snapped to.
+            # Not styled — a marker is a 3D point. The pane just says what it is: its
+            # coordinate and what it snapped to. Building a ligand at it lives in the Tools
+            # tab's permanent Ligand placement panel, not here.
             pos = it.get("position") or [0.0, 0.0, 0.0]
             coord = QLabel(f"x  {pos[0]:.3f}\ny  {pos[1]:.3f}\nz  {pos[2]:.3f}    Å")
             coord.setStyleSheet("font-family: monospace;")
             self._appearance_layout.addWidget(coord)
             snapped = ("on atom " + str(it["atom"])) if it.get("atom") is not None \
                 else "in the view plane (empty space)"
-            note = QLabel("Placed " + snapped)
+            note = QLabel("Placed " + snapped
+                          + ".\nBuild a ligand here from Tools → Ligand placement.")
             note.setWordWrap(True)
             note.setStyleSheet("color: #888;")
             self._appearance_layout.addWidget(note)
-
-            # Place a ligand here — the "do a thing right here" action on the marker.
-            from PySide6.QtWidgets import QLineEdit
-
-            self._appearance_layout.addWidget(QLabel("Add ligand (monomer code):"))
-            code_edit = QLineEdit()
-            code_edit.setPlaceholderText("e.g. GOL, ATP, NAG")
-            code_edit.setMaxLength(5)
-            self._appearance_layout.addWidget(code_edit)
-            # …or draw it from a SMILES string, for anything not in the library. The code
-            # field above then just names the residue (defaults to LIG).
-            self._appearance_layout.addWidget(QLabel("or SMILES (code above names it):"))
-            smiles_edit = QLineEdit()
-            smiles_edit.setPlaceholderText("e.g. CC(=O)Oc1ccccc1C(=O)O")
-            self._appearance_layout.addWidget(smiles_edit)
-            has_map = self._desktop.map_for_model() is not None
-            fit_check = QCheckBox("Fit into density (explode-and-refine)")
-            fit_check.setChecked(has_map)
-            fit_check.setEnabled(has_map)
-            fit_check.setToolTip(
-                "Settle the ligand into the active model's map with a large radius of "
-                "convergence." if has_map else
-                "No map is paired with the active model — the ligand is just placed.")
-            self._appearance_layout.addWidget(fit_check)
-            place_btn = QPushButton("Fit ligand here")
-            place_btn.setToolTip(
-                "Build the ligand (from the monomer library, or from the SMILES string), "
-                "centre it here, and add it as a new object.")
-
-            def _place(m=it["id"], c=code_edit, s=smiles_edit, f=fit_check):
-                smiles = s.text().strip()
-                if smiles:  # SMILES wins; the code field is just the residue name
-                    self._desktop.fit_ligand_from_smiles_at_marker(
-                        m, smiles, c.text() or "LIG", fit=f.isChecked())
-                else:
-                    self._desktop.fit_ligand_at_marker(m, c.text(), fit=f.isChecked())
-
-            place_btn.clicked.connect(
-                lambda _c=False: self._safe(_place))
-            # Enter in either field fits the ligand too, without reaching for the button.
-            code_edit.returnPressed.connect(lambda: self._safe(_place))
-            smiles_edit.returnPressed.connect(lambda: self._safe(_place))
-            self._appearance_layout.addWidget(place_btn)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
         if it["kind"] == "reflections":
@@ -3030,6 +3065,7 @@ class ControlsWindow:
         elif kind == "model" and active and ident != active["id"]:
             kind, ident = active_ref
         self._update_appearance(kind, ident)
+        self._update_ligand_panel()  # markers/maps may have changed
 
     def _on_tree_current_changed(self, current, _previous) -> None:
         if self._suppress_model_events or current is None:
