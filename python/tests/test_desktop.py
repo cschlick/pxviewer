@@ -547,13 +547,13 @@ def test_smiles_ligand_restraints_can_be_saved(qapp, tmp_path):
         with pytest.raises(ValueError, match="no restraints"):
             app.save_restraints_cif(protein["id"], str(tmp_path / "nope.cif"))
 
-        # Export writes the pair a refinement needs in one step: the fitted coordinates and
-        # the restraints dictionary alongside as <stem>_restraints.cif.
-        coord, restraints = app.export_ligand(ligand["id"], str(tmp_path / "EOH.cif"))
+        # Export writes the pair a refinement needs in one step: the fitted coordinates
+        # (mmCIF, .mmcif) and the restraints dictionary alongside as <stem>_restraints.cif.
+        coord, restraints = app.export_ligand(ligand["id"], str(tmp_path / "EOH.mmcif"))
         from pathlib import Path as _P
-        assert _P(coord).name == "EOH.cif" and _P(restraints).name == "EOH_restraints.cif"
-        assert "_atom_site" in _P(coord).read_text()  # placed coordinates
-        assert "SMILES_CANONICAL" in _P(restraints).read_text()  # the dictionary
+        assert _P(coord).name == "EOH.mmcif" and _P(restraints).name == "EOH_restraints.cif"
+        assert "_atom_site" in _P(coord).read_text()  # placed coordinates, macromolecular mmCIF
+        assert "SMILES_CANONICAL" in _P(restraints).read_text()  # the monomer dictionary
         with pytest.raises(ValueError, match="no restraints"):
             app.export_ligand(protein["id"], str(tmp_path / "prot.cif"))
     finally:

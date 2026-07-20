@@ -2759,7 +2759,10 @@ class ControlsWindow:
         it = self._find_item(kind, ident)
         default = it["name"] if it else "out"
         if kind == "model":
-            fmt = "mmCIF (*.cif);;PDB (*.pdb)"
+            # .mmcif marks these as macromolecular coordinates, distinct from a monomer
+            # restraint .cif or a small-molecule core CIF; both extensions still write mmCIF.
+            fmt = "mmCIF (*.mmcif *.cif);;PDB (*.pdb)"
+            default = f"{default}.mmcif"
         else:
             fmt = "CCP4/MRC map (*.mrc *.map *.ccp4)"
         path, _ = QFileDialog.getSaveFileName(self._window, "Write object", default, fmt)
@@ -2775,9 +2778,11 @@ class ControlsWindow:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         default = name.split(" (")[0].strip() or "ligand"  # "AIN (ligand)" -> "AIN"
+        # .mmcif for the coordinates, so they read as macromolecular mmCIF and are not
+        # confused with the monomer restraint .cif (nor a small-molecule COD/core CIF).
         path, _ = QFileDialog.getSaveFileName(
             self._window, "Export ligand (coordinates + restraints)",
-            f"{default}.cif", "mmCIF coordinates (*.cif);;PDB coordinates (*.pdb)")
+            f"{default}.mmcif", "mmCIF coordinates (*.mmcif *.cif);;PDB coordinates (*.pdb)")
         if not path:
             return
         try:
