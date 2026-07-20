@@ -550,6 +550,39 @@ def test_smiles_ligand_restraints_can_be_saved(qapp, tmp_path):
         app.stop()
 
 
+def test_writing_a_restrained_model_as_mmcif_needs_no_probe(qapp, tmp_path):
+    """Writing a model as mmCIF must emit coordinates, not a validation report. A ligand
+    (like any minimized model) carries a restraints manager, and mmtbx's full model_as_mmcif
+    would compute a clashscore that shells out to the external Probe binary — absent here.
+    The write must succeed anyway and round-trip as a readable mmCIF."""
+    import time
+
+    pytest.importorskip("rdkit")
+    from iotbx.data_manager import DataManager
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._markers.append({"id": "marker-1", "name": "m", "position": [0.0, 0.0, 0.0],
+                             "atom": None, "visible": True})
+        before = {m["id"] for m in app._models}
+        app.fit_ligand_from_smiles_at_marker("marker-1", "CCO", "EOH", fit=False)
+        deadline = time.time() + 60
+        while time.time() < deadline and {m["id"] for m in app._models} == before:
+            qapp.processEvents()
+            time.sleep(0.05)
+        ligand = next(m for m in app._models if m["id"] not in before)
+        assert ligand["session"].model.restraints_manager_available()  # the Probe trigger
+
+        out = tmp_path / "EOH.cif"
+        app.write_object("model", ligand["id"], str(out))  # must not raise (no Probe)
+        DataManager().process_model_file(str(out))  # and it reparses as a real mmCIF
+    finally:
+        app.stop()
+
+
 def test_placing_a_ligand_clears_the_input_fields(qapp):
     """After a ligand is placed the code and SMILES boxes clear, so the next ligand cannot
     silently inherit the previous code as its name/restraints. A failed build leaves the

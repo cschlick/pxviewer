@@ -4683,7 +4683,16 @@ class DesktopApp:
             if model is None:
                 raise ValueError("no cctbx model to write")
             is_pdb = p.lower().endswith((".pdb", ".ent"))
-            text = model.model_as_pdb() if is_pdb else model.model_as_mmcif()
+            if is_pdb:
+                text = model.model_as_pdb()
+            else:
+                # Coordinates, not a validation report. model_as_mmcif() computes geometry
+                # statistics (clashscore) whenever restraints exist — which every ligand and
+                # minimized model here has — and clashscore shells out to Probe, a molprobity
+                # binary we neither ship nor need to write a file. The hierarchy's mmCIF is
+                # the coordinates + cell, matching the PDB branch, and never invokes Probe.
+                text = model.get_hierarchy().as_mmcif_string(
+                    crystal_symmetry=model.crystal_symmetry())
             with open(p, "w") as fh:
                 fh.write(text)
         elif kind == "volume":
