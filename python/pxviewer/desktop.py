@@ -6472,12 +6472,13 @@ class DesktopApp:
         self._restraint_prim_ids = []
 
     def show_restraint_notations(self, mid: Optional[str], specs) -> None:
-        """Draw geometry notations for the selected restraint rows.
+        """Show the selected restraint rows in the viewer.
 
-        ``specs`` is a list of ``(kind, i_seqs)``. Bonds/angles/dihedrals get their
-        measurement notation (so exactly the participating atoms are marked, not the
-        whole residue); chirality/planarity have no simple notation, so their atoms
-        are highlighted instead. Multiple rows -> multiple notations.
+        ``specs`` is a list of ``(kind, i_seqs)``. Every participating atom is highlighted —
+        so you see exactly *which* atoms make up the restraint, not the whole residue — and
+        bonds/angles/dihedrals also get their measurement notation drawn (the distance line,
+        angle arc or dihedral fan). Chirality/planarity have no simple notation, so they show
+        as the highlight alone. Multiple rows -> multiple. The camera frames them all.
         """
         session = self.session_for(mid)
         self._clear_restraint_notations()
@@ -6490,6 +6491,7 @@ class DesktopApp:
             pid = f"geomsel-{i}"
             iseqs = list(iseqs)
             focus_atoms.update(iseqs)
+            highlight.update(iseqs)  # mark every atom in the restraint, whatever the kind
             try:
                 if kind == "bond" and len(iseqs) == 2:
                     session.add_distance(iseqs[0], iseqs[1], id=pid)
@@ -6497,15 +6499,12 @@ class DesktopApp:
                     session.add_angle(iseqs[0], iseqs[1], iseqs[2], id=pid)
                 elif kind == "dihedral" and len(iseqs) == 4:
                     session.add_dihedral(iseqs[0], iseqs[1], iseqs[2], iseqs[3], id=pid)
-                else:  # chirality / planarity: no notation, just mark the atoms
-                    highlight.update(iseqs)
+                else:  # chirality / planarity: the highlight above is the only marking
                     continue
                 self._restraint_prim_ids.append(pid)
             except Exception:  # pragma: no cover - defensive (stale indices)
-                highlight.update(iseqs)
-        # Highlight only the atoms without a notation (empty list clears the overlay,
-        # so a pure bond/angle/dihedral selection shows just the notation).
-        try:
+                pass
+        try:  # (empty list clears the overlay)
             session.highlight(sorted(highlight))
         except Exception:  # pragma: no cover - defensive
             pass

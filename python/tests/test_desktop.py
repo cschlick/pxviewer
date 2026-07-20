@@ -2092,6 +2092,38 @@ def test_validation_subtabs_and_row_focus(qapp):
         app.stop()
 
 
+def test_restraint_row_marks_all_atoms_and_draws_its_notation(qapp):
+    """Selecting a restraint row marks *every* atom in the restraint and draws its
+    distance/angle/dihedral notation — so you see the atoms that form it, not one atom."""
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer.geometry import GeometryRestraints, monomer_library_available
+    if not monomer_library_available():
+        pytest.skip("no monomer library")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file("pxviewer/data/1ubq.pdb"), "1ubq")
+        sess = app._model_entry(mid)["session"]
+        gr = GeometryRestraints(sess.model)
+
+        for kind, n in (("bond", 2), ("angle", 3), ("dihedral", 4)):
+            iseqs = tuple(int(i) for i in gr.row(kind, 0)[0])
+            assert len(iseqs) == n
+            app.show_restraint_notations(mid, [(kind, iseqs)])
+            assert app._restraint_prim_ids == ["geomsel-0"]           # the notation is drawn
+            assert set(sess._last_highlight_indices) == set(iseqs)     # and every atom is marked
+
+        # Several selected rows -> several notations.
+        specs = [("bond", tuple(int(i) for i in gr.row("bond", r)[0])) for r in (0, 1)]
+        app.show_restraint_notations(mid, specs)
+        assert app._restraint_prim_ids == ["geomsel-0", "geomsel-1"]
+    finally:
+        app.stop()
+
+
 def test_residue_orientation_and_space_navigation(qapp):
     """Oriented focus frames a residue N->C screen-right with side chain up, and
     advance_residue steps along the chain (space-bar navigation)."""
