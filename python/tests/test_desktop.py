@@ -2124,6 +2124,42 @@ def test_restraint_row_marks_all_atoms_and_draws_its_notation(qapp):
         app.stop()
 
 
+def test_atom_precision_actions_switch_a_ribbon_to_ball_and_stick(qapp):
+    """A cartoon ribbon can't show atoms, so atom-precision work would draw markup into
+    empty space. Those actions switch the model to ball-and-stick first; reps that already
+    show atoms are left as the user chose."""
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer.geometry import GeometryRestraints, monomer_library_available
+    if not monomer_library_available():
+        pytest.skip("no monomer library")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file("pxviewer/data/1ubq.pdb"), "1ubq")
+        assert app._model_entry(mid)["rep"] == "cartoon"  # polymer default
+
+        # A restraint-row notation switches the ribbon to ball-and-stick.
+        gr = GeometryRestraints(app._model_entry(mid)["session"].model)
+        app.show_restraint_notations(mid, [("bond", tuple(int(i) for i in gr.row("bond", 0)[0]))])
+        assert app._model_entry(mid)["rep"] == "ball-and-stick"
+
+        # A rep that already shows atoms is left as chosen.
+        app.set_model_representation(mid, "spacefill")
+        app.ensure_atoms_shown(mid)
+        assert app._model_entry(mid)["rep"] == "spacefill"
+
+        # Measuring also switches a ribbon (select/colour do not — they aren't hooked).
+        app.set_model_representation(mid, "cartoon")
+        app._scene_selection[mid] = [0, 1]
+        app.measure_selection("distance")
+        assert app._model_entry(mid)["rep"] == "ball-and-stick"
+    finally:
+        app.stop()
+
+
 def test_residue_orientation_and_space_navigation(qapp):
     """Oriented focus frames a residue N->C screen-right with side chain up, and
     advance_residue steps along the chain (space-bar navigation)."""

@@ -4317,6 +4317,19 @@ class DesktopApp:
         entry["rep"] = rep
         self._apply_model_rep(entry)
 
+    def ensure_atoms_shown(self, mid: Optional[str] = None) -> None:
+        """Switch a model off a ribbon (cartoon) view to ball-and-stick, so atom-precision
+        work — measuring, restraint notations, restraint edits, ligand markers, dragging —
+        is not invisible or drawn into empty space over the ribbon. A no-op for any rep that
+        already shows atoms (ball-and-stick, spacefill, …). Safe to call from any thread."""
+        mid = mid or self._active_model_id
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("rep") != "cartoon":
+            return
+        entry["rep"] = "ball-and-stick"
+        self._apply_model_rep(entry)
+        self._emit_loaded_changed()  # reflect the switch in the appearance pane and tree
+
     def set_model_type_hidden(self, mid: str, label: str, hidden: bool) -> None:
         """Show or hide a structure type (protein/water/…) on a model."""
         entry = self._model_entry(mid)
@@ -4395,6 +4408,7 @@ class DesktopApp:
             atoms = list(self._scene_selection.get(self._active_model_id, []))
         if len(atoms) != need:
             raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
+        self.ensure_atoms_shown()  # the measurement marks atoms — show them under the ribbon
         if kind == "distance":
             session.add_distance(atoms[0], atoms[1])
         elif kind == "angle":
@@ -4571,6 +4585,7 @@ class DesktopApp:
         if session is None:  # pragma: no cover - defensive
             self._status("could not arm — the viewport has no session")
             return
+        self.ensure_atoms_shown()  # snapping to an atom needs the atoms visible, not a ribbon
         session.set_marker_mode(True)
         self._status("Click in the viewport to place a ligand marker…")
 
@@ -4802,6 +4817,7 @@ class DesktopApp:
             model = getattr(session, "model", None)
             if model is None:
                 return
+            self.ensure_atoms_shown(mid)  # dragging an atom needs to see the atoms, not a ribbon
             from .geometry import monomer_library_available
 
             if not monomer_library_available():
@@ -5205,6 +5221,7 @@ class DesktopApp:
         if kind == "dihedral":
             edit["periodicity"] = 1
         self._apply_edits(entry, list(entry.get("edits") or []) + [edit])
+        self.ensure_atoms_shown(mid)  # an edit is about specific atoms — show them
         return edit
 
     def remove_edit(self, mid: str, index: int) -> None:
@@ -6484,6 +6501,8 @@ class DesktopApp:
         self._clear_restraint_notations()
         if session is None:
             return
+        if specs:
+            self.ensure_atoms_shown(mid)  # a ribbon can't show the atoms this notation marks
         self._restraint_prim_session = session
         highlight: set = set()
         focus_atoms: set = set()
