@@ -632,7 +632,8 @@ def test_metal_example_and_its_sample_edits_file(qapp):
     from pxviewer.loader import sample_structure_path
 
     assert [t.title for t in tutorial.all_tutorials()] == \
-        ["Validate a structure", "Load restraint edits", "Custom restraint edits"]
+        ["Validate a structure", "Fit a ligand into density",
+         "Load restraint edits", "Custom restraint edits"]
 
     site = sample_structure_path("zn_site.pdb")
     edits_file = sample_structure_path("zn_site_edits.phil")
@@ -658,6 +659,57 @@ def test_metal_example_and_its_sample_edits_file(qapp):
         assert skipped == 0
         loaded = app.model_edits(mid)
         assert len(loaded) == 1 and loaded[0]["kind"] == "bond"
+    finally:
+        app.stop()
+
+
+def test_ligand_fitting_demo_makes_maps_and_fits_atp(qapp):
+    """The ligand-fitting demo loads a ligand-free model + reflections that contain ATP.
+    Making maps yields a paired 2mFo-DFc and an mFo-DFc difference map, and ATP fits back
+    into the blob it came from — the Phenix ligand-fitting tutorial, self-contained."""
+    import time
+
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer.geometry import monomer_library_available
+    if not monomer_library_available():
+        pytest.skip("no monomer library (ATP)")
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_ligand_fitting_demo()
+        qapp.processEvents()
+        assert len(app._models) == 1 and len(app._reflections) == 1
+        assert app.map_for_model() is None  # not phased yet
+        # the Demos menu offers it
+        labels = [a.text() for a in app._controls._build_demos_menu().actions()]
+        assert any("Ligand fitting" in l for l in labels)
+
+        mid, rid = app._models[0]["id"], app._reflections[0]["id"]
+        app.make_maps(rid, mid)
+        deadline = time.time() + 120
+        while time.time() < deadline and app.map_for_model(mid) is None:
+            qapp.processEvents()
+            time.sleep(0.1)
+        assert app.map_for_model(mid) is not None                       # paired 2mFo-DFc
+        assert any("mFo-DFc" in v["name"] for v in app._volumes)        # a difference map
+
+        # A marker at the blob, build+fit ATP — it lands where the density is.
+        center = app._LIGAND_FITTING_CENTER
+        app._markers.append({"id": "marker-1", "name": "m", "position": list(center),
+                             "atom": None, "visible": True})
+        before = {m["id"] for m in app._models}
+        app.fit_ligand_at_marker("marker-1", "ATP", fit=True, trials=8)
+        deadline = time.time() + 150
+        while time.time() < deadline and {m["id"] for m in app._models} == before:
+            qapp.processEvents()
+            time.sleep(0.1)
+        ligand = next(m for m in app._models if m["id"] not in before)
+        fitted = ligand["session"].model.get_sites_cart().as_numpy_array().mean(0)
+        assert np.linalg.norm(fitted - np.array(center)) < 4.0  # fitted into the blob
     finally:
         app.stop()
 
@@ -2408,17 +2460,19 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         # rows that keep the headers off the edges).
         examples = [a.text() for a in actions[ex_i + 1:tut_i]
                     if not a.isSeparator() and a.text().strip()]
-        assert len(examples) == 5
+        assert len(examples) == 6
         assert any("1UBQ" in l for l in examples)
         assert any("map + model" in l for l in examples)
         assert any("validation" in l for l in examples)
         assert any("X-ray" in l for l in examples)
+        assert any("Ligand fitting" in l for l in examples)
         assert any("Metal site" in l for l in examples)
-        # ...and the tutorials follow: validation, then the edits pair (loading before writing).
+        # ...and the tutorials follow: validation, ligand fitting, then the edits pair.
         tutorials = [a.text() for a in actions[tut_i + 1:]
                      if not a.isSeparator() and a.text().strip()]
         assert [t.lower() for t in tutorials] == \
-            ["validate a structure", "load restraint edits", "custom restraint edits"]
+            ["validate a structure", "fit a ligand into density",
+             "load restraint edits", "custom restraint edits"]
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
         buttons = ctl.widget().findChildren(QPushButton)

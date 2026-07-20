@@ -1387,6 +1387,8 @@ class ControlsWindow:
                        lambda: self._on_load_sample("1tec.pdb"))
         menu.addAction("X-ray — model + reflections (make density)",
                        self._on_run_xray_demo)
+        menu.addAction("Ligand fitting — fit ATP into difference density",
+                       self._on_run_ligand_fitting_demo)
         menu.addAction("Metal site — Zn coordination (restraint edits)",
                        lambda: self._on_load_sample("zn_site.pdb"))
         gap = menu.addAction(" ")  # a blank line between the sections, above "Tutorials"
@@ -1516,6 +1518,7 @@ class ControlsWindow:
             "Arm placement, then click in the viewport: a ligand marker is dropped there — "
             "snapped to the atom under the cursor, or the view plane in empty space.")
         place_btn.clicked.connect(self._desktop.arm_marker)
+        self._lig_place_btn = place_btn  # a tutorial highlight target
         mk_row.addWidget(place_btn)
         clear_mk = self._make_icon_button("circle-off", "Clear", "Remove all ligand markers")
         clear_mk.clicked.connect(self._desktop.clear_markers)
@@ -3077,6 +3080,14 @@ class ControlsWindow:
             self._desktop.load_xray_demo()
         except Exception as exc:  # computing the reflections can fail; keep the app up
             QMessageBox.warning(self._window, "X-ray demo failed", str(exc))
+
+    def _on_run_ligand_fitting_demo(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        try:
+            self._desktop.load_ligand_fitting_demo()
+        except Exception as exc:  # building the ligand / reflections can fail; keep the app up
+            QMessageBox.warning(self._window, "Ligand-fitting demo failed", str(exc))
 
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
@@ -6234,6 +6245,57 @@ class DesktopApp:
             f"X-ray demo: {SAMPLE_STRUCTURE[0]} + reflections — open the reflections and "
             "click Make maps")
         return "xray"
+
+    # Where the hidden ATP sits, cartesian, in the bundled model's frame — near the surface
+    # with clearance from the unit-cell edges, so its difference blob doesn't wrap.
+    _LIGAND_FITTING_CENTER = (18.0, 20.0, 15.0)
+    _LIGAND_FITTING_CODE = "ATP"
+
+    def load_ligand_fitting_demo(self, *, d_min: float = 2.0) -> str:
+        """Demo mirroring Phenix's ligand-fitting tutorial (fit a flexible ligand into a
+        difference map), self-contained. Reflections are computed from the bundled protein
+        *with* an ATP placed near its surface, but only the ligand-free protein is loaded —
+        so Make maps yields an mFo-DFc map with an ATP-shaped blob where the model has
+        nothing. Place a marker in the blob and build/fit ATP into it."""
+        import os
+        import tempfile
+
+        self.stop_demo()
+        self._reset_interactions()
+
+        from . import ligands
+        from .cctbx_io import read_model
+
+        sample = sample_structure_path()
+        if sample is None:
+            raise FileNotFoundError("the bundled sample model is missing")
+
+        protein = read_model(str(sample))
+        cs = protein.crystal_symmetry()
+        ligand = ligands.build_ligand_model(
+            self._LIGAND_FITTING_CODE, self._LIGAND_FITTING_CENTER, crystal_symmetry=cs)
+
+        # Amplitudes from protein + ligand together; the model loaded is protein only.
+        combined = protein.get_xray_structure().deep_copy_scatterers()
+        combined = combined.concatenate(ligand.get_xray_structure())
+        f_calc = combined.structure_factors(d_min=d_min).f_calc()
+        f_obs = abs(f_calc).set_observation_type_xray_amplitude()
+        f_obs = f_obs.customized_copy(sigmas=f_obs.data() * 0.05)
+        flags = f_obs.generate_r_free_flags(fraction=0.05)
+
+        out_dir = tempfile.mkdtemp(prefix="pxviewer-ligfit-demo-")  # outlives the load
+        mtz = os.path.join(out_dir, "ligand_fitting_data.mtz")
+        dataset = f_obs.as_mtz_dataset(column_root_label="F")
+        dataset.add_miller_array(flags, column_root_label="R-free-flags")
+        dataset.mtz_object().write(mtz)
+
+        with self._batch_load():
+            self._load_model_file(str(sample))
+            self._load_reflection_file(mtz)
+        self._status(
+            "Ligand-fitting demo: a ligand-free model + reflections that contain ATP — open "
+            "the reflections, Make maps, then fit ATP into the mFo-DFc blob")
+        return "ligand-fitting"
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
         """Stream an animated model demo into the viewport."""

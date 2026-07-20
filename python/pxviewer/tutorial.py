@@ -79,6 +79,48 @@ def validation_tutorial() -> Tutorial:
     ])
 
 
+def ligand_fitting_tutorial() -> Tutorial:
+    """Fit a ligand into difference density — pxviewer's take on Phenix's ligand-fitting
+    tutorial, self-contained (no phenix, no external data)."""
+    return Tutorial("Fit a ligand into density", [
+        Step(
+            "Phenix's ligand-fitting tutorial fits a flexible ligand into a difference map. "
+            "Let's do the same, straight from data.\n\nOpen the example: click **Demos** and "
+            "pick **Ligand fitting** — a ligand-free model plus reflections that secretly "
+            "contain an ATP.",
+            done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
+            target=lambda cw: cw._demos_btn,
+        ),
+        Step(
+            "Compute the maps: in the **Scene** list select the **reflections** object and "
+            "click **Make maps** in its panel. That phases the data against the model — and "
+            "the **mFo-DFc** difference map lights up a green blob where the model is missing "
+            "atoms: the ATP.",
+            done=lambda cw: cw._desktop.map_for_model() is not None,
+        ),
+        Step(
+            "Mark the blob. Contour the **mFo-DFc** map (scroll the wheel over the viewport) "
+            "and rotate to the green density near the protein. Then on the **Tools** tab, in "
+            "**Ligand placement**, click **Place ligand marker** and click the blob in the "
+            "viewport to drop a marker there.",
+            done=lambda cw: len(cw._desktop._markers) >= 1,
+            target=lambda cw: cw._lig_place_btn,
+        ),
+        Step(
+            "Build and fit: in the Ligand placement panel type **ATP** in the monomer-code "
+            "box, tick **Fit into density**, and click **Fit ligand here**. It builds ATP and "
+            "settles it into the density (explode-and-refine).",
+            done=lambda cw: any("ligand" in m["name"].lower() for m in cw._desktop._models),
+            target=lambda cw: cw._lig_fit_btn,
+        ),
+        Step(
+            "Done — ATP is now modelled in the density that was empty. That is the whole "
+            "ligand-fitting loop, the same as Phenix's tutorial: difference map → place → "
+            "build → fit — with no phenix and no downloaded dataset.",
+        ),
+    ])
+
+
 def load_edits_tutorial() -> Tutorial:
     """Load a shared restraint-edits file onto a structure — the reading half of the loop."""
     return Tutorial("Load restraint edits", [
@@ -141,6 +183,7 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — validation first, then the edits pair
-    (reading before writing)."""
-    return [validation_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]
+    """Every walkthrough offered, in menu order — validate, fit a ligand, then the restraint-
+    edits pair (reading before writing)."""
+    return [validation_tutorial(), ligand_fitting_tutorial(),
+            load_edits_tutorial(), restraint_edits_tutorial()]
