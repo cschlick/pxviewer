@@ -2,6 +2,15 @@
 
 __version__ = "0.1.0"
 
+# Point cctbx at the monomer library shipped by the `chem_data` package (if present)
+# before any restraints are built, so minimization/validation work out of the box on a
+# conda install. Cheap and side-effect-free when chem_data is absent or the variable is
+# already set; the real logic (and env-var precedence) lives in geometry.monomer_library_root.
+from .geometry import monomer_library_root as _monomer_library_root
+
+_monomer_library_root()
+del _monomer_library_root
+
 from .api import (
     AtomArrays,
     Volume,

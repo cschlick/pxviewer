@@ -20,19 +20,45 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 MONOMER_LIBRARY_HELP = (
     "Geometry restraints need the CCP4 / geostd monomer library.\n\n"
-    "Set MMTBX_CCP4_MONOMER_LIB to a geostd checkout:\n"
+    "It ships with the `chem_data` conda package — install it alongside pxviewer:\n"
+    "    conda install -c chem_data chem_data\n\n"
+    "or point MMTBX_CCP4_MONOMER_LIB at a geostd checkout:\n"
     "    git clone https://github.com/phenix-project/geostd\n"
     "    export MMTBX_CCP4_MONOMER_LIB=/path/to/geostd\n\n"
     "then reopen the model."
 )
 
 
+def _chem_data_geostd() -> Optional[str]:
+    """The geostd directory shipped by the ``chem_data`` conda package, if importable.
+
+    ``chem_data`` is a plain importable package, so this resolves regardless of the
+    Python version or platform layout (no hard-coded ``site-packages`` path) — which
+    is what lets the conda package find the monomer library without an activation hook.
+    """
+    try:
+        import chem_data
+    except Exception:
+        return None
+    path = os.path.join(os.path.dirname(chem_data.__file__), "geostd")
+    return path if os.path.isdir(path) else None
+
+
 def monomer_library_root() -> Optional[str]:
-    """The monomer-library (geostd) directory cctbx will use, or None."""
+    """The monomer-library (geostd) directory cctbx will use, or None.
+
+    An explicit ``MMTBX_CCP4_MONOMER_LIB`` / ``CLIBD_MON`` wins; otherwise fall back to
+    the geostd the ``chem_data`` package ships and export ``MMTBX_CCP4_MONOMER_LIB`` so
+    cctbx's own pdb_interpretation — which reads that variable directly — finds it too.
+    """
     for var in ("MMTBX_CCP4_MONOMER_LIB", "CLIBD_MON"):
         path = os.environ.get(var)
         if path and os.path.isdir(path):
             return path
+    geostd = _chem_data_geostd()
+    if geostd:
+        os.environ.setdefault("MMTBX_CCP4_MONOMER_LIB", geostd)
+        return geostd
     return None
 
 

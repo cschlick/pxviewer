@@ -13,34 +13,57 @@ through cctbx, then maps onto Mol\*'s data on the Python side.
 
 ## Quick start
 
-### Environment (conda)
+### Install (conda package)
 
-Model I/O needs **cctbx**, which ships only on conda-forge (not PyPI), so pxviewer
-installs via conda:
+Model I/O needs **cctbx** and its **geostd** monomer library, which ship only on conda
+channels (not PyPI), so pxviewer installs via conda:
+
+```bash
+conda install -c <your-channel> -c conda-forge -c chem_data pxviewer
+pxviewer desktop        # launch the app
+```
+
+`chem_data` (cctbx's own anaconda.org channel — a free community channel, not Anaconda's
+`defaults`, so no commercial ToS) ships the geostd monomer library the restraints and
+validation code needs; it's a `run` dependency of the package, and pxviewer discovers its
+geostd automatically at import — no env var or activation hook to set. The built Mol*
+frontend is bundled inside the package, so the install is self-contained.
+
+To build the package yourself, see [`conda-recipe/`](conda-recipe/meta.yaml):
+
+```bash
+./scripts/build_frontend.sh                        # produce frontend/build/index.js
+conda build conda-recipe -c conda-forge -c chem_data
+```
+
+pxviewer is `noarch: python`, so one build (on Linux or macOS) installs everywhere.
+
+### Environment (conda, from source)
+
+For development from a checkout:
 
 ```bash
 conda env create -f environment.yml   # python, cctbx-base, chem_data, PySide6, …
 conda activate pxviewer
-./scripts/setup_chem_data.sh           # monomer lib + validation caches (see below)
-conda deactivate && conda activate pxviewer   # pick up the monomer-lib hook it wrote
 pip install -e ./python                # the pxviewer package itself
+./scripts/setup_chem_data.sh           # (optional) build the validation caches
 ```
 
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
-The `chem_data` package (installed by `environment.yml` from cctbx's own
-anaconda.org channel — a free community channel, not Anaconda's `defaults`) ships
-the geostd monomer library the restraints code needs and the rotamer/CaBLAM
-validation data; `setup_chem_data.sh` points `MMTBX_CCP4_MONOMER_LIB` at geostd and
-builds the validation caches, so there's no separate geostd checkout to manage
-(see below).
+The `chem_data` package (from cctbx's community anaconda.org channel) ships the geostd
+monomer library and the rotamer/CaBLAM validation data. The monomer library is found
+automatically (pxviewer resolves geostd straight from the importable `chem_data`
+package), so no `MMTBX_CCP4_MONOMER_LIB` hook is needed; `setup_chem_data.sh` remains
+only to build the validation caches (see below).
 
 ### Frontend
 
+The conda package bundles the built frontend, so this is only for source checkouts. Build
+the Mol* bundle once (esbuild ships a static binary — no node runtime needed):
+
 ```bash
-cd frontend
-npm install
-npm run build
-# serve this directory over http, then open index.html
+cd frontend && npm ci          # populate node_modules (molstar, react, esbuild)
+cd .. && ./scripts/build_frontend.sh   # -> frontend/build/index.js
 ```
 
 ### Load a model
@@ -456,12 +479,12 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
 - **Demos** — the built-in model and volume demos.
 
 The geometry restraints tables build with cctbx, which needs the CCP4/**geostd**
-monomer library. The conda env supplies it: `environment.yml` installs the
-`chem_data` package (which bundles geostd), and `scripts/setup_chem_data.sh`
-points `MMTBX_CCP4_MONOMER_LIB` at it via an activate.d hook (and builds the
-rotamer/CaBLAM validation caches) — so the standard setup above needs nothing extra.
-The tables show a setup hint until the variable is set. Outside a conda env, or to
-use your own copy, point it at a checkout directly:
+monomer library. The `chem_data` package supplies it (a `run` dependency of the conda
+package, and installed by `environment.yml`): pxviewer resolves geostd straight from the
+importable `chem_data` package and exports `MMTBX_CCP4_MONOMER_LIB` itself, so restraints
+work out of the box with no hook or manual step. The tables show a setup hint only if no
+library can be found at all. To override — outside a conda env, or to use your own copy —
+point the variable at a checkout directly (it takes precedence over `chem_data`):
 
 ```bash
 git clone https://github.com/phenix-project/geostd

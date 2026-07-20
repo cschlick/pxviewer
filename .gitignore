@@ -22,6 +22,10 @@ AGENTS.md
 # Local dev fixtures for manual GUI testing (regenerate: scripts/make_dev_fixtures.py)
 python/tests/data/
 
+# Built frontend copied into the package at conda-build time (conda-recipe/build.sh);
+# the `build/` rule above already covers its build/ subdir, this covers the HTML/icon.
+python/pxviewer/frontend/
+
 # geostd monomer library (large; git clone https://github.com/phenix-project/geostd)
 /geostd/
 

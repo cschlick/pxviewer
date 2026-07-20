@@ -17,10 +17,19 @@ from typing import Optional, Tuple
 
 
 def find_frontend_dir() -> Optional[Path]:
-    """Locate the frontend directory in an editable checkout, if present."""
-    candidate = Path(__file__).resolve().parents[2] / "frontend"
-    if (candidate / "index.html").exists():
-        return candidate
+    """Locate the frontend directory: bundled inside the installed package first, then
+    the sibling ``frontend/`` of an editable source checkout.
+
+    A conda/pip install ships the built frontend at ``pxviewer/frontend/`` (see the
+    packaging recipe), so the installed package is self-contained. In a source checkout
+    that directory does not exist, and the repo's top-level ``frontend/`` is used instead.
+    """
+    packaged = Path(__file__).resolve().parent / "frontend"
+    if (packaged / "index.html").exists():
+        return packaged
+    checkout = Path(__file__).resolve().parents[2] / "frontend"
+    if (checkout / "index.html").exists():
+        return checkout
     return None
 
 

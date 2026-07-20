@@ -14,9 +14,13 @@ dependencies = [
     # cctbx currently supports numpy <= 2.4.
     "numpy>=1.23,<2.5",
 ]
-# NOTE: atomic-model I/O needs cctbx (`cctbx-base`), which ships only on
-# conda-forge, not PyPI — so it can't be a dependency here. Install it with conda
-# (see environment.yml) or: conda install -c conda-forge cctbx-base
+# NOTE: atomic-model I/O needs cctbx (`cctbx-base`) and its monomer library
+# (`chem_data`), which ship only on conda channels, not PyPI — so they can't be
+# dependencies here. Install with conda (see environment.yml / conda-recipe), or:
+# conda install -c conda-forge -c chem_data cctbx-base chem_data
+
+[project.scripts]
+pxviewer = "pxviewer.__main__:main"
 
 [project.optional-dependencies]
 live = [
@@ -38,9 +42,14 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["pxviewer"]
-# Bundled data — the sample model (pxviewer/data/1aki.pdb), the app icon and the Lucide
-# tab icons (pxviewer/assets/**) — is included automatically as it lives inside the
-# package directory.
+# Bundled data — the sample models (pxviewer/data/**), the app icon and the Lucide tab
+# icons (pxviewer/assets/**) — is included automatically as it lives inside the package
+# directory. The built Mol* frontend is copied to pxviewer/frontend/ at packaging time
+# (scripts/build_frontend.sh then the conda recipe); it must be force-listed as an
+# artifact because its build/ subdir matches a .gitignore rule hatchling would honour.
+artifacts = [
+    "pxviewer/frontend/**",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

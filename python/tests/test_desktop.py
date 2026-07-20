@@ -1657,8 +1657,12 @@ def test_geometry_shows_setup_message_without_monomer_library(qapp, monkeypatch)
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
+    import pxviewer.geometry as geometry
+
     monkeypatch.delenv("MMTBX_CCP4_MONOMER_LIB", raising=False)
     monkeypatch.delenv("CLIBD_MON", raising=False)
+    # ...and pretend chem_data (which ships geostd) isn't installed, so no library is found.
+    monkeypatch.setattr(geometry, "_chem_data_geostd", lambda: None)
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession

@@ -30,8 +30,12 @@ def _model():
 
 
 def test_build_geometry_returns_none_without_monomer_library(monkeypatch):
+    import pxviewer.geometry as geometry
+
     monkeypatch.delenv("MMTBX_CCP4_MONOMER_LIB", raising=False)
     monkeypatch.delenv("CLIBD_MON", raising=False)
+    # ...and pretend the chem_data package isn't installed either, so nothing supplies geostd.
+    monkeypatch.setattr(geometry, "_chem_data_geostd", lambda: None)
     assert not monomer_library_available()
     assert build_geometry(object()) is None
 

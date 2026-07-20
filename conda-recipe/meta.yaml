@@ -1,0 +1,80 @@
+{% set version = "0.1.0" %}
+
+# Conda recipe for pxviewer.
+#
+# Build (once, on Linux or macOS — the package is noarch so it then installs everywhere):
+#
+#     ./scripts/build_frontend.sh          # produce frontend/build/index.js
+#     conda build conda-recipe -c conda-forge -c chem_data
+#
+# Install the built package:
+#
+#     conda install -c <your-channel> -c conda-forge -c chem_data pxviewer
+#
+# `chem_data` (cctbx's community channel — not Anaconda's `defaults`, so no commercial
+# ToS) ships the geostd monomer library; pxviewer discovers it automatically at import
+# (pxviewer.geometry.monomer_library_root), so no activation hook or env var is needed.
+
+package:
+  name: pxviewer
+  version: {{ version }}
+
+source:
+  path: ..
+
+build:
+  noarch: python
+  number: 0
+  script_env:
+    - PXVIEWER_SKIP_FRONTEND_BUILD
+  entry_points:
+    - pxviewer = pxviewer.__main__:main
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - hatchling
+  run:
+    - python >=3.10
+    # Atomic-model I/O, maps, restraints and refinement.
+    - cctbx-base
+    # The geostd monomer library restraints/validation build from (cctbx channel).
+    - chem_data
+    # SMILES -> 3D conformer for on-the-fly ligand placement.
+    - rdkit
+    # cctbx currently supports numpy <= 2.4.
+    - numpy <2.5
+    # The desktop app: Qt bindings + the native WebEngine module PySide6 does not pull in.
+    - pyside6 >=6.5
+    - qt6-webengine
+    # Scene/data building and the live WebSocket viewport.
+    - molviewspec >=1.8.0
+    - msgpack-python >=1.0
+    - websockets >=12.0
+    # The embedded Jupyter console.
+    - ipykernel >=6.0
+
+test:
+  requires:
+    - pip
+  imports:
+    - pxviewer
+    - pxviewer.desktop
+  commands:
+    # Dependency tree is consistent, the CLI is installed, and the frontend + monomer
+    # library are actually resolvable from the installed package.
+    - pip check
+    - pxviewer --help
+    - python -c "from pxviewer.appserver import find_frontend_dir, frontend_is_built; d = find_frontend_dir(); assert d is not None and frontend_is_built(d), 'frontend not bundled'"
+    - python -c "from pxviewer.geometry import monomer_library_available; assert monomer_library_available(), 'chem_data monomer library not found'"
+
+about:
+  home: https://github.com/cschlick/pxviewer
+  license: LicenseRef-pxviewer-source-available
+  license_file: LICENSE
+  summary: A desktop molecular-structure viewer (cctbx + Mol*) with live refinement, validation and restraint editing.
+
+extra:
+  recipe-maintainers:
+    - cschlick

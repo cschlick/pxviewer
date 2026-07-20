@@ -17,8 +17,8 @@
 # anaconda.org channel, not conda-forge — a free community channel, not
 # Anaconda's `defaults`, so no commercial ToS applies. It only carries the
 # latest build. Installing it here means the restraints data comes with the
-# env instead of a separately-managed geostd checkout; point
-# MMTBX_CCP4_MONOMER_LIB at its geostd dir (see README) so cctbx finds it.
+# env instead of a separately-managed geostd checkout; pxviewer resolves its geostd
+# dir straight from the importable chem_data package, so cctbx finds it with no hook.
 # qt6-webengine: PySide6 carries the Python bindings for QtWebEngine (the desktop
 # app's Mol* viewport), but conda-forge splits the native Qt WebEngine module into
 # its own package that pyside6 does not pull in — without it the viewport import
