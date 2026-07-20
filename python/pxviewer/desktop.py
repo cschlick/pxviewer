@@ -1879,15 +1879,17 @@ class ControlsWindow:
                 {**it, **self._desktop.model_appearance(mid)}.get("clip"), _set_clip)
 
             if it.get("has_restraints_cif"):
-                # A ligand built here carries its own geostd restraint CIF — offer to save it.
-                save_cif = QPushButton("Save restraints (CIF)…")
-                save_cif.setToolTip(
-                    "Write this ligand's geometry restraints as a geostd-style monomer CIF, "
-                    "with a provenance block recording the SMILES and the rdkit version that "
-                    "produced it.")
-                save_cif.clicked.connect(
-                    lambda _=False, d=mid, nm=it["name"]: self._on_save_restraints(d, nm))
-                self._appearance_layout.addWidget(save_cif)
+                # A ligand built here — export the pair a refinement needs: its fitted
+                # coordinates and its restraints dictionary, in one action.
+                export = QPushButton("Export ligand (coordinates + restraints)…")
+                export.setToolTip(
+                    "Write the two files a refinement needs together: the fitted coordinates "
+                    "(mmCIF or PDB) and, saved alongside as <name>_restraints.cif, the "
+                    "restraints dictionary — a geostd-style monomer CIF with the SMILES and "
+                    "rdkit-version provenance that built it.")
+                export.clicked.connect(
+                    lambda _=False, d=mid, nm=it["name"]: self._on_export_ligand(d, nm))
+                self._appearance_layout.addWidget(export)
         else:  # volume
             vid = it["id"]
             # Read the live values, not this snapshot: the level in particular can have
@@ -2769,19 +2771,20 @@ class ControlsWindow:
         except Exception as exc:
             QMessageBox.warning(self._window, "Write failed", str(exc))
 
-    def _on_save_restraints(self, mid: str, name: str) -> None:
+    def _on_export_ligand(self, mid: str, name: str) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         default = name.split(" (")[0].strip() or "ligand"  # "AIN (ligand)" -> "AIN"
         path, _ = QFileDialog.getSaveFileName(
-            self._window, "Save restraints", f"{default}.cif", "Monomer CIF (*.cif)")
+            self._window, "Export ligand (coordinates + restraints)",
+            f"{default}.cif", "mmCIF coordinates (*.cif);;PDB coordinates (*.pdb)")
         if not path:
             return
         try:
-            self._desktop.save_restraints_cif(mid, path)
-            self._set_status(f"Saved restraints to {Path(path).name}")
+            coord, restraints = self._desktop.export_ligand(mid, path)
+            self._set_status(f"Exported {Path(coord).name} + {Path(restraints).name}")
         except Exception as exc:
-            QMessageBox.warning(self._window, "Save restraints failed", str(exc))
+            QMessageBox.warning(self._window, "Export failed", str(exc))
 
     def _on_chip(self, button, expr: str) -> None:
         for other, _ in self._sel_chips:
@@ -4716,6 +4719,21 @@ class DesktopApp:
             raise ValueError("this object has no restraints to save")
         with open(str(path), "w") as fh:
             fh.write(cif)
+
+    def export_ligand(self, mid: str, coord_path: str) -> tuple:
+        """Write a ligand as the pair a refinement needs, in one step: its fitted
+        coordinates (``coord_path``, mmCIF or PDB by extension) and — saved alongside as
+        ``<stem>_restraints.cif`` — its restraints dictionary. The dictionary carries the
+        ideal geometry in the monomer frame, so it complements the coordinates rather than
+        repeating them. Returns ``(coord_path, restraints_path)``."""
+        entry = self._model_entry(mid)
+        if not (entry and entry.get("restraints_cif")):
+            raise ValueError("this object has no restraints to export")
+        p = Path(coord_path)
+        restraints_path = str(p.with_name(p.stem + "_restraints.cif"))
+        self.write_object("model", mid, str(coord_path))  # fitted coordinates
+        self.save_restraints_cif(mid, restraints_path)     # restraints dictionary
+        return str(coord_path), restraints_path
 
     def _volume_command(self, vid: str, key: str, value, send) -> None:
         """Record a volume appearance change and push it to the viewport live.
