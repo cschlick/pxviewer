@@ -1360,9 +1360,13 @@ class ControlsWindow:
         ming.addLayout(min_row)
         layout.addWidget(minimization)
 
-        # -- Dragging atoms ------------------------------------------------
-        # Armed deliberately: while it is on, a left-drag onto an atom pulls the model
-        # about instead of turning the view.
+        layout.addStretch()
+        return tab
+
+    def _build_drag_group(self):
+        """The 'Drag atoms' options (lives on the Settings tab)."""
+        from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout
+
         dragging = QGroupBox("Drag atoms")
         dg = QVBoxLayout(dragging)
         hint = QLabel("Shift-drag any atom or bond to pull it; the model bends to follow.")
@@ -1380,13 +1384,11 @@ class ControlsWindow:
             "Hold Shift and the model keeps relaxing the whole time — a gentle living "
             "settle that stays in motion even when the pointer is still, rather than "
             "nudging once per move and stopping.")
+        self._tug_continuous_check.setChecked(True)  # on by default; connect after, no fire
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         dg.addWidget(self._tug_continuous_check)
-        layout.addWidget(dragging)
-
-        layout.addStretch()
-        return tab
+        return dragging
 
     def _on_minimize(self) -> None:
         try:
@@ -1619,6 +1621,8 @@ class ControlsWindow:
         radius_row.addStretch()
         vg.addLayout(radius_row)
         layout.addWidget(viewer)
+
+        layout.addWidget(self._build_drag_group())
 
         layout.addStretch()
         return tab
@@ -3252,9 +3256,11 @@ class DesktopApp:
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
-        # Dragging atoms: Shift-drag, one drag at a time (there is one pointer).
+        # Dragging atoms: Shift-drag, one drag at a time (there is one pointer). Continuous
+        # relaxation is on by default — a drag settles as a living motion, which reads better
+        # than a nudge-and-stop; the checkbox in Settings mirrors this.
         self._tug_into_density = False
-        self._tug_continuous = False
+        self._tug_continuous = True
         self._tug: Any = None
         self._tug_model: Optional[str] = None
         self._tug_session: Any = None
