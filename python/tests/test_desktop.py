@@ -560,6 +560,59 @@ def test_smiles_ligand_restraints_can_be_saved(qapp, tmp_path):
         app.stop()
 
 
+def test_tutorial_coach_advances_when_steps_are_done(qapp):
+    """The guided coach is non-modal and hidden until started, then advances itself as each
+    step's task is actually done (model loaded, atoms selected, edit added) — not on a mere
+    button press — and closes on Finish."""
+    import time
+
+    pytest.importorskip("rdkit")
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer import tutorial
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        cw = app._controls
+        assert cw._coach_bar.isHidden()  # not shown until a tutorial starts
+
+        cw._start_tutorial(tutorial.restraint_edits_tutorial())
+        assert not cw._coach_bar.isHidden()
+        assert cw._coach_progress.text() == "Step 1 / 4"
+
+        # Step 1: the action loads the sample; the predicate then advances.
+        cw._run_tutorial_action()
+        deadline = time.time() + 30
+        while time.time() < deadline and not app._models:
+            qapp.processEvents()
+            time.sleep(0.02)
+        cw._maybe_advance_tutorial()
+        assert cw._coach_progress.text() == "Step 2 / 4"
+
+        # Step 2: selecting two atoms advances.
+        mid = app._active_model_id
+        app._scene_selection[mid] = [0, 1]
+        cw._maybe_advance_tutorial()
+        assert cw._coach_progress.text() == "Step 3 / 4"
+
+        # Step 3: authoring an edit (two atoms in different residues) advances to the last step.
+        atoms = app._model_entry(mid)["session"].model.get_hierarchy().atoms()
+        resseqs = [a.parent().parent().resseq for a in atoms]
+        j = next(k for k in range(len(atoms)) if resseqs[k] != resseqs[0])
+        app._scene_selection[mid] = [0, j]
+        app.add_edit_from_selection(mid, "bond")
+        cw._maybe_advance_tutorial()
+        assert cw._coach_progress.text() == "Step 4 / 4"
+        assert cw._coach_next.text() == "Finish"
+
+        # Finish closes the coach.
+        cw._tutorial_next()
+        assert cw._coach_bar.isHidden() and cw._tutorial is None
+    finally:
+        app.stop()
+
+
 def test_authoring_saving_and_loading_restraint_edits(qapp, tmp_path):
     """Author a custom bond from a selection, see it validated and listed, round-trip it
     through a PHIL file, and confirm the model's restraints carry it. A duplicate edit (a
@@ -1879,11 +1932,13 @@ def test_new_model_focuses_appearance(qapp):
 
 
 def test_axis_off_by_default_and_help(qapp):
-    """XYZ axes start hidden (the Settings checkbox is unchecked) and the Help button
-    updates the status line."""
+    """XYZ axes start hidden (the Settings checkbox is unchecked) and the Help button opens
+    a non-modal menu of guided tutorials."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtWidgets import QMenu
 
     from pxviewer.desktop import DesktopApp
 
@@ -1892,8 +1947,11 @@ def test_axis_off_by_default_and_help(qapp):
     try:
         controls = app._controls
         assert controls._axis_check.isChecked() is False  # axes off by default
-        controls._on_help()
-        assert "coming soon" in controls._status_label.text().lower()
+        controls._on_help()  # opens the tutorials menu (non-blocking; must not raise/hang)
+        menu = controls._window.findChild(QMenu, "tutorialMenu")
+        assert menu is not None
+        assert any("restraint" in a.text().lower() for a in menu.actions())
+        menu.close()
     finally:
         app.stop()
 

@@ -978,6 +978,12 @@ class ControlsWindow:
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
+        # A non-modal guided-tutorial 'coach' bar at the top, hidden until a tutorial starts.
+        self._tutorial = None            # active Tutorial (see pxviewer.tutorial)
+        self._tutorial_step = 0
+        self._tutorial_timer = None      # polls the step's done() predicate while active
+        layout.addWidget(self._build_coach_bar())
+
         self._console = None  # EmbeddedConsole, created lazily on first tab view
         self._console_started = False
         self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
@@ -1041,10 +1047,10 @@ class ControlsWindow:
             "maximize-2", "Detach", "Detach the controls to their own window")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
-        help_btn = self._make_icon_button(
-            "circle-question-mark", "Help", "Documentation (coming soon)")
-        help_btn.clicked.connect(self._on_help)
-        status_row.addWidget(help_btn)
+        self._help_btn = self._make_icon_button(
+            "circle-question-mark", "Help", "Guided tutorials and documentation")
+        self._help_btn.clicked.connect(self._on_help)
+        status_row.addWidget(self._help_btn)
         layout.addLayout(status_row)
 
         self._suppress_model_events = False
@@ -3013,8 +3019,161 @@ class ControlsWindow:
         return b
 
     def _on_help(self) -> None:
-        # Placeholder until the documentation is linked.
-        self._set_status("Documentation coming soon.")
+        from PySide6.QtWidgets import QMenu
+
+        from . import tutorial
+
+        menu = QMenu(self._window)
+        menu.setObjectName("tutorialMenu")
+        menu.addSection("Guided tutorials")
+        for tut in tutorial.all_tutorials():
+            act = menu.addAction(tut.title)
+            act.triggered.connect(lambda _c=False, t=tut: self._start_tutorial(t))
+        menu.addSeparator()
+        doc = menu.addAction("Documentation (coming soon)")
+        doc.setEnabled(False)
+        # popup(), not exec(): non-blocking, so it never freezes a headless/fuzzer run the
+        # way a modal exec() loop would. The menu is parented to the window, so it lives on.
+        menu.popup(self._help_btn.mapToGlobal(self._help_btn.rect().bottomLeft()))
+
+    # -- guided tutorials: a non-modal coach that advances when a step is actually done ----
+
+    def _build_coach_bar(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+        bar = QFrame()
+        bar.setObjectName("coachBar")
+        bar.setStyleSheet(
+            "#coachBar { background:#eef4ff; border:1px solid #b9d0f0; border-radius:6px; }"
+            "#coachBar QLabel { color:#16283f; }")
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        self._coach_title = QLabel("")
+        self._coach_title.setStyleSheet("font-weight:600; color:#16283f;")
+        head.addWidget(self._coach_title)
+        head.addStretch(1)
+        self._coach_progress = QLabel("")
+        self._coach_progress.setStyleSheet("color:#5a6b85;")
+        head.addWidget(self._coach_progress)
+        close = QPushButton("✕")
+        close.setFixedWidth(26)
+        close.setFlat(True)
+        close.setToolTip("Exit the tutorial")
+        close.clicked.connect(lambda: self._tutorial_exit())
+        head.addWidget(close)
+        v.addLayout(head)
+        self._coach_text = QLabel("")
+        self._coach_text.setWordWrap(True)
+        self._coach_text.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(self._coach_text)
+        row = QHBoxLayout()
+        self._coach_action = QPushButton("")
+        self._coach_action.clicked.connect(self._run_tutorial_action)
+        row.addWidget(self._coach_action)
+        row.addStretch(1)
+        self._coach_back = QPushButton("Back")
+        self._coach_back.clicked.connect(self._tutorial_back)
+        row.addWidget(self._coach_back)
+        self._coach_next = QPushButton("Next")
+        self._coach_next.clicked.connect(self._tutorial_next)
+        row.addWidget(self._coach_next)
+        v.addLayout(row)
+        bar.setVisible(False)
+        self._coach_bar = bar
+        return bar
+
+    @staticmethod
+    def _coach_markup(text: str) -> str:
+        """Tiny markdown → HTML for the coach: **bold**, `code`, and blank-line breaks."""
+        import html
+        import re
+
+        t = html.escape(text)
+        t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
+        t = re.sub(r"`(.+?)`", r"<code>\1</code>", t)
+        return t.replace("\n\n", "<br><br>").replace("\n", "<br>")
+
+    def _start_tutorial(self, tutorial_obj) -> None:
+        from PySide6.QtCore import QTimer
+
+        self._tutorial = tutorial_obj
+        self._tutorial_step = 0
+        self._coach_bar.setVisible(True)
+        if self._tutorial_timer is None:
+            self._tutorial_timer = QTimer(self._window)
+            self._tutorial_timer.setInterval(400)  # poll the step's done() predicate
+            self._tutorial_timer.timeout.connect(self._maybe_advance_tutorial)
+        self._tutorial_timer.start()
+        self._show_tutorial_step()
+
+    def _show_tutorial_step(self) -> None:
+        tut = self._tutorial
+        if tut is None:
+            return
+        step = tut.steps[self._tutorial_step]
+        self._coach_title.setText(tut.title)
+        self._coach_progress.setText(f"Step {self._tutorial_step + 1} / {len(tut.steps)}")
+        self._coach_text.setText(self._coach_markup(step.text))
+        if step.action:
+            self._coach_action.setText("▶  " + step.action[0])
+            self._coach_action.setVisible(True)
+        else:
+            self._coach_action.setVisible(False)
+        self._coach_back.setEnabled(self._tutorial_step > 0)
+        last = self._tutorial_step == len(tut.steps) - 1
+        self._coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
+
+    def _maybe_advance_tutorial(self) -> None:
+        if self._tutorial is None:
+            return
+        step = self._tutorial.steps[self._tutorial_step]
+        if step.done is None:
+            return
+        try:
+            satisfied = bool(step.done(self))
+        except Exception:  # pragma: no cover - a predicate touching not-yet-ready state
+            satisfied = False
+        if satisfied:
+            self._advance_tutorial(auto=True)
+
+    def _advance_tutorial(self, *, auto: bool) -> None:
+        if self._tutorial is None:
+            return
+        if self._tutorial_step >= len(self._tutorial.steps) - 1:
+            self._tutorial_exit(finished=True)
+            return
+        self._tutorial_step += 1
+        if auto:
+            self._flash_status("✓ step done")
+        self._show_tutorial_step()
+
+    def _tutorial_next(self) -> None:
+        self._advance_tutorial(auto=False)
+
+    def _tutorial_back(self) -> None:
+        if self._tutorial is not None and self._tutorial_step > 0:
+            self._tutorial_step -= 1
+            self._show_tutorial_step()
+
+    def _tutorial_exit(self, finished: bool = False) -> None:
+        self._tutorial = None
+        if self._tutorial_timer is not None:
+            self._tutorial_timer.stop()
+        self._coach_bar.setVisible(False)
+        self._set_status("Tutorial complete — nicely done." if finished else "Tutorial closed.")
+
+    def _run_tutorial_action(self) -> None:
+        if self._tutorial is None:
+            return
+        step = self._tutorial.steps[self._tutorial_step]
+        if step.action:
+            try:
+                step.action[1](self)
+            except Exception as exc:
+                self._flash_status(str(exc))
 
     def reflect_dock_state(self, floating: bool) -> None:
         """Keep the dock/detach button in step with the panel's state: maximize-2 to detach
