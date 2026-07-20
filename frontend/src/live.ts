@@ -1496,28 +1496,6 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;
     let building = false;
-
-    // Coordinate frames stream faster than the viewer can rebuild the structure — a
-    // second of minimization sends ~130 frames, and drawing every one makes the model go
-    // on jiggling long after the run has actually stopped (the animation drains a backlog).
-    // So render latest-only: keep just the newest frame, draw it, and drop any that piled
-    // up while a draw was in flight. The motion then tracks real time — it stops when the
-    // frames stop — and the message loop stays free to handle a Shift/drag mid-run.
-    let pendingFrame: Float32Array | null = null;
-    let drawingFrame = false;
-    const drawFrames = async () => {
-        if (drawingFrame) return;
-        drawingFrame = true;
-        try {
-            while (pendingFrame && viewer) {
-                const coords = pendingFrame;
-                pendingFrame = null;  // anything arriving now supersedes what we just took
-                await viewer.update(coords);
-            }
-        } finally {
-            drawingFrame = false;
-        }
-    };
     // Per-atom attribute values (colour-by-attribute), received as binary and
     // referenced by key from representation specs. Held independent of the viewer,
     // since they may arrive while it is still building.
@@ -1863,10 +1841,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const m of queued) await handleControlMessage(m);
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
         } else if (tag === TAG_FRAME && viewer) {
-            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8. Latest-only:
-            // stash and let drawFrames coalesce, so a burst never queues stale motion.
-            pendingFrame = new Float32Array(buffer, 8);
-            void drawFrames();
+            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
+            const coords = new Float32Array(buffer, 8);
+            await viewer.update(coords);
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching
