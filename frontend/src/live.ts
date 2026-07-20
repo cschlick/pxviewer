@@ -442,6 +442,11 @@ export class LiveViewer {
 
     private async build(topologyBcif: Uint8Array) {
         const plugin = this.plugin;
+        // Pick at the atom, not the residue. Mol*'s interaction granularity defaults to
+        // 'residue' — a click is expanded to the whole residue, so you can't target a single
+        // atom, which measurement, restraint edits and marker snapping all need. Force
+        // 'element' (atom) granularity so a click resolves to exactly the atom under it.
+        plugin.managers.interactivity.setProps({ granularity: 'element' });
         // Copy into a fresh ArrayBuffer-backed view (rawData wants Uint8Array<ArrayBuffer>).
         const bytes = new Uint8Array(topologyBcif);
         const data = await plugin.builders.data.rawData({ data: bytes, label: 'pxviewer-topology' });
