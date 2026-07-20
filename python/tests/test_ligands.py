@@ -67,6 +67,40 @@ def test_build_from_smiles_rejects_junk():
         ligands.build_ligand_from_smiles("", "LIG", (0, 0, 0))
 
 
+def test_smiles_ligand_carries_a_geostd_cif_with_rdkit_provenance():
+    """The SMILES ligand keeps the exact restraint CIF that built it — a geostd-style
+    monomer file that reparses, and records its rdkit provenance (source SMILES, canonical
+    SMILES / InChIKey, and the program) so a saved file says where it came from."""
+    pytest.importorskip("rdkit")
+    import iotbx.cif
+
+    m = ligands.build_ligand_from_smiles("CC(=O)Oc1ccccc1C(=O)O", "AIN", (0, 0, 0))
+    cif = ligands.restraints_cif_text(m)
+    assert cif is not None
+
+    # It is a real monomer CIF: reparses, and its comp block carries the restraint loops.
+    blocks = iotbx.cif.reader(input_string=cif).model()
+    assert "comp_list" in blocks and "comp_AIN" in blocks
+    comp = blocks["comp_AIN"]
+    assert "_chem_comp_bond.value_dist" in comp and "_chem_comp_angle.value_angle" in comp
+
+    # Provenance: the source SMILES, the standard descriptor block, and the program.
+    assert "CC(=O)Oc1ccccc1C(=O)O" in cif
+    assert "_pdbx_chem_comp_descriptor" in cif and "SMILES_CANONICAL" in cif
+    assert "RDKit" in cif
+    # aspirin's InChIKey — proof the recorded structure is the actual molecule
+    assert "BSYNRYMUTXBXSQ" in cif
+
+
+def test_library_ligand_carries_its_geostd_cif():
+    """A library ligand carries the geostd file it came from, so it can be saved too."""
+    if not ligands.available("GOL"):
+        pytest.skip("no monomer library (GOL) available")
+    m = ligands.build_ligand_model("GOL", (0, 0, 0))
+    cif = ligands.restraints_cif_text(m)
+    assert cif is not None and "comp_GOL" in cif.replace("data_comp_GOL", "comp_GOL")
+
+
 def test_coarse_orient_recovers_a_bad_orientation():
     """The rotational pre-search rotates a mis-oriented rigid ligand back toward its
     density — deterministic and fast, so it belongs in the suite (unlike the full fit)."""

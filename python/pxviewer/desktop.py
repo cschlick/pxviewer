@@ -1869,6 +1869,17 @@ class ControlsWindow:
 
             self._add_clip_row(
                 {**it, **self._desktop.model_appearance(mid)}.get("clip"), _set_clip)
+
+            if it.get("has_restraints_cif"):
+                # A ligand built here carries its own geostd restraint CIF — offer to save it.
+                save_cif = QPushButton("Save restraints (CIF)…")
+                save_cif.setToolTip(
+                    "Write this ligand's geometry restraints as a geostd-style monomer CIF, "
+                    "with a provenance block recording the SMILES and the rdkit version that "
+                    "produced it.")
+                save_cif.clicked.connect(
+                    lambda _=False, d=mid, nm=it["name"]: self._on_save_restraints(d, nm))
+                self._appearance_layout.addWidget(save_cif)
         else:  # volume
             vid = it["id"]
             # Read the live values, not this snapshot: the level in particular can have
@@ -2749,6 +2760,20 @@ class ControlsWindow:
             self._set_status(f"Wrote {Path(path).name}")
         except Exception as exc:
             QMessageBox.warning(self._window, "Write failed", str(exc))
+
+    def _on_save_restraints(self, mid: str, name: str) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        default = name.split(" (")[0].strip() or "ligand"  # "AIN (ligand)" -> "AIN"
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save restraints", f"{default}.cif", "Monomer CIF (*.cif)")
+        if not path:
+            return
+        try:
+            self._desktop.save_restraints_cif(mid, path)
+            self._set_status(f"Saved restraints to {Path(path).name}")
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Save restraints failed", str(exc))
 
     def _on_chip(self, button, expr: str) -> None:
         for other, _ in self._sel_chips:
@@ -4260,9 +4285,15 @@ class DesktopApp:
 
             def add_on_main():
                 from .live import LiveSession
+                from . import ligands
 
                 session = LiveSession.from_cctbx_model(model)
-                self._add_model(session, name=f"{code} (ligand)")
+                new_mid = self._add_model(session, name=f"{code} (ligand)")
+                # Keep the ligand's own geostd restraint CIF on its entry so it can be saved
+                # (SMILES ligands carry an rdkit-provenance CIF; library ones the geostd file).
+                entry = self._model_entry(new_mid)
+                if entry is not None:
+                    entry["restraints_cif"] = ligands.restraints_cif_text(model)
                 # The marker has done its job — it becomes the ligand object. Consume it so
                 # it doesn't linger in the object list alongside the model it produced.
                 self.remove_marker(mid)
@@ -4653,6 +4684,20 @@ class DesktopApp:
             entry["data"].write_map(p)  # cctbx writes the map
         else:
             raise ValueError("nothing to write")
+
+    def save_restraints_cif(self, mid: str, path: str) -> None:
+        """Write a ligand's geometry restraints as a geostd-style monomer CIF.
+
+        Only ligands built here carry one (SMILES ligands get an rdkit-provenance CIF;
+        library ligands carry the geostd file they came from) — the exact bytes cctbx used,
+        so the saved restraints match the model on screen.
+        """
+        entry = self._model_entry(mid)
+        cif = entry.get("restraints_cif") if entry else None
+        if not cif:
+            raise ValueError("this object has no restraints to save")
+        with open(str(path), "w") as fh:
+            fh.write(cif)
 
     def _volume_command(self, vid: str, key: str, value, send) -> None:
         """Record a volume appearance change and push it to the viewport live.
@@ -5183,7 +5228,8 @@ class DesktopApp:
             {"kind": "model", "id": m["id"], "name": m["name"], "visible": m["visible"],
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
              "color": m.get("color"), "interactions": m.get("interactions", False),
-             "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or [])}
+             "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
+             "has_restraints_cif": bool(m.get("restraints_cif"))}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],

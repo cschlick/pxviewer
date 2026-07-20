@@ -25,7 +25,8 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 __all__ = ["available", "ideal_atoms", "build_ligand_model",
-           "build_ligand_from_smiles", "coarse_orient", "fit_into_density"]
+           "build_ligand_from_smiles", "restraints_cif_text", "coarse_orient",
+           "fit_into_density"]
 
 
 def _monomer_root() -> Optional[str]:
@@ -87,8 +88,18 @@ def build_ligand_model(code: str, center, *, crystal_symmetry: Any = None,
     placed = xyz - xyz.mean(axis=0) + center  # centroid -> center
     # One residue whose name is the code, so cctbx finds its restraints in the same
     # library the coordinates came from — no restraint CIF needed.
-    return _assemble_model(placed, names, elements, code.upper(),
-                           crystal_symmetry=crystal_symmetry, data_manager=data_manager)
+    model = _assemble_model(placed, names, elements, code.upper(),
+                            crystal_symmetry=crystal_symmetry, data_manager=data_manager)
+    # Carry the library's own geostd CIF so it can be saved too — it already holds the
+    # library's provenance, so it is copied verbatim (no rdkit block).
+    path = _cif_path(code)
+    if path is not None:
+        try:
+            with open(path) as fh:
+                setattr(model, _RESTRAINTS_CIF_ATTR, fh.read())
+        except OSError:  # pragma: no cover - unreadable library file
+            pass
+    return model
 
 
 def build_ligand_from_smiles(smiles: str, code: str, center, *,
@@ -107,12 +118,26 @@ def build_ligand_from_smiles(smiles: str, code: str, center, *,
     Raises ValueError if rdkit cannot parse or embed the SMILES.
     """
     code = (code or "LIG").strip().upper()[:3] or "LIG"
-    names, elements, xyz, cif_object = _smiles_restraints(smiles, code)
+    names, elements, xyz, cif_object, cif_text = _smiles_restraints(smiles, code)
     center = np.asarray(center, dtype=float).reshape(3)
     placed = xyz - xyz.mean(axis=0) + center  # centroid -> center
-    return _assemble_model(placed, names, elements, code,
-                           crystal_symmetry=crystal_symmetry, data_manager=data_manager,
-                           restraint_objects=[(f"{code}.cif", cif_object)])
+    model = _assemble_model(placed, names, elements, code,
+                            crystal_symmetry=crystal_symmetry, data_manager=data_manager,
+                            restraint_objects=[(f"{code}.cif", cif_object)])
+    # Keep the exact CIF that built these restraints on the model, so it can be saved as a
+    # geostd-style monomer file later — same bytes cctbx used, not a regenerated conformer.
+    setattr(model, _RESTRAINTS_CIF_ATTR, cif_text)
+    return model
+
+
+_RESTRAINTS_CIF_ATTR = "_pxviewer_restraints_cif"
+
+
+def restraints_cif_text(model: Any) -> Optional[str]:
+    """The geostd-style restraint CIF that built ``model``'s geometry, if one is carried
+    (SMILES-derived ligands, and library ligands via :func:`build_ligand_model`). ``None``
+    for an ordinary model whose restraints come from the library at large."""
+    return getattr(model, _RESTRAINTS_CIF_ATTR, None)
 
 
 def _assemble_model(placed: np.ndarray, names: List[str], elements: List[str], code: str,
@@ -183,20 +208,87 @@ def _smiles_restraints(smiles: str, code: str
         counts[el] = counts.get(el, 0) + 1
         names.append(f"{el}{counts[el]}")
 
-    cif_object = iotbx.cif.reader(
-        input_string=_monomer_cif_text(mol, code, names, elements, xyz)).model()
-    return names, elements, xyz, cif_object
+    provenance = _rdkit_provenance(mol, smiles)
+    cif_text = _monomer_cif_text(mol, code, names, elements, xyz, provenance)
+    cif_object = iotbx.cif.reader(input_string=cif_text).model()
+    return names, elements, xyz, cif_object, cif_text
+
+
+def _rdkit_provenance(mol: Any, smiles: str) -> dict:
+    """What rdkit knows about the ligand, for the restraint CIF's provenance block: the
+    canonical structure (SMILES / InChI / InChIKey), formula and charge, and the rdkit
+    version that produced it. Best-effort — any field rdkit cannot supply is just omitted."""
+    import rdkit
+    from rdkit import Chem
+    from rdkit.Chem import rdMolDescriptors
+
+    prov: dict = {"input_smiles": (smiles or "").strip(),
+                  "rdkit_version": rdkit.__version__}
+    try:  # the depositor-facing structure is the H-suppressed graph
+        noh = Chem.RemoveHs(mol)
+        prov["canonical_smiles"] = Chem.MolToSmiles(noh)
+        prov["formula"] = rdMolDescriptors.CalcMolFormula(noh)
+        prov["formal_charge"] = Chem.GetFormalCharge(mol)
+    except Exception:  # pragma: no cover - odd molecules
+        pass
+    try:  # InChI needs rdkit's InChI support; skip cleanly if absent
+        inchi = Chem.MolToInchi(mol) or ""
+        if inchi:
+            prov["inchi"] = inchi
+            prov["inchikey"] = Chem.InchiToInchiKey(inchi)
+    except Exception:  # pragma: no cover - InChI backend missing
+        pass
+    return prov
 
 
 _BOND_TYPES = None
 
 
+def _cif_quote(value: Any) -> str:
+    """CIF-quote a value for a loop cell. Double quotes suit SMILES/InChI (which never
+    contain a double quote but do contain spaces, ``#``, ``()``, …, all of which end or
+    reserve a bare token); a missing value becomes the CIF null ``.``."""
+    if value is None or value == "":
+        return "."
+    return '"' + str(value).replace('"', "'") + '"'
+
+
+def _provenance_header(code: str, provenance: dict, date: str) -> List[str]:
+    """A comment header documenting how these restraints were made — read before trusting
+    them: the ideals are measured off one rdkit conformer, not a library or QM."""
+    lines = [
+        "# ---------------------------------------------------------------------------",
+        f"# Monomer restraints for {code}, generated by pxviewer.",
+        f"# Source SMILES : {provenance.get('input_smiles', '(unknown)')}",
+        f"# Generator     : RDKit {provenance.get('rdkit_version', '(unknown)')}",
+        "# Method        : SMILES parsed, hydrogens added, one 3D conformer embedded",
+        "#                 (ETKDG) and MMFF-optimised; ideal bond lengths and angles",
+        "#                 MEASURED off that single conformer, with nominal esds",
+        "#                 (bond 0.020 A, angle 3.0 deg).",
+        "# Caveat        : geometric estimates, not library- or QM-quality restraints —",
+        "#                 review (and ideally regularise with AceDRG/eLBOW) before",
+        "#                 production refinement.",
+    ]
+    if provenance.get("formula"):
+        lines.append(f"# Formula       : {provenance['formula']}"
+                     f"   Formal charge: {provenance.get('formal_charge', '?')}")
+    if provenance.get("inchikey"):
+        lines.append(f"# InChIKey      : {provenance['inchikey']}")
+    lines.append(f"# Generated     : {date}")
+    lines.append("# ---------------------------------------------------------------------------")
+    return lines
+
+
 def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str],
-                      xyz: np.ndarray) -> str:
+                      xyz: np.ndarray, provenance: Optional[dict] = None) -> str:
     """A CCP4-monomer restraint CIF for ``mol`` — ideal bond/angle values off its
     conformer. Enough for cctbx to build a full geometry restraints manager: atoms (with
     the element as its own generic energy type, which the energy library accepts), bonds,
-    and every bond–bond angle."""
+    and every bond–bond angle. ``provenance`` (rdkit facts, see :func:`_rdkit_provenance`)
+    is woven in as a comment header, ``_chem_comp`` fields, and a standard
+    ``_pdbx_chem_comp_descriptor`` block so the saved file records where it came from."""
+    import datetime
+
     from rdkit import Chem
 
     global _BOND_TYPES
@@ -209,14 +301,20 @@ def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str]
         c = float(np.dot(u, v) / (np.linalg.norm(u) * np.linalg.norm(v)))
         return math.degrees(math.acos(max(-1.0, min(1.0, c))))
 
+    prov = provenance or {}
+    date = datetime.date.today().isoformat()
+    charge = prov.get("formal_charge")
     n_all = mol.GetNumAtoms()
     n_nh = sum(1 for e in elements if e != "H")
-    out = [
+    out = _provenance_header(code, prov, date)
+    out += [
         "data_comp_list", "loop_",
         "_chem_comp.id", "_chem_comp.three_letter_code", "_chem_comp.name",
         "_chem_comp.group", "_chem_comp.number_atoms_all",
         "_chem_comp.number_atoms_nh", "_chem_comp.desc_level",
-        f"{code} {code} 'ligand from SMILES' non-polymer {n_all} {n_nh} .",
+        "_chem_comp.formula", "_chem_comp.pdbx_formal_charge", "_chem_comp.pdbx_initial_date",
+        f"{code} {code} 'ligand from SMILES' non-polymer {n_all} {n_nh} . "
+        f"{_cif_quote(prov.get('formula'))} {charge if charge is not None else '.'} {date}",
         f"data_comp_{code}", "loop_",
         "_chem_comp_atom.comp_id", "_chem_comp_atom.atom_id", "_chem_comp_atom.type_symbol",
         "_chem_comp_atom.type_energy", "_chem_comp_atom.x", "_chem_comp_atom.y",
@@ -248,6 +346,25 @@ def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str]
                 i, k = ns[a], ns[b]
                 out.append(f"{code} {names[i]} {names[j]} {names[k]} "
                            f"{angle(i, j, k):.3f} 3.0")
+
+    # The structure's provenance, the standard mmCIF way: which program produced which
+    # descriptor. cctbx ignores this category, so it rides along without disturbing the
+    # restraints, and any tool reading the file back learns exactly where it came from.
+    version = prov.get("rdkit_version", ".")
+    descriptors = [
+        ("SMILES", prov.get("input_smiles")),
+        ("SMILES_CANONICAL", prov.get("canonical_smiles")),
+        ("InChI", prov.get("inchi")),
+        ("InChIKey", prov.get("inchikey")),
+    ]
+    rows = [(kind, val) for kind, val in descriptors if val]
+    if rows:
+        out += ["loop_", "_pdbx_chem_comp_descriptor.comp_id",
+                "_pdbx_chem_comp_descriptor.type", "_pdbx_chem_comp_descriptor.program",
+                "_pdbx_chem_comp_descriptor.program_version",
+                "_pdbx_chem_comp_descriptor.descriptor"]
+        for kind, val in rows:
+            out.append(f"{code} {kind} RDKit {version} {_cif_quote(val)}")
     return "\n".join(out) + "\n"
 
 
