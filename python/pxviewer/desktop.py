@@ -4540,6 +4540,21 @@ class DesktopApp:
                 self._status(
                     f"refining {name}{' into the map' if map_data else ''}… "
                     "(press Stop, or Shift-drag an atom, to finish)")
+                # Pace the frame stream, exactly as a drag does (see _push_tug): cctbx emits
+                # states far faster than the viewer can draw them, and pushing every one
+                # floods the render so the frames back up and the model keeps *moving after
+                # the run has stopped* — which reads as "Stop did nothing". Capping the rate
+                # keeps the picture current, so the motion tracks the compute (and the Stop
+                # button, which already reflects it). The settled frame of each cycle is
+                # force-pushed below, so pacing never drops the resting conformation.
+                last_push = [0.0]
+
+                def stream(coords):
+                    now = time.monotonic()
+                    if now - last_push[0] >= _TUG_PUSH_INTERVAL:
+                        last_push[0] = now
+                        session.push(coords)
+
                 # Continuous mode: a single convergent run is over in ~1 s — too fast to
                 # watch or interrupt. So keep the run alive until the user ends it, giving a
                 # steady window to Stop or hand the model to a drag. Refine in cycles (each
@@ -4549,12 +4564,13 @@ class DesktopApp:
                 # will not move — the run stays "on" (and stoppable) without burning a core.
                 while not self._minimize_stop.is_set():
                     stats = minimize(
-                        model, map_data=map_data, on_state=session.push,
+                        model, map_data=map_data, on_state=stream,
                         should_stop=self._minimize_stop.is_set, stride=4)
                     if first is None:
                         first = stats
                     prev, last = last, stats
                     shown += stats["n_sent"]
+                    session.push(model.get_sites_cart().as_numpy_array())  # the resting frame
                     if stats["stopped"]:
                         break
                     # Converged when the model's geometry stops getting better: a cycle that
