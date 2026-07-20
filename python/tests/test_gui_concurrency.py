@@ -169,6 +169,9 @@ def test_minimize_survives_concurrent_removal(guarded_modals):
         QApplication.processEvents()
         assert_viewer_consistent(app)
 
+        # The run is continuous — it holds at its minimum until ended — so stop it, then
+        # let the thread wind down and land its result against the mutated registry.
+        app.stop_minimization()
         _drain("pxviewer-minimize")
         QApplication.processEvents()
         assert_viewer_consistent(app)

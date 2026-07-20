@@ -4501,6 +4501,12 @@ class DesktopApp:
         than jumping to the answer. Runs on a background thread; ``session.push`` is
         thread-safe, and :meth:`stop_minimization` can halt it. The model itself ends up
         minimized, so the tables, validation and Write all see the new coordinates.
+
+        The run is *continuous*: a single convergent minimization is over in ~1 s — too
+        fast to watch or interrupt — so once the model reaches its minimum the run stays
+        on (the model held there, no CPU spent) until the user ends it with
+        :meth:`stop_minimization` or by starting a drag. That keeps a steady window to
+        stop it or hand the model to a drag, and keeps the running indicator honest.
         """
         entry = self._model_entry(self._active_model_id)
         if entry is None:
@@ -4528,25 +4534,54 @@ class DesktopApp:
                 self._minimize_idle.set()
                 self.bridge.minimizing_changed.emit(False)
                 return
+            first = last = None
+            shown = 0
             try:
-                self._status(f"minimizing {name}{' into the map' if map_data else ''}…")
-                # Thin the stream: cctbx emits a state per function evaluation, far
-                # more than the viewport can show.
-                stats = minimize(
-                    model, map_data=map_data, on_state=session.push,
-                    should_stop=self._minimize_stop.is_set, stride=4)
+                self._status(
+                    f"refining {name}{' into the map' if map_data else ''}… "
+                    "(press Stop, or Shift-drag an atom, to finish)")
+                # Continuous mode: a single convergent run is over in ~1 s — too fast to
+                # watch or interrupt. So keep the run alive until the user ends it, giving a
+                # steady window to Stop or hand the model to a drag. Refine in cycles (each
+                # thins its stream: cctbx emits a state per evaluation, far more than the
+                # viewport shows); once a cycle no longer improves the geometry the model is
+                # at its minimum, so HOLD the run open rather than spin cctbx on a model that
+                # will not move — the run stays "on" (and stoppable) without burning a core.
+                while not self._minimize_stop.is_set():
+                    stats = minimize(
+                        model, map_data=map_data, on_state=session.push,
+                        should_stop=self._minimize_stop.is_set, stride=4)
+                    if first is None:
+                        first = stats
+                    prev, last = last, stats
+                    shown += stats["n_sent"]
+                    if stats["stopped"]:
+                        break
+                    # Converged when the model's geometry stops getting better: a cycle that
+                    # improves neither bond nor angle rmsd is at the minimum. (A displacement
+                    # test is fooled — atoms keep sliding in flat directions as each cycle
+                    # rebuilds restraints, without the geometry actually improving.)
+                    settled = (stats["bonds_after"] >= (prev["bonds_after"] if prev else 1e9) - 1e-4
+                               and stats["angles_after"] >= (prev["angles_after"] if prev else 1e9) - 1e-2)
+                    if settled:
+                        self._status(
+                            f"{name} refined (bond rmsd {stats['bonds_after']:.3f}) — holding; "
+                            "press Stop or Shift-drag to finish")
+                        while not self._minimize_stop.is_set():
+                            time.sleep(0.1)
+                        break
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"minimization failed: {exc}")
                 return
             finally:
                 self._minimize_idle.set()  # the model is the drag's to take now
                 self.bridge.minimizing_changed.emit(False)
-            self._status(
-                f"{name}: bond rmsd {stats['bonds_before']:.3f} -> {stats['bonds_after']:.3f}, "
-                f"angle rmsd {stats['angles_before']:.2f} -> {stats['angles_after']:.2f} "
-                f"({stats['n_sent']} of {stats['n_states']} steps shown)"
-                + (f", map weight {stats['weight']:.1f}" if stats["weight"] else "")
-                + (" — stopped" if stats["stopped"] else ""))
+            if first is not None:
+                self._status(
+                    f"{name}: bond rmsd {first['bonds_before']:.3f} -> {last['bonds_after']:.3f}, "
+                    f"angle rmsd {first['angles_before']:.2f} -> {last['angles_after']:.2f} "
+                    f"({shown} steps shown)"
+                    + (f", map weight {last['weight']:.1f}" if last["weight"] else ""))
             entry.pop("validation", None)  # stale: the coordinates just moved
             # So is the density, if this model was phased: it describes where the atoms
             # were. Once per run, never per step — each update is two transforms.

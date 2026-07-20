@@ -454,6 +454,55 @@ def test_shift_arm_is_exactly_pause(qapp):
         app.stop()
 
 
+def test_minimization_runs_continuously_until_stopped(qapp):
+    """A convergent minimization is over in ~1 s — too fast to watch or interrupt. So the
+    run stays 'on' after it converges (the model held at its minimum) until the user ends
+    it, giving a steady window to Stop or hand the model to a drag. Stopping then reports
+    the improvement and frees the model."""
+    import time
+
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("mmtbx.refinement.geometry_minimization")
+    from pxviewer.geometry import monomer_library_available
+    if not monomer_library_available():
+        pytest.skip("no monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+    from pathlib import Path
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        status = []
+        app.bridge.status_changed.connect(status.append)
+        app.load_files([str(Path(__file__).resolve().parents[1] / "pxviewer" / "data" / "1ubq.pdb")])
+        qapp.processEvents()
+
+        app.minimize_model(use_map=False)
+        # Refine to convergence, then hold: wait for the holding message.
+        deadline = time.time() + 40
+        while time.time() < deadline and not any("holding" in s for s in status):
+            qapp.processEvents()
+            time.sleep(0.02)
+        assert any("holding" in s for s in status), "never reached the held state"
+        # Held means still running: the model has not been released to a drag yet.
+        assert not app._minimize_idle.is_set()
+
+        # Stop (as Pause / a Shift-drag would): the run ends and the model is freed.
+        app.stop_minimization()
+        deadline = time.time() + 5
+        while time.time() < deadline and not app._minimize_idle.is_set():
+            qapp.processEvents()
+            time.sleep(0.02)
+        assert app._minimize_idle.is_set()
+        for _ in range(30):
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert any("bond rmsd" in s and "->" in s for s in status), "no improvement summary"
+    finally:
+        app.stop()
+
+
 def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
     """Pairing relocates the model into the map's frame — several angstrom for a boxed
     map. The map the browser is served has to move with it, or the model is drawn away
