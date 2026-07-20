@@ -966,20 +966,17 @@ export class LiveViewer {
         });
     }
 
-    // Click selects just that atom; shift-click toggles it in the set; a click on
-    // empty space clears. Highlights the set and reports it back to Python.
-    private handleSelectionClick(location: StructureElement.Location | undefined, shift: boolean) {
+    // In Select mode each click on an atom *accumulates* — it toggles that atom in or out
+    // of the set — so you build a multi-atom selection by just clicking, no modifier. A
+    // click on empty space clears. (No shift needed, which leaves Shift free for the drag-
+    // minimize; the `shift` arg is unused now that shift+drag is claimed by the tug.)
+    private handleSelectionClick(location: StructureElement.Location | undefined, _shift: boolean) {
         if (!location) {
-            if (!shift) this.mouseSelectionSet.clear();
+            this.mouseSelectionSet.clear();
         } else {
             const el = location.element as unknown as number;
-            if (shift) {
-                if (this.mouseSelectionSet.has(el)) this.mouseSelectionSet.delete(el);
-                else this.mouseSelectionSet.add(el);
-            } else {
-                this.mouseSelectionSet.clear();
-                this.mouseSelectionSet.add(el);
-            }
+            if (this.mouseSelectionSet.has(el)) this.mouseSelectionSet.delete(el);
+            else this.mouseSelectionSet.add(el);
         }
         const indices = Array.from(this.mouseSelectionSet).sort((a, b) => a - b);
         this.setHighlight(indices);

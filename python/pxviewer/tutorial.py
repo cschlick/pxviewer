@@ -63,7 +63,8 @@ def restraint_edits_tutorial() -> Tutorial:
         ),
         Step(
             "Turn on atom picking, then click **two atoms in different residues** in the "
-            "viewport (so they aren't already bonded to each other).",
+            "viewport — each click adds to the selection (pick different residues so the two "
+            "aren't already bonded). Click empty space to start over.",
             done=lambda cw: _selection_count(cw) >= 2,
             action=("Turn on atom picking", lambda cw: cw._pick_btn.setChecked(True)),
         ),

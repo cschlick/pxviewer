@@ -1198,7 +1198,8 @@ class ControlsWindow:
         sel_row = QHBoxLayout()
         self._pick_btn = self._make_icon_button(
             "mouse-pointer-click", "Pick",
-            "Pick atoms in the 3D view to build a selection", checkable=True)
+            "Pick atoms in the 3D view — each click adds to the selection; click empty space "
+            "to clear (Shift-drag still drags an atom to minimize)", checkable=True)
         self._pick_btn.toggled.connect(self._on_toggle_select)
         sel_row.addWidget(self._pick_btn)
 
