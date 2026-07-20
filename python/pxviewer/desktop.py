@@ -895,8 +895,58 @@ class ViewportWindow:
         settings = self._view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
-        layout.addWidget(self._view)
+        # The viewer takes the top; a guided-tutorial 'coach' pane docks under it (hidden
+        # until a tutorial runs), so a tutorial never resizes the controls pane. ~4:1.
+        layout.addWidget(self._view, stretch=4)
+        layout.addWidget(self._build_coach_pane(), stretch=1)
         self._view.loadFinished.connect(self._verify_webgl)
+
+    def _build_coach_pane(self):
+        """The guided-tutorial coach: a pane docked below the viewer (hidden until a
+        tutorial starts). Built here so it splits the viewport, not the controls pane; the
+        ControlsWindow owns the logic and drives these widgets (see its tutorial methods)."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+        bar = QFrame()
+        bar.setObjectName("coachPane")
+        bar.setStyleSheet(
+            "#coachPane { background:#eef4ff; border-top:2px solid #b9d0f0; }"
+            "#coachPane QLabel { color:#16283f; }")
+        bar.setMinimumHeight(110)
+        v = QVBoxLayout(bar)
+        v.setContentsMargins(14, 10, 14, 10)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        self.coach_title = QLabel("")
+        self.coach_title.setStyleSheet("font-weight:600; color:#16283f;")
+        head.addWidget(self.coach_title)
+        head.addStretch(1)
+        self.coach_progress = QLabel("")
+        self.coach_progress.setStyleSheet("color:#5a6b85;")
+        head.addWidget(self.coach_progress)
+        self.coach_close = QPushButton("✕")
+        self.coach_close.setFixedWidth(26)
+        self.coach_close.setFlat(True)
+        self.coach_close.setToolTip("Exit the tutorial")
+        head.addWidget(self.coach_close)
+        v.addLayout(head)
+        self.coach_text = QLabel("")
+        self.coach_text.setWordWrap(True)
+        self.coach_text.setTextFormat(Qt.TextFormat.RichText)
+        v.addWidget(self.coach_text, stretch=1)
+        row = QHBoxLayout()
+        self.coach_action = QPushButton("")
+        row.addWidget(self.coach_action)
+        row.addStretch(1)
+        self.coach_back = QPushButton("Back")
+        row.addWidget(self.coach_back)
+        self.coach_next = QPushButton("Next")
+        row.addWidget(self.coach_next)
+        v.addLayout(row)
+        bar.setVisible(False)
+        self.coach_bar = bar
+        return bar
 
     def load(self, url: str) -> None:
         from PySide6.QtCore import QUrl
@@ -978,11 +1028,13 @@ class ControlsWindow:
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        # A non-modal guided-tutorial 'coach' bar at the top, hidden until a tutorial starts.
+        # Guided-tutorial state. The coach pane lives on the viewport window (so a tutorial
+        # splits the viewer, not this controls pane); this window owns the logic and drives
+        # those widgets — wire their buttons to our handlers.
         self._tutorial = None            # active Tutorial (see pxviewer.tutorial)
         self._tutorial_step = 0
         self._tutorial_timer = None      # polls the step's done() predicate while active
-        layout.addWidget(self._build_coach_bar())
+        self._wire_coach()
 
         self._console = None  # EmbeddedConsole, created lazily on first tab view
         self._console_started = False
@@ -3039,52 +3091,15 @@ class ControlsWindow:
 
     # -- guided tutorials: a non-modal coach that advances when a step is actually done ----
 
-    def _build_coach_bar(self):
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
-
-        bar = QFrame()
-        bar.setObjectName("coachBar")
-        bar.setStyleSheet(
-            "#coachBar { background:#eef4ff; border:1px solid #b9d0f0; border-radius:6px; }"
-            "#coachBar QLabel { color:#16283f; }")
-        v = QVBoxLayout(bar)
-        v.setContentsMargins(10, 8, 10, 8)
-        v.setSpacing(6)
-        head = QHBoxLayout()
-        self._coach_title = QLabel("")
-        self._coach_title.setStyleSheet("font-weight:600; color:#16283f;")
-        head.addWidget(self._coach_title)
-        head.addStretch(1)
-        self._coach_progress = QLabel("")
-        self._coach_progress.setStyleSheet("color:#5a6b85;")
-        head.addWidget(self._coach_progress)
-        close = QPushButton("✕")
-        close.setFixedWidth(26)
-        close.setFlat(True)
-        close.setToolTip("Exit the tutorial")
-        close.clicked.connect(lambda: self._tutorial_exit())
-        head.addWidget(close)
-        v.addLayout(head)
-        self._coach_text = QLabel("")
-        self._coach_text.setWordWrap(True)
-        self._coach_text.setTextFormat(Qt.TextFormat.RichText)
-        v.addWidget(self._coach_text)
-        row = QHBoxLayout()
-        self._coach_action = QPushButton("")
-        self._coach_action.clicked.connect(self._run_tutorial_action)
-        row.addWidget(self._coach_action)
-        row.addStretch(1)
-        self._coach_back = QPushButton("Back")
-        self._coach_back.clicked.connect(self._tutorial_back)
-        row.addWidget(self._coach_back)
-        self._coach_next = QPushButton("Next")
-        self._coach_next.clicked.connect(self._tutorial_next)
-        row.addWidget(self._coach_next)
-        v.addLayout(row)
-        bar.setVisible(False)
-        self._coach_bar = bar
-        return bar
+    def _wire_coach(self) -> None:
+        """Connect the viewport window's coach buttons to this window's tutorial logic. The
+        pane and its widgets are built on the viewport (see ViewportWindow._build_coach_pane)
+        so a tutorial splits the viewer, not this controls pane."""
+        vp = self._desktop._viewport
+        vp.coach_close.clicked.connect(lambda: self._tutorial_exit())
+        vp.coach_action.clicked.connect(self._run_tutorial_action)
+        vp.coach_back.clicked.connect(self._tutorial_back)
+        vp.coach_next.clicked.connect(self._tutorial_next)
 
     @staticmethod
     def _coach_markup(text: str) -> str:
@@ -3102,7 +3117,7 @@ class ControlsWindow:
 
         self._tutorial = tutorial_obj
         self._tutorial_step = 0
-        self._coach_bar.setVisible(True)
+        self._desktop._viewport.coach_bar.setVisible(True)
         if self._tutorial_timer is None:
             self._tutorial_timer = QTimer(self._window)
             self._tutorial_timer.setInterval(400)  # poll the step's done() predicate
@@ -3115,17 +3130,18 @@ class ControlsWindow:
         if tut is None:
             return
         step = tut.steps[self._tutorial_step]
-        self._coach_title.setText(tut.title)
-        self._coach_progress.setText(f"Step {self._tutorial_step + 1} / {len(tut.steps)}")
-        self._coach_text.setText(self._coach_markup(step.text))
+        vp = self._desktop._viewport
+        vp.coach_title.setText(tut.title)
+        vp.coach_progress.setText(f"Step {self._tutorial_step + 1} / {len(tut.steps)}")
+        vp.coach_text.setText(self._coach_markup(step.text))
         if step.action:
-            self._coach_action.setText("▶  " + step.action[0])
-            self._coach_action.setVisible(True)
+            vp.coach_action.setText("▶  " + step.action[0])
+            vp.coach_action.setVisible(True)
         else:
-            self._coach_action.setVisible(False)
-        self._coach_back.setEnabled(self._tutorial_step > 0)
+            vp.coach_action.setVisible(False)
+        vp.coach_back.setEnabled(self._tutorial_step > 0)
         last = self._tutorial_step == len(tut.steps) - 1
-        self._coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
+        vp.coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
 
     def _maybe_advance_tutorial(self) -> None:
         if self._tutorial is None:
@@ -3163,7 +3179,7 @@ class ControlsWindow:
         self._tutorial = None
         if self._tutorial_timer is not None:
             self._tutorial_timer.stop()
-        self._coach_bar.setVisible(False)
+        self._desktop._viewport.coach_bar.setVisible(False)
         self._set_status("Tutorial complete — nicely done." if finished else "Tutorial closed.")
 
     def _run_tutorial_action(self) -> None:

@@ -575,11 +575,12 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
     app._webapp.start()
     try:
         cw = app._controls
-        assert cw._coach_bar.isHidden()  # not shown until a tutorial starts
+        coach = app._viewport  # the coach pane lives on the viewport window
+        assert coach.coach_bar.isHidden()  # not shown until a tutorial starts
 
         cw._start_tutorial(tutorial.restraint_edits_tutorial())
-        assert not cw._coach_bar.isHidden()
-        assert cw._coach_progress.text() == "Step 1 / 4"
+        assert not coach.coach_bar.isHidden()
+        assert coach.coach_progress.text() == "Step 1 / 4"
 
         # Step 1: the action loads the sample; the predicate then advances.
         cw._run_tutorial_action()
@@ -588,13 +589,13 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
             qapp.processEvents()
             time.sleep(0.02)
         cw._maybe_advance_tutorial()
-        assert cw._coach_progress.text() == "Step 2 / 4"
+        assert coach.coach_progress.text() == "Step 2 / 4"
 
         # Step 2: selecting two atoms advances.
         mid = app._active_model_id
         app._scene_selection[mid] = [0, 1]
         cw._maybe_advance_tutorial()
-        assert cw._coach_progress.text() == "Step 3 / 4"
+        assert coach.coach_progress.text() == "Step 3 / 4"
 
         # Step 3: authoring an edit (two atoms in different residues) advances to the last step.
         atoms = app._model_entry(mid)["session"].model.get_hierarchy().atoms()
@@ -603,12 +604,12 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
         app._scene_selection[mid] = [0, j]
         app.add_edit_from_selection(mid, "bond")
         cw._maybe_advance_tutorial()
-        assert cw._coach_progress.text() == "Step 4 / 4"
-        assert cw._coach_next.text() == "Finish"
+        assert coach.coach_progress.text() == "Step 4 / 4"
+        assert coach.coach_next.text() == "Finish"
 
         # Finish closes the coach.
         cw._tutorial_next()
-        assert cw._coach_bar.isHidden() and cw._tutorial is None
+        assert coach.coach_bar.isHidden() and cw._tutorial is None
     finally:
         app.stop()
 
