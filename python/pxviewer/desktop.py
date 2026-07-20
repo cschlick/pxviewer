@@ -1317,19 +1317,20 @@ class ControlsWindow:
         mg.addLayout(mrow)
         layout.addWidget(measure)
 
-        marker = QGroupBox("Marker")
+        marker = QGroupBox("Ligand placement")
         mkg = QVBoxLayout(marker)
-        mkg.addWidget(QLabel("Drop a marker at a 3D point in the viewport:"))
+        mkg.addWidget(QLabel(
+            "Drop a ligand marker in the viewport, then place a ligand at it from its panel:"))
         mk_row = QHBoxLayout()
         place_btn = self._make_icon_button(
-            "circle-arrow-out-up-left", "Place marker",
-            "Arm placement, then click in the viewport: a sphere is dropped there — "
-            "snapped to the atom under the cursor, or the view plane in empty space — and "
-            "its 3D coordinate is sent back.")
+            "circle-arrow-out-up-left", "Place ligand marker",
+            "Arm placement, then click in the viewport: a ligand marker is dropped there — "
+            "snapped to the atom under the cursor, or the view plane in empty space. Select "
+            "it in the object list to place a ligand at that point.")
         place_btn.clicked.connect(self._desktop.arm_marker)
         mk_row.addWidget(place_btn)
         clear_mk = self._make_icon_button(
-            "circle-off", "Clear", "Remove all placed markers")
+            "circle-off", "Clear", "Remove all ligand markers")
         clear_mk.clicked.connect(self._desktop.clear_markers)
         mk_row.addWidget(clear_mk)
         mk_row.addStretch(1)
@@ -2997,7 +2998,8 @@ class ControlsWindow:
                     self._active_group.addButton(radio)
                     radio.setChecked(bool(it.get("active")))  # won't fire buttonClicked
                     self._loaded_tree.setItemWidget(node, 1, radio)
-                suffix = {"volume": "   [map]", "reflections": "   [data]", "marker": "   [marker]"}
+                # No marker suffix: its name ("Ligand marker N") already says what it is.
+                suffix = {"volume": "   [map]", "reflections": "   [data]"}
                 name = it["name"] + suffix.get(it["kind"], "")
                 node.setText(2, name)
                 node.setToolTip(2, it["name"])  # full name on hover when elided
@@ -4043,10 +4045,10 @@ class DesktopApp:
         than tied to one model."""
         session = self._control_session()
         if session is None:
-            self._status("load a model first to place a marker")
+            self._status("load a model first to place a ligand marker")
             return
         session.set_marker_mode(True)
-        self._status("Click in the viewport to place a marker…")
+        self._status("Click in the viewport to place a ligand marker…")
 
     def _on_marker(self, position, atom) -> None:
         """A marker was placed: register it (so it appears in the Objects list as a handle)
@@ -4054,15 +4056,18 @@ class DesktopApp:
         None. Runs on a session's event-loop thread; the list/markup are cheap and safe."""
         self._marker_counter += 1
         point = [float(c) for c in position]
+        # 'name' is what the object list shows: a ligand marker to the user, though the
+        # marker machinery itself stays generic for other tools.
         self._markers.append({
-            "id": f"marker-{self._marker_counter}", "name": f"Marker {self._marker_counter}",
+            "id": f"marker-{self._marker_counter}",
+            "name": f"Ligand marker {self._marker_counter}",
             "position": point, "atom": atom, "visible": True,
         })
         self._draw_markers()
         self._emit_loaded_changed()
         where = f" on atom {atom}" if atom is not None else ""
         self._status(
-            f"Marker at ({point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f}){where} "
+            f"Ligand marker at ({point[0]:.2f}, {point[1]:.2f}, {point[2]:.2f}){where} "
             f"— {len(self._markers)} placed")
 
     def _marker_entry(self, mid):
@@ -4101,7 +4106,7 @@ class DesktopApp:
         self._draw_markers()  # empty list -> clears the markup channel
         self._emit_loaded_changed()
         if had:
-            self._status("Markers cleared")
+            self._status("Ligand markers cleared")
 
     def fit_ligand_at_marker(self, mid: str, code: str, *, fit: bool = True,
                              trials: int = 20) -> None:
