@@ -560,6 +560,62 @@ def test_smiles_ligand_restraints_can_be_saved(qapp, tmp_path):
         app.stop()
 
 
+def test_authoring_saving_and_loading_restraint_edits(qapp, tmp_path):
+    """Author a custom bond from a selection, see it validated and listed, round-trip it
+    through a PHIL file, and confirm the model's restraints carry it. A duplicate edit (a
+    bond the library already restrains) is refused and not stored."""
+    import time
+
+    pytest.importorskip("rdkit")
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._markers.append({"id": "marker-1", "name": "m", "position": [0.0, 0.0, 0.0],
+                             "atom": None, "visible": True})
+        before = {m["id"] for m in app._models}
+        app.fit_ligand_from_smiles_at_marker("marker-1", "CCO", "EOH", fit=False)
+        deadline = time.time() + 60
+        while time.time() < deadline and {m["id"] for m in app._models} == before:
+            qapp.processEvents()
+            time.sleep(0.05)
+        ligand = next(m for m in app._models if m["id"] not in before)
+        mid = ligand["id"]
+        model = ligand["session"].model
+        names = [a.name.strip() for a in model.get_hierarchy().atoms()]
+        base = model.get_restraints_manager().geometry.pair_proxies().bond_proxies.simple.size()
+
+        # Author a bond between C1 and O1 (not natively bonded).
+        app._scene_selection[mid] = [names.index("C1"), names.index("O1")]
+        app.add_edit_from_selection(mid, "bond")
+        assert len(app.model_edits(mid)) == 1
+        item = next(it for it in app._loaded_summary()["items"] if it["id"] == mid)
+        assert len(item["edits"]) == 1 and "bond" in item["edits"][0]["summary"]
+        # the restraints the minimizer will use now carry it
+        n1 = model.get_restraints_manager().geometry.pair_proxies().bond_proxies.simple.size()
+        assert n1 == base + 1
+
+        # A duplicate (C1-C2 are already bonded) is refused; the edit list is unchanged.
+        app._scene_selection[mid] = [names.index("C1"), names.index("C2")]
+        with pytest.raises(ValueError):
+            app.add_edit_from_selection(mid, "bond")
+        assert len(app.model_edits(mid)) == 1
+
+        # Save, clear, load: the edit survives the PHIL round-trip.
+        phil = tmp_path / "edits.phil"
+        app.save_edits(mid, str(phil))
+        assert "geometry_restraints.edits" in phil.read_text()
+        app.clear_edits(mid)
+        assert app.model_edits(mid) == []
+        skipped = app.load_edits(mid, str(phil))
+        assert skipped == 0 and len(app.model_edits(mid)) == 1
+    finally:
+        app.stop()
+
+
 def test_writing_a_restrained_model_as_mmcif_needs_no_probe(qapp, tmp_path):
     """Writing a model as mmCIF must emit coordinates, not a validation report. A ligand
     (like any minimized model) carries a restraints manager, and mmtbx's full model_as_mmcif

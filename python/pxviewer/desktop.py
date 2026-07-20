@@ -185,6 +185,13 @@ def _app_icon():
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
 
 
+def _edit_summary(edit: dict) -> str:
+    """A one-line label for a restraint edit, for the Loaded tree / edits list."""
+    from . import edits
+
+    return edits.summarize(edit)
+
+
 def _line_icon(name: str, color, size: int = 20):
     """A monochrome line SVG (``<name>.svg``) tinted to ``color`` as a QIcon.
 
@@ -1319,6 +1326,8 @@ class ControlsWindow:
         mg.addLayout(mrow)
         layout.addWidget(measure)
 
+        layout.addWidget(self._build_edits_group())
+
         layout.addWidget(self._build_ligand_placement_group())
 
         minimization = QGroupBox("Minimization")
@@ -1433,6 +1442,122 @@ class ControlsWindow:
         self._lig_last_target = None
         self._update_ligand_panel()
         return box
+
+    def _build_edits_group(self):
+        """Custom geometry-restraint edits: bond/angle/dihedral restraints added on top of
+        the library, authored from the current selection (same as Measure) and saved/loaded
+        as a phenix geometry_restraints.edits PHIL file."""
+        from PySide6.QtWidgets import (
+            QGroupBox, QHBoxLayout, QLabel, QListWidget, QPushButton, QVBoxLayout)
+
+        box = QGroupBox("Restraint edits")
+        v = QVBoxLayout(box)
+        v.addWidget(QLabel(
+            "Custom restraints on top of the library — a covalent link, a metal bond.\n"
+            "Select the atoms, then add (the current geometry becomes the target):"))
+        add_row = QHBoxLayout()
+        add_row.setSpacing(6)
+        for label, kind, n in [("Bond", "bond", 2), ("Angle", "angle", 3),
+                               ("Dihedral", "dihedral", 4)]:
+            b = QPushButton(label)
+            b.setToolTip(f"Add a custom {kind} restraint from {n} selected atoms of the "
+                         "active model, honoured by this app's minimize/drag and exportable "
+                         "for phenix.refine.")
+            b.clicked.connect(lambda _c=False, k=kind: self._on_add_edit(k))
+            add_row.addWidget(b)
+        add_row.addStretch(1)
+        v.addLayout(add_row)
+
+        self._edits_list = QListWidget()
+        self._edits_list.setToolTip("Restraint edits on the active model. Select one to remove it.")
+        self._edits_list.setMaximumHeight(90)
+        v.addWidget(self._edits_list)
+
+        file_row = QHBoxLayout()
+        file_row.setSpacing(6)
+        remove = QPushButton("Remove")
+        remove.setToolTip("Remove the selected edit")
+        remove.clicked.connect(self._on_remove_edit)
+        clear = QPushButton("Clear")
+        clear.setToolTip("Remove all edits from the active model")
+        clear.clicked.connect(self._on_clear_edits)
+        load = QPushButton("Load…")
+        load.setToolTip("Read a geometry_restraints.edits PHIL file and add its edits")
+        load.clicked.connect(self._on_load_edits)
+        save = QPushButton("Save…")
+        save.setToolTip("Write the active model's edits as a geometry_restraints.edits PHIL file")
+        save.clicked.connect(self._on_save_edits)
+        for b in (remove, clear, load, save):
+            file_row.addWidget(b)
+        file_row.addStretch(1)
+        v.addLayout(file_row)
+        self._refresh_edits_list()
+        return box
+
+    def _refresh_edits_list(self) -> None:
+        """Show the active model's edits (called on load/selection changes)."""
+        if not hasattr(self, "_edits_list"):
+            return
+        self._edits_list.clear()
+        mid = self._desktop._active_model_id
+        item = next((it for it in self._desktop._loaded_summary()["items"]
+                     if it["kind"] == "model" and it["id"] == mid), None)
+        for e in (item.get("edits") if item else []) or []:
+            self._edits_list.addItem(e["summary"])
+
+    def _on_add_edit(self, kind: str) -> None:
+        mid = self._desktop._active_model_id
+        if mid is None:
+            self._set_status("load a model first")
+            return
+        try:
+            self._desktop.add_edit_from_selection(mid, kind)
+        except Exception as exc:
+            self._flash_status(str(exc))
+
+    def _on_remove_edit(self) -> None:
+        row = self._edits_list.currentRow()
+        if row < 0:
+            self._set_status("select an edit to remove")
+            return
+        self._safe(lambda: self._desktop.remove_edit(self._desktop._active_model_id, row))
+
+    def _on_clear_edits(self) -> None:
+        self._safe(lambda: self._desktop.clear_edits(self._desktop._active_model_id))
+
+    def _on_load_edits(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        mid = self._desktop._active_model_id
+        if mid is None:
+            self._set_status("load a model first")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Load restraint edits", "", "Edits PHIL (*.phil *.params *.txt *.eff)")
+        if not path:
+            return
+        try:
+            skipped = self._desktop.load_edits(mid, path)
+            msg = f"Loaded edits from {Path(path).name}"
+            if skipped:
+                msg += f" ({skipped} planarity/parallelity edit(s) skipped — not yet supported)"
+            self._set_status(msg)
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Load edits failed", str(exc))
+
+    def _on_save_edits(self) -> None:
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        mid = self._desktop._active_model_id
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save restraint edits", "edits.phil", "Edits PHIL (*.phil)")
+        if not path:
+            return
+        try:
+            self._desktop.save_edits(mid, path)
+            self._set_status(f"Saved edits to {Path(path).name}")
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Save edits failed", str(exc))
 
     def _on_fit_ligand(self) -> None:
         """Build a ligand at the most recently placed ligand marker, from the panel fields."""
@@ -3129,6 +3254,7 @@ class ControlsWindow:
             kind, ident = active_ref
         self._update_appearance(kind, ident)
         self._update_ligand_panel()  # markers/maps may have changed
+        self._refresh_edits_list()   # active model or its edits may have changed
 
     def _on_tree_current_changed(self, current, _previous) -> None:
         if self._suppress_model_events or current is None:
@@ -3880,7 +4006,7 @@ class DesktopApp:
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
                  "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
                  "type_groups": None, "clip": (0.0, 1.0),
-                 "interactions": False}
+                 "interactions": False, "edits": []}
         self._models.append(entry)
         self._apply_model_rep(entry)
         self._active_model_id = mid
@@ -4740,6 +4866,108 @@ class DesktopApp:
         self.save_restraints_cif(mid, restraints_path)     # restraints dictionary
         return str(coord_path), restraints_path
 
+    # -- custom geometry restraint edits (phenix/cctbx geometry_restraints.edits) --------
+
+    def model_edits(self, mid: str) -> list:
+        """The custom restraint edits carried on a model (list of dicts; see pxviewer.edits)."""
+        entry = self._model_entry(mid)
+        return list(entry.get("edits") or []) if entry else []
+
+    def _apply_edits(self, entry: dict, new_edits: list) -> None:
+        """Attach ``new_edits`` to the model and rebuild its restraints. Validated: if cctbx
+        rejects them (e.g. a bond already restrained by the library), revert and raise, so a
+        model's stored edits are always ones a later minimize/drag can build."""
+        from . import edits as edits_mod
+
+        model = entry["session"].model
+        if model is None:
+            raise ValueError("the object has no cctbx model")
+        previous = list(entry.get("edits") or [])
+        edits_mod.set_edits(model, new_edits)
+        try:
+            edits_mod.build_restraints(model, force=True)
+        except Exception as exc:
+            edits_mod.set_edits(model, previous)
+            try:
+                edits_mod.build_restraints(model, force=True)
+            except Exception:  # pragma: no cover - revert best effort
+                pass
+            raise ValueError(str(exc).splitlines()[0] if str(exc) else "cctbx rejected the edit")
+        entry["edits"] = list(new_edits)
+        self._emit_loaded_changed()
+
+    def add_edit_from_selection(self, mid: str, kind: str, *, sigma: Optional[float] = None) -> dict:
+        """Author a bond/angle/dihedral edit from the active model's selected atoms (2/3/4),
+        taking the current geometry as the target. Order follows the selection, same as the
+        measurement tools. Raises if the wrong number of atoms is selected or cctbx rejects it."""
+        from . import edits as edits_mod
+
+        entry = self._model_entry(mid)
+        if entry is None:
+            raise ValueError("no such model")
+        model = entry["session"].model
+        if model is None:
+            raise ValueError("the object has no cctbx model")
+        need = edits_mod.KIND_ARITY.get(kind)
+        if need is None:
+            raise ValueError(f"cannot author a {kind} edit")
+        with self._scene_lock:
+            atoms = list(self._scene_selection.get(mid, []))
+        if len(atoms) != need:
+            raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
+        sites = model.get_sites_cart().as_numpy_array()
+        edit = {
+            "kind": kind, "action": "add",
+            "selections": [edits_mod.selection_for_atom(model, i) for i in atoms],
+            "ideal": edits_mod.geometry_value(kind, [sites[i] for i in atoms]),
+            "sigma": float(sigma) if sigma is not None else edits_mod._DEFAULT_SIGMA[kind]}
+        if kind == "dihedral":
+            edit["periodicity"] = 1
+        self._apply_edits(entry, list(entry.get("edits") or []) + [edit])
+        return edit
+
+    def remove_edit(self, mid: str, index: int) -> None:
+        """Drop the edit at ``index`` and rebuild restraints without it."""
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        current = list(entry.get("edits") or [])
+        if 0 <= index < len(current):
+            del current[index]
+            self._apply_edits(entry, current)
+
+    def clear_edits(self, mid: str) -> None:
+        """Remove all edits from a model."""
+        entry = self._model_entry(mid)
+        if entry and entry.get("edits"):
+            self._apply_edits(entry, [])
+
+    def load_edits(self, mid: str, path: str) -> int:
+        """Read a geometry_restraints.edits PHIL file and add its edits to the model. Returns
+        the number of unsupported (planarity/parallelity) entries skipped."""
+        from . import edits as edits_mod
+
+        entry = self._model_entry(mid)
+        if entry is None:
+            raise ValueError("no such model")
+        with open(str(path)) as fh:
+            parsed, unsupported = edits_mod.parse_edits(fh.read())
+        if not parsed and not unsupported:
+            raise ValueError("no bond/angle/dihedral edits found in that file")
+        self._apply_edits(entry, list(entry.get("edits") or []) + parsed)
+        return unsupported
+
+    def save_edits(self, mid: str, path: str) -> None:
+        """Write a model's edits as a geometry_restraints.edits PHIL file."""
+        from . import edits as edits_mod
+
+        entry = self._model_entry(mid)
+        current = list(entry.get("edits") or []) if entry else []
+        if not current:
+            raise ValueError("this object has no edits to save")
+        with open(str(path), "w") as fh:
+            fh.write(edits_mod.edits_to_phil(current))
+
     def _volume_command(self, vid: str, key: str, value, send) -> None:
         """Record a volume appearance change and push it to the viewport live.
 
@@ -5270,7 +5498,8 @@ class DesktopApp:
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
              "color": m.get("color"), "interactions": m.get("interactions", False),
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
-             "has_restraints_cif": bool(m.get("restraints_cif"))}
+             "has_restraints_cif": bool(m.get("restraints_cif")),
+             "edits": [{"kind": e["kind"], "summary": _edit_summary(e)} for e in (m.get("edits") or [])]}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
