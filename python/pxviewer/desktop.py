@@ -1389,6 +1389,8 @@ class ControlsWindow:
                        self._on_run_xray_demo)
         menu.addAction("Ligand fitting — fit ATP into difference density",
                        self._on_run_ligand_fitting_demo)
+        menu.addAction("Cryo-EM — real-space refine a model into density",
+                       self._on_run_real_space_refinement_demo)
         menu.addAction("Metal site — Zn coordination (restraint edits)",
                        lambda: self._on_load_sample("zn_site.pdb"))
         gap = menu.addAction(" ")  # a blank line between the sections, above "Tutorials"
@@ -3088,6 +3090,14 @@ class ControlsWindow:
             self._desktop.load_ligand_fitting_demo()
         except Exception as exc:  # building the ligand / reflections can fail; keep the app up
             QMessageBox.warning(self._window, "Ligand-fitting demo failed", str(exc))
+
+    def _on_run_real_space_refinement_demo(self) -> None:
+        from PySide6.QtWidgets import QMessageBox
+
+        try:
+            self._desktop.load_real_space_refinement_demo()
+        except Exception as exc:  # generating the map can fail; keep the app up
+            QMessageBox.warning(self._window, "Cryo-EM demo failed", str(exc))
 
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
@@ -6296,6 +6306,46 @@ class DesktopApp:
             "Ligand-fitting demo: a ligand-free model + reflections that contain ATP — open "
             "the reflections, Make maps, then fit ATP into the mFo-DFc blob")
         return "ligand-fitting"
+
+    def load_real_space_refinement_demo(self, *, d_min: float = 3.0, shake: float = 0.5) -> str:
+        """Demo mirroring Phenix's cryo-EM real-space refinement: a model sitting slightly off
+        a density map, to be refined back into it. A cryo-EM-resolution map is computed from
+        the bundled model, then the model is *shaken* off it — so 'Minimize' with 'Use map'
+        (gradient-driven real-space refinement, exactly what phenix.real_space_refine does)
+        pulls it back into the density. Self-contained (no phenix, no dataset)."""
+        self.stop_demo()
+        self._reset_interactions()
+
+        from iotbx.map_model_manager import map_model_manager
+
+        from .cctbx_io import read_model
+        from .volume_io import split_map_model_manager
+
+        sample = sample_structure_path()
+        if sample is None:
+            raise FileNotFoundError("the bundled sample model is missing")
+
+        mmm = map_model_manager(model=read_model(str(sample)))
+        mmm.generate_map(d_min=d_min)  # a cryo-EM-resolution density from the true model
+        # Shake the model off the density; putting it back is the refinement's whole job.
+        model = mmm.model()
+        xrs = model.get_xray_structure().deep_copy_scatterers()
+        xrs.shake_sites_in_place(mean_distance=shake)
+        model.set_sites_cart(xrs.sites_cart())
+
+        model_data, volumes = split_map_model_manager(mmm, name=SAMPLE_STRUCTURE[1])
+        volumes = [v for v in volumes if v.map_id == "map_manager"] or volumes
+
+        gid = self._new_group(SAMPLE_STRUCTURE[1], mmm=mmm)
+        with self._batch_load():
+            session = self._model_session(model_data.model, SAMPLE_STRUCTURE[1])
+            self._add_model(session, f"{SAMPLE_STRUCTURE[0]} (model, shaken)", group=gid)
+            for vd in volumes:
+                self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (cryo-EM density)", group=gid)
+        self._status(
+            "Cryo-EM demo: a shaken model in its density — Minimize with 'Use map' to "
+            "real-space refine it back in")
+        return "group"
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
         """Stream an animated model demo into the viewport."""

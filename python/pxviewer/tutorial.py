@@ -121,6 +121,41 @@ def ligand_fitting_tutorial() -> Tutorial:
     ])
 
 
+def _minimizing(cw: Any) -> bool:
+    return not cw._desktop._minimize_idle.is_set()
+
+
+def cryo_em_refinement_tutorial() -> Tutorial:
+    """Real-space refine a model into a cryo-EM density — pxviewer's take on Phenix's
+    real_space_refine, self-contained (map computed from the model, no external data)."""
+    return Tutorial("Real-space refine into cryo-EM density", [
+        Step(
+            "Cryo-EM refinement (phenix's `real_space_refine`) slides a model into a 3D "
+            "density map — a gradient-driven minimization, not against reflections but "
+            "against the map itself.\n\nOpen the example: click **Demos** and pick **Cryo-EM "
+            "— real-space refine a model into density**. It loads a model that sits slightly "
+            "*off* its own density, waiting to be pushed back in.",
+            done=lambda cw: cw._desktop.map_for_model() is not None,
+            target=lambda cw: cw._demos_btn,
+        ),
+        Step(
+            "Real-space refine it: on the **Tools** tab, in **Minimize**, tick **Use map** "
+            "(so the minimizer pulls toward the density, not just ideal geometry) and click "
+            "**Minimize**. Watch the model creep into the map — that *is* real-space "
+            "refinement, streaming live.",
+            done=_minimizing,
+            target=lambda cw: cw._minimize_btn,
+        ),
+        Step(
+            "When the model stops shifting it has settled into the density — click **Stop**. "
+            "You just did what `phenix.real_space_refine` does: minimized an atomic model into "
+            "a cryo-EM map, no reflections and no phenix. Re-run **Make maps** isn't needed — "
+            "the map here is the target, fixed.",
+            target=lambda cw: cw._minimize_map_check,
+        ),
+    ])
+
+
 def load_edits_tutorial() -> Tutorial:
     """Load a shared restraint-edits file onto a structure — the reading half of the loop."""
     return Tutorial("Load restraint edits", [
@@ -183,7 +218,7 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — validate, fit a ligand, then the restraint-
-    edits pair (reading before writing)."""
-    return [validation_tutorial(), ligand_fitting_tutorial(),
+    """Every walkthrough offered, in menu order — validate, fit a ligand, real-space refine
+    into cryo-EM density, then the restraint-edits pair (reading before writing)."""
+    return [validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
             load_edits_tutorial(), restraint_edits_tutorial()]

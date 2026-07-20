@@ -633,6 +633,7 @@ def test_metal_example_and_its_sample_edits_file(qapp):
 
     assert [t.title for t in tutorial.all_tutorials()] == \
         ["Validate a structure", "Fit a ligand into density",
+         "Real-space refine into cryo-EM density",
          "Load restraint edits", "Custom restraint edits"]
 
     site = sample_structure_path("zn_site.pdb")
@@ -710,6 +711,67 @@ def test_ligand_fitting_demo_makes_maps_and_fits_atp(qapp):
         ligand = next(m for m in app._models if m["id"] not in before)
         fitted = ligand["session"].model.get_sites_cart().as_numpy_array().mean(0)
         assert np.linalg.norm(fitted - np.array(center)) < 4.0  # fitted into the blob
+    finally:
+        app.stop()
+
+
+def test_cryo_em_demo_refines_a_shaken_model_into_its_density(qapp):
+    """The cryo-EM demo loads a model sitting *off* a density computed from it, paired as one
+    group. Minimizing with the map (real-space refinement) settles the model back into the
+    density — the map-model correlation climbs — and its tutorial advances at each step."""
+    import time
+
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    pytest.importorskip("iotbx.map_model_manager")
+    from pxviewer import tutorial
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        cw, coach = app._controls, app._viewport
+        cw._start_tutorial(tutorial.cryo_em_refinement_tutorial())
+        assert coach.coach_progress.text() == "Step 1 / 3"
+
+        # Step 1: load the demo — a model + a density map paired in one group.
+        app.load_real_space_refinement_demo(shake=0.6)
+        qapp.processEvents()
+        assert len(app._models) == 1 and len(app._volumes) == 1
+        gid = app._models[0]["group"]
+        mmm = app.group_mmm(gid)
+        assert gid is not None and mmm is not None and app.map_for_model() is not None
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 2 / 3"
+
+        # How well the model fits its density before refinement.
+        mmm.set_resolution(3.0)
+        cc_before = float(mmm.map_model_cc())
+
+        # Step 2: real-space refine — minimize into the map. It advances once running.
+        statuses = []
+        app.bridge.status_changed.connect(statuses.append)
+        app.minimize_model(use_map=True)
+        deadline = time.time() + 90
+        while time.time() < deadline and app._minimize_idle.is_set():
+            qapp.processEvents()
+            time.sleep(0.02)
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 3 / 3"
+
+        # Let it settle into the density, then stop.
+        deadline = time.time() + 90
+        while time.time() < deadline and not any(
+                "holding" in s or "rmsd" in s for s in statuses):
+            qapp.processEvents()
+            time.sleep(0.05)
+        app.stop_minimization()
+        deadline = time.time() + 10
+        while time.time() < deadline and not app._minimize_idle.is_set():
+            qapp.processEvents()
+            time.sleep(0.05)
+
+        cc_after = float(mmm.map_model_cc())
+        assert cc_after > cc_before  # the model moved into the density
     finally:
         app.stop()
 
@@ -2436,8 +2498,8 @@ def test_multi_model_registry(qapp):
         app.stop()
 
 
-def test_demos_menu_has_the_four_curated_examples(qapp):
-    """The Demos dropdown is the one preload entry point (Samples is gone): four bundled
+def test_demos_menu_has_the_curated_examples(qapp):
+    """The Demos dropdown is the one preload entry point (Samples is gone): a set of bundled
     examples, each showing off one thing the app does."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2460,18 +2522,20 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         # rows that keep the headers off the edges).
         examples = [a.text() for a in actions[ex_i + 1:tut_i]
                     if not a.isSeparator() and a.text().strip()]
-        assert len(examples) == 6
+        assert len(examples) == 7
         assert any("1UBQ" in l for l in examples)
         assert any("map + model" in l for l in examples)
         assert any("validation" in l for l in examples)
         assert any("X-ray" in l for l in examples)
         assert any("Ligand fitting" in l for l in examples)
+        assert any("Cryo-EM" in l for l in examples)
         assert any("Metal site" in l for l in examples)
-        # ...and the tutorials follow: validation, ligand fitting, then the edits pair.
+        # ...and the tutorials follow: validation, ligand fitting, cryo-EM, then the edits pair.
         tutorials = [a.text() for a in actions[tut_i + 1:]
                      if not a.isSeparator() and a.text().strip()]
         assert [t.lower() for t in tutorials] == \
             ["validate a structure", "fit a ligand into density",
+             "real-space refine into cryo-em density",
              "load restraint edits", "custom restraint edits"]
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
