@@ -3626,6 +3626,9 @@ class DesktopApp:
             self._dummy = _dummy_session()
             self._dummy.start(host=self._host, port=0)
             self._dummy.on_volume_iso(self._on_volume_iso_changed)
+            # So a ligand marker can be placed on a blank canvas (no model), where the
+            # dummy is the session the viewport is connected to.
+            self._dummy.on_marker(lambda position, atom: self._on_marker(position, atom))
             # Render nothing: an empty `on` set draws no atoms, so an empty scene
             # is truly empty (the dummy only keeps the ws channel open).
             try:
@@ -3702,6 +3705,10 @@ class DesktopApp:
             params.append(f"mvsj={mvsj}")
         params.append("ws=" + ",".join(ws))
         self._viewport.load(f"{self._webapp.url}index.html?{'&'.join(params)}")
+        # Markers ride the control session, which the reload may have changed (e.g. the
+        # dummy on a blank canvas -> a model just loaded), so re-assert them onto it.
+        if self._markers:
+            self._draw_markers()
 
     def _wire_active(self, session) -> None:
         """Point the active session at ``session`` (the default table model + display target).
@@ -4044,8 +4051,11 @@ class DesktopApp:
         the click. Rides the control session, so the marker is a scene-level point rather
         than tied to one model."""
         session = self._control_session()
-        if session is None:
-            self._status("load a model first to place a ligand marker")
+        if session is None:  # blank canvas: fall back to the dummy the viewport connects to
+            self._ensure_dummy_ws()
+            session = self._control_session()
+        if session is None:  # pragma: no cover - defensive
+            self._status("could not arm — the viewport has no session")
             return
         session.set_marker_mode(True)
         self._status("Click in the viewport to place a ligand marker…")
