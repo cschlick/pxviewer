@@ -4284,10 +4284,12 @@ class DesktopApp:
         viewer goes deaf and blind exactly as the drag begins.
         """
         if action == "arm":
-            # Shift pressed: a drag is imminent. If a minimization is running, start halting
-            # it now — so by the time the pointer actually grabs an atom the model is free.
-            # Non-blocking (this is the socket thread); the drag's begin waits for the stop.
-            self._preempt_minimization_for_drag()
+            # Shift pressed: a drag is imminent. Do exactly what the Pause button does —
+            # stop any running minimization (same call, same message) — so by the time the
+            # pointer grabs an atom the model is free. Non-blocking (this is the socket
+            # thread); the drag's begin waits for the run to actually finish.
+            if not self._minimize_idle.is_set():
+                self.stop_minimization()
             return
         if self._tug_queue is None:
             import queue
@@ -4295,14 +4297,6 @@ class DesktopApp:
             self._tug_queue = queue.Queue()
             threading.Thread(target=self._tug_worker, name="pxviewer-tug", daemon=True).start()
         self._tug_queue.put((action, mid, atom, target))
-
-    def _preempt_minimization_for_drag(self) -> None:
-        """Signal any running minimization to stop, and say so — a drag is on its way and
-        the model can't be handed over until the minimizer lets go. Only the signal here;
-        the wait for it to actually finish happens on the tug worker, in _serve_tug."""
-        if not self._minimize_idle.is_set():
-            self._minimize_stop.set()
-            self._warn("Minimization in progress — stopping so you can drag")
 
     def _tug_worker(self) -> None:
         """Serve drags off the socket's thread.
@@ -4362,7 +4356,7 @@ class DesktopApp:
             # for its thread to let go before we build restraints on the same model, so the
             # two never write the coordinates at once. It converges in well under a second;
             # the timeout is a safety cap, not the expected wait. (Shift-keydown usually
-            # started this stop already, via _preempt_minimization_for_drag.)
+            # started this stop already, in the "arm" branch above.)
             if not self._minimize_idle.is_set():
                 self._minimize_stop.set()
                 self._minimize_idle.wait(timeout=2.0)
@@ -4572,7 +4566,6 @@ class DesktopApp:
         """
         self._minimize_stop.set()
         self._status("stopping minimization…")
-        self._status("minimizing…")
 
     def set_axis(self, visible: bool) -> None:
         control = self._control_session()

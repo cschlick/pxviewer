@@ -420,28 +420,36 @@ def test_minimize_buttons_show_which_state_is_live(qapp):
         app.stop()
 
 
-def test_shift_arm_preempts_a_running_minimization(qapp):
-    """Shift is pressed (a drag is imminent): the 'arm' message halts a running
-    minimization and flashes why, so a drag that can't grab yet is explained rather than
-    silently dead. With nothing running it is a no-op — no stop, no warning."""
+def test_shift_arm_is_exactly_pause(qapp):
+    """Shift is pressed (a drag is imminent): the 'arm' message does exactly what the Pause
+    button does — stop a running minimization, same signal, same status. With nothing
+    running it is a no-op, just as Pause is disabled when nothing is running."""
     from pxviewer.desktop import DesktopApp
 
     app = DesktopApp(port=0)
     try:
-        warned = []
-        app.bridge.status_warned.connect(warned.append)
+        status = []
+        app.bridge.status_changed.connect(status.append)
 
-        # Nothing running: arm does nothing.
+        # Nothing running: arm does nothing (no stop, no message).
         app._on_tug("m", "arm", -1, None)
         qapp.processEvents()
-        assert not app._minimize_stop.is_set() and warned == []
+        assert not app._minimize_stop.is_set() and status == []
 
-        # A run is going (idle cleared as minimize_model would): arm stops it and says why.
+        # A run is going (idle cleared as minimize_model would): arm stops it and says so —
+        # the very same status the Pause button raises.
         app._minimize_idle.clear()
         app._on_tug("m", "arm", -1, None)
         qapp.processEvents()
+        arm_status = list(status)
         assert app._minimize_stop.is_set()
-        assert warned and "drag" in warned[-1].lower()
+        assert arm_status and "stopping" in arm_status[-1].lower()
+
+        # And pressing Pause directly raises the identical message.
+        status.clear()
+        app.stop_minimization()
+        qapp.processEvents()
+        assert status == [arm_status[-1]]
     finally:
         app.stop()
 
