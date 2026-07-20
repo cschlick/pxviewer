@@ -358,9 +358,21 @@ def model_secondary_structure(model: Any) -> List[Tuple[str, int, int, str]]:
 
 
 def model_is_polymer(model: Any) -> bool:
-    """Whether the model contains a polymer (protein or nucleic acid) — enables cartoon."""
+    """Whether the model has an actual polymer *chain* — at least two protein or nucleic-acid
+    residues in one chain — which is what cartoon can trace. A lone amino acid, or a handful
+    of isolated residues (a metal site's coordinating histidines, say), is not a polymer:
+    cartoon has nothing to draw, so those default to ball-and-stick."""
     try:
-        return bool(model.contains_protein() or model.contains_nucleic_acid())
+        from iotbx.pdb import common_residue_names_get_class as get_class
+
+        polymer = {"common_amino_acid", "modified_amino_acid",
+                   "common_rna_dna", "modified_rna_dna"}
+        for chain in model.get_hierarchy().chains():
+            n = sum(1 for rg in chain.residue_groups()
+                    if get_class(rg.atom_groups()[0].resname) in polymer)
+            if n >= 2:
+                return True
+        return False
     except Exception:  # pragma: no cover - defensive
         return False
 

@@ -650,6 +650,8 @@ def test_metal_example_and_its_sample_edits_file(qapp):
         names = {a.name.strip() for a in
                  app._model_entry(mid)["session"].model.get_hierarchy().atoms()}
         assert {"ZN", "O", "NE2"} <= names  # metal, water, coordinating His nitrogen
+        # isolated histidines are not a polymer, so it draws ball-and-stick, not empty cartoon
+        assert app._model_entry(mid)["rep"] == "ball-and-stick"
 
         assert app.model_edits(mid) == []
         skipped = app.load_edits(mid, str(edits_file))
