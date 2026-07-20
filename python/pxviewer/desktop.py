@@ -4236,6 +4236,9 @@ class DesktopApp:
 
                 session = LiveSession.from_cctbx_model(model)
                 self._add_model(session, name=f"{code} (ligand)")
+                # The marker has done its job — it becomes the ligand object. Consume it so
+                # it doesn't linger in the object list alongside the model it produced.
+                self.remove_marker(mid)
                 self._status(
                     f"placed {code}"
                     + (" and fitted into density" if map_data is not None else "")
