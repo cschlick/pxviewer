@@ -172,6 +172,37 @@ def test_a_drag_from_the_viewport_reaches_a_handler():
         session.stop()
 
 
+def test_arm_from_the_viewport_reaches_a_handler():
+    """Pressing Shift sends a 'arm' message with no atom (the drag hasn't grabbed anything
+    yet). It must still reach the tug handler — that is what lets the app stop a running
+    minimization the instant Shift goes down, before the pointer grabs."""
+    import asyncio
+    import json
+
+    websockets = pytest.importorskip("websockets")
+    from pxviewer.live import LiveSession
+
+    session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
+    session.start(port=0)
+    seen = []
+    session.on_tug(lambda action, atom, target: seen.append((action, atom, target)))
+    try:
+        async def scenario():
+            url = f"ws://{session.host}:{session.port}"
+            async with websockets.connect(url) as ws:
+                await ws.recv()
+                await ws.send(json.dumps({"type": "tug", "action": "arm"}))
+                for _ in range(50):
+                    if seen:
+                        break
+                    await asyncio.sleep(0.05)
+
+        asyncio.run(scenario())
+        assert seen == [("arm", -1, None)]
+    finally:
+        session.stop()
+
+
 def test_continuous_mode_keeps_minimizing_between_targets():
     """The difference the mode makes: with the target held still, the free-running steps
     keep reducing the strain, where a single nudge would have stopped. That is what lets
