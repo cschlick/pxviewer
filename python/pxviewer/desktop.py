@@ -1387,6 +1387,8 @@ class ControlsWindow:
                        lambda: self._on_load_sample("1tec.pdb"))
         menu.addAction("X-ray — model + reflections (make density)",
                        self._on_run_xray_demo)
+        gap = menu.addAction(" ")  # a blank line between the sections, above "Tutorials"
+        gap.setEnabled(False)
         menu.addSection("Tutorials")
         for tut in tutorial.all_tutorials():
             menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))

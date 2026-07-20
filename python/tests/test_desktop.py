@@ -2249,8 +2249,10 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert "Examples" in labels and "Tutorials" in labels
         ex_i, tut_i = labels.index("Examples"), labels.index("Tutorials")
         assert ex_i < tut_i
-        # The four curated examples sit between the two section headers.
-        examples = [a.text() for a in actions[ex_i + 1:tut_i] if not a.isSeparator()]
+        # The four curated examples sit between the two section headers (ignoring blank
+        # spacer rows that keep the headers off the edges).
+        examples = [a.text() for a in actions[ex_i + 1:tut_i]
+                    if not a.isSeparator() and a.text().strip()]
         assert len(examples) == 4
         assert any("1UBQ" in l for l in examples)
         assert any("map + model" in l for l in examples)
