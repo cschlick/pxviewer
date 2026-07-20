@@ -313,6 +313,7 @@ def _make_bridge():
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
+        ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
         volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
 
     return _Bridge()
@@ -1054,6 +1055,7 @@ class ControlsWindow:
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
+        desktop.bridge.ligand_placed.connect(self._on_ligand_placed)
         desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
         self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
         self._update_tug_density()
@@ -1446,6 +1448,12 @@ class ControlsWindow:
             self._desktop.fit_ligand_from_smiles_at_marker(mid, smiles, code or "LIG", fit=fit)
         else:
             self._desktop.fit_ligand_at_marker(mid, code, fit=fit)
+
+    def _on_ligand_placed(self) -> None:
+        """A ligand was built and added — clear the code and SMILES inputs so the next one
+        starts fresh, rather than silently reusing the last code as its name/restraints."""
+        self._lig_code_edit.clear()
+        self._lig_smiles_edit.clear()
 
     def _update_ligand_panel(self) -> None:
         """Enable the ligand fields only with a marker to place at, and reflect the current
@@ -4297,6 +4305,7 @@ class DesktopApp:
                 # The marker has done its job — it becomes the ligand object. Consume it so
                 # it doesn't linger in the object list alongside the model it produced.
                 self.remove_marker(mid)
+                self.bridge.ligand_placed.emit()  # so the panel clears its inputs
                 self._status(
                     f"placed {code}"
                     + (" and fitted into density" if map_data is not None else "")

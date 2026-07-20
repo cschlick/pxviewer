@@ -550,6 +550,53 @@ def test_smiles_ligand_restraints_can_be_saved(qapp, tmp_path):
         app.stop()
 
 
+def test_placing_a_ligand_clears_the_input_fields(qapp):
+    """After a ligand is placed the code and SMILES boxes clear, so the next ligand cannot
+    silently inherit the previous code as its name/restraints. A failed build leaves the
+    inputs untouched, so a typo can be fixed rather than retyped."""
+    import time
+
+    pytest.importorskip("rdkit")
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        ctrls = app._controls
+
+        def place(code, smiles, marker):
+            app._markers.append({"id": marker, "name": "m", "position": [0.0, 0.0, 0.0],
+                                 "atom": None, "visible": True})
+            ctrls._lig_code_edit.setText(code)
+            ctrls._lig_smiles_edit.setText(smiles)
+            n = len(app._models)
+            ctrls._on_fit_ligand()
+            deadline = time.time() + 40
+            while time.time() < deadline and len(app._models) == n:
+                qapp.processEvents()
+                time.sleep(0.05)
+            qapp.processEvents()
+
+        place("EOH", "CCO", "marker-1")
+        assert ctrls._lig_code_edit.text() == "" and ctrls._lig_smiles_edit.text() == ""
+
+        # A build that fails leaves the fields as typed (nothing was placed).
+        app._markers.append({"id": "marker-2", "name": "m", "position": [0.0, 0.0, 0.0],
+                             "atom": None, "visible": True})
+        ctrls._lig_code_edit.setText("ABC")
+        ctrls._lig_smiles_edit.setText("not_a_smiles!!!")
+        n = len(app._models)
+        ctrls._on_fit_ligand()
+        for _ in range(40):
+            qapp.processEvents()
+            time.sleep(0.02)
+        assert len(app._models) == n  # nothing placed
+        assert ctrls._lig_code_edit.text() == "ABC"
+        assert ctrls._lig_smiles_edit.text() == "not_a_smiles!!!"
+    finally:
+        app.stop()
+
+
 def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
     """Pairing relocates the model into the map's frame — several angstrom for a boxed
     map. The map the browser is served has to move with it, or the model is drawn away
