@@ -1387,6 +1387,8 @@ class ControlsWindow:
                        lambda: self._on_load_sample("1tec.pdb"))
         menu.addAction("X-ray — model + reflections (make density)",
                        self._on_run_xray_demo)
+        menu.addAction("Metal site — Zn coordination (restraint edits)",
+                       lambda: self._on_load_sample("zn_site.pdb"))
         gap = menu.addAction(" ")  # a blank line between the sections, above "Tutorials"
         gap.setEnabled(False)
         menu.addSection("Tutorials")
@@ -1599,6 +1601,7 @@ class ControlsWindow:
         load = QPushButton("Load…")
         load.setToolTip("Read a geometry_restraints.edits PHIL file and add its edits")
         load.clicked.connect(self._on_load_edits)
+        self._edit_load_btn = load  # a tutorial highlight target
         save = QPushButton("Save…")
         save.setToolTip("Write the active model's edits as a geometry_restraints.edits PHIL file")
         save.clicked.connect(self._on_save_edits)
@@ -1648,8 +1651,11 @@ class ControlsWindow:
         if mid is None:
             self._set_status("load a model first")
             return
+        # Open on the bundled sample edits file, so the tutorial's file is right there.
+        sample = sample_structure_path("zn_site_edits.phil")
         path, _ = QFileDialog.getOpenFileName(
-            self._window, "Load restraint edits", "", "Edits PHIL (*.phil *.params *.txt *.eff)")
+            self._window, "Load restraint edits", str(sample) if sample else "",
+            "Edits PHIL (*.phil *.params *.txt *.eff)")
         if not path:
             return
         try:

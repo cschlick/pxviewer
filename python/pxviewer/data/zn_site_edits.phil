@@ -1,0 +1,15 @@
+# Sample restraint edits for the bundled metal-coordination example (zn_site.pdb).
+# Adds the Zn-water coordination bond that cctbx does not restrain on its own
+# (the three Zn-His bonds are auto-detected; this defines the catalytic water).
+# Bond/angle/dihedral restraints added on top of the monomer-library defaults —
+# e.g. a covalent-ligand link or metal coordination the library does not know.
+# Read by cctbx/phenix (refinement.geometry_restraints.edits) and by pxviewer.
+geometry_restraints.edits {
+  bond {
+    action = add
+    atom_selection_1 = "chain S and resseq 1 and name ZN"
+    atom_selection_2 = "chain S and resseq 2 and name O"
+    distance_ideal = 2.1000
+    sigma = 0.0500
+  }
+}

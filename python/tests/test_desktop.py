@@ -620,6 +620,46 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
         app.stop()
 
 
+def test_metal_example_and_its_sample_edits_file(qapp):
+    """The bundled metal site loads (Zn + water + histidines), and the bundled sample edits
+    file applies to it — adding the Zn-water coordination bond cctbx doesn't restrain on its
+    own. Tutorials are offered loading-first, writing-second."""
+    import time
+
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer import tutorial
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.loader import sample_structure_path
+
+    assert [t.title for t in tutorial.all_tutorials()] == \
+        ["Load restraint edits", "Custom restraint edits"]
+
+    site = sample_structure_path("zn_site.pdb")
+    edits_file = sample_structure_path("zn_site_edits.phil")
+    assert site is not None and edits_file is not None
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(site)])
+        deadline = time.time() + 30
+        while time.time() < deadline and not app._models:
+            qapp.processEvents()
+            time.sleep(0.02)
+        mid = app._active_model_id
+        names = {a.name.strip() for a in
+                 app._model_entry(mid)["session"].model.get_hierarchy().atoms()}
+        assert {"ZN", "O", "NE2"} <= names  # metal, water, coordinating His nitrogen
+
+        assert app.model_edits(mid) == []
+        skipped = app.load_edits(mid, str(edits_file))
+        assert skipped == 0
+        loaded = app.model_edits(mid)
+        assert len(loaded) == 1 and loaded[0]["kind"] == "bond"
+    finally:
+        app.stop()
+
+
 def test_authoring_saving_and_loading_restraint_edits(qapp, tmp_path):
     """Author a custom bond from a selection, see it validated and listed, round-trip it
     through a PHIL file, and confirm the model's restraints carry it. A duplicate edit (a
@@ -2249,18 +2289,20 @@ def test_demos_menu_has_the_four_curated_examples(qapp):
         assert "Examples" in labels and "Tutorials" in labels
         ex_i, tut_i = labels.index("Examples"), labels.index("Tutorials")
         assert ex_i < tut_i
-        # The four curated examples sit between the two section headers (ignoring blank
-        # spacer rows that keep the headers off the edges).
+        # The curated examples sit between the two section headers (ignoring blank spacer
+        # rows that keep the headers off the edges).
         examples = [a.text() for a in actions[ex_i + 1:tut_i]
                     if not a.isSeparator() and a.text().strip()]
-        assert len(examples) == 4
+        assert len(examples) == 5
         assert any("1UBQ" in l for l in examples)
         assert any("map + model" in l for l in examples)
         assert any("validation" in l for l in examples)
         assert any("X-ray" in l for l in examples)
-        # ...and at least one tutorial follows.
-        tutorials = [a.text() for a in actions[tut_i + 1:] if not a.isSeparator()]
-        assert tutorials and any("restraint" in l.lower() for l in tutorials)
+        assert any("Metal site" in l for l in examples)
+        # ...and the two tutorials follow, loading before writing.
+        tutorials = [a.text() for a in actions[tut_i + 1:]
+                     if not a.isSeparator() and a.text().strip()]
+        assert [t.lower() for t in tutorials] == ["load restraint edits", "custom restraint edits"]
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
         buttons = ctl.widget().findChildren(QPushButton)

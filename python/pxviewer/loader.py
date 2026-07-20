@@ -36,6 +36,7 @@ SAMPLE_STRUCTURE = ("1ubq.pdb", "Ubiquitin (1UBQ)")
 SAMPLES = [
     SAMPLE_STRUCTURE,
     ("1tec.pdb", "Thermitase-eglin (1TEC) — validation demo"),
+    ("zn_site.pdb", "Metal site — Zn coordination (restraint edits)"),
 ]
 
 
