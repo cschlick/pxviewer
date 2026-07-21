@@ -1502,6 +1502,16 @@ class ControlsWindow:
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         dg.addWidget(self._tug_continuous_check)
+        self._tug_livemap_check = QCheckBox("Live difference map")
+        self._tug_livemap_check.setToolTip(
+            "While dragging, recompute the mFo-DFc difference map in a small window around "
+            "the atom and show it live — green where the data wants density, red where the "
+            "model has too much. Honest feedback as you fit (the main 2mFo-DFc map is left "
+            "alone to avoid model bias). Needs a map phased from reflections; use Recompute "
+            "for the whole-structure maps.")
+        self._tug_livemap_check.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_live_difference_map(on)))
+        dg.addWidget(self._tug_livemap_check)
         return dragging
 
     def _build_ligand_placement_group(self):
@@ -3804,6 +3814,16 @@ class DesktopApp:
         self._tug_last: Any = None
         self._tug_last_push: float = 0.0
         self._tug_queue: Any = None  # made with its worker on the first drag
+        # Live difference map while dragging (see set_live_difference_map): a warm-recompute
+        # engine, cached per phased group, fed the latest drag frame off a one-slot queue so
+        # only the most recent conformation is ever mapped (older frames are dropped).
+        self._live_diff = False
+        self._diff_engine: Any = None          # reflections.LiveDifferenceMap
+        self._diff_engine_key: Optional[str] = None  # the group id it was built for
+        self._diff_queue: Any = None
+        self._diff_ctx: Any = None             # (group id, reflection path) for the running drag
+        self._diff_atom: Optional[int] = None  # the dragged atom, the window's centre
+        self._diff_gen = 0                      # bumped on each drag start/clear; drops stale recomputes
         # The radius new maps from reflections open with (Settings changes it).
         self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
 
@@ -4592,6 +4612,116 @@ class DesktopApp:
         """
         self._tug_continuous = bool(enabled)
 
+    def set_live_difference_map(self, enabled: bool) -> None:
+        """Whether a drag streams a live mFo-DFc difference map around the dragged atom.
+
+        On: each drag frame triggers a warm recompute of the difference density in a small
+        window at the atom (see :class:`reflections.LiveDifferenceMap`), shown as a green/red
+        box that flattens as the fit improves — honest feedback, since the difference map is
+        about model-vs-data, not the model-echoing 2mFo-DFc. Only the local window updates;
+        the whole-structure maps stay put until **Recompute**. Needs reflections phased
+        against the model (Make maps first). Takes effect on the next drag.
+        """
+        self._live_diff = bool(enabled)
+        if not enabled:
+            self._clear_live_diff()
+
+    def _group_reflection_path(self, gid: Optional[str]) -> Optional[str]:
+        """The on-disk reflection file phased into group ``gid``, if any (for re-phasing)."""
+        if gid is None:
+            return None
+        for entry in self._reflections:
+            if entry.get("group") == gid and entry.get("r_work") is not None:
+                path = entry["data"].path
+                if path:
+                    return path
+        return None
+
+    def _maybe_start_live_diff(self, mid: str, atom: int) -> None:
+        """At a drag's start, arm the live difference map if it applies. Worker thread."""
+        self._diff_ctx = None
+        self._diff_atom = None
+        if not self._live_diff:
+            return
+        entry = self._model_entry(mid)
+        gid = entry.get("group") if entry else None
+        refl_path = self._group_reflection_path(gid)
+        if refl_path is None:
+            return  # no phased reflections to recompute from — nothing to show
+        self._diff_ctx = (gid, refl_path)
+        self._diff_atom = atom
+        self._diff_gen += 1
+        if self._diff_queue is None:
+            import queue
+
+            self._diff_queue = queue.Queue()
+            threading.Thread(
+                target=self._diff_worker, name="pxviewer-diffmap", daemon=True).start()
+
+    def _queue_live_diff(self, coords: Any) -> None:
+        """Hand the latest drag frame to the difference-map worker (drops older frames)."""
+        if self._diff_ctx is None or self._diff_atom is None or self._diff_queue is None:
+            return
+        gid, refl_path = self._diff_ctx
+        sites = np.ascontiguousarray(np.asarray(coords, dtype="float64")).reshape(-1, 3)
+        if self._diff_atom >= len(sites):
+            return
+        center = tuple(sites[self._diff_atom])
+        self._diff_queue.put((sites, center, gid, refl_path, self._diff_gen))
+
+    def _diff_worker(self) -> None:
+        """Recompute + stream the local difference map for the latest drag frame.
+
+        Off the tug thread, so a recompute (tens of ms) never slows the drag; runs of frames
+        collapse to the newest, and the scaled fmodel is built once per group and reused."""
+        import queue
+
+        while not self._stopped:
+            try:
+                item = self._diff_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            while True:  # collapse to the most recent frame
+                try:
+                    item = self._diff_queue.get_nowait()
+                except queue.Empty:
+                    break
+            if item is None:
+                continue
+            sites, center, gid, refl_path, gen = item
+            session = self._tug_session
+            if session is None or not self._live_diff or gen != self._diff_gen:
+                continue  # the drag ended (or a newer one began) before this frame ran
+            try:
+                if self._diff_engine is None or self._diff_engine_key != gid:
+                    from .reflections import LiveDifferenceMap
+
+                    mmm = self.group_mmm(gid)
+                    model = mmm.model() if mmm is not None else None
+                    if model is None:
+                        continue
+                    self._status("preparing live difference map…")
+                    self._diff_engine = LiveDifferenceMap(model, refl_path)
+                    self._diff_engine_key = gid
+                box = self._diff_engine.recompute_local(center, radius=6.0, sites_cart=sites)
+                if gen == self._diff_gen and self._live_diff:  # not superseded during the recompute
+                    session.show_map_box(box, level=3.0)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                self._status(f"live difference map failed: {exc}")
+                self._diff_ctx = None  # stop hammering a failing recompute for this drag
+
+    def _clear_live_diff(self) -> None:
+        """Stop streaming the live difference map and remove the window from the viewport."""
+        self._diff_ctx = None
+        self._diff_atom = None
+        self._diff_gen += 1  # invalidate any recompute still in flight
+        session = self._tug_session
+        if session is not None:
+            try:
+                session.clear_map_box()
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     # -- markers ---------------------------------------------------------
 
     def arm_marker(self) -> None:
@@ -4865,6 +4995,7 @@ class DesktopApp:
             self._tug_session = session
             self._tug_last = None
             self._tug_last_push = 0.0
+            self._maybe_start_live_diff(mid, atom)  # arm the live difference map, if on
             self._status(f"dragging atom {atom} — {self._tug.zone_size} atoms giving way")
             return
 
@@ -4877,6 +5008,7 @@ class DesktopApp:
                 self._push_tug(self._tug.move_to(target))
         elif action == "end":
             self._settle_tug()   # let go, and watch it come to rest
+            self._clear_live_diff()  # remove the live window (while the session is still known)
             self._end_tug()
             entry.pop("validation", None)  # stale: the atoms just moved
 
@@ -4945,6 +5077,7 @@ class DesktopApp:
         self._tug_last = coords
         self._tug_last_push = now
         self._tug_session.push(coords)
+        self._queue_live_diff(coords)  # follow the drag with a local difference map, if on
 
     def _end_tug(self) -> None:
         """Close out a drag, if one is running. Idempotent."""

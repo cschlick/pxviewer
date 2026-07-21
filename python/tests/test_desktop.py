@@ -776,6 +776,74 @@ def test_cryo_em_demo_refines_a_shaken_model_into_its_density(qapp):
         app.stop()
 
 
+def test_live_difference_map_streams_a_box_during_a_drag(qapp):
+    """With 'Live difference map' on and a phased model, arming a drag and feeding it a frame
+    streams an mFo-DFc window (a _TAG_MAP payload) to the model's session; disabling clears it.
+    Exercises the whole wiring — arm, the background recompute worker, and teardown."""
+    import struct
+    import tempfile
+    import time
+    from pathlib import Path
+
+    import numpy as np
+
+    pytest.importorskip("mmtbx.f_model")
+    from pxviewer.geometry import monomer_library_available
+    if not monomer_library_available():
+        pytest.skip("no monomer library")
+    from pxviewer.cctbx_io import read_model
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.loader import sample_structure_path
+
+    # A self-contained phased group: bundled model + synthetic reflections computed from it.
+    path = sample_structure_path()
+    model = read_model(str(path))
+    f_obs = abs(model.get_xray_structure().structure_factors(d_min=2.0).f_calc())
+    f_obs.set_observation_type_xray_amplitude()
+    td = tempfile.mkdtemp()
+    mtz = Path(td) / "d.mtz"
+    ds = f_obs.as_mtz_dataset(column_root_label="F")
+    ds.add_miller_array(f_obs.generate_r_free_flags(), column_root_label="FreeR_flag")
+    ds.mtz_object().write(str(mtz))
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(path)])
+        app.load_files([str(mtz)])
+        deadline = time.time() + 60
+        while time.time() < deadline and (not app._models or not app._reflections):
+            qapp.processEvents()
+            time.sleep(0.02)
+        mid, rid = app._models[0]["id"], app._reflections[0]["id"]
+        app.make_maps(rid, mid)
+        deadline = time.time() + 150
+        while time.time() < deadline and app.map_for_model(mid) is None:
+            qapp.processEvents()
+            time.sleep(0.05)
+        assert app.map_for_model(mid) is not None  # phased
+
+        session = app._model_entry(mid)["session"]
+        app._tug_session = session          # as a drag 'begin' sets it
+        app.set_live_difference_map(True)
+        app._maybe_start_live_diff(mid, atom=model.get_number_of_atoms() // 2)
+        assert app._diff_ctx is not None    # armed: a phased group with reflections exists
+
+        app._queue_live_diff(np.array(model.get_sites_cart(), dtype="float64"))
+        deadline = time.time() + 90
+        while time.time() < deadline and session._last_map_box is None:
+            qapp.processEvents()
+            time.sleep(0.05)
+        assert session._last_map_box is not None
+        assert struct.unpack_from("<I", session._last_map_box, 0)[0] == 4  # _TAG_MAP
+
+        app.set_live_difference_map(False)  # clears the window and disarms
+        assert app._diff_ctx is None
+        assert session._last_map_box is None
+    finally:
+        app.stop()
+
+
 def test_validation_tutorial_advances_when_validation_runs(qapp):
     """The validation walkthrough: load the demo, run validation, read the results. It
     advances when a model is loaded and again once validation has cached results."""
