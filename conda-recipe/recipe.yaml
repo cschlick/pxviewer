@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/prefix-dev/recipe-format/main/schema.json
+#
+# rattler-build recipe for pxviewer (mamba-based, fast — no classic solver). Equivalent to
+# the conda-build recipe in meta.yaml; both drive the shared build.sh alongside this file.
+#
+#   ./scripts/build_frontend.sh                                   # produce frontend/build/index.js
+#   rattler-build build --recipe conda-recipe/recipe.yaml -c conda-forge -c chem_data
+#
+# Produces a noarch package (one build installs everywhere). Install with:
+#   conda install -c <your-channel> -c conda-forge -c chem_data pxviewer
+#
+# chem_data (cctbx's community channel — not Anaconda's defaults, so no commercial ToS)
+# ships the geostd monomer library; pxviewer discovers it automatically at import
+# (pxviewer.geometry.monomer_library_root), so no activation hook or env var is needed.
+
+context:
+  version: "0.1.0"
+
+package:
+  name: pxviewer
+  version: ${{ version }}
+
+source:
+  # Do not filter by .gitignore: the pre-built frontend bundle (frontend/build/index.js)
+  # is a gitignored artifact that build.sh needs. conda-build copies it implicitly; here
+  # we opt in explicitly. (node_modules comes along too — a cheap local copy — and lets
+  # build.sh rebuild the bundle from source if it is ever absent.)
+  - path: ..
+    use_gitignore: false
+
+build:
+  number: 0
+  noarch: python
+  python:
+    entry_points:
+      - pxviewer = pxviewer.__main__:main
+  # build.sh (in this directory) is auto-run: it bundles the frontend and pip-installs.
+
+requirements:
+  host:
+    - python >=3.10
+    - pip
+    - hatchling
+  run:
+    - python >=3.10
+    # Atomic-model I/O, maps, restraints and refinement.
+    - cctbx-base
+    # The geostd monomer library restraints/validation build from (cctbx channel).
+    - chem_data
+    # SMILES -> 3D conformer for on-the-fly ligand placement.
+    - rdkit
+    # cctbx currently supports numpy <= 2.4.
+    - numpy <2.5
+    # The desktop app: Qt bindings + the native WebEngine module PySide6 does not pull in.
+    - pyside6 >=6.5
+    - qt6-webengine
+    # Scene/data building and the live WebSocket viewport.
+    - molviewspec >=1.8.0
+    - msgpack-python >=1.0
+    - websockets >=12.0
+    # The embedded Jupyter console.
+    - ipykernel >=6.0
+
+tests:
+  # Imports pull in the full run env and pip check confirms a consistent tree.
+  - python:
+      imports:
+        - pxviewer
+        - pxviewer.desktop
+      pip_check: true
+  # The CLI is installed, and the frontend + monomer library resolve from the package.
+  - script:
+      - pxviewer --help
+      - python -c "from pxviewer.appserver import find_frontend_dir, frontend_is_built; d = find_frontend_dir(); assert d is not None and frontend_is_built(d), 'frontend not bundled'"
+      - python -c "from pxviewer.geometry import monomer_library_available; assert monomer_library_available(), 'chem_data monomer library not found'"
+
+about:
+  homepage: https://github.com/cschlick/pxviewer
+  license: LicenseRef-pxviewer-source-available
+  license_file: LICENSE
+  summary: A desktop molecular-structure viewer (cctbx + Mol*) with live refinement, validation and restraint editing.
+
+extra:
+  recipe-maintainers:
+    - cschlick

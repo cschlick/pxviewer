@@ -29,14 +29,20 @@ validation code needs; it's a `run` dependency of the package, and pxviewer disc
 geostd automatically at import — no env var or activation hook to set. The built Mol*
 frontend is bundled inside the package, so the install is self-contained.
 
-To build the package yourself, see [`conda-recipe/`](conda-recipe/meta.yaml):
+To build the package yourself (see [`conda-recipe/`](conda-recipe/)), first produce the
+frontend bundle, then build with **rattler-build** — it uses a fast mamba-class solver and
+builds in seconds:
 
 ```bash
 ./scripts/build_frontend.sh                        # produce frontend/build/index.js
-conda build conda-recipe -c conda-forge -c chem_data
+rattler-build build --recipe conda-recipe/recipe.yaml -c conda-forge -c chem_data
 ```
 
-pxviewer is `noarch: python`, so one build (on Linux or macOS) installs everywhere.
+The equivalent `conda build conda-recipe -c conda-forge -c chem_data` also works and
+produces an identical package, but its metadata-render step uses conda's classic solver
+and can take ~40 min for this dependency set (vs. seconds for rattler-build). pxviewer is
+`noarch: python`, so one build (on Linux or macOS) installs everywhere. Then install from
+your local build with `conda install --use-local -c conda-forge -c chem_data pxviewer`.
 
 ### Environment (conda, from source)
 

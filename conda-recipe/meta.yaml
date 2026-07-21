@@ -1,6 +1,12 @@
 {% set version = "0.1.0" %}
 
-# Conda recipe for pxviewer.
+# Conda-build recipe for pxviewer.
+#
+# NOTE: conda-build's classic metadata-render step is very slow for this dependency set
+# (~40 min). For a ~seconds build of an identical package, prefer rattler-build with the
+# equivalent recipe.yaml in this directory:
+#
+#     rattler-build build --recipe conda-recipe/recipe.yaml -c conda-forge -c chem_data
 #
 # Build (once, on Linux or macOS — the package is noarch so it then installs everywhere):
 #
@@ -25,8 +31,6 @@ source:
 build:
   noarch: python
   number: 0
-  script_env:
-    - PXVIEWER_SKIP_FRONTEND_BUILD
   entry_points:
     - pxviewer = pxviewer.__main__:main
 
