@@ -1162,6 +1162,10 @@ class ControlsWindow:
         # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
+        # Don't let the tabs stretch to fill the bar. The macOS style expands them by default,
+        # which spreads six icon-only tabs across the whole width with big gaps between the
+        # glyphs; sized to content they sit together, tight and left-aligned, as on Linux.
+        tabs.tabBar().setExpanding(False)
         tabs.setIconSize(QSize(20, 20))
         # Lucide line icons, tinted to the tab text colour so they read in light and dark.
         tint = self._btn_tint
