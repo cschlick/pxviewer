@@ -279,6 +279,25 @@ def _accent(widget, name: str) -> str:
     return dark if is_dark else light
 
 
+# macOS renders icon-only QPushButtons as tall, near-borderless native bezels, so the glyphs
+# read as oversized and unframed (Linux/Adwaita frames them tightly, which looks right). Give
+# them a compact, theme-adaptive frame *only on macOS* — palette() colours so it still tracks
+# light/dark — and leave the good native look on other platforms untouched.
+_IS_MAC = sys.platform == "darwin"
+_ICON_BUTTON_QSS = (
+    "QPushButton { border: 1px solid palette(mid); border-radius: 5px; padding: 3px;"
+    " background-color: palette(button); }"
+    "QPushButton:hover { border-color: palette(highlight); }"
+    "QPushButton:pressed { background-color: palette(midlight); }"
+    "QPushButton:checked { background-color: palette(highlight); }"
+)
+
+
+def _icon_button_base_qss() -> str:
+    """The base stylesheet for an icon-only button — a macOS frame, or nothing elsewhere."""
+    return _ICON_BUTTON_QSS if _IS_MAC else ""
+
+
 def _tab_hover_filter(tabbar, on_hover):
     """A QObject event filter, parented to ``tabbar``, that calls ``on_hover(index)`` with
     the tab under the pointer (or -1 on leave). Defined lazily so the module imports without
@@ -1829,7 +1848,7 @@ class ControlsWindow:
                 f"border-radius:4px; }}")
             icon = _line_icon(icon_name, "#ffffff", size=18)
         else:
-            btn.setStyleSheet("")
+            btn.setStyleSheet(_icon_button_base_qss())  # back to the plain framed look
             icon = self._icon(icon_name)
         if icon is not None:
             btn.setIcon(icon)
@@ -3243,6 +3262,7 @@ class ControlsWindow:
 
         b = QPushButton()
         b.setCheckable(checkable)
+        b.setStyleSheet(_icon_button_base_qss())  # a tidy frame on macOS, native elsewhere
         icon = self._icon(icon_name, size=icon_size)
         if icon is not None:
             b.setIcon(icon)
