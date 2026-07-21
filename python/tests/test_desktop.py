@@ -776,6 +776,70 @@ def test_cryo_em_demo_refines_a_shaken_model_into_its_density(qapp):
         app.stop()
 
 
+def test_palette_default_colours_flow_through_a_family(qapp):
+    """A new model and the maps phased from it draw opening colours from one palette: the
+    model (uniform ribbon, or carbon-tint on atoms) and its 2mFo-DFc map take successive
+    palette slots, while the difference map keeps its conventional green/red."""
+    import tempfile
+    import time
+    from pathlib import Path
+
+    pytest.importorskip("mmtbx.f_model")
+    from pxviewer.cctbx_io import read_model
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.loader import sample_structure_path
+
+    path = sample_structure_path()  # 1UBQ, a polymer
+    model = read_model(str(path))
+    f_obs = abs(model.get_xray_structure().structure_factors(d_min=2.0).f_calc())
+    f_obs.set_observation_type_xray_amplitude()
+    td = tempfile.mkdtemp()
+    mtz = Path(td) / "d.mtz"
+    ds = f_obs.as_mtz_dataset(column_root_label="F")
+    ds.add_miller_array(f_obs.generate_r_free_flags(), column_root_label="FreeR_flag")
+    ds.mtz_object().write(str(mtz))
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(path)])
+        deadline = time.time() + 40
+        while time.time() < deadline and not app._models:
+            qapp.processEvents()
+            time.sleep(0.02)
+        entry = app._models[0]
+        palette = entry["palette"]
+        assert len(palette) == 4 and all(c.startswith("#") for c in palette)
+        session = entry["session"]
+
+        def rep():
+            return list(session._representations.values())[0]
+
+        # Polymer default is a cartoon in a uniform palette[0] (a solid ribbon).
+        assert entry["rep"] == "cartoon"
+        assert rep()["color"] == "uniform" and rep()["colorValue"] == palette[0]
+        # Switched to an atom view, the same colour becomes a carbon tint (O/N/S standard).
+        app.set_model_representation(entry["id"], "ball-and-stick")
+        assert rep().get("carbonColor") == palette[0]
+
+        app.load_files([str(mtz)])
+        deadline = time.time() + 40
+        while time.time() < deadline and not app._reflections:
+            qapp.processEvents()
+            time.sleep(0.02)
+        app.make_maps(app._reflections[0]["id"], entry["id"])
+        deadline = time.time() + 150
+        while time.time() < deadline and app.map_for_model(entry["id"]) is None:
+            qapp.processEvents()
+            time.sleep(0.05)
+        maps = {v["name"]: v for v in app._volumes}
+        assert maps["2mFo-DFc"]["color"] == palette[1]   # next palette slot
+        assert maps["mFo-DFc"]["color"] == "green"        # difference map untouched
+        assert maps["mFo-DFc"]["negative_color"] == "red"
+    finally:
+        app.stop()
+
+
 def test_live_difference_map_streams_a_box_during_a_drag(qapp):
     """With 'Live difference map' on and a phased model, arming a drag and feeding it a frame
     streams an mFo-DFc window (a _TAG_MAP payload) to the model's session; disabling clears it.

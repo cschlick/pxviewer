@@ -1,0 +1,386 @@
+{
+  "Memphis pop": [
+    "#FF2D95",
+    "#FFD23F",
+    "#00B4D8",
+    "#9D4EDD"
+  ],
+  "Sottsass": [
+    "#F72585",
+    "#06D6A0",
+    "#FFCA3A",
+    "#4361EE"
+  ],
+  "Squiggle": [
+    "#FF6B6B",
+    "#4CC9F0",
+    "#FFE66D",
+    "#7B2FF7"
+  ],
+  "Terrazzo": [
+    "#FF5DA2",
+    "#2EC4B6",
+    "#FFD000",
+    "#7209B7"
+  ],
+  "Bauhaus remix": [
+    "#FF206E",
+    "#00BBF9",
+    "#FBFF12",
+    "#8338EC"
+  ],
+  "Pastel clash": [
+    "#FF71CE",
+    "#80FFDB",
+    "#FFF685",
+    "#8795E8"
+  ],
+  "Neon grid": [
+    "#F706CF",
+    "#39FF14",
+    "#00E5FF",
+    "#7700FF"
+  ],
+  "Candy build": [
+    "#FF3CAC",
+    "#FFD166",
+    "#06FFA5",
+    "#4895EF"
+  ],
+  "Plastic dream": [
+    "#FF4FA3",
+    "#C1FF00",
+    "#00C2FF",
+    "#B026FF"
+  ],
+  "Geometric": [
+    "#FF006E",
+    "#FFA600",
+    "#2EC4B6",
+    "#3A86FF"
+  ],
+  "Wavelength": [
+    "#FF5E5B",
+    "#4CC9F0",
+    "#FFE45E",
+    "#9D4EDD"
+  ],
+  "Postmod prime": [
+    "#FF1D58",
+    "#FFD23F",
+    "#00FF9F",
+    "#4361EE"
+  ],
+  "Acid pop": [
+    "#CCFF33",
+    "#FF10F0",
+    "#00DDFF",
+    "#FF7900"
+  ],
+  "Bubble": [
+    "#FF5C8A",
+    "#80FFDB",
+    "#FFE66D",
+    "#A06CD5"
+  ],
+  "Vapor mod": [
+    "#FF6AD5",
+    "#94D0FF",
+    "#06D6A0",
+    "#FFD000"
+  ],
+  "Hyper": [
+    "#F72585",
+    "#FF9F1C",
+    "#4CC9F0",
+    "#7209B7"
+  ],
+  "Jellybean": [
+    "#FF4D6D",
+    "#FFCA3A",
+    "#41EAD4",
+    "#4D96FF"
+  ],
+  "Funhouse": [
+    "#FF0099",
+    "#AACC00",
+    "#00BBF9",
+    "#9D4EDD"
+  ],
+  "Confetti": [
+    "#FF6F61",
+    "#FFD166",
+    "#5DD39E",
+    "#4361EE"
+  ],
+  "Splash": [
+    "#FF2079",
+    "#00F5D4",
+    "#FFE66D",
+    "#8338EC"
+  ],
+  "Mod squad": [
+    "#FF5DA2",
+    "#FBFF12",
+    "#00B4D8",
+    "#7B2FF7"
+  ],
+  "Pinball": [
+    "#FF206E",
+    "#FFA600",
+    "#39FF14",
+    "#00C2FF"
+  ],
+  "Riso print": [
+    "#FF4FA3",
+    "#FFD23F",
+    "#2EC4B6",
+    "#4361EE"
+  ],
+  "Lava lamp": [
+    "#FF6B6B",
+    "#FF9F1C",
+    "#C77DFF",
+    "#00BBF9"
+  ],
+  "Skittle clash": [
+    "#F72585",
+    "#FFCA3A",
+    "#00FF85",
+    "#4361EE"
+  ],
+  "Bright bazaar": [
+    "#FF7900",
+    "#FF1D58",
+    "#4CC9F0",
+    "#9EF01A"
+  ],
+  "Pop art": [
+    "#FF2D95",
+    "#00E5FF",
+    "#FFE45E",
+    "#FF7900"
+  ],
+  "Disco": [
+    "#F706CF",
+    "#FFD000",
+    "#00F5D4",
+    "#7700FF"
+  ],
+  "Spray paint": [
+    "#FF5C8A",
+    "#C1FF00",
+    "#4895EF",
+    "#B026FF"
+  ],
+  "Kool": [
+    "#FF6F61",
+    "#4CC9F0",
+    "#FFF685",
+    "#9D4EDD"
+  ],
+  "Tutti frutti": [
+    "#FF3CAC",
+    "#FF9F1C",
+    "#06D6A0",
+    "#4D96FF"
+  ],
+  "Gel pen": [
+    "#FF10F0",
+    "#39FF14",
+    "#00C2FF",
+    "#FFD23F"
+  ],
+  "Pixel": [
+    "#FF2079",
+    "#FFCA3A",
+    "#2EC4B6",
+    "#7209B7"
+  ],
+  "Synth pop": [
+    "#FF6AD5",
+    "#8795E8",
+    "#80FFDB",
+    "#FFE66D"
+  ],
+  "Beach ball": [
+    "#FF4D6D",
+    "#FFA600",
+    "#00BBF9",
+    "#9EF01A"
+  ],
+  "Sherbet pop": [
+    "#FF9A8B",
+    "#FFD166",
+    "#80FFDB",
+    "#A06CD5"
+  ],
+  "Electric ave": [
+    "#F72585",
+    "#FBFF12",
+    "#00E5FF",
+    "#7B2FF7"
+  ],
+  "Mallrat": [
+    "#FF5DA2",
+    "#FF9F1C",
+    "#41EAD4",
+    "#4361EE"
+  ],
+  "Loud": [
+    "#FF0099",
+    "#C1FF00",
+    "#00B4D8",
+    "#FF7900"
+  ],
+  "Cassette": [
+    "#FF6B6B",
+    "#FFD23F",
+    "#2EC4B6",
+    "#8338EC"
+  ],
+  "Glow": [
+    "#FF4FA3",
+    "#9EF01A",
+    "#4CC9F0",
+    "#B026FF"
+  ],
+  "Marquee": [
+    "#FF206E",
+    "#FFCA3A",
+    "#00FF9F",
+    "#4895EF"
+  ],
+  "Bright side": [
+    "#FF7900",
+    "#FF1D58",
+    "#80FFDB",
+    "#7209B7"
+  ],
+  "Sugar rush": [
+    "#FF71CE",
+    "#FFE66D",
+    "#00C2FF",
+    "#9D4EDD"
+  ],
+  "Pool party": [
+    "#FF5C8A",
+    "#FFD000",
+    "#00F5D4",
+    "#3A86FF"
+  ],
+  "Zest": [
+    "#FF6F61",
+    "#C1FF00",
+    "#00BBF9",
+    "#C77DFF"
+  ],
+  "Holo": [
+    "#F706CF",
+    "#00F0B5",
+    "#FFD23F",
+    "#4361EE"
+  ],
+  "Bold type": [
+    "#FF2D95",
+    "#FFA600",
+    "#4CC9F0",
+    "#9EF01A"
+  ],
+  "Saturate": [
+    "#FF1D58",
+    "#FFCA3A",
+    "#06D6A0",
+    "#7B2FF7"
+  ],
+  "Bonbon": [
+    "#FF5DA2",
+    "#FFE45E",
+    "#80FFDB",
+    "#A06CD5"
+  ],
+  "Hi-vis": [
+    "#CCFF33",
+    "#FF10F0",
+    "#00DDFF",
+    "#FF9F1C"
+  ],
+  "Mixtape": [
+    "#FF4D6D",
+    "#4CC9F0",
+    "#FFD166",
+    "#8338EC"
+  ],
+  "Jukebox": [
+    "#FF006E",
+    "#FFA600",
+    "#39FF14",
+    "#00C2FF"
+  ],
+  "Carnival": [
+    "#FF2079",
+    "#FFD000",
+    "#2EC4B6",
+    "#9D4EDD"
+  ],
+  "Spectrum jr": [
+    "#FF6B6B",
+    "#FF9F1C",
+    "#FFE66D",
+    "#06D6A0"
+  ],
+  "Cool clash": [
+    "#00B4D8",
+    "#FF2D95",
+    "#FFE66D",
+    "#7209B7"
+  ],
+  "Razzle": [
+    "#F72585",
+    "#C1FF00",
+    "#4895EF",
+    "#FFA600"
+  ],
+  "Dazzle": [
+    "#FF4FA3",
+    "#00F5D4",
+    "#FFCA3A",
+    "#7700FF"
+  ],
+  "Pop rocks": [
+    "#FF5C8A",
+    "#9EF01A",
+    "#00C2FF",
+    "#FF7900"
+  ],
+  "Limelight": [
+    "#CCFF33",
+    "#FF5DA2",
+    "#4CC9F0",
+    "#B026FF"
+  ],
+  "Saccharine": [
+    "#FF71CE",
+    "#FFE66D",
+    "#80FFDB",
+    "#8795E8"
+  ],
+  "Voltage jr": [
+    "#F706CF",
+    "#39FF14",
+    "#00E5FF",
+    "#FFD23F"
+  ],
+  "Mod floral": [
+    "#FF6F61",
+    "#FFD166",
+    "#9EF01A",
+    "#4361EE"
+  ],
+  "Grand finale": [
+    "#FF2D95",
+    "#FFD23F",
+    "#06D6A0",
+    "#4361EE"
+  ]
+}

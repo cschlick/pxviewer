@@ -113,8 +113,18 @@ _MODEL_COLOR_OPTIONS = [
 
 
 def _model_rep_color(rep: str) -> str:
-    """A sensible default colour theme for a representation type."""
+    """A sensible default colour theme for a representation type (no palette in play)."""
     return "secondary-structure" if rep == "cartoon" else "element-symbol"
+
+
+# Representations that draw individual atoms: a palette colour tints their *carbons* (O/N/S
+# keep their standard hues). Ribbons/surfaces have no atoms to tint, so a palette colour is
+# applied uniformly instead. See _apply_model_rep.
+_ATOM_REPS = frozenset({"ball-and-stick", "ball_and_stick", "spacefill", "sphere"})
+
+
+def _rep_shows_atoms(rep: str) -> bool:
+    return rep in _ATOM_REPS
 
 
 # cctbx classifies each residue (common_residue_names_get_class) into these named
@@ -3885,6 +3895,10 @@ class DesktopApp:
         # the active model (drives the atoms table + selection sync).
         self._models: List[dict] = []
         self._model_counter = 0
+        # Default-colour palettes handed to each new family (model + its maps) as it opens.
+        from .palettes import PaletteCycler
+
+        self._palettes = PaletteCycler()
         self._active_model_id: Optional[str] = None
         self._focused_residue: Optional[tuple] = None  # (chain, resid) for space-bar nav
         # Loaded volumes (a distinct category — never in the atoms table / selection):
@@ -4431,12 +4445,38 @@ class DesktopApp:
 
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
-        color = entry.get("color") or _model_rep_color(rep)  # explicit colour overrides the default
         on = self._shown_indices(entry)  # restrict to shown structure types
+        kwargs = self._model_colour_kwargs(entry, rep)
         if on is not None:
-            session.set_representation(rep, color=color, on=on)
-        else:
-            session.set_representation(rep, color=color)
+            kwargs["on"] = on
+        session.set_representation(rep, **kwargs)
+
+    def _model_colour_kwargs(self, entry, rep: str) -> dict:
+        """How to colour a model's representation: an explicit user colour wins; else the
+        family palette (carbon-tint for atoms, uniform for ribbons); else the theme default."""
+        explicit = entry.get("color")
+        if explicit:
+            return {"color": explicit}  # a colour the user set by hand — uniform, as before
+        base = (entry.get("palette") or [None])[0]  # the family's model colour
+        if base:
+            return {"carbon_color": base} if _rep_shows_atoms(rep) else {"color": base}
+        return {"color": _model_rep_color(rep)}  # no palette (fallback): the theme default
+
+    def _next_family_map_color(self, gid: Optional[str]) -> Optional[str]:
+        """The next map colour from group ``gid``'s model-family palette, advancing its slot.
+
+        Returns None when the group has no palette-bearing model (then the caller keeps the
+        map's conventional colour) — and is only for *non-difference* maps; a difference map
+        keeps green/red regardless, so it never draws a slot."""
+        if gid is None:
+            return None
+        for entry in self._models:
+            if entry.get("group") == gid and entry.get("palette"):
+                palette = entry["palette"]
+                slot = entry.get("palette_slot", 1)
+                entry["palette_slot"] = slot + 1
+                return palette[slot % len(palette)]
+        return None
 
     def _default_model_rep(self, session) -> str:
         from . import cctbx_io
@@ -4459,7 +4499,11 @@ class DesktopApp:
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
                  "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
                  "type_groups": None, "clip": (0.0, 1.0),
-                 "interactions": False, "edits": []}
+                 "interactions": False, "edits": [],
+                 # This model + the maps phased from it are one family, coloured from one
+                 # palette: the model takes slot 0, its maps the rest (palette_slot is the
+                 # next map slot). See _model_colour_kwargs and _next_family_map_color.
+                 "palette": self._palettes.next(), "palette_slot": 1}
         self._models.append(entry)
         self._apply_model_rep(entry)
         self._active_model_id = mid
@@ -6222,7 +6266,12 @@ class DesktopApp:
                 rentry["r_free"] = out["r_free"]
                 with self._batch_load():
                     for map_type in types:
-                        colour, iso, negative = MAP_STYLE[map_type in DIFFERENCE_MAP_TYPES]
+                        is_diff = map_type in DIFFERENCE_MAP_TYPES
+                        colour, iso, negative = MAP_STYLE[is_diff]
+                        # Difference maps keep green/red (Coot semantics); the 2mFo-DFc map
+                        # takes the next colour from the model's family palette.
+                        if not is_diff:
+                            colour = self._next_family_map_color(gid) or colour
                         self._add_volume(
                             VolumeData.from_map_manager(
                                 mmm.get_map_manager_by_id(map_type),
@@ -6357,7 +6406,10 @@ class DesktopApp:
             self._add_reflections(data, name, group=gid)
             for coefficients in data.map_coefficient_arrays():
                 label = coefficients.info().label_string()
-                colour, iso, negative = MAP_STYLE[is_difference_map(label)]
+                is_diff = is_difference_map(label)
+                colour, iso, negative = MAP_STYLE[is_diff]
+                if not is_diff:  # a no-op here (no model in this group), consistent with make_maps
+                    colour = self._next_family_map_color(gid) or colour
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
                 # A map from reflections fills the unit cell: open it with a radius,
