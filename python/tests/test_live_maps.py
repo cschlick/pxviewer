@@ -80,6 +80,29 @@ def test_recompute_freezes_scales_but_r_free_tracks_the_model(_engine):
     assert engine.r_free > r_free_good     # a worse model reads as a worse R-free (honest)
 
 
+def test_recompute_local_is_a_small_box_that_captures_the_signal(_engine):
+    """recompute_local returns a tiny window around the tug point — far smaller than the
+    whole-cell map — while still holding the difference peak from a moved atom there."""
+    engine, model = _engine
+    xrs = model.get_xray_structure().deep_copy_scatterers()
+    sites = xrs.sites_cart()
+    i = model.get_number_of_atoms() // 2
+    x, y, z = sites[i]
+    center = (x + 1.0, y, z)
+    sites[i] = center
+    xrs.set_sites_cart(sites)
+
+    full = engine.recompute(xray_structure=xrs)
+    box = engine.recompute_local(center, radius=5.0, xray_structure=xrs)
+
+    full_pts = full.map_data().size()
+    box_pts = box.map_data().size()
+    assert box_pts < full_pts / 5             # a genuine crop, not the whole map
+    assert max(box.map_data().all()) < 40     # a small window (~20 grid points a side)
+    # the moved-atom difference peak is inside the window
+    assert np.abs(box.map_data().as_numpy_array()).max() > 12.0
+
+
 def test_recompute_accepts_numpy_sites(_engine):
     """The live loop holds coordinates as a numpy (N,3) array; recompute must take them."""
     engine, model = _engine

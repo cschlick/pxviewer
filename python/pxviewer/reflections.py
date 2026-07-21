@@ -218,6 +218,47 @@ class LiveDifferenceMap:
         coefficients = self._fmodel.electron_density_map().map_coefficients(map_type=map_type)
         return map_from_coefficients(coefficients, resolution_factor=self._resolution_factor)
 
+    def recompute_local(
+        self,
+        center: Any,
+        *,
+        radius: float = 6.0,
+        model: Any = None,
+        sites_cart: Any = None,
+        xray_structure: Any = None,
+        map_type: str = "mFo-DFc",
+    ) -> Any:
+        """A small difference-map box (~``2*radius`` A on a side) centred on ``center``
+        (Cartesian ``(x, y, z)`` in A) — the map to stream while tugging *there*.
+
+        The full map is recomputed and only then cropped: the FFT is over all of reciprocal
+        space, so a local window does not cut the compute (see ``scripts/bench_live_maps.py``)
+        — what it cuts is *delivery*. A 5 A window is a ~20-grid-point box of tens of KB
+        instead of the whole-cell megabytes, cheap to ship and redraw every frame. Reach for
+        a full :meth:`recompute` behind a deliberate "recompute" action for the whole model.
+
+        Returns a boxed ``map_manager`` whose origin records where the window sits in the cell.
+        """
+        import math
+
+        from iotbx.map_model_manager import map_model_manager
+
+        full = self.recompute(
+            model=model, sites_cart=sites_cart, xray_structure=xray_structure, map_type=map_type)
+        unit_cell = full.crystal_symmetry().unit_cell()
+        n_grid = full.unit_cell_grid
+        edges = unit_cell.parameters()[:3]
+        frac = unit_cell.fractionalize(tuple(float(c) for c in center))
+        lower, upper = [], []
+        for axis in range(3):
+            half = radius / (edges[axis] / n_grid[axis])   # window half-width in grid points
+            middle = frac[axis] * n_grid[axis]
+            lower.append(int(math.floor(middle - half)))
+            upper.append(int(math.ceil(middle + half)))
+        mmm = map_model_manager(map_manager=full)  # `full` is discarded, so no copy needed
+        mmm.box_all_maps_with_bounds_and_shift_origin(lower_bounds=lower, upper_bounds=upper)
+        return mmm.map_manager()
+
     def rescale(self) -> None:
         """Re-derive bulk solvent and overall scales — the expensive step frozen per frame.
         Call after a large rearrangement so the stale mask stops distorting the map."""
