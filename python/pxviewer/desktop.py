@@ -297,6 +297,23 @@ def _tab_hover_filter(tabbar, on_hover):
     return _TabHoverFilter(tabbar)
 
 
+def _palette_watch_filter(widget, on_change):
+    """A QObject filter, parented to ``widget``, that calls ``on_change()`` when the palette
+    changes — a light/dark switch, or the real theme landing once the window is shown. Lets
+    baked-pixmap icons re-tint (palette() stylesheets already re-colour themselves)."""
+    from PySide6.QtCore import QEvent, QObject
+
+    class _PaletteFilter(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.PaletteChange):
+                on_change()
+            return False
+
+    watcher = _PaletteFilter(widget)
+    widget.installEventFilter(watcher)
+    return watcher
+
+
 def install_desktop_entry() -> str:
     """Write a Linux ``.desktop`` file so the launcher shows pxviewer's name and icon.
 
@@ -1086,7 +1103,17 @@ class ControlsWindow:
         self._window.setMinimumSize(300, 480)  # compact — the viewer takes the space
         from PySide6.QtGui import QPalette
 
-        self._btn_tint = self._window.palette().color(QPalette.ColorRole.ButtonText)
+        # Tint icons to WindowText, not ButtonText: on macOS native buttons draw their own
+        # text, so ButtonText can stay black and not track dark mode — which would paint every
+        # icon dark-on-dark. WindowText follows the system appearance reliably everywhere.
+        self._icon_role = QPalette.ColorRole.WindowText
+        self._btn_tint = self._window.palette().color(self._icon_role)
+        # Icons are baked pixmaps, so (unlike palette() stylesheets) they do not re-colour on a
+        # theme change on their own. Register each so _retint_icons can rebuild them — needed
+        # both for a live light/dark switch and because the real palette may only land once the
+        # window is shown (the tint read here can be the pre-show default).
+        self._icon_registry: list = []   # (apply_icon(QIcon), name, size)
+        self._tab_icon_names: list = []  # (tab index, name)
 
         layout = QVBoxLayout(self._window)
         layout.setSpacing(12)
@@ -1118,7 +1145,7 @@ class ControlsWindow:
         tabs.tabBar().setUsesScrollButtons(False)
         tabs.setIconSize(QSize(20, 20))
         # Lucide line icons, tinted to the tab text colour so they read in light and dark.
-        tint = self._window.palette().color(self._window.foregroundRole())
+        tint = self._btn_tint
         specs = [
             (self._build_scene_tab(), "Scene", "layers"),
             (self._build_tools_tab(), "Tools", "wrench"),
@@ -1135,6 +1162,8 @@ class ControlsWindow:
                 else tabs.addTab(widget, label)
             tabs.setTabToolTip(index, label)
             self._tab_labels.append(label)
+            if icon is not None:
+                self._tab_icon_names.append((index, icon_name))
             if label == "Console":
                 self._console_tab_index = index
         # The icons need a label too. A tooltip is set above, but it is slow to appear and
@@ -1149,6 +1178,14 @@ class ControlsWindow:
         tabs.currentChanged.connect(self._on_tab_changed)
         self._tabs = tabs  # kept so a tutorial can reveal the tab holding a highlight target
         layout.addWidget(tabs, stretch=1)
+
+        # Keep icon tints tracking the theme: a filter catches a live palette change (or the
+        # real appearance landing on show, common on macOS), and a one-shot re-tint covers the
+        # case where the palette is already right by the time the loop starts.
+        from PySide6.QtCore import QTimer
+
+        self._palette_watcher = _palette_watch_filter(self._window, self._retint_icons)
+        QTimer.singleShot(0, self._retint_icons)
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
         # It doubles as the tab labeller on hover, so remember the real status underneath.
@@ -3171,6 +3208,30 @@ class ControlsWindow:
         """A Lucide icon tinted to the button text colour (or None if the asset is gone)."""
         return _line_icon(name, self._btn_tint, size=size)
 
+    def _retint_icons(self) -> None:
+        """Re-tint every registered icon to the current theme's text colour.
+
+        Called on a palette change (a light/dark switch, or the real palette finally landing
+        once the window is shown), since baked-pixmap icons — unlike palette() stylesheets —
+        do not re-colour themselves. Idempotent and cheap; a no-op if the tint is unchanged."""
+        from PySide6.QtGui import QPalette
+
+        tint = self._window.palette().color(self._icon_role)
+        if tint == self._btn_tint and self._icon_registry:
+            return  # nothing changed
+        self._btn_tint = tint
+        for apply_icon, name, size in self._icon_registry:
+            icon = _line_icon(name, tint, size=size)
+            if icon is not None:
+                apply_icon(icon)
+        for index, name in self._tab_icon_names:
+            icon = _line_icon(name, tint)
+            if icon is not None:
+                self._tabs.setTabIcon(index, icon)
+        # The Minimize/Stop pair carries a state-dependent look (filled accent + white glyph
+        # when active), so repaint it for the current run state rather than a flat re-tint.
+        self._on_minimizing_changed(not self._desktop._minimize_idle.is_set())
+
     def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False,
                           icon_size=18, square=False):
         """An icon-only button (tinted SVG), falling back to text if the asset is gone.
@@ -3186,6 +3247,7 @@ class ControlsWindow:
         if icon is not None:
             b.setIcon(icon)
             b.setIconSize(QSize(icon_size, icon_size))
+            self._icon_registry.append((b.setIcon, icon_name, icon_size))
         else:
             b.setText(fallback_text)
         b.setToolTip(tooltip)
