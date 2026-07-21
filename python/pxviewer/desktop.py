@@ -292,6 +292,18 @@ _ICON_BUTTON_QSS = (
     "QPushButton:checked { background-color: palette(highlight); }"
 )
 
+# macOS's native tab style enforces a wide per-tab minimum, so icon-only tabs sprawl across
+# the bar with big gaps (setExpanding(False) does not touch that minimum). A stylesheet is the
+# only thing that overrides the native tab metrics: size each tab to its glyph + a little
+# padding, flat, with a highlight underline on the selected one. Theme-adaptive (palette()),
+# and applied on macOS only so the native Linux tabs are left as they are.
+_TAB_BAR_QSS = (
+    "QTabBar::tab { background: transparent; border: 0; margin: 0;"
+    " border-bottom: 2px solid transparent; padding: 6px 5px; }"
+    "QTabBar::tab:selected { border-bottom: 2px solid palette(highlight); }"
+    "QTabBar::tab:hover { background: palette(midlight); }"
+)
+
 
 def _icon_button_base_qss() -> str:
     """The base stylesheet for an icon-only button — a macOS frame, or nothing elsewhere."""
@@ -1162,10 +1174,12 @@ class ControlsWindow:
         # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
-        # Don't let the tabs stretch to fill the bar. The macOS style expands them by default,
-        # which spreads six icon-only tabs across the whole width with big gaps between the
-        # glyphs; sized to content they sit together, tight and left-aligned, as on Linux.
+        # Keep the six icon tabs tight and left-aligned. setExpanding(False) suffices on
+        # Fusion; macOS ignores it and imposes a wide per-tab minimum, so there a stylesheet
+        # (_TAB_BAR_QSS) overrides the native tab metrics to size each tab to its glyph.
         tabs.tabBar().setExpanding(False)
+        if _IS_MAC:
+            tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
         tabs.setIconSize(QSize(20, 20))
         # Lucide line icons, tinted to the tab text colour so they read in light and dark.
         tint = self._btn_tint
