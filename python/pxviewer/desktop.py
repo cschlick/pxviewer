@@ -309,6 +309,9 @@ _ICON_BUTTON_QSS = (
 # padding, flat, with a highlight underline on the selected one. Theme-adaptive (palette()),
 # and applied on macOS only so the native Linux tabs are left as they are.
 _TAB_BAR_QSS = (
+    # Stylesheeting the tabs makes Qt paint the bar itself with a default (grey) background;
+    # keep it transparent so it blends with the pane instead of banding across it.
+    "QTabBar { background: transparent; }"
     "QTabBar::tab { background: transparent; border: 0; margin: 0;"
     " border-bottom: 2px solid transparent; padding: 6px 5px; }"
     "QTabBar::tab:selected { border-bottom: 2px solid palette(highlight); }"
