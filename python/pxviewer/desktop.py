@@ -258,6 +258,27 @@ def _line_icon(name: str, color, size: int = 20):
     return QIcon(pm)
 
 
+# Semantic accent colours, in (light-theme, dark-theme) shades so each reads on its own
+# background — dark greens/ambers on a light UI, brighter ones on a dark UI. Everything else
+# follows the palette directly (QSS ``palette(...)`` refs); only these carry meaning the
+# palette has no role for, so they are chosen by hand and resolved against the live palette.
+_ACCENTS = {
+    "go": ("#1a7f37", "#2ea043"),     # green — a run is ready / underway (Minimize)
+    "stop": ("#b26a00", "#cc8400"),   # amber — stop a run (Pause)
+    "warn": ("#b26a00", "#e3a008"),   # amber text — a message to catch the eye
+    "error": ("#c0392b", "#f85149"),  # red — an invalid action / bad input
+}
+
+
+def _accent(widget, name: str) -> str:
+    """The shade of a semantic accent (see :data:`_ACCENTS`) for ``widget``'s current theme."""
+    from PySide6.QtGui import QPalette
+
+    light, dark = _ACCENTS[name]
+    is_dark = widget.palette().color(QPalette.ColorRole.Window).lightness() < 128
+    return dark if is_dark else light
+
+
 def _tab_hover_filter(tabbar, on_hover):
     """A QObject event filter, parented to ``tabbar``, that calls ``on_hover(index)`` with
     the tab under the pointer (or -1 on leave). Defined lazily so the module imports without
@@ -774,7 +795,10 @@ def _make_restraint_table_model():
                 if role == Qt.ItemDataRole.DisplayRole:
                     return text
                 if path is not None and role == Qt.ItemDataRole.ForegroundRole:
-                    return QColor("#2563eb")  # link blue
+                    from PySide6.QtGui import QPalette
+                    from PySide6.QtWidgets import QApplication
+
+                    return QApplication.palette().color(QPalette.ColorRole.Link)  # theme's link colour
                 if path is not None and role == Qt.ItemDataRole.FontRole:
                     font = QFont()
                     font.setUnderline(True)
@@ -949,19 +973,20 @@ class ViewportWindow:
         bar = QFrame()
         bar.setObjectName("coachPane")
         bar.setStyleSheet(
-            "#coachPane { background:#eef4ff; border-top:2px solid #b9d0f0; }"
-            "#coachPane QLabel { color:#16283f; }")
+            "#coachPane { background:palette(alternate-base); "
+            "border-top:2px solid palette(mid); }"
+            "#coachPane QLabel { color:palette(text); }")
         bar.setMinimumHeight(110)
         v = QVBoxLayout(bar)
         v.setContentsMargins(14, 10, 14, 10)
         v.setSpacing(6)
         head = QHBoxLayout()
         self.coach_title = QLabel("")
-        self.coach_title.setStyleSheet("font-weight:600; color:#16283f;")
+        self.coach_title.setStyleSheet("font-weight:600; color:palette(text);")
         head.addWidget(self.coach_title)
         head.addStretch(1)
         self.coach_progress = QLabel("")
-        self.coach_progress.setStyleSheet("color:#5a6b85;")
+        self.coach_progress.setStyleSheet("color:palette(placeholder-text);")
         head.addWidget(self.coach_progress)
         self.coach_close = QPushButton("✕")
         self.coach_close.setFixedWidth(26)
@@ -1132,7 +1157,7 @@ class ControlsWindow:
         self._tab_hover = False
         self._status_label = QLabel("Ready")
         self._status_label.setWordWrap(True)
-        self._status_label.setStyleSheet("color: #666;")
+        self._status_label.setStyleSheet("color: palette(placeholder-text);")
         status_row.addWidget(self._status_label, stretch=1)
         # Always-visible dock/detach control: the painted header's button is hidden while
         # the panel floats (it uses the native window frame then), so this is the reliable
@@ -1269,7 +1294,7 @@ class ControlsWindow:
 
         self._file_label = QLabel("")
         self._file_label.setWordWrap(True)
-        self._file_label.setStyleSheet("color: #888;")
+        self._file_label.setStyleSheet("color: palette(placeholder-text);")
         ol.addWidget(self._file_label)
 
         # Everything below scrolls, so a busy scene never clips the controls.
@@ -1350,7 +1375,7 @@ class ControlsWindow:
 
         self._selection_label = QLabel("none selected")
         self._selection_label.setWordWrap(True)
-        self._selection_label.setStyleSheet("color: #666;")
+        self._selection_label.setStyleSheet("color: palette(placeholder-text);")
         sl.addWidget(self._selection_label)
         layout.addWidget(sel_box)
 
@@ -1540,7 +1565,7 @@ class ControlsWindow:
 
         self._lig_target_label = QLabel("")
         self._lig_target_label.setWordWrap(True)
-        self._lig_target_label.setStyleSheet("color: #888;")
+        self._lig_target_label.setStyleSheet("color: palette(placeholder-text);")
         lg.addWidget(self._lig_target_label)
 
         lg.addWidget(QLabel("Ligand (monomer code):"))
@@ -1752,16 +1777,18 @@ class ControlsWindow:
         while minimizing. The inactive one stays a plain, quiet button."""
         self._minimize_btn.setEnabled(not running)
         self._minimize_stop_btn.setEnabled(running)
-        self._paint_minimize_button(self._minimize_btn, "play", "#1a7f37", active=not running)
-        self._paint_minimize_button(self._minimize_stop_btn, "pause", "#b26a00", active=running)
+        self._paint_minimize_button(self._minimize_btn, "play", "go", active=not running)
+        self._paint_minimize_button(self._minimize_stop_btn, "pause", "stop", active=running)
 
     def _paint_minimize_button(self, btn, icon_name: str, accent: str, *, active: bool) -> None:
         """Give the active play/pause button a filled accent (white glyph on colour); leave
-        the inactive one in its default look. Falls back to the button's text if the icon
-        asset is gone (the accent style still applies)."""
+        the inactive one in its default look. ``accent`` is a semantic name (see
+        :func:`_accent`) so the fill tracks light/dark. Falls back to the button's text if
+        the icon asset is gone (the accent style still applies)."""
         if active:
+            colour = _accent(btn, accent)
             btn.setStyleSheet(
-                f"QPushButton {{ background:{accent}; border:1px solid {accent}; "
+                f"QPushButton {{ background:{colour}; border:1px solid {colour}; "
                 f"border-radius:4px; }}")
             icon = _line_icon(icon_name, "#ffffff", size=18)
         else:
@@ -1803,7 +1830,7 @@ class ControlsWindow:
         hint = QLabel("MolProbity all-atom contacts. Add hydrogens (reduce2), then run "
                       "probe2, and toggle the overlays:")
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
+        hint.setStyleSheet("color: palette(placeholder-text);")
         ag.addWidget(hint)
         analyze = self._make_icon_button(
             "heading-1", "Add H + analyze",
@@ -1882,7 +1909,7 @@ class ControlsWindow:
         page = QWidget()
         v = QVBoxLayout(page)
         summary = QLabel(result.summary)
-        summary.setStyleSheet("color: #666;")
+        summary.setStyleSheet("color: palette(placeholder-text);")
         summary.setWordWrap(True)
         v.addWidget(summary)
 
@@ -2025,7 +2052,7 @@ class ControlsWindow:
         self._iso_row = None  # rebuilt below only when a volume is focused
         if it is None:
             hint = QLabel("Select an object above to edit how it looks.")
-            hint.setStyleSheet("color: #999;")
+            hint.setStyleSheet("color: palette(placeholder-text);")
             self._appearance_layout.addWidget(hint)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
@@ -2065,7 +2092,7 @@ class ControlsWindow:
             note = QLabel("Placed " + snapped
                           + ".\nBuild a ligand here from Tools → Ligand placement.")
             note.setWordWrap(True)
-            note.setStyleSheet("color: #888;")
+            note.setStyleSheet("color: palette(placeholder-text);")
             self._appearance_layout.addWidget(note)
             self._safe(lambda: self._desktop.set_volume_scroll_target(None))
             return
@@ -2078,14 +2105,14 @@ class ControlsWindow:
             self._appearance_layout.addWidget(summary)
             arrays = QLabel("Arrays: " + ", ".join(it.get("labels") or []))
             arrays.setWordWrap(True)
-            arrays.setStyleSheet("color: #888;")
+            arrays.setStyleSheet("color: palette(placeholder-text);")
             self._appearance_layout.addWidget(arrays)
             note = QLabel(
                 "Carries map coefficients — density needs no model."
                 if it.get("has_map_coefficients")
                 else "Amplitudes only — density needs a model to phase against.")
             note.setWordWrap(True)
-            note.setStyleSheet("color: #888;")
+            note.setStyleSheet("color: palette(placeholder-text);")
             self._appearance_layout.addWidget(note)
             if it.get("r_work") is not None:
                 fit = QLabel(f"R-work {it['r_work']:.4f} · R-free {it['r_free']:.4f}")
@@ -2880,8 +2907,11 @@ class ControlsWindow:
     def widget(self):
         return self._window
 
-    _STATUS_STYLE = "color: #666;"
-    _STATUS_WARN_STYLE = "color: #b26a00; font-weight: 600;"  # amber, to catch the eye
+    _STATUS_STYLE = "color: palette(placeholder-text);"
+
+    def _status_warn_style(self) -> str:
+        """The amber flash, in the shade that reads on the current theme (see :func:`_accent`)."""
+        return f"color: {_accent(self._window, 'warn')}; font-weight: 600;"
 
     def _set_status(self, text: str) -> None:
         self._real_status = text
@@ -2896,7 +2926,7 @@ class ControlsWindow:
 
         self._real_status = text
         self._status_label.setText(text)
-        self._status_label.setStyleSheet(self._STATUS_WARN_STYLE)
+        self._status_label.setStyleSheet(self._status_warn_style())
         QTimer.singleShot(
             4000, lambda: self._status_label.setStyleSheet(self._STATUS_STYLE))
 
@@ -2980,7 +3010,7 @@ class ControlsWindow:
         note = QLabel(
             "cctbx will move these into a common frame, so the model may shift.\n"
             "That is what makes them usable together — minimizing into density, say.")
-        note.setStyleSheet("color: #888;")
+        note.setStyleSheet("color: palette(placeholder-text);")
         form.addRow(note)
         model_combo = QComboBox()
         for m in models:
@@ -3073,7 +3103,8 @@ class ControlsWindow:
         try:
             n = self._desktop.select_by_expression(expr)
         except Exception as exc:  # invalid syntax / no model
-            self._selection_label.setText(f"<span style='color:#c0392b'>{exc}</span>")
+            self._selection_label.setText(
+                f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
             return
         self._selection_label.setText("selection cleared" if not expr.strip() else f"{n} atom(s) selected")
 
