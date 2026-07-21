@@ -218,6 +218,48 @@ def masked_map_copy(mmm: Any, map_id: str, radius: float) -> Any:
                 pass
 
 
+def encode_map_box(map_manager: Any, *, level: float = 3.0, is_difference: bool = True) -> bytes:
+    """Serialise a (boxed) map as a self-contained density window for the live viewer.
+
+    A small binary header followed by the raw f32 grid, holding everything the browser
+    needs to place and contour the box without any crystallography of its own: the box
+    dimensions, the Cartesian position of grid point ``(0, 0, 0)``, and the three Cartesian
+    voxel *step-vectors* (so a non-orthogonal cell simply gives non-axis-aligned steps).
+    This is the density counterpart of the raw-f32 coordinate frame — no parse, just an
+    affine and a float buffer the frontend drops onto a Mol* volume.
+
+    ``level`` is a contour in sigma of the (sigma-scaled) map; a difference map is drawn at
+    ``+level`` (green) and ``-level`` (red). Grid values are C-order: index ``(i, j, k)`` is
+    at ``data[(i*ny + j)*nz + k]`` and sits at Cartesian ``origin + i*step0 + j*step1 + k*step2``.
+
+    Layout (little-endian; the sender prepends the u32 message tag):
+        u32 flags (bit 0 = is_difference); f32 level;
+        i32 nx, ny, nz; f32 origin[3]; f32 step0[3], step1[3], step2[3]; f32 data[nx*ny*nz]
+    """
+    import struct
+
+    md = map_manager.map_data()
+    nx, ny, nz = md.all()
+    data = np.ascontiguousarray(md.as_numpy_array(), dtype="<f4")
+    ortho = np.array(
+        map_manager.crystal_symmetry().unit_cell().orthogonalization_matrix(), dtype="float64"
+    ).reshape(3, 3)
+    # The map_manager's own cell spans exactly this grid (for a boxed map, the box's cell over
+    # the box's dims), so the Cartesian step along grid axis j is column j of the frac->cart
+    # matrix divided by that axis's grid count. (unit_cell_grid still refers to the full cell,
+    # so it must NOT be used here.)
+    steps = ortho @ np.diag([1.0 / nx, 1.0 / ny, 1.0 / nz])
+    shift = map_manager.shift_cart()  # translation that moved the box to a zero origin
+    origin = (-shift[0], -shift[1], -shift[2])  # so grid (0,0,0) sits back at its Cartesian place
+
+    header = struct.pack("<If", int(bool(is_difference)), float(level))
+    header += struct.pack("<iii", int(nx), int(ny), int(nz))
+    header += struct.pack("<fff", *origin)
+    for j in range(3):
+        header += struct.pack("<fff", float(steps[0, j]), float(steps[1, j]), float(steps[2, j]))
+    return header + data.tobytes()
+
+
 def map_model_manager_from_files(
     model_file: Optional[Any] = None,
     map_files: Any = (),

@@ -109,3 +109,81 @@ def test_recompute_accepts_numpy_sites(_engine):
     sites = np.array(model.get_sites_cart(), dtype="float64")
     mm = engine.recompute(sites_cart=sites)
     assert mm.map_data().as_numpy_array().shape == mm.map_data().all()
+
+
+def _moved_box(engine, model, radius=5.0):
+    """A difference-map box around a single atom displaced 1 A; returns (box, center)."""
+    xrs = model.get_xray_structure().deep_copy_scatterers()
+    sites = xrs.sites_cart()
+    i = model.get_number_of_atoms() // 2
+    x, y, z = sites[i]
+    center = (x + 1.0, y, z)
+    sites[i] = center
+    xrs.set_sites_cart(sites)
+    return engine.recompute_local(center, radius=radius, xray_structure=xrs), center
+
+
+def test_encode_map_box_carries_a_self_contained_affine(_engine):
+    """The wire format is decodable with no crystallography: the grid is the small window,
+    and the moved-atom peak decodes (via origin + i*stepX + j*stepY + k*stepZ) to the
+    Cartesian place the atom went — so the browser can place the box from the payload alone."""
+    import struct
+
+    from pxviewer.volume_io import encode_map_box
+
+    engine, model = _engine
+    box, center = _moved_box(engine, model)
+    body = encode_map_box(box, level=3.0)
+
+    flags, level = struct.unpack_from("<If", body, 0)
+    nx, ny, nz = struct.unpack_from("<iii", body, 8)
+    origin = np.array(struct.unpack_from("<fff", body, 20))
+    steps = [np.array(struct.unpack_from("<fff", body, 32 + 12 * j)) for j in range(3)]
+    data = np.frombuffer(body, dtype="<f4", offset=68).reshape(nx, ny, nz)
+
+    assert flags == 1 and level == pytest.approx(3.0)     # difference map, +/-3 sigma
+    assert max(nx, ny, nz) < 40                            # a small window, not the whole cell
+    assert data.size == nx * ny * nz
+    peak = np.unravel_index(np.argmax(np.abs(data)), data.shape)
+    cart = origin + peak[0] * steps[0] + peak[1] * steps[1] + peak[2] * steps[2]
+    assert np.linalg.norm(cart - np.array(center)) < 2.5   # the peak lands at the tug
+
+
+def test_live_session_streams_and_replays_the_map_box(_engine):
+    """show_map_box broadcasts the density window as a tagged binary frame, and a late
+    client is caught up with the current box on connect (like the last coordinate frame)."""
+    import asyncio
+    import struct
+
+    websockets = pytest.importorskip("websockets")
+    from pxviewer import LiveSession
+
+    engine, model = _engine
+    box, _ = _moved_box(engine, model)
+    _TAG_MAP = 4
+
+    session = LiveSession.from_sites([[float(i), 0.0, 0.0] for i in range(4)])
+    session.start(port=0)
+
+    async def _recv_map(ws):
+        for _ in range(20):
+            msg = await asyncio.wait_for(ws.recv(), timeout=5)
+            if isinstance(msg, (bytes, bytearray)) and struct.unpack_from("<I", msg, 0)[0] == _TAG_MAP:
+                return msg
+        return None
+
+    async def scenario():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.show_map_box(box, level=3.0)
+            msg = await _recv_map(ws)
+            assert msg is not None and len(msg) > 4 + 68  # tag + header + at least some grid
+        # A client that joins after the box is live still gets it (replayed on connect).
+        async with websockets.connect(url) as late:
+            assert await _recv_map(late) is not None
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        session.stop()

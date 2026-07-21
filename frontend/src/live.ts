@@ -18,7 +18,13 @@ import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Color, ColorScale } from 'molstar/lib/mol-util/color';
-import { Mat4, Vec2, Vec3, Vec4 } from 'molstar/lib/mol-math/linear-algebra';
+import { Mat4, Vec2, Vec3, Vec4, Tensor } from 'molstar/lib/mol-math/linear-algebra';
+import { Volume } from 'molstar/lib/mol-model/volume';
+import { VolumeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
+import { createVolumeRepresentationParams } from 'molstar/lib/mol-plugin-state/helpers/volume-representation-params';
+import { ColorNames } from 'molstar/lib/mol-util/color/names';
+import { CustomProperties } from 'molstar/lib/mol-model/custom-property';
+import { arrayMin, arrayMax, arrayMean, arrayRms } from 'molstar/lib/mol-util/array';
 import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
@@ -95,6 +101,64 @@ export const LiveTrajectory = PluginStateTransform.BuiltIn({
     },
 });
 type LiveTrajectory = typeof LiveTrajectory;
+
+// -- live difference-density box -----------------------------------------
+// A small electron-density window streamed as a raw f32 grid + an explicit grid->Cartesian
+// affine (see pxviewer.volume_io.encode_map_box). Built into a Mol* Volume exactly like the
+// CUBE/DX parsers do (mol-model-formats/volume/cube.js) — no crystallographic cell, just the
+// affine — and updated in place by bumping `version` and swapping `values` (same mechanism as
+// LiveTrajectory), so the two isosurfaces (green +level, red -level) recompute per frame.
+
+function buildDiffVolume(
+    nx: number, ny: number, nz: number, values: Float32Array,
+    origin: Vec3, stepX: Vec3, stepY: Vec3, stepZ: Vec3,
+): Volume {
+    // C-order grid (last index fastest) -> axisOrderSlowToFast [0,1,2], as cube.js uses.
+    const space = Tensor.Space([nx, ny, nz], [0, 1, 2], Float32Array);
+    const cells = Tensor.create(space, Tensor.Data1(values));
+    const matrix = Mat4.fromTranslation(Mat4(), origin);       // grid (i,j,k) -> origin + i*stepX + j*stepY + k*stepZ
+    Mat4.mul(matrix, matrix, Mat4.fromBasis(Mat4(), stepX, stepY, stepZ));
+    return {
+        label: 'diff-map',
+        grid: {
+            transform: { kind: 'matrix', matrix },
+            cells,
+            stats: { min: arrayMin(values), max: arrayMax(values), mean: arrayMean(values), sigma: arrayRms(values) },
+        },
+        instances: [{ transform: Mat4.identity() }],
+        sourceData: { kind: 'custom', name: 'diff-map', data: {} } as any,
+        customProperties: new CustomProperties(),
+        _propertyData: Object.create(null),
+        _localPropertyData: Object.create(null),
+    } as Volume;
+}
+
+export const LiveDiffVolume = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-live-diff-volume',
+    display: { name: 'pxviewer Live Difference Map', description: 'A streamed density window updated in place.' },
+    from: SO.Root,
+    to: SO.Volume.Data,
+    params: {
+        version: PD.Numeric(0),
+        nx: PD.Numeric(0), ny: PD.Numeric(0), nz: PD.Numeric(0),
+        values: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
+        origin: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepX: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepY: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepZ: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+    },
+})({
+    apply({ params }) {
+        return Task.create('pxviewer Live Difference Map', async () => {
+            const p = params as any;
+            const vol = buildDiffVolume(p.nx, p.ny, p.nz, p.values, p.origin, p.stepX, p.stepY, p.stepZ);
+            return new SO.Volume.Data(vol, { label: 'Difference Map', description: `v${p.version}` });
+        });
+    },
+    // No custom update(): a param change re-runs apply(), rebuilding the Volume so both
+    // isosurface children recompute against the fresh grid.
+});
+type LiveDiffVolume = typeof LiveDiffVolume;
 
 // -- probe2 contact-dot surface ------------------------------------------
 //
@@ -418,6 +482,8 @@ export class LiveViewer {
     private clashesNode: StateObjectSelector | undefined;
     private probeChannels: Map<number, StateObjectSelector[]> = new Map();
     private markupChannels: Map<number, StateObjectSelector[]> = new Map();
+    private mapVolume: StateObjectSelector | undefined;  // the live difference-map density window
+    private mapVersion = 0;
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -864,6 +930,64 @@ export class LiveViewer {
         this.probeChannels.set(channel, nodes);
     }
 
+    /**
+     * Show or update the live difference-density window: `[u32 flags][f32 level][i32 nx,ny,nz]
+     * [f32 origin][f32 stepX,stepY,stepZ][f32 grid]` starting at `offset` (see
+     * pxviewer.volume_io.encode_map_box). The first call builds the volume + its isosurfaces
+     * (green +level, red -level for a difference map); later calls update the same nodes in
+     * place, so nothing is created or destroyed per frame.
+     */
+    async setMapBox(buffer: ArrayBuffer, offset: number) {
+        const dv = new DataView(buffer);
+        const flags = dv.getUint32(offset, true);
+        const level = dv.getFloat32(offset + 4, true);
+        const nx = dv.getInt32(offset + 8, true);
+        const ny = dv.getInt32(offset + 12, true);
+        const nz = dv.getInt32(offset + 16, true);
+        let p = offset + 20;
+        const v3 = () => { const w = Vec3.create(dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)); p += 12; return w; };
+        const origin = v3(), stepX = v3(), stepY = v3(), stepZ = v3();
+        // Own the grid: Tensor.Data1 does not copy, and the socket buffer is transient.
+        const values = new Float32Array(buffer, p, nx * ny * nz).slice();
+        this.mapVersion += 1;
+
+        if (this.mapVolume && this.mapVolume.ref) {
+            await this.plugin.state.data.build().to(this.mapVolume.ref)
+                .update((old: any) => ({ ...old, version: this.mapVersion, nx, ny, nz, values, origin, stepX, stepY, stepZ }))
+                .commit();
+            return;
+        }
+        const isDifference = (flags & 1) !== 0;
+        const build = this.plugin.state.data.build();
+        const vol = build.toRoot().apply(LiveDiffVolume, {
+            version: this.mapVersion, nx, ny, nz, values, origin, stepX, stepY, stepZ,
+        });
+        vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
+            type: 'isosurface',
+            typeParams: { isoValue: Volume.IsoValue.absolute(level), alpha: 1 },
+            color: 'uniform', colorParams: { value: ColorNames.green },
+        }));
+        if (isDifference) {
+            vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
+                type: 'isosurface',
+                typeParams: { isoValue: Volume.IsoValue.absolute(-level), alpha: 1 },
+                color: 'uniform', colorParams: { value: ColorNames.red },
+            }));
+        }
+        await build.commit();
+        this.mapVolume = vol.selector;
+    }
+
+    /** Remove the live difference-density window (see `setMapBox`). */
+    async clearMapBox() {
+        if (this.mapVolume && this.mapVolume.ref) {
+            const b = this.plugin.state.data.build();
+            b.delete(this.mapVolume.ref);
+            await b.commit();
+        }
+        this.mapVolume = undefined;
+    }
+
     /** Remove a probe dot overlay: one `channel`, or all when omitted. */
     async clearProbeDots(channel?: number) {
         const channels = channel === undefined ? [...this.probeChannels.keys()] : [channel];
@@ -1057,6 +1181,7 @@ const TAG_TOPOLOGY = 0;
 const TAG_FRAME = 1;
 const TAG_ATTRIBUTE = 2;
 const TAG_DOTS = 3;
+const TAG_MAP = 4;
 // Dot channels >= this are validation markers (drawn large); must match
 // pxviewer.validation.CHANNEL_BASE.
 const VALIDATION_CHANNEL_BASE = 10;
@@ -1708,10 +1833,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
+    let pendingMapBox: ArrayBuffer | null = null;  // a density window that beat the viewer build (latest only)
 
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'axis' && typeof msg.visible === 'boolean') {
@@ -1730,6 +1856,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 else await viewer.setClashes(msg.pairs ?? []);
             } else if (msg.type === 'dots' && viewer) {
                 if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
+            } else if (msg.type === 'map_box' && viewer) {
+                if (msg.action === 'clear') await viewer.clearMapBox();
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
@@ -1842,6 +1970,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const queued = pendingControl.splice(0);
             for (const m of queued) await handleControlMessage(m);
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
+            if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -1861,6 +1990,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // droppable frame).
             if (viewer) await viewer.setProbeDots(buffer, 4);
             else pendingDots.push(buffer);
+        } else if (tag === TAG_MAP) {
+            // A live density window (see viewer.setMapBox). Only the latest matters, so
+            // if the viewer is still building just keep the most recent one.
+            if (viewer) await viewer.setMapBox(buffer, 4);
+            else pendingMapBox = buffer;
         }
     };
 

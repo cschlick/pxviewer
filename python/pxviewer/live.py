@@ -93,6 +93,7 @@ _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
 _TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
 _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colours)
+_TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
 
 # probe2 dot overlay channels — independently toggleable (full surface vs clashes).
 PROBE_CONTACTS = 0
@@ -445,6 +446,7 @@ class LiveSession:
 
         self._frame_index = 0
         self._last_frame: Optional[bytes] = None
+        self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -801,6 +803,32 @@ class LiveSession:
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def show_map_box(self, map_manager: Any, *, level: float = 3.0, is_difference: bool = True) -> None:
+        """Stream a small live density window (a boxed ``map_manager``) to the viewport.
+
+        The whole box is one binary payload — an affine plus the raw f32 grid (see
+        :func:`pxviewer.volume_io.encode_map_box`) — so it updates in place with no file
+        staging, the density counterpart of a coordinate frame. Used to follow a drag with
+        a recomputed difference map around the tug. Thread-safe; replayed to late viewers.
+        Call :meth:`clear_map_box` to remove it.
+        """
+        from .volume_io import encode_map_box
+
+        payload = struct.pack("<I", _TAG_MAP) + encode_map_box(
+            map_manager, level=level, is_difference=is_difference)
+        self._last_map_box = payload
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast, payload)
+
+    def clear_map_box(self) -> None:
+        """Remove the live density window (see :meth:`show_map_box`). Thread-safe."""
+        self._last_map_box = None
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(
+                self._broadcast_text, json.dumps({"type": "map_box", "action": "clear"}))
 
     def show_markup(self, channel: int, primitives: Any) -> int:
         """Draw MolProbity validation markup on ``channel``: ``primitives`` is a list
@@ -1752,6 +1780,8 @@ class LiveSession:
                 )
             for payload in self._probe_dots_payloads.values():
                 await self._locked_send(websocket, payload)
+            if self._last_map_box is not None:
+                await self._locked_send(websocket, self._last_map_box)
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:
