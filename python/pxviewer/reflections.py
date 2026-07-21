@@ -24,6 +24,7 @@ __all__ = [
     "DIFFERENCE_MAP_TYPES",
     "PHASED_MAP_TYPES",
     "phased_maps",
+    "LiveDifferenceMap",
     "ReflectionData",
     "is_difference_map",
     "map_from_coefficients",
@@ -150,6 +151,98 @@ def phased_maps(
         for map_type in map_types
     }
     return {"maps": maps, "r_work": fmodel.r_work(), "r_free": fmodel.r_free()}
+
+
+class LiveDifferenceMap:
+    """Recompute an mFo-DFc difference map fast, as a model moves — the *warm* path.
+
+    A full :func:`phased_maps` re-derives bulk solvent and rescales every call (~0.1-1 s),
+    far too slow to follow a drag. This builds the scaled ``fmodel`` **once** and then, per
+    update, recomputes *only* f_calc from the moved atoms and re-FFTs the difference
+    coefficients — 5-40x faster: interactive (tens of Hz) for a small protein, a few Hz for
+    a few-thousand-atom model. See ``scripts/bench_live_maps.py`` for numbers.
+
+    Two deliberate crystallographic choices, both about honesty rather than speed:
+
+    * It recomputes the **difference** map (mFo-DFc), not 2mFo-DFc. The difference map shows
+      where the model disagrees with the data, so watching it flatten as you fit is real
+      feedback. Recomputing 2mFo-DFc live would instead just echo the moving model back —
+      model bias, the one thing a crystallographer is trained to distrust.
+    * Scales and the bulk-solvent mask are **frozen** at construction (``update_f_calc``
+      only, never ``update_all_scales`` per frame): the map answers to the model you are
+      moving, not to a re-fit of the experiment to that model, and :attr:`r_free` stays a
+      fixed reference that dragging cannot flatter. The frozen mask does go stale under
+      large rearrangements — call :meth:`rescale` (the expensive step) to refresh it.
+    """
+
+    def __init__(
+        self,
+        model: Any,
+        reflection_file: Any,
+        *,
+        resolution_factor: float = DEFAULT_RESOLUTION_FACTOR,
+        scattering_table: str = "n_gaussian",
+        data_manager: Any = None,
+    ) -> None:
+        from .cctbx_io import data_manager as _dm
+
+        dm = _dm(data_manager)
+        dm.add_model("model", model)
+        dm.process_miller_array_file(str(reflection_file))
+        self._fmodel = dm.get_fmodel(scattering_table=scattering_table)
+        self._fmodel.update_all_scales()  # once: bulk solvent + overall scaling (the slow part)
+        self._resolution_factor = resolution_factor
+
+    def recompute(
+        self,
+        *,
+        model: Any = None,
+        sites_cart: Any = None,
+        xray_structure: Any = None,
+        map_type: str = "mFo-DFc",
+    ) -> Any:
+        """A fresh difference ``map_manager`` for the moved atoms.
+
+        Give the new conformation as a cctbx ``model``, an ``xray_structure``, or a
+        ``sites_cart`` array (flex ``vec3_double`` or an ``(N, 3)`` / flat numpy array).
+        Only f_calc is recomputed; the frozen scales and mask are reused.
+        """
+        xrs = xray_structure
+        if xrs is None and model is not None:
+            xrs = model.get_xray_structure()
+        if xrs is None:
+            xrs = self._fmodel.xray_structure.deep_copy_scatterers()
+            if sites_cart is not None:
+                xrs.set_sites_cart(_as_vec3(sites_cart))
+        self._fmodel.update_xray_structure(xray_structure=xrs, update_f_calc=True)
+        coefficients = self._fmodel.electron_density_map().map_coefficients(map_type=map_type)
+        return map_from_coefficients(coefficients, resolution_factor=self._resolution_factor)
+
+    def rescale(self) -> None:
+        """Re-derive bulk solvent and overall scales — the expensive step frozen per frame.
+        Call after a large rearrangement so the stale mask stops distorting the map."""
+        self._fmodel.update_all_scales()
+
+    @property
+    def r_work(self) -> float:
+        return self._fmodel.r_work()
+
+    @property
+    def r_free(self) -> float:
+        """R-free against the frozen scales — a fixed reference, not re-fit to the model."""
+        return self._fmodel.r_free()
+
+
+def _as_vec3(sites: Any) -> Any:
+    """Coerce ``(N,3)`` / flat numpy coordinates (or a flex array) to flex ``vec3_double``."""
+    from scitbx.array_family import flex
+
+    if isinstance(sites, flex.vec3_double):
+        return sites
+    import numpy as np
+
+    arr = np.ascontiguousarray(np.asarray(sites, dtype="float64")).reshape(-1, 3)
+    return flex.vec3_double(arr)
 
 
 class ReflectionData:
