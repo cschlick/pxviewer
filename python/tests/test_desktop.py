@@ -1584,7 +1584,7 @@ def test_object_list_fits_its_contents(qapp):
         tree = ctl._loaded_tree
         assert tree.maximumHeight() == _TREE_MIN_HEIGHT  # empty: no reserved space
 
-        for i in range(30):
+        for i in range(60):
             app._add_volume(VolumeData.from_numpy(np.ones((4, 4, 4))), f"v{i}")
         # Many objects: it grows, but only to the ceiling — then it scrolls itself.
         assert tree.maximumHeight() == _TREE_MAX_HEIGHT

@@ -84,9 +84,10 @@ _MARKER_COLOR = [255, 90, 90]
 
 # The object list sizes itself to its contents between these. The floor keeps the empty
 # state from collapsing to nothing; past the ceiling the list scrolls itself rather than
-# taking the whole pane.
-_TREE_MIN_HEIGHT = 66
-_TREE_MAX_HEIGHT = 320
+# taking the whole pane. Roomier now that the mouse reference moved to a popup (its old
+# space is the list's), so more objects show at once before it has to scroll.
+_TREE_MIN_HEIGHT = 150
+_TREE_MAX_HEIGHT = 440
 
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
 # The model values must be types the LiveSession API accepts (see live.py's
@@ -1250,6 +1251,10 @@ class ControlsWindow:
             "maximize-2", "Detach", "Detach the controls to their own window")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
+        self._mouse_btn = self._make_icon_button(
+            "mouse", "Mouse", "Mouse and keyboard controls for the viewport")
+        self._mouse_btn.clicked.connect(self._on_mouse_help)
+        status_row.addWidget(self._mouse_btn)
         self._help_btn = self._make_icon_button(
             "circle-question-mark", "Help", "Documentation (coming soon)")
         self._help_btn.clicked.connect(self._on_help)
@@ -1463,12 +1468,8 @@ class ControlsWindow:
         sl.addWidget(self._selection_label)
         layout.addWidget(sel_box)
 
-        # -- Mouse reference ---------------------------------------------
-        # Zoom moved off the scroll wheel (which now contours) when the bindings went
-        # Coot-style, and an invisible zoom is a real trap — so the whole map is spelled
-        # out here on the home tab.
-        layout.addWidget(self._build_mouse_legend())
-
+        # The mouse/key reference used to live here, but it ate the room the object list
+        # wants; it's now a popup off the mouse button in the status row (see _on_mouse_help).
         layout.addStretch()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -3308,6 +3309,28 @@ class ControlsWindow:
         # Placeholder until the documentation is linked. Guided tutorials live under the
         # Demos button (Examples / Tutorials), not here.
         self._set_status("Documentation coming soon. Tutorials are under the Demos button.")
+
+    def _on_mouse_help(self) -> None:
+        """Pop up the mouse/keyboard reference above the mouse button (built once, reused).
+
+        A ``Qt.Popup`` so it dismisses on a click away, like a menu — the reference is a
+        glance, not a window to manage."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QFrame, QVBoxLayout
+
+        popup = getattr(self, "_mouse_popup", None)
+        if popup is None:
+            popup = QFrame(self._window, Qt.WindowType.Popup)
+            popup.setFrameShape(QFrame.Shape.StyledPanel)
+            v = QVBoxLayout(popup)
+            v.setContentsMargins(8, 8, 8, 8)
+            v.addWidget(self._build_mouse_legend())
+            self._mouse_popup = popup
+        popup.adjustSize()
+        # The button sits at the bottom of the pane, so open the popup above it, right-aligned.
+        corner = self._mouse_btn.mapToGlobal(self._mouse_btn.rect().topRight())
+        popup.move(corner.x() - popup.width(), corner.y() - popup.height() - 4)
+        popup.show()
 
     # -- guided tutorials: a non-modal coach that advances when a step is actually done ----
 
