@@ -581,6 +581,14 @@ export class LiveViewer {
                 params.color = spec.color;
             }
             if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
+            if (spec.carbonColor != null) {
+                // Element theme with a custom carbon colour: tint carbons, keep O/N/S standard.
+                params.color = 'element-symbol';
+                params.colorParams = {
+                    ...(params.colorParams || {}),
+                    carbonColor: { name: 'uniform', params: { value: decodeColor(spec.carbonColor) } },
+                };
+            }
             const typeParams: any = spec.params ? { ...spec.params } : {};
             if (spec.opacity != null) typeParams.alpha = spec.opacity;
             // Set the clip as the representation is built: this rebuilds every node, so

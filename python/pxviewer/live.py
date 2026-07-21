@@ -1172,6 +1172,7 @@ class LiveSession:
         *,
         color: Optional[str] = None,
         color_value: Optional[str] = None,
+        carbon_color: Optional[str] = None,
         on: Any = None,
         opacity: Optional[float] = None,
         params: Optional[dict] = None,
@@ -1185,12 +1186,16 @@ class LiveSession:
         such as ``'orange'``, or ``'#ff8800'``) or a Mol* **colour theme** name
         (``'element-symbol'``, ``'chain-id'``, ``'secondary-structure'``,
         ``'residue-name'``, ``'hydrophobicity'``, …); ``color_value`` also forces a
-        uniform colour. ``on`` restricts it to a subset (a :class:`Selection`, an MVS
-        ``ComponentExpression``, or anything coercible); omit for the whole
-        structure. ``opacity`` sets transparency and ``params`` passes type-specific
-        options. Returns the id; representations track streamed coordinates.
+        uniform colour. ``carbon_color`` tints only the carbons (an SVG name / hex) while
+        the other elements keep their standard colours — the "element theme, but carbon is
+        this colour" look — and implies the ``element-symbol`` theme. ``on`` restricts it to
+        a subset (a :class:`Selection`, an MVS ``ComponentExpression``, or anything
+        coercible); omit for the whole structure. ``opacity`` sets transparency and
+        ``params`` passes type-specific options. Returns the id; representations track
+        streamed coordinates.
         """
-        spec = self._make_repr_spec(type, color, color_value, on, opacity, params, id)
+        spec = self._make_repr_spec(
+            type, color, color_value, carbon_color, on, opacity, params, id)
         self._representations[spec["id"]] = spec
         self._send_representations()
         return spec["id"]
@@ -1354,7 +1359,7 @@ class LiveSession:
         )
 
         self._representations.clear()
-        spec = self._make_repr_spec(type, None, None, on, None, None, id)
+        spec = self._make_repr_spec(type, None, None, None, on, None, None, id)
         spec["color"] = "attribute"
         spec["attribute"] = {
             "name": attribute if isinstance(attribute, str) else "values",
@@ -1543,13 +1548,16 @@ class LiveSession:
             )
         return _MVS_TO_MOLSTAR_REPR[mvs]
 
-    def _make_repr_spec(self, type, color, color_value, on, opacity, params, id) -> dict:
+    def _make_repr_spec(self, type, color, color_value, carbon_color, on, opacity, params, id) -> dict:
         spec: dict = {
             "id": id if id is not None else self._next_representation_id(),
             "type": self._normalize_repr_type(type),
         }
         # Colour: a uniform SVG name / hex (MVS ColorT), else a Mol* colour theme.
-        if color_value is not None:
+        if carbon_color is not None:
+            # Element theme, but carbon is this one colour (O/N/S keep their standard hues).
+            spec["color"], spec["carbonColor"] = "element-symbol", carbon_color
+        elif color_value is not None:
             spec["color"], spec["colorValue"] = "uniform", color_value
         elif color is not None and (color.startswith("#") or color in _SVG_COLOR_NAMES):
             spec["color"], spec["colorValue"] = "uniform", color
