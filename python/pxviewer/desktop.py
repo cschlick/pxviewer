@@ -4049,6 +4049,10 @@ class DesktopApp:
         # WebSocket threads, read on the GUI thread, so guard it.
         self._scene_selection: dict = {}
         self._scene_lock = threading.Lock()
+        # Serialises restraint builds. The pre-warm below runs on its own thread while a
+        # drag can start on the tug worker, and both would otherwise process the same
+        # model at once. Held only around the build, which is rare and per-model.
+        self._restraints_lock = threading.Lock()
         # Restraint-notation primitives currently drawn for the selected geometry rows.
         self._restraint_prim_ids: list = []
         self._restraint_prim_session = None
@@ -4623,6 +4627,52 @@ class DesktopApp:
         self._emit_loaded_changed()
         return mid
 
+    def _warm_restraints(self, mid: Optional[str] = None) -> None:
+        """Build a model's restraints ahead of time, off any thread the user is waiting on.
+
+        The first drag on a model pays for pdb_interpretation — measured at 0.66 s on
+        ubiquitin and 1.35 s on a 2737-atom structure — and it lands *inside* the click, so
+        the grab sits dead before anything moves. (Later drags are 22-88 ms, which is the
+        real cost of a drag; the rest is this one-off.)
+
+        Called when Shift goes down, which is the earliest reliable sign a drag is coming,
+        and buys whatever of that build the user's Shift-to-click gap covers.
+
+        Deliberately *not* called when the model loads, which would hide the cost entirely.
+        Building restraints early enough changes what later restraint work sees — it made
+        ``test_restraint_row_draws_notation`` fail on its own — and until that interaction
+        is understood, warming at load trades a known delay for an unknown correctness
+        risk. See the note in OBJECT_HIDE_TODO-style terms: worth revisiting, not worth
+        guessing at.
+        """
+        entry = self._model_entry(mid if mid is not None else self._active_model_id)
+        if entry is None:
+            return
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return
+        try:
+            if model.restraints_manager_available():
+                return
+        except Exception:  # pragma: no cover - defensive
+            return
+        from .geometry import monomer_library_available
+
+        if not monomer_library_available():
+            return  # nothing to warm; the drag will say so when it is tried
+
+        def work() -> None:
+            try:
+                from . import edits
+
+                with self._restraints_lock:
+                    if not model.restraints_manager_available():
+                        edits.build_restraints(model)
+            except Exception:  # pragma: no cover - cctbx/runtime errors
+                pass  # a real failure surfaces when a drag or minimize actually needs them
+
+        threading.Thread(target=work, name="pxviewer-restraints-warm", daemon=True).start()
+
     def set_model_representation(self, mid: str, rep: str) -> None:
         """Change a model's representation type (from the inline dropdown)."""
         entry = self._model_entry(mid)
@@ -5185,6 +5235,9 @@ class DesktopApp:
             # thread); the drag's begin waits for the run to actually finish.
             if not self._minimize_idle.is_set():
                 self.stop_minimization()
+            # And make sure this model's restraints exist before the grab needs them. Nearly
+            # always already warm from load; this covers a model that arrived another way.
+            self._warm_restraints(mid)
             return
         if self._tug_queue is None:
             import queue
@@ -5258,9 +5311,16 @@ class DesktopApp:
                 self._minimize_idle.wait(timeout=2.0)
             from .tug import Tug
 
+            # Say so before building, not after: on a cold model this is the one place the
+            # user is left waiting, and silence there reads as a dropped click.
+            if not model.restraints_manager_available():
+                self._status("preparing restraints for dragging…")
             try:
-                self._tug = Tug(model, atom, map_data=self.map_for_model(mid)
-                                if self._tug_into_density else None)
+                # Against the pre-warm (see _warm_restraints): if one is in flight for this
+                # model, wait for it rather than building the same thing alongside it.
+                with self._restraints_lock:
+                    self._tug = Tug(model, atom, map_data=self.map_for_model(mid)
+                                    if self._tug_into_density else None)
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"could not start dragging: {exc}")
                 self._tug = None

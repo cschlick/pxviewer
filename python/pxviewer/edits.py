@@ -23,6 +23,8 @@ atom-selection strings, and ``ideal`` is the target distance (Å) or angle (deg)
 
 from __future__ import annotations
 
+import threading
+
 from typing import Any, List, Optional, Tuple
 
 # The structured edits are carried on a cctbx model here, so restraint builds pick them up.
@@ -203,6 +205,10 @@ def get_edits(model: Any) -> List[dict]:
     return list(getattr(model, _ATTR, None) or [])
 
 
+#: Serialises restraint builds; see build_restraints.
+_BUILD_LOCK = threading.Lock()
+
+
 def set_edits(model: Any, edits: List[dict]) -> None:
     """Carry ``edits`` on ``model`` so the next restraint build applies them."""
     setattr(model, _ATTR, list(edits or []))
@@ -219,14 +225,22 @@ def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = 
     goes through ``force=True``, which unsets and rebuilds. ``force=True`` (after edits
     change): always rebuild, so an edit added or removed takes effect (and a cleared edit
     is really gone — ``process()`` only drops the old manager when given explicit params).
+
+    Serialised across threads. Building replaces the model's restraints manager in place, so
+    two builds of the same model at once leave it in a state neither asked for. There is a
+    real chance of that: the drag pre-warm runs on its own thread precisely so the user is
+    not waiting on it, while minimize and the drag itself build from theirs. The lock is
+    global rather than per-model because a build is rare, seconds long, and CPU-bound —
+    letting two run at once would not help even on different models.
     """
-    if not force and model.restraints_manager_available():
-        return
-    params = model.get_default_pdb_interpretation_params()
-    edits = get_edits(model)
-    if edits:
-        _fill_params(params.geometry_restraints.edits, edits)
-    model.process(pdb_interpretation_params=params, make_restraints=make_restraints)
+    with _BUILD_LOCK:
+        if not force and model.restraints_manager_available():
+            return
+        params = model.get_default_pdb_interpretation_params()
+        edits = get_edits(model)
+        if edits:
+            _fill_params(params.geometry_restraints.edits, edits)
+        model.process(pdb_interpretation_params=params, make_restraints=make_restraints)
 
 
 def _fill_params(scope: Any, edits: List[dict]) -> None:

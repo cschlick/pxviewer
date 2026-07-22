@@ -551,6 +551,23 @@ export class LiveViewer {
         const structure = await plugin.builders.structure.createStructure(liveModel);
         this.structure = structure;
         await this.setRepresentations([]); // the default (ball-and-stick / element-symbol)
+
+        // Frame the structure once, then stop the camera following the scene.
+        //
+        // Mol* ships `camera.manualReset: false`, meaning the camera re-fits itself to the
+        // scene's bounding sphere whenever that changes. For a viewer showing a fixed
+        // structure that is helpful. Here every streamed frame rebuilds the scene, so the
+        // camera chases the atoms: grab one after focusing on a residue and the view jumps
+        // back out to the whole structure — the focus you just set, undone by the drag you
+        // just started. Measured on 1TEC, the first drag frame moved the camera radius
+        // 34.99 -> 37.96 and shifted its target.
+        //
+        // Coordinates moving is never a reason to move the camera. So let the automatic fit
+        // do its job once — framing a newly loaded structure is the one time it is wanted —
+        // and then take it off the leash. From then on the camera moves only when something
+        // asks it to: reset-view, focus, orient, or the user's own mouse, all of which set
+        // the camera directly and are unaffected by this.
+        lockCameraOnceFramed(plugin);
     }
 
     /**
@@ -728,6 +745,34 @@ export class LiveViewer {
         const selection = this.plugin.managers.structure.selection;
         selection.fromLoci('remove', Structure.toStructureElementLoci(structure));
         if (loci) selection.fromLoci('add', loci);
+    }
+
+    /**
+     * Mark an atom as grabbed, the instant the click lands.
+     *
+     * The first drag on a model waits on cctbx building its restraints — up to a second or
+     * so — before any atom can move. Without this the click looks lost: nothing acknowledges
+     * it until the model suddenly starts following the pointer. A highlight costs nothing
+     * and is honest about what has happened so far, which is that the grab registered.
+     *
+     * Uses the highlight channel, not the selection: a selection is the user's, and a drag
+     * has no business clearing it.
+     */
+    markGrabbed(atom: number) {
+        const structure = this.currentStructure();
+        if (!structure) return;
+        try {
+            this.plugin.managers.interactivity.lociHighlights.highlightOnly({
+                loci: lociFromElementIndices(structure, [atom]),
+            });
+        } catch { /* a highlight is a courtesy; never let it break the drag */ }
+    }
+
+    /** Drop the grabbed-atom marker (the drag is over, or real motion has taken over). */
+    clearGrabbed() {
+        try {
+            this.plugin.managers.interactivity.lociHighlights.clearHighlights();
+        } catch { /* as above */ }
     }
 
     /** Zoom the camera to the given positional atom indices. */
@@ -1235,6 +1280,34 @@ const MEASURE_ARITY: Record<string, number> = { distance: 2, angle: 3, dihedral:
 // quiet. Mol* already does exactly this for temporal multisampling; this extends the idea
 // to occlusion. The full-quality image is what you get whenever you stop, which is when
 // you are actually looking at it.
+
+/**
+ * Stop the camera re-fitting itself to the scene, once the scene has been fitted once.
+ *
+ * Must wait for that first fit: lock too early — before the geometry exists — and the
+ * structure is never framed at all, leaving the camera at its default with nothing in view.
+ * So poll until the scene has real extent, allow the reset animation to land, and only then
+ * set `manualReset`. Gives up after a few seconds rather than polling forever, which leaves
+ * the stock (self-fitting) behaviour rather than a blank viewport.
+ */
+function lockCameraOnceFramed(plugin: PluginContext) {
+    const canvas = plugin.canvas3d;
+    if (!canvas) return;
+    let tries = 0;
+    const tick = () => {
+        const framed = (canvas.boundingSphere?.radius ?? 0) > 0;
+        if (!framed && tries++ < 60) {
+            setTimeout(tick, 50);
+            return;
+        }
+        if (!framed) return;  // never got any geometry; leave the camera as Mol* shipped it
+        // Past cameraResetDurationMs, so the fit has finished moving before it is frozen.
+        setTimeout(() => canvas.setProps((p: Canvas3DProps) => {
+            (p.camera as any).manualReset = true;
+        }), 400);
+    };
+    setTimeout(tick, 50);
+}
 
 /** How long after the last interactive event the full-quality image comes back. Long
  *  enough to span the gaps between streamed drag frames (paced at ~25 ms) and between
@@ -1965,6 +2038,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         // Taken from the trackball only now that an atom is really under the pointer.
         ev.preventDefault();
         ev.stopPropagation();
+        // Acknowledge the grab now. The server may need up to a second to build this
+        // model's restraints before the first atom can move, and an unmarked click in that
+        // gap reads as a click that did not land.
+        viewer.markGrabbed(atom);
         ws.send(JSON.stringify({ type: 'tug', action: 'begin', atom }));
     };
 
@@ -1980,6 +2057,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const endTug = () => {
         if (!tugging) return;
         ws.send(JSON.stringify({ type: 'tug', action: 'end', atom: tugging.atom }));
+        viewer?.clearGrabbed();
         tugging = null;
         tugPending = null;
     };
