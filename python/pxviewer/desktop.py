@@ -46,11 +46,6 @@ _CUSTOM_COLOR = "\x00custom"
 _ISO_SLIDER_MAX = 10.0
 _ISO_SPIN_MAX = 100.0
 _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in steps of this
-# Hiding a map = contouring it so high nothing is drawn. A live iso change is the one
-# in-place edit a software renderer (SwiftShader) survives — clipping or removing the
-# isosurface segfaults it — so this is how a map hides on every renderer. Far above any
-# real density (and the spin's own max), so the surface is reliably empty.
-_HIDDEN_VOLUME_ISO = 1000.0
 
 # Default radius for masking density around a model (A). 3 A is roughly one atom's
 # reach, which is what "the density belonging to this model" usually means.
@@ -3676,7 +3671,7 @@ class ControlsWindow:
                 if it["visible"] is None:
                     # Reflections: nothing drawable, so nothing to show or hide.
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                elif it["kind"] in ("model", "volume") and not self._desktop._hide_in_place:
+                elif it["kind"] in ("model", "volume") and not self._desktop._can_hide:
                     # Software WebGL (this VM's SwiftShader) segfaults whenever a drawn
                     # object is hidden — a map by touching its isosurface, a model by the
                     # reload that redraws the scene — so the box is not checkable: toggling
@@ -3875,20 +3870,19 @@ class DesktopApp:
     """Run the pxviewer desktop app with viewport and controls windows."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 5173,
-                 hide_in_place: bool = False):
+                 can_hide: bool = False):
         _check_qt()
 
         from PySide6.QtWidgets import QApplication
 
         self._host = host
         self._port = port
-        # How show/hide works. In place (a clip toggle on a still-connected object) is
-        # smooth but relies on the renderer surviving a live GPU state change; on this
-        # box's software WebGL it segfaults, so hardware-only. Off (the default) hides by
-        # recomposing and reloading the page — a flicker, but a clean context teardown
-        # that never disposes anything mid-frame. run_desktop sets this from the GL
-        # backend; the safe default is a reload. See pxviewer.gpu and [[gpu-webgl]].
-        self._hide_in_place = bool(hide_in_place)
+        # Whether objects can be hidden at all. Hiding recomposes the scene without the
+        # hidden object and reloads the page — a clean context teardown that never disposes
+        # anything mid-frame. A software renderer (SwiftShader) segfaults even on that, so
+        # hiding is refused there and the tree checkboxes are non-checkable. run_desktop sets
+        # this from the GL backend (hardware only). See pxviewer.gpu and [[gpu-webgl]].
+        self._can_hide = bool(can_hide)
 
         # Qt must be initialized before any widgets are created.
         self._app = QApplication.instance()
@@ -4320,26 +4314,10 @@ class DesktopApp:
     def _visible_model_ws(self) -> List[str]:
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
 
-    def _all_model_ws(self) -> List[str]:
-        """Every model's socket, hidden ones included. In-place hiding keeps them all
-        connected (a hidden model is clipped, not dropped) so showing is a live message."""
-        return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
-
-    def _models_in_place(self) -> bool:
-        """Whether models hide by an in-place clip (staying connected) rather than a reload.
-
-        In place on hardware WebGL always; on software only when no map is loaded. A live
-        clip is safe on software as long as no isosurface is in the scene — clipping *with*
-        a map present segfaults it — and reloading a model away is safe as long as the page
-        does not go blank, which it only does when the map is gone and the last model is
-        hidden. So the two cover each other: with a map, reload (the map keeps the page
-        non-blank); without one, clip in place (no isosurface to fight, no blank reload)."""
-        return self._hide_in_place or not self._volumes
-
     def _model_ws(self) -> List[str]:
-        """The sockets the page connects to: all models when hiding in place (hidden ones
-        stay, clipped), else only the visible ones (a hidden model is dropped on reload)."""
-        return self._all_model_ws() if self._models_in_place() else self._visible_model_ws()
+        """The sockets the page connects to — only the visible models. A hidden model is
+        simply dropped from the recomposed scene on reload; that is the whole hide."""
+        return self._visible_model_ws()
 
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
@@ -4362,18 +4340,12 @@ class DesktopApp:
     def _control_session(self):
         """A session the viewport is actually connected to, for volume commands.
 
-        It has to be one of the sockets ``_reload_viewport`` put in the page. When hiding
-        in place every model stays connected (a hidden one is only clipped), so the active
-        model always carries commands; when reloading the page connects only to the
-        *visible* models, so a hidden active model is the wrong answer — its socket has no
-        clients and every volume command would quietly vanish. The dummy is the fallback
-        when there is no reachable model at all.
+        It has to be one of the sockets ``_reload_viewport`` put in the page — only the
+        *visible* models. A hidden active model is the wrong answer: its socket has no
+        clients, so every volume command would quietly vanish. The dummy is the fallback
+        when no model is visible.
         """
         entry = self._model_entry(self._active_model_id)
-        if self._models_in_place():
-            if entry is not None:
-                return entry["session"]
-            return self._models[0]["session"] if self._models else self._dummy
         if entry is not None and entry["visible"]:
             return entry["session"]
         visible = next((m["session"] for m in self._models if m["visible"]), None)
@@ -4382,27 +4354,25 @@ class DesktopApp:
         return self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing every volume; return its URL path (or None).
+        """Write an MVSJ composing the visible volumes; return its URL path (or None).
 
-        Every volume is always emitted, at its real level — a reload that drops a map's
-        isosurface segfaults a software renderer, and so does loading it empty, so the map
-        always loads populated and hidden ones are re-parked empty afterwards by a live
-        level bump (see ``set_volume_visible`` and ``_reassert_hidden_volumes``). Only a
-        visible volume is focused."""
-        if not self._volumes:
+        A hidden volume is left out of the scene entirely — that is how it hides, on the
+        reload that recomposes this. Only the first volume is focused, and only when no model
+        is there to centre on."""
+        visible = [v for v in self._volumes if v["visible"]]
+        if not visible:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
-        first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
-        for v in self._volumes:
+        for i, v in enumerate(visible):
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
-                focus=(focus_first and v is first_visible),
+                focus=(focus_first and i == 0),
             ))
         self._scene_counter += 1
         scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
@@ -4421,7 +4391,6 @@ class DesktopApp:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
-        self._reassert_hidden_volumes()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -5759,22 +5728,6 @@ class DesktopApp:
             if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
-    def _reassert_hidden_volumes(self) -> None:
-        """Re-tell the control session which maps are parked hidden, before the page
-        reloads. The rebuilt scene loads every map at its real, populated level; the
-        session re-parks the hidden ones empty on connect (a safe populated->empty bump).
-        The session carrying volume commands can change across reloads, so the current one
-        is handed the full state — hidden refs parked, visible refs released."""
-        control = self._control_session()
-        if control is None:
-            return
-        for entry in self._volumes:
-            try:
-                control.set_volume_hidden(
-                    entry["ref"], _HIDDEN_VOLUME_ISO if not entry["visible"] else None)
-            except Exception:  # pragma: no cover - defensive
-                pass
-
     def _send_volume_clip(self, entry) -> None:
         """Push a volume's whole clip: the slab and the radius are one thing to the
         viewer, so a change to either re-sends both."""
@@ -5799,8 +5752,6 @@ class DesktopApp:
         if entry is None or entry.get("clip") == clip:
             return
         entry["clip"] = clip
-        if self._models_in_place() and not entry["visible"]:
-            return  # hidden behind a closed slab; the real clip applies when shown
         try:
             entry["session"].set_clip(front, back)
         except Exception:  # pragma: no cover - defensive
@@ -5854,40 +5805,18 @@ class DesktopApp:
     def set_model_visible(self, mid: str, visible: bool) -> None:
         """Show or hide a loaded model in the viewport.
 
-        On hardware WebGL, close/open the model's clip slab (a full-scene clip plane makes
-        every atom disappear without touching geometry) or reload — see ``_models_in_place``.
-
-        On **software** WebGL this is refused (silently — an internal caller, add-hydrogens,
-        hides the H-less original, and must not warn or crash): both the in-place clip and
-        the reload segfault this renderer once a map is in the scene, and there is no safe
-        alternative. The tree checkbox is non-checkable and a click on it flashes why. Maps
-        are pinned the same way; on this box nothing drawn can be hidden."""
+        Hiding recomposes the scene without this model and reloads the page; showing puts it
+        back. Refused on **software** WebGL (silently — an internal caller, add-hydrogens,
+        hides the H-less original, and must not warn or crash), where the reload segfaults the
+        renderer once a map is in the scene; there the tree checkbox is non-checkable and a
+        click flashes why. Maps hide the same way."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
-        if not self._hide_in_place:
-            return  # software: hiding any drawn object segfaults; the map/model stays shown
+        if not self._can_hide:
+            return  # software: hiding any drawn object segfaults; the model stays shown
         entry["visible"] = bool(visible)
-        if self._models_in_place():
-            try:
-                if visible:
-                    front, back = entry.get("clip") or (0.0, 1.0)
-                    entry["session"].set_clip(front, back)   # restore the real slab
-                else:
-                    entry["session"].set_clip(1.0, 1.0)      # closed slab -> nothing drawn
-            except Exception:  # pragma: no cover - defensive
-                pass
-        else:
-            # Reload drops a hidden model from the page. If it was clip-hidden in a
-            # no-map state that has since gained a map, clear that stale slab first, so it
-            # is not replayed closed when shown.
-            if visible:
-                try:
-                    front, back = entry.get("clip") or (0.0, 1.0)
-                    entry["session"].set_clip(front, back)
-                except Exception:  # pragma: no cover - defensive
-                    pass
-            self._reload_viewport()
+        self._reload_viewport()  # recompose with only the visible objects
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
@@ -6005,45 +5934,17 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume by moving its contour, never by removing its isosurface.
+        """Show or hide a volume by recomposing the scene without it and reloading.
 
-        Hiding parks the map at an empty contour (far past any density) — a live
-        populated->empty level change, in place, which a *hardware* renderer survives.
-        Showing goes the other way, but an empty->populated rebuild *in place* segfaults
-        it, so showing instead reloads the page, which loads the map fresh at its real
-        level (the way it first appeared). The map is always in the scene at its real
-        level, so a reload never loads it empty and never removes its isosurface — the two
-        things that crash. The real level is kept on the entry.
-
-        On **software** WebGL every one of those isosurface operations eventually corrupts
-        the GL command buffer and segfaults, with no safe alternative, so hiding a map is
-        refused there (and its checkbox is disabled) rather than risking the whole app. It
-        works on hardware; ``hide_in_place`` marks that."""
+        Refused on **software** WebGL (its checkbox is non-checkable, a click flashes why),
+        where the isosurface teardown a reload runs segfaults the renderer — same as models."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
-        if not self._hide_in_place:
-            # No safe way to hide a map's isosurface here (see the class docstring), and
-            # even the _emit_loaded_changed a snap-back would run re-touches it and crashes.
-            # Refuse silently — the tree keeps the box non-checkable and its click handler
-            # is what flashes why (a pure status message that touches nothing).
-            return
+        if not self._can_hide:
+            return  # software: hiding a map's isosurface segfaults; it stays shown
         entry["visible"] = bool(visible)
-        control = self._control_session()
-        if visible:
-            # Release the park and reload: the fresh page draws the map populated. Doing
-            # this in place (empty->populated) is what segfaults, so it must be a reload.
-            if control is not None:
-                try:
-                    control.set_volume_hidden(entry["ref"], None)
-                except Exception:  # pragma: no cover - defensive
-                    pass
-            self._reload_viewport()
-        elif control is not None:
-            try:
-                control.set_volume_hidden(entry["ref"], _HIDDEN_VOLUME_ISO)  # park empty, live
-            except Exception:  # pragma: no cover - defensive
-                pass
+        self._reload_viewport()  # a hidden volume is simply left out of the recomposed scene
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
@@ -7027,7 +6928,7 @@ def run_desktop(host: str = "127.0.0.1", port: int = 5173,
     # software renderer (SwiftShader) segfaults on. Software and user-custom flags fall
     # back to the reload-based hide, which is slower to the eye but never disposes
     # anything mid-frame. See DesktopApp.__init__.
-    desktop = DesktopApp(host=host, port=port, hide_in_place=(mode == "hardware"))
+    desktop = DesktopApp(host=host, port=port, can_hide=(mode == "hardware"))
     try:
         return desktop.start()
     finally:

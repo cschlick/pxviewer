@@ -513,11 +513,6 @@ class LiveSession:
         # the same reason: a clip is worked out from the camera and re-aimed as it moves,
         # so it cannot be baked into the scene — a viewport reload would drop it.
         self._clips: dict = {}
-        # Volumes parked at an empty contour to hide them, keyed by ref -> that level.
-        # Replayed to late clients: the scene bakes the *real* level (so a reload loads the
-        # map populated, never empty — an empty->populated rebuild segfaults software GL),
-        # then this re-hides it with a live level bump, the safe populated->empty direction.
-        self._hidden_volume_iso: dict = {}
         self._selection_handlers: List[Callable[[Selection], None]] = []
         self._measure_handlers: List[Callable[[Primitive], None]] = []
         self._selection_changed = threading.Event()
@@ -885,22 +880,6 @@ class LiveSession:
         Thread-safe: may be called from any thread.
         """
         message = json.dumps({"type": "volume_iso", "ref": str(ref), "value": float(value)})
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(self._broadcast_text, message)
-
-    def set_volume_hidden(self, ref: str, iso: Optional[float]) -> None:
-        """Hide a volume by parking its contour at ``iso`` (an empty level), or release it
-        with ``iso=None``. Like :meth:`set_volume_iso` but the parked level is remembered
-        and replayed to late clients, so a scene reload (which loads the map at its real,
-        populated level) re-hides it — a live populated->empty bump, the only direction a
-        software renderer survives. Thread-safe."""
-        key = str(ref)
-        if iso is None:
-            self._hidden_volume_iso.pop(key, None)
-            return
-        self._hidden_volume_iso[key] = float(iso)
-        message = json.dumps({"type": "volume_iso", "ref": key, "value": float(iso)})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1778,10 +1757,6 @@ class LiveSession:
                 )
             for clip in list(self._clips.values()):
                 await self._locked_send(websocket, json.dumps(clip))
-            for ref, iso in list(self._hidden_volume_iso.items()):
-                # The scene loaded the map at its real level; re-park the hidden ones empty.
-                await self._locked_send(
-                    websocket, json.dumps({"type": "volume_iso", "ref": ref, "value": iso}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})

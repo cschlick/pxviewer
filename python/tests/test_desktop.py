@@ -1181,10 +1181,9 @@ def test_volume_appearance_controls(qapp, tmp_path):
 
 
 def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
-    """Volume commands ride a model's socket, so the control session must be one the page
-    is connected to. On hardware every model stays connected (a hidden one is just clipped),
-    so the active model always carries them — hidden or not — and the dummy is the fallback
-    only when there is no model at all."""
+    """Volume commands ride a model's socket, so the control session must be one the page is
+    connected to — only the *visible* models. Hiding the active model drops it from the page,
+    so commands fall to another visible model; the dummy is the fallback when none is."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1194,7 +1193,7 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    app = DesktopApp(port=0, hide_in_place=True)  # hardware: models can hide (in place)
+    app = DesktopApp(port=0, can_hide=True)  # hardware: objects can hide
     app._webapp.start()
     try:
         app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
@@ -1205,15 +1204,13 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         assert app._active_model_id == b
         assert app._control_session() is app.session_for(b)
 
-        # Hide the active model -> it stays connected (clipped), so it keeps carrying the
-        # commands; every model's socket remains in the page.
+        # Hide the active model -> it leaves the page, so commands fall to the visible one.
         app.set_model_visible(b, False)
-        assert f"ws://{app._host}:{app.session_for(b).port}" in app._all_model_ws()
-        assert app._control_session() is app.session_for(b)
+        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._model_ws()
+        assert app._control_session() is app.session_for(a)
 
-        # Remove every model -> the page falls back to the dummy, and so must the commands.
-        app.remove_model(b)
-        app.remove_model(a)
+        # Hide it too -> no visible model -> the page (and commands) fall to the dummy.
+        app.set_model_visible(a, False)
         app._ensure_dummy_ws()
         assert app._control_session() is app._dummy
     finally:
@@ -1221,11 +1218,10 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
 
 
 def test_software_pins_a_model_and_says_why_on_click(qapp):
-    """On software WebGL hiding a model segfaults too — the reload that would redraw the
-    scene re-touches the fragile GL just like a map — so models are pinned exactly like
-    maps: the checkbox is non-checkable and refused silently (an internal caller,
-    add-hydrogens, hides the H-less original and must not warn), and a click on the box
-    flashes why. Models and maps hide normally on hardware."""
+    """On software WebGL hiding a model segfaults (the reload that redraws the scene touches
+    the fragile GL), so models are pinned like maps: the checkbox is non-checkable and refused
+    silently (an internal caller, add-hydrogens, hides the H-less original and must not warn),
+    and a click on the box flashes why. Both hide normally on hardware."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1234,7 +1230,7 @@ def test_software_pins_a_model_and_says_why_on_click(qapp):
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
 
-    app = DesktopApp(port=0, hide_in_place=False)  # software
+    app = DesktopApp(port=0, can_hide=False)  # software
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
@@ -1243,127 +1239,97 @@ def test_software_pins_a_model_and_says_why_on_click(qapp):
                     if n.data(0, Qt.ItemDataRole.UserRole) == ("model", a))
         assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)  # non-checkable
 
-        warned, clips, loads = [], [], []
+        warned, loads = [], []
         app.bridge.status_warned.connect(warned.append)
-        sess = app.session_for(a)
-        oc = sess.set_clip
-        sess.set_clip = lambda f, b, **k: (clips.append((f, b)), oc(f, b, **k))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
-        # The setter refuses silently (add-hydrogens relies on this — no warn, no crash).
+        # The setter refuses silently (add-hydrogens relies on this — no warn, no reload).
         app.set_model_visible(a, False)
         assert app._model_entry(a)["visible"] is True
-        assert clips == [] and loads == [] and warned == []
+        assert loads == [] and warned == []
 
         # But a click on the check column flashes why — touching nothing.
         ctl._on_tree_item_clicked(node, 0)
         assert warned and "hardware WebGL" in warned[-1]
-        assert clips == [] and loads == []
+        assert loads == []
     finally:
         app.stop()
 
 
-def test_in_place_model_hide_is_a_clip_not_a_reload(qapp):
-    """On hardware WebGL (hide_in_place) hiding a model must not reload the viewport and
-    must not dispose geometry: the model closes its own clip slab and stays connected, so
-    showing restores the real slab live. (On software this reloads instead — see the test
-    above — because an in-place GPU change segfaults SwiftShader.)"""
+def test_hiding_a_model_reloads_the_scene_without_it(qapp):
+    """On hardware a model hides by recomposing the scene without it and reloading — no clip,
+    no in-place GPU mutation. Its socket leaves the page; showing puts it back."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
 
-    app = DesktopApp(port=0, hide_in_place=True)
+    app = DesktopApp(port=0, can_hide=True)
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        assert len(app._all_model_ws()) == 1  # models stay connected
-
-        clips = []
-        sess = app.session_for(a)
-        om = sess.set_clip
-        sess.set_clip = lambda f, b, **k: (clips.append((f, b, k.get("ref"))), om(f, b, **k))[1]
+        app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")  # keeps the page alive
+        ws_a = f"ws://{app._host}:{app.session_for(a).port}"
         loads = []
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
         app.set_model_visible(a, False)
+        assert ws_a not in app._model_ws()   # dropped from the recomposed scene
+        assert len(loads) == 1                # a reload, the clean teardown
+
         app.set_model_visible(a, True)
-        assert loads == [], "in-place model hide/show reloaded the viewport"
-        assert clips == [(1.0, 1.0, None), (0.0, 1.0, None)]  # close then reopen the slab
-        assert app._model_entry(a)["clip"] == (0.0, 1.0)  # real clip preserved
+        assert ws_a in app._model_ws()        # back
+        assert len(loads) == 2
     finally:
         app.stop()
 
 
-def test_hiding_a_map_parks_it_empty_showing_reloads_it_populated(qapp):
-    """Hiding a map parks it at an empty contour in place (a safe populated->empty level
-    bump) with no reload; showing reloads the page, which loads the map fresh at its real
-    level (empty->populated in place segfaults a software renderer, so it must be a fresh
-    load). The scene always bakes the real level so a reload never loads it empty, and the
-    session remembers the park so a reload while hidden re-hides it. Same on both
-    renderers. Level edits while hidden are stored, not pushed."""
+def test_hiding_a_map_reloads_the_scene_without_it(qapp):
+    """On hardware a map hides by leaving it out of the recomposed scene and reloading — no
+    isosurface park in place. Its ref leaves the scene; showing reloads with it back."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
     import numpy as np
 
     from pxviewer.desktop import DesktopApp
-    from pxviewer.desktop import _HIDDEN_VOLUME_ISO
     from pxviewer.live import LiveSession
     from pxviewer.volume_io import VolumeData
 
-    # Only on hardware (hide_in_place): on software the isosurface operations segfault, so
-    # hiding a map is refused there entirely — see the software test below.
-    app = DesktopApp(port=0, hide_in_place=True)
+    app = DesktopApp(port=0, can_hide=True)
     app._webapp.start()
     try:
-        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")  # keeps the page alive
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
-        entry = app._volume_entry(vid)
-        ref = entry["ref"]
-        real_iso = entry["iso"]
-
-        control = app._control_session()
-        parks = []
-        op = control.set_volume_hidden
-        control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
+        ref = app._volume_entry(vid)["ref"]
         loads = []
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
-        # The scene always bakes the real level, so a reload never loads the map empty.
-        scene = (app._webapp.volume_dir / app._write_volume_scene().lstrip("/")).read_text()
-        assert ref in scene and str(_HIDDEN_VOLUME_ISO) not in scene
+        def scene_text():
+            path = app._write_volume_scene()
+            return "" if path is None else (app._webapp.volume_dir / path.lstrip("/")).read_text()
+
+        assert ref in scene_text()  # visible: in the scene
 
         app.set_volume_visible(vid, False)
-        assert loads == [], "hiding a map reloaded the viewport"
-        assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)     # parked empty, in place
-        assert entry["iso"] == real_iso                   # real level preserved
-
-        # A reload while hidden re-parks it empty (after loading it populated).
-        control.set_volume_hidden(ref, None)              # forget, so the reassert re-sets it
-        app._reassert_hidden_volumes()
-        assert parks[-1] == (ref, _HIDDEN_VOLUME_ISO)
-
-        # Level edits while hidden are stored, not pushed (would bring the map back).
-        app.set_volume_iso(vid, 2.5)
-        assert entry["iso"] == 2.5
+        assert len(loads) == 1            # hidden by a reload without it
+        assert ref not in scene_text()    # the only volume, now left out
 
         app.set_volume_visible(vid, True)
-        assert len(loads) == 1                            # showing reloads once (loads populated)
-        assert parks[-1] == (ref, None)                   # park released
+        assert len(loads) == 2
+        assert ref in scene_text()        # back
     finally:
         app.stop()
 
 
 def test_software_pins_a_map_and_says_why_on_click(qapp):
-    """On software WebGL every way to hide a map's isosurface segfaults — including the
-    _emit_loaded_changed a snap-back would run — so the checkbox is non-checkable (toggling
-    it is what crashes). It is not a dead control though: clicking it flashes the reason,
-    a pure status message that touches nothing. Models still hide on software."""
+    """On software WebGL hiding a map's isosurface segfaults, so the checkbox is non-checkable
+    (toggling it is what crashes). Not a dead control though: clicking it flashes the reason,
+    a pure status message that touches nothing. Both hide on hardware."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1373,28 +1339,23 @@ def test_software_pins_a_map_and_says_why_on_click(qapp):
     from pxviewer.desktop import DesktopApp
     from pxviewer.volume_io import VolumeData
 
-    app = DesktopApp(port=0, hide_in_place=False)  # software
+    app = DesktopApp(port=0, can_hide=False)  # software
     app._webapp.start()
     try:
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
         ctl = app._controls
         node = next(n for n in _iter_tree_items(ctl._loaded_tree)
                     if n.data(0, Qt.ItemDataRole.UserRole) == ("volume", vid))
-        # The box is non-checkable — toggling it is the operation that segfaults.
-        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)  # non-checkable
 
-        # Clicking the check column flashes why — and touches no viewer state.
-        warned, parks, loads = [], [], []
+        warned, loads = [], []
         app.bridge.status_warned.connect(warned.append)
-        control = app._control_session()
-        op = control.set_volume_hidden
-        control.set_volume_hidden = lambda r, iso: (parks.append((r, iso)), op(r, iso))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
         ctl._on_tree_item_clicked(node, 0)
         assert warned and "hardware WebGL" in warned[-1]
-        assert parks == [] and loads == []                 # nothing touched the isosurface
+        assert loads == []                                 # nothing touched the scene
         assert app._volume_entry(vid)["visible"] is True   # still pinned visible
 
         # A click off the check column (e.g. the name) says nothing.
@@ -1411,35 +1372,6 @@ def _iter_tree_items(tree):
         node = stack.pop()
         yield node
         stack.extend(node.child(i) for i in range(node.childCount()))
-
-
-def test_in_place_hidden_object_clip_edits_are_deferred(qapp):
-    """A hidden object is held behind a closed slab; editing its clip stores the value but
-    must not push it (which would draw what the closed slab is hiding). It applies on show."""
-    pytest.importorskip("websockets")
-    pytest.importorskip("PySide6.QtWebEngineWidgets")
-
-    from pxviewer.desktop import DesktopApp
-    from pxviewer.live import LiveSession
-
-    app = DesktopApp(port=0, hide_in_place=True)
-    app._webapp.start()
-    try:
-        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        app.set_model_visible(a, False)
-        sess = app.session_for(a)
-        clips = []
-        oc = sess.set_clip
-        sess.set_clip = lambda f, b, **k: (clips.append((f, b)), oc(f, b, **k))[1]
-
-        app.set_model_clip(a, 0.2, 0.8)
-        assert clips == [], "clip pushed while hidden -> the model would reappear"
-        assert app._model_entry(a)["clip"] == (0.2, 0.8)
-
-        app.set_model_visible(a, True)
-        assert clips == [(0.2, 0.8)], "showing did not restore the stored clip"
-    finally:
-        app.stop()
 
 
 def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
@@ -2612,7 +2544,7 @@ def test_multi_model_registry(qapp):
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
 
-    app = DesktopApp(port=0, hide_in_place=True)  # hardware: models can hide
+    app = DesktopApp(port=0, can_hide=True)  # hardware: models can hide
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
