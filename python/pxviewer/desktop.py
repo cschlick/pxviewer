@@ -303,21 +303,18 @@ _ICON_BUTTON_QSS = (
     "QPushButton:checked { background-color: palette(highlight); }"
 )
 
-def _compact_tab_bar():
-    """A QTabBar that caps its tabs to a compact width — for macOS, where the native style
-    gives icon-only tabs a wide size hint and sprawls them across the bar (setExpanding does
-    not touch that). Overriding the *hint* keeps the native bar rendering, so unlike a
-    stylesheet it leaves no grey band behind the tabs. Lazily defined (no QApplication needed
-    at import)."""
-    from PySide6.QtCore import QSize
-    from PySide6.QtWidgets import QTabBar
-
-    class _CompactTabBar(QTabBar):
-        def tabSizeHint(self, index):
-            base = super().tabSizeHint(index)
-            return QSize(min(base.width(), 44), base.height())  # icon + a little padding
-
-    return _CompactTabBar()
+# macOS gives icon-only tabs a wide size hint and sprawls them across the bar (setExpanding
+# does not touch it); only a stylesheet overrides the native tab metrics. It also makes Qt
+# paint the bar itself — so paint the bar and tabs the panel colour (palette(window)) to cover
+# the native grey base, rather than leaving it transparent (which shows that grey through).
+# Applied on macOS only, so the native Linux tabs are untouched.
+_TAB_BAR_QSS = (
+    "QTabBar { background: palette(window); }"
+    "QTabBar::tab { background: palette(window); border: 0; margin: 0;"
+    " border-bottom: 2px solid palette(window); padding: 6px 5px; }"
+    "QTabBar::tab:selected { border-bottom: 2px solid palette(highlight); }"
+    "QTabBar::tab:hover { background: palette(midlight); }"
+)
 
 
 def _icon_button_base_qss() -> str:
@@ -1183,19 +1180,16 @@ class ControlsWindow:
         from PySide6.QtCore import Qt, QSize
 
         tabs = QTabWidget()
-        if _IS_MAC:
-            tabs.setTabBar(_compact_tab_bar())  # tight icon tabs via a size hint, not a stylesheet
         # The controls pane is narrow — a third of the window, down to 300px, narrower
         # still when floated — so six text tabs overflow. Use an icon per tab instead (the
         # label becomes its tooltip): icon-only tabs are compact enough that all six fit at
         # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
-        # Keep the six icon tabs tight and left-aligned. setExpanding(False) suffices on
-        # Fusion; macOS ignores it and gives icon-only tabs a wide size hint, so there a
-        # compact QTabBar subclass caps the hint (see _compact_tab_bar) — the native bar is
-        # kept, unlike a stylesheet, which painted a grey band behind it.
+        # Keep the six icon tabs tight and left-aligned (see _TAB_BAR_QSS for the macOS case).
         tabs.tabBar().setExpanding(False)
+        if _IS_MAC:
+            tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
         tabs.setIconSize(QSize(20, 20))
         # Lucide line icons, tinted to the tab text colour so they read in light and dark.
         tint = self._btn_tint
