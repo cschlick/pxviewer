@@ -1,4 +1,4 @@
-# Object hide: make it smooth, or fix the macOS QtWebEngine segfault
+# Object hide: the segfault is fixed; making it smooth is what's left
 
 This is a self-contained brief for whoever picks up the smooth-hide work. It assumes no
 knowledge of prior conversations.
@@ -7,91 +7,130 @@ knowledge of prior conversations.
 
 pxviewer is a desktop molecular-structure viewer: a PySide6/Qt app whose viewport is a
 **QtWebEngine** (Chromium) view running a **Mol\*** (molstar) TypeScript frontend. The Python
-backend streams data to the frontend over WebSockets. The crash below reproduces only on macOS
-with a real GPU (hardware WebGL); on software rendering (SwiftShader) hiding is refused entirely,
-so you must debug on the Mac.
+backend streams data to the frontend over WebSockets.
 
-## The bug to fix
+## SOLVED: the segfault was never the GPU
 
-Hiding a loaded object (a model or a map) from the object-list checkboxes must be smooth. Right
-now it works but **flickers**: hiding one object reloads the entire viewport page, so every
-other object briefly blanks and redraws. The goal is in-place hiding (toggle one object's
-visibility without disturbing the others) — but every in-place attempt so far **segfaults the
-whole app on this Mac's GPU**.
+Earlier versions of this brief said "this app's QtWebEngine GL context does not survive any
+in-place GPU state change on this Mac" and sent people to chase ANGLE backends, driver
+versions and streaming races. **That was a misdiagnosis.** The crash was a plain Qt
+use-after-free in the object list, with no renderer involved at all.
 
-## What's been tried and FAILED (both segfault on the real macOS GPU)
+### What actually happened
 
-1. **Clip slab**: hiding a model by sending it a full-scene clip plane (`set_clip(1,1)`, a
-   closed slab) so nothing draws. → segfault on hide.
-2. **`setSubtreeVisibility`** (Mol\*'s own standard hide, from
-   `molstar/lib/mol-plugin/behavior/static/state`): called on the model's structure state ref,
-   or on a volume's isosurface repr cell. → on macOS it (a) did **not** visually hide, and
-   (b) **segfaulted** on rapid on/off toggling. Headless on Linux/SwiftShader it DID set
-   `cell.state.isHidden = true` with no reload and no error — so the Python→frontend plumbing is
-   correct; the failure is specific to the macOS QtWebEngine GL context.
+macOS crash reports (`~/Library/Logs/DiagnosticReports/python3.12-*.ips`) all showed the same
+faulting stack, in the **main app process** — not the WebEngine GPU/render subprocess:
 
-Two independent in-place mechanisms both crashing strongly suggests **this app's QtWebEngine GL
-context does not survive any in-place GPU state change on this Mac** — only a full page reload
-(a clean context teardown) is stable. That may be abnormal (a healthy WebGL context toggles
-visibility fine), so it's likely a **version / driver issue** with the conda `qt6-webengine` +
-Mol\* + macOS-GPU combination, OR a race between the app's continuous coordinate streaming and
-the visibility change.
+```
+0  QTreeWidgetItem::setData(int, int, QVariant const&)      <- crash (EXC_BAD_ACCESS)
+1  QTreeWidgetItemWrapper::setData(...)                      <- PySide6 virtual dispatch
+2  QTreeModel::setData(...)
+3  QStyledItemDelegate::editorEvent(...)                     <- the checkbox being toggled
+5  QAbstractItemView::edit(...)
+7  QAbstractItemView::mouseReleaseEvent(...)                 <- still inside the mouse release
+```
 
-## Current stable baseline (do not regress this)
+The sequence:
 
-Hiding is currently **reload-based** and stable: `DesktopApp.set_model_visible` /
-`set_volume_visible` set the entry's `visible` flag and call `_reload_viewport()`, which
-recomposes the scene URL from only the visible objects and reloads the QtWebEngine page. It
-flickers but never crashes. **Keep the app crash-free at all times**; if in-place proves
-impossible, leaving the reload behavior in place is an acceptable outcome.
+1. You click a visibility checkbox. Qt runs `QTreeWidgetItem::setData(CheckStateRole)` from
+   the tree's own mouse-release/edit stack.
+2. `setData` emits `itemChanged` **synchronously**, mid-call.
+3. `_on_tree_item_changed` ran `set_model_visible` / `set_volume_visible` right there, which
+   reached `_emit_loaded_changed` -> `_on_loaded_changed` -> `QTreeWidget.clear()`.
+4. `clear()` destroyed every item — including the one whose `setData` was still on the stack.
+5. `setData` and its callers kept using that freed item as the stack unwound. SIGSEGV, with
+   `KERN_INVALID_ADDRESS ... (possible pointer authentication failure)`.
 
-## Goal
+### Why it looked like a GPU bug
 
-Diagnose *why* an in-place visibility change segfaults on this Mac, and if fixable, implement
-smooth in-place hiding (hide/show one object with no page reload, no flicker).
+- It fired on a *hide*, so it correlated perfectly with whatever hide mechanism was in play.
+- **Three unrelated hide mechanisms all crashed identically** — the clip slab, Mol\*'s
+  `setSubtreeVisibility`, and the plain scene reload. Three different renderer paths sharing
+  one byte-identical Qt backtrace is the tell that none of them was the cause.
+- It reproduced on **SwiftShader (pure CPU) as well as the real GPU**. A GPU-context bug that
+  reproduces on a software rasterizer is not a GPU-context bug.
+- The "stable reload baseline" crashed too — a crash report at 01:08 lands after the 00:11
+  revert to reload-based hiding, with the same stack as the in-place ones. The reload path was
+  never actually safe; it just crashed less often.
+- "Crashed on rapid toggling" fits exactly: fast clicking maximizes the chance of the rebuild
+  landing inside a live mouse-release stack.
+
+### The fix
+
+Read the plain values off the item, then apply the change on the next event-loop turn
+(`QTimer.singleShot(0, ...)`), once Qt has finished with the item. Nothing that runs inside
+`itemChanged` may touch the tree. See `ControlsWindow._on_tree_item_changed` /
+`_apply_visibility` in `python/pxviewer/desktop.py`.
+
+Two sibling paths had the identical defect and were hardened the same way:
+
+- `_on_tree_current_changed` -> `set_active_model` -> rebuild, from inside the tree's
+  selection handling.
+- `_on_active_radio` -> `set_active_model` -> rebuild. Worse: the radio lives *in* the tree
+  via `setItemWidget`, so the rebuild deletes the very button still delivering its own click.
+
+Regression test: `test_toggling_a_visibility_box_does_not_rebuild_the_tree_inside_the_signal`
+in `python/tests/test_desktop.py` (verified to fail without the fix).
+
+**The general rule for this codebase: never rebuild the object tree from inside a signal
+emitted by one of its own items or item widgets. Defer it.**
+
+## What's left: kill the flicker
+
+Hiding is still **reload-based**, so it works and no longer crashes, but hiding one object
+reloads the page and every other object briefly blanks. Making it smooth means in-place
+hiding — and the thing that blocked it is gone.
+
+Commit `64da4c5` ("Hide objects in place (no flicker)") already implemented this end to end
+and was reverted in `1b32eff` **only because of the crash diagnosed above**. Reverting that
+revert is the obvious starting point:
+
+```
+git revert 1b32eff     # restores in-place hiding via setSubtreeVisibility
+```
+
+That commit's design: `LiveSession.set_structure_visible` toggles a model's own structure
+(replayed to late clients, so a reload keeps a hidden model hidden); `set_volume_visible`
+toggles a map's isosurface by ref; `_reassert_hidden_volumes` re-hides maps after any reload.
+
+**One unresolved symptom to expect.** The revert commit reported two problems: the crash
+(solved) and that `setSubtreeVisibility` *"didn't hide"* visually on macOS. The second is a
+separate, real issue and is now the only thing standing between here and smooth hiding. Leads:
+
+1. Confirm it sets state at all: after a toggle, check `cell.state.isHidden` on the target
+   ref. Headless it did set correctly, so the plumbing works — the question is the render.
+2. The render probably just didn't sync. Force it: `plugin.canvas3d?.requestDraw(true)` after
+   the toggle.
+3. Try Mol\*'s higher-level command instead of the raw helper:
+   `PluginCommands.State.ToggleVisibility.dispatch(plugin, { state: plugin.state.data, ref })`.
+4. Check the ref actually targets the drawn node. For a volume, `findVolumeReprCell(plugin,
+   ref)` must resolve to the isosurface repr cell; for a model, hiding the *structure* ref may
+   need to be the representation ref instead.
+
+Do this work on the Mac with hardware WebGL, and re-verify by toggling rapidly — that is what
+used to crash, and it should now be boring.
+
+## Also worth revisiting
+
+`_can_hide` still refuses hiding on software rendering (checkboxes non-checkable, a click
+flashes why). That restriction exists only because hiding "segfaulted on software" — which
+was this same tree bug, not the renderer. It is probably safe to lift entirely, but software
+rendering has not been re-tested since the fix, so it was left in place. Verify, then remove
+the policy and its tests together.
 
 ## Key code
 
 - `python/pxviewer/desktop.py` — `DesktopApp`. Hide entry points: `set_model_visible`,
   `set_volume_visible`. Scene composition: `_reload_viewport`, `_model_ws`,
   `_write_volume_scene`, `_control_session`. Object lists: `self._models`, `self._volumes`
-  (dicts with `"visible"`, `"session"`, `"ref"`). `_can_hide` gates hiding (True on hardware;
-  hiding is refused on software rendering — the checkboxes are non-checkable there).
-- `python/pxviewer/live.py` — `LiveSession` (one per model, its own WebSocket). Sends JSON text
-  control messages (`{"type": ...}`) and tagged binary frames; replays state to late clients in
-  `_handler`. `set_clip` is a real feature (front/rear slab) — the failed hide overloaded it.
+  (dicts with `"visible"`, `"session"`, `"ref"`). Tree: `ControlsWindow._on_loaded_changed`
+  (rebuilds it), `_on_tree_item_changed` (the deferral).
+- `python/pxviewer/live.py` — `LiveSession` (one per model, its own WebSocket). Sends JSON
+  text control messages and tagged binary frames; replays state to late clients in `_handler`.
 - `frontend/src/live.ts` — the Mol\* integration. `connectLive(plugin, url)` runs one per model
-  in ONE shared plugin. `class LiveViewer` holds `this.structure` (a
-  `StateObjectSelector<Structure>`). `handleControlMessage` dispatches text messages. Volumes
-  load from an MVSJ scene (`?mvsj=...`); `findVolumeReprCell(plugin, ref)` locates a volume's
-  repr cell by ref.
-
-## Debugging leads (rough priority)
-
-1. **Get the actual crash cause.** Run with Chromium logging and reproduce a hide-toggle crash;
-   the last GL/Chromium lines before the segfault usually name the failing call:
-   `QTWEBENGINE_CHROMIUM_FLAGS="--enable-logging=stderr --v=1" python -m pxviewer desktop`
-   Also read the macOS crash report in `~/Library/Logs/DiagnosticReports/` — is it the app
-   process or the QtWebEngine **GPU/render subprocess** that dies?
-2. **Version check** — a mismatched/old WebEngine is the prime suspect:
-   `conda list | grep -iE "qt6|webengine|pyside|chromium"` and the Mol\* version in
-   `frontend/package.json` / `frontend/node_modules/molstar/package.json`.
-3. **Isolate pxviewer vs. the stack.** Build a minimal standalone Mol\* HTML page that loads a
-   structure and toggles `setSubtreeVisibility` on a timer, open it in a bare QtWebEngine view
-   (or Safari/Chrome), and see if the visibility toggle alone crashes. If it crashes in a bare
-   QtWebEngine but not in Chrome, it's the QtWebEngine build.
-4. **Streaming race.** pxviewer pushes coordinate frames continuously (the trajectory
-   version-bumps and re-renders). A visibility change concurrent with a frame re-render could
-   corrupt state. Try hiding a **static** model (no active minimization/drag) vs. a streaming
-   one; try pausing the stream around the toggle; try debouncing / `requestAnimationFrame`
-   around the visibility change.
-5. **Different Mol\* API.** Instead of raw `setSubtreeVisibility`, try
-   `PluginCommands.State.ToggleVisibility.dispatch(plugin, { state: plugin.state.data, ref })`,
-   and ensure a redraw (`plugin.canvas3d?.requestDraw(true)`) — the "didn't visually hide"
-   symptom suggests the render didn't sync.
-6. **GPU-process resilience.** Test whether specific `QTWEBENGINE_CHROMIUM_FLAGS`
-   (e.g. `--disable-gpu-sandbox`, or a different ANGLE backend `--use-angle=metal` /
-   `--use-angle=gl`) change the crash — that would point squarely at the WebEngine GPU layer.
+  in ONE shared plugin. `class LiveViewer` holds `this.structure`. `handleControlMessage`
+  dispatches text messages. Volumes load from an MVSJ scene (`?mvsj=...`);
+  `findVolumeReprCell(plugin, ref)` locates a volume's repr cell by ref.
 
 ## Build / run / test
 
@@ -100,18 +139,23 @@ smooth in-place hiding (hide/show one object with no page reload, no flicker).
 - **Frontend edits require a rebuild**: `cd frontend && npm run build` (writes `build/index.js`,
   which is gitignored), then restart the app.
 - Run: `python -m pxviewer desktop` (or `pxviewer desktop`).
-- Tests (Linux/headless): `QT_QPA_PLATFORM=offscreen python -m pytest
-  python/tests/test_desktop.py python/tests/test_live.py python/tests/test_gui_fuzz.py -q`.
-  Hide behavior is covered by `test_hiding_a_model_reloads_the_scene_without_it`,
+- Tests: `QT_QPA_PLATFORM=offscreen python -m pytest python/tests/test_desktop.py
+  python/tests/test_live.py python/tests/test_gui_fuzz.py -q`. Hide behavior is covered by
+  `test_hiding_a_model_reloads_the_scene_without_it`,
   `test_hiding_a_map_reloads_the_scene_without_it`,
+  `test_toggling_a_visibility_box_does_not_rebuild_the_tree_inside_the_signal`,
   `test_software_pins_a_model_and_says_why_on_click`, and the `_control_session_is_reachable`
-  invariant in `python/tests/gui_invariants.py`. If you change the hide mechanism, update these;
-  keep the software "no hiding" policy intact. (The full `tests/` run in one process hangs on a
-  pre-existing leaked-thread issue — run per-file.)
+  invariant in `python/tests/gui_invariants.py`. (The full `tests/` run in one process hangs
+  on a pre-existing leaked-thread issue — run per-file.)
+- Five tests in `test_desktop.py` fail on a clean checkout for unrelated pre-existing reasons
+  (`test_minimize_buttons_show_which_state_is_live`, `test_validation_subtabs_and_row_focus`,
+  `test_restraint_row_marks_all_atoms_and_draws_its_notation`,
+  `test_atom_precision_actions_switch_a_ribbon_to_ball_and_stick`,
+  `test_residue_orientation_and_space_navigation`). Don't be alarmed by them; don't blame them
+  on hide work.
 
 ## Constraints
 
 - Commits authored as `cschlick <cschlick@users.noreply.github.com>`, no AI attribution.
 - Push only when explicitly asked.
-- Above all: **do not leave the app in a state that segfaults.** If in-place can't be made safe,
-  keep the stable reload behavior.
+- Above all: **do not leave the app in a state that segfaults.**

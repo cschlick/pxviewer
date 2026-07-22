@@ -3668,12 +3668,13 @@ class ControlsWindow:
                     # Reflections: nothing drawable, so nothing to show or hide.
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                 elif it["kind"] in ("model", "volume") and not self._desktop._can_hide:
-                    # Software WebGL (this VM's SwiftShader) segfaults whenever a drawn
-                    # object is hidden — a map by touching its isosurface, a model by the
-                    # reload that redraws the scene — so the box is not checkable: toggling
-                    # it would run the very operation that crashes. Not a dead control,
-                    # though: a click flashes why (see _on_tree_item_clicked), a pure status
-                    # message that touches nothing. They hide normally on hardware WebGL.
+                    # Hiding is disabled on software WebGL (this VM's SwiftShader). The
+                    # original reason — "hiding segfaults the software renderer" — turned out
+                    # to be a misread of the object-tree use-after-free fixed in
+                    # _on_tree_item_changed, which crashed on every renderer because no
+                    # renderer was involved. The block stays only because software rendering
+                    # has not been re-tested since; it is likely safe to lift. Not a dead
+                    # control: a click flashes why (see _on_tree_item_clicked).
                     node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
                     node.setCheckState(0, Qt.CheckState.Checked)
                     node.setToolTip(0, "Hiding needs hardware WebGL "
@@ -3725,15 +3726,18 @@ class ControlsWindow:
     def _on_tree_current_changed(self, current, _previous) -> None:
         if self._suppress_model_events or current is None:
             return
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import Qt, QTimer
 
         kind, ident = current.data(0, Qt.ItemDataRole.UserRole)
         if kind == "group":
             self._update_appearance()  # a group header has nothing to edit
             return
-        self._update_appearance(kind, ident)  # master -> detail
+        self._update_appearance(kind, ident)  # master -> detail; touches no tree item
         if kind == "model":
-            self._desktop.set_active_model(ident)  # focusing a model activates it
+            # Activating rebuilds the tree, and this signal runs inside the tree's own
+            # selection handling — rebuilding here would free the item Qt is still using
+            # (see _on_tree_item_changed). Defer past the signal.
+            QTimer.singleShot(0, lambda: self._desktop.set_active_model(ident))
 
     def _make_type_combo(self, mid, types, hidden):
         """A checkable dropdown of structure types (checked = shown)."""
@@ -3772,12 +3776,30 @@ class ControlsWindow:
         self._set_table_model(target)
 
     def _on_tree_item_changed(self, item, _column=0) -> None:
-        from PySide6.QtCore import Qt
+        """A visibility box was toggled -> apply it, but never from inside this signal.
+
+        ``itemChanged`` is emitted *synchronously* from inside ``QTreeWidgetItem::setData``,
+        which Qt is running from the tree's own mouse-release/edit stack. Applying the change
+        here would run ``_emit_loaded_changed`` -> ``_on_loaded_changed`` -> ``tree.clear()``,
+        destroying the very item whose ``setData`` is on the stack; Qt then keeps using that
+        freed item as the stack unwinds and the process dies with SIGSEGV. That — not the
+        GPU — is what every past "hiding segfaults" report actually was, which is why it
+        reproduced identically on software and hardware WebGL and on three unrelated hide
+        mechanisms.
+
+        So read the plain values off the item now and do the work on the next event-loop
+        turn, once Qt has finished with the item. Nothing here may touch the tree.
+        """
+        from PySide6.QtCore import Qt, QTimer
 
         if self._suppress_model_events:
             return
         kind, ident = item.data(0, Qt.ItemDataRole.UserRole)
         visible = item.checkState(0) == Qt.CheckState.Checked
+        QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
+
+    def _apply_visibility(self, kind: str, ident: str, visible: bool) -> None:
+        """Apply a visibility toggle, off the tree's signal stack (see above)."""
         if kind == "model":
             self._desktop.set_model_visible(ident, visible)
         elif kind == "volume":
@@ -3805,13 +3827,17 @@ class ControlsWindow:
 
     def _on_active_radio(self, button) -> None:
         """A model's active radio was clicked -> make it the active model."""
+        from PySide6.QtCore import QTimer
+
         if self._suppress_model_events:
             return
         mid = button.property("mid")
         if mid:
             # set_active_model refreshes the Loaded tree; _on_loaded_changed then points
             # Appearance at the newly active model (a focused model tracks the active one).
-            self._desktop.set_active_model(mid)
+            # The radio lives *in* the tree (setItemWidget), so that refresh deletes this
+            # very button while it is still delivering its own click — defer past it.
+            QTimer.singleShot(0, lambda: self._desktop.set_active_model(mid))
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt
@@ -5795,12 +5821,22 @@ class DesktopApp:
         """Show or hide a loaded model in the viewport.
 
         Hiding recomposes the scene without this model and reloads the page; showing puts it
-        back. A reload is a clean context teardown — the only thing this app's WebGL survives;
-        an in-place change (a clip, or a visibility toggle) segfaults it, on software *and*
-        on hardware. Refused on **software** WebGL (silently — an internal caller,
-        add-hydrogens, hides the H-less original, and must not warn or crash), where even the
-        reload's teardown crashes once a map is in the scene; there the tree checkbox is
-        non-checkable and a click flashes why. Maps hide the same way."""
+        back. That reload is why hiding flickers.
+
+        This used to be documented as "a reload is the only teardown this app's WebGL
+        survives, an in-place change segfaults it". That was wrong. The segfault was never in
+        the renderer: it was a use-after-free in the *object tree*, which rebuilt itself from
+        inside ``QTreeWidgetItem::setData`` and freed the item Qt was still using (see
+        ``ControlsWindow._on_tree_item_changed``). Three unrelated hide mechanisms crashed
+        with one identical Qt backtrace, on software and hardware alike — the tell that no GPU
+        was involved. The toggle is now deferred off that signal, so hiding no longer crashes
+        by either mechanism, and in-place hiding is worth revisiting to kill the flicker.
+
+        Still refused on **software** WebGL (silently — an internal caller, add-hydrogens,
+        hides the H-less original, and must not warn or crash); there the tree checkbox is
+        non-checkable and a click flashes why. That restriction predates the real diagnosis
+        and is probably now unnecessary, but it has not been re-tested on software rendering.
+        Maps hide the same way."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
@@ -5925,12 +5961,13 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume by recomposing the scene without it and reloading. A reload
-        is the only teardown this app's WebGL survives (an in-place isosurface change
-        segfaults it); the flicker is the price of not crashing.
+        """Show or hide a volume by recomposing the scene without it and reloading, which is
+        what makes hiding flicker. The old "an in-place isosurface change segfaults the
+        renderer" reading was a misdiagnosis — see ``set_model_visible`` for what actually
+        crashed (an object-tree use-after-free, not the GPU).
 
-        Refused on **software** WebGL (its checkbox is non-checkable, a click flashes why),
-        where even the reload's isosurface teardown segfaults the renderer — same as models."""
+        Still refused on **software** WebGL (its checkbox is non-checkable, a click flashes
+        why) — a restriction kept only because it has not been re-tested since."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return

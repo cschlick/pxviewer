@@ -1287,6 +1287,59 @@ def test_hiding_a_model_reloads_the_scene_without_it(qapp):
         app.stop()
 
 
+def test_toggling_a_visibility_box_does_not_rebuild_the_tree_inside_the_signal(qapp):
+    """A visibility checkbox must never rebuild the object tree from inside ``itemChanged``.
+
+    Qt emits ``itemChanged`` synchronously from inside ``QTreeWidgetItem::setData``, which it
+    is running from the tree's own mouse-release/edit stack. Rebuilding there reaches
+    ``QTreeWidget.clear()``, destroying the very item whose ``setData`` is still on the stack;
+    Qt keeps using that freed item as the stack unwinds and the process dies with SIGSEGV.
+
+    That — not the GPU — is what every past "hiding segfaults" crash was: three unrelated hide
+    mechanisms (clip slab, setSubtreeVisibility, scene reload) all crashed with one identical
+    Qt backtrace, on software *and* hardware WebGL. So the toggle is applied one event-loop
+    turn later, once Qt has finished with the item.
+    """
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtCore import Qt
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0, can_hide=True)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")  # keeps the page alive
+
+        tree = app._controls._loaded_tree
+        item = next(
+            it for it in tree.findItems("", Qt.MatchFlag.MatchContains | Qt.MatchFlag.MatchRecursive, 2)
+            if it.data(0, Qt.ItemDataRole.UserRole) == ("model", a)
+        )
+
+        # Record any teardown that happens while Qt is inside setData -> itemChanged.
+        in_signal = {"now": False}
+        cleared_in_signal = []
+        real_clear = tree.clear
+        tree.clear = lambda: (cleared_in_signal.append(True) if in_signal["now"] else None, real_clear())[1]
+
+        in_signal["now"] = True
+        item.setCheckState(0, Qt.CheckState.Unchecked)  # emits itemChanged synchronously
+        in_signal["now"] = False
+
+        assert not cleared_in_signal          # the segfault: the live item freed under Qt
+        assert item.text(2) == "A"            # so the item is still alive and usable
+        assert app._model_entry(a)["visible"]  # deferred, so not applied yet
+
+        qapp.processEvents()
+        assert not app._model_entry(a)["visible"]  # applied on the next event-loop turn
+    finally:
+        app.stop()
+
+
 def test_hiding_a_map_reloads_the_scene_without_it(qapp):
     """On hardware a map hides by leaving it out of the recomposed scene and reloading — no
     in-place isosurface change (which segfaults). Its ref leaves the scene; showing reloads."""
@@ -2132,8 +2185,11 @@ def test_active_model_radio(qapp):
         assert set(radios) == {a, b}  # one radio per model, tagged with its id
         assert radios[b].isChecked() and not radios[a].isChecked()  # ring-with-dot = active
 
-        # Clicking A's radio activates A (without touching row selection).
+        # Clicking A's radio activates A (without touching row selection). Activation is
+        # deferred one event-loop turn: the rebuild it triggers deletes the radio that is
+        # still delivering this click, so it must not run inside the signal.
         app._controls._on_active_radio(radios[a])
+        qapp.processEvents()
         assert app._active_model_id == a
         # After the rebuild, A's radio is now the checked one.
         radios = {r.property("mid"): r for r in tree.findChildren(QRadioButton)}
@@ -2168,6 +2224,7 @@ def test_appearance_follows_active_model(qapp):
         # Activating A via its radio must move Appearance to A (the bug: it stayed on B).
         radios = {r.property("mid"): r for r in app._controls._loaded_tree.findChildren(QRadioButton)}
         app._controls._on_active_radio(radios[a])
+        qapp.processEvents()  # activation is deferred off the radio's own click signal
         assert app._active_model_id == a
         assert app._controls._focused == ("model", a)
 
