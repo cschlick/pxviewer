@@ -159,7 +159,8 @@ class GeometryRestraints:
     def __init__(self, model: Any):
         restraints = model.get_restraints_manager()
         if restraints is None:
-            model.process(make_restraints=True)  # needs the monomer library
+            from . import edits
+            edits.build_restraints(model)  # one build path, one lock (see edits._BUILD_LOCK)
             restraints = model.get_restraints_manager()
         self.model = model
         self.geometry = restraints.geometry

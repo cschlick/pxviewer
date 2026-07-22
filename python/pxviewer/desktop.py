@@ -4623,6 +4623,7 @@ class DesktopApp:
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
+        self._warm_restraints(mid)  # so the first drag does not pay for pdb_interpretation
         self._reload_viewport()
         self._emit_loaded_changed()
         return mid
@@ -4635,15 +4636,17 @@ class DesktopApp:
         the grab sits dead before anything moves. (Later drags are 22-88 ms, which is the
         real cost of a drag; the rest is this one-off.)
 
-        Called when Shift goes down, which is the earliest reliable sign a drag is coming,
-        and buys whatever of that build the user's Shift-to-click gap covers.
+        Called when a model loads, so the build is done long before a drag — and again on
+        Shift-keydown, to cover a model that arrived another way or a drag that beat the
+        load-time build.
 
-        Deliberately *not* called when the model loads, which would hide the cost entirely.
-        Building restraints early enough changes what later restraint work sees — it made
-        ``test_restraint_row_draws_notation`` fail on its own — and until that interaction
-        is understood, warming at load trades a known delay for an unknown correctness
-        risk. See the note in OBJECT_HIDE_TODO-style terms: worth revisiting, not worth
-        guessing at.
+        Runs on a background thread so nothing waits on it, which is only safe because every
+        restraint build now funnels through one lock (see ``edits.build_restraints`` and
+        ``GeometryRestraints``): cctbx restraint building touches process-global state, and
+        two builds at once — the background warm and, say, the restraint tables building
+        their own — leave it in a state neither asked for. That race, not any change in
+        what the restraints *contain* (the two build paths produce identical proxies), is
+        what made a restraint-table test fail intermittently before the paths were unified.
         """
         entry = self._model_entry(mid if mid is not None else self._active_model_id)
         if entry is None:
