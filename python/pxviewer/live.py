@@ -16,7 +16,6 @@ Server -> client (binary, little-endian; first uint32 is a tag):
   - tag 1 FRAME    : [u32 tag=1][u32 frameIndex][f32 * 3N]  (x0,y0,z0,x1,y1,z1,...)
 
 Server -> client (UTF-8 JSON text control messages):
-  - {"type": "axis", "visible": bool}                          toggle the axis helper
   - {"type": "highlight", "atoms": <index-set>}                show selection overlay
   - {"type": "focus", "atoms": <index-set>}                    aim the camera
   - {"type": "primitive", "action": "add",                     draw a measurement:
@@ -446,6 +445,7 @@ class LiveSession:
 
         self._frame_index = 0
         self._last_frame: Optional[bytes] = None
+        self._structure_visible = True  # this model's own visibility (replayed to late clients)
         self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
@@ -640,15 +640,6 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast, payload)
         return index
 
-    def set_axis(self, visible: bool) -> None:
-        """Broadcast a command to show or hide the camera XYZ axis helper.
-
-        Thread-safe: may be called from any thread.
-        """
-        message = json.dumps({"type": "axis", "visible": bool(visible)})
-        loop = self._loop
-        if loop is not None:
-            loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def reset_view(self) -> None:
         """Reframe the camera to fit the whole scene at its default orientation.
@@ -847,6 +838,25 @@ class LiveSession:
         ``volume-0`` or a custom :class:`Volume` ref). Thread-safe.
         """
         message = json.dumps({"type": "volume_color", "ref": str(ref), "color": str(color)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_structure_visible(self, visible: bool) -> None:
+        """Show or hide this session's own structure (all its representations) in place — a
+        render skip, not a teardown, so nothing reloads and no GPU resource is disposed.
+        Remembered and replayed to late clients, so a scene reload keeps a hidden model
+        hidden. Thread-safe."""
+        self._structure_visible = bool(visible)
+        message = json.dumps({"type": "structure_visible", "value": bool(visible)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_visible(self, ref: str, visible: bool) -> None:
+        """Show or hide a volume by reference in place (a render skip on its isosurface, no
+        reload, no dispose). The scene keeps the map; this only stops drawing it. Thread-safe."""
+        message = json.dumps({"type": "volume_visible", "ref": str(ref), "value": bool(visible)})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1712,6 +1722,10 @@ class LiveSession:
             await self._locked_send(websocket, struct.pack("<I", _TAG_TOPOLOGY) + self._topology)
             if self._last_frame is not None:
                 await self._locked_send(websocket, self._last_frame)
+            if not self._structure_visible:
+                # A model hidden before this client connected: hide it again (render skip).
+                await self._locked_send(
+                    websocket, json.dumps({"type": "structure_visible", "value": False}))
             if self._last_highlight_indices:
                 # Bring a late-joining viewer up to the current highlight.
                 await self._locked_send(

@@ -103,18 +103,21 @@ def test_frame_length_mismatch_rejected(session):
         session.push([[0, 0, 0], [1, 1, 1]])  # only 2 atoms, topology has 4
 
 
-def test_set_axis_command_reaches_client(session):
+def test_set_structure_visible_command_reaches_client(session):
     async def scenario():
         import json
 
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
-            session.set_axis(False)
-            message = await asyncio.wait_for(ws.recv(), timeout=5)
-            assert isinstance(message, str)
+            session.set_structure_visible(False)
+            # A frame may arrive first; take the next text (control) message.
+            for _ in range(5):
+                message = await asyncio.wait_for(ws.recv(), timeout=5)
+                if isinstance(message, str):
+                    break
             event = json.loads(message)
-            assert event == {"type": "axis", "visible": False}
+            assert event == {"type": "structure_visible", "value": False}
 
     asyncio.run(scenario())
 

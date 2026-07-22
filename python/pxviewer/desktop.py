@@ -2070,10 +2070,6 @@ class ControlsWindow:
 
         viewer = QGroupBox("Viewer")
         vg = QVBoxLayout(viewer)
-        self._axis_check = QCheckBox("Show XYZ axes")
-        self._axis_check.setChecked(False)  # the viewer hides them by default
-        self._axis_check.toggled.connect(lambda on: self._desktop.set_axis(on))
-        vg.addWidget(self._axis_check)
 
         # How much density a map from reflections opens with. 15 A is a starting point,
         # not a convention we can point at, so it is adjustable rather than baked in.
@@ -4315,9 +4311,10 @@ class DesktopApp:
         return [f"ws://{self._host}:{m['session'].port}" for m in self._models if m["visible"]]
 
     def _model_ws(self) -> List[str]:
-        """The sockets the page connects to — only the visible models. A hidden model is
-        simply dropped from the recomposed scene on reload; that is the whole hide."""
-        return self._visible_model_ws()
+        """Every model's socket. Hiding is a render skip in place (the model stays connected,
+        replaying its own hidden state on reconnect), not a drop — so the page keeps them
+        all, and a hidden model reappears the instant it is shown without a reload."""
+        return [f"ws://{self._host}:{m['session'].port}" for m in self._models]
 
     def _ensure_dummy_ws(self) -> str:
         """A persistent 1-atom control session: carries volume commands and keeps the
@@ -4338,41 +4335,34 @@ class DesktopApp:
         return f"ws://{self._host}:{self._dummy.port}"
 
     def _control_session(self):
-        """A session the viewport is actually connected to, for volume commands.
-
-        It has to be one of the sockets ``_reload_viewport`` put in the page — only the
-        *visible* models. A hidden active model is the wrong answer: its socket has no
-        clients, so every volume command would quietly vanish. The dummy is the fallback
-        when no model is visible.
-        """
+        """A session the viewport is connected to, for volume commands. Every model stays
+        connected (hiding is a render skip, not a drop), so the active model always carries
+        them; the dummy is the fallback only when there is no model at all."""
         entry = self._model_entry(self._active_model_id)
-        if entry is not None and entry["visible"]:
+        if entry is not None:
             return entry["session"]
-        visible = next((m["session"] for m in self._models if m["visible"]), None)
-        if visible is not None:
-            return visible
-        return self._dummy
+        return self._models[0]["session"] if self._models else self._dummy
 
     def _write_volume_scene(self) -> Optional[str]:
-        """Write an MVSJ composing the visible volumes; return its URL path (or None).
+        """Write an MVSJ composing every volume; return its URL path (or None).
 
-        A hidden volume is left out of the scene entirely — that is how it hides, on the
-        reload that recomposes this. Only the first volume is focused, and only when no model
-        is there to centre on."""
-        visible = [v for v in self._volumes if v["visible"]]
-        if not visible:
+        Hidden volumes stay in the scene (a render skip, re-applied after the reload by
+        ``_reassert_hidden_volumes``) so a reload never rebuilds an isosurface from empty.
+        Only the first visible volume is focused, and only when no model is there to centre."""
+        if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
+        first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
-        for i, v in enumerate(visible):
+        for v in self._volumes:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 isosurface_kind="relative", isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
-                focus=(focus_first and i == 0),
+                focus=(focus_first and v is first_visible),
             ))
         self._scene_counter += 1
         scene_dir = self._webapp.volume_dir / "scene" / str(self._scene_counter)
@@ -4391,6 +4381,7 @@ class DesktopApp:
             # No model to carry volume commands / keep the page alive -> use the dummy.
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
+        self._reassert_hidden_volumes()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -5409,11 +5400,6 @@ class DesktopApp:
         self._minimize_stop.set()
         self._status("stopping minimization…")
 
-    def set_axis(self, visible: bool) -> None:
-        control = self._control_session()
-        if control is not None:
-            control.set_axis(bool(visible))
-
     def reset_view(self) -> None:
         """Reframe the viewport camera to fit the whole scene."""
         self._focused_residue = None  # space-bar nav restarts from the top after a reset
@@ -5728,6 +5714,20 @@ class DesktopApp:
             if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
                 self._send_volume_clip(entry)
 
+    def _reassert_hidden_volumes(self) -> None:
+        """After a reload the fresh scene draws every map; re-hide the ones marked hidden.
+        A render skip on the current control session (models replay their own hidden state on
+        reconnect, but a volume lives in the shared scene, so the app re-asserts it)."""
+        control = self._control_session()
+        if control is None:
+            return
+        for entry in self._volumes:
+            if not entry["visible"]:
+                try:
+                    control.set_volume_visible(entry["ref"], False)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
     def _send_volume_clip(self, entry) -> None:
         """Push a volume's whole clip: the slab and the radius are one thing to the
         viewer, so a change to either re-sends both."""
@@ -5803,20 +5803,20 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
-        """Show or hide a loaded model in the viewport.
+        """Show or hide a loaded model in the viewport, in place.
 
-        Hiding recomposes the scene without this model and reloads the page; showing puts it
-        back. Refused on **software** WebGL (silently — an internal caller, add-hydrogens,
-        hides the H-less original, and must not warn or crash), where the reload segfaults the
-        renderer once a map is in the scene; there the tree checkbox is non-checkable and a
-        click flashes why. Maps hide the same way."""
+        Toggles the model's own render visibility — no reload, so the other objects do not
+        flicker. Refused on **software** WebGL (silently — an internal caller, add-hydrogens,
+        hides the H-less original, and must not warn or crash), where even a render-state
+        change segfaults the renderer; there the tree checkbox is non-checkable and a click
+        flashes why. Maps hide the same way."""
         entry = self._model_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
         if not self._can_hide:
             return  # software: hiding any drawn object segfaults; the model stays shown
         entry["visible"] = bool(visible)
-        self._reload_viewport()  # recompose with only the visible objects
+        entry["session"].set_structure_visible(bool(visible))  # a render skip, in place
         self._emit_loaded_changed()
 
     def remove_model(self, mid: str) -> None:
@@ -5934,17 +5934,20 @@ class DesktopApp:
         return vid
 
     def set_volume_visible(self, vid: str, visible: bool) -> None:
-        """Show or hide a volume by recomposing the scene without it and reloading.
+        """Show or hide a volume in place — a render skip on its isosurface, no reload, so
+        the model and other maps do not flicker.
 
         Refused on **software** WebGL (its checkbox is non-checkable, a click flashes why),
-        where the isosurface teardown a reload runs segfaults the renderer — same as models."""
+        where touching the isosurface's render state segfaults the renderer — same as models."""
         entry = self._volume_entry(vid)
         if entry is None or entry["visible"] == bool(visible):
             return
         if not self._can_hide:
             return  # software: hiding a map's isosurface segfaults; it stays shown
         entry["visible"] = bool(visible)
-        self._reload_viewport()  # a hidden volume is simply left out of the recomposed scene
+        control = self._control_session()
+        if control is not None:
+            control.set_volume_visible(entry["ref"], bool(visible))  # a render skip, in place
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:

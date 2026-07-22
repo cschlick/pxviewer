@@ -18,6 +18,9 @@ function App() {
             // custom property, so `set_interactions` from Python has something
             // to add. Not in the minimal default spec we start from.
             s.behaviors.push(PluginSpec.Behavior(Interactions));
+            // No XYZ axes indicator — off from the start (in the default props, so it never
+            // flashes on a fresh page), and there is no toggle for it.
+            s.canvas3d = { ...(s.canvas3d || {}), camera: { helper: { axes: { name: 'off', params: {} } } } } as any;
             return s;
         },
     });

@@ -1182,8 +1182,8 @@ def test_volume_appearance_controls(qapp, tmp_path):
 
 def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
     """Volume commands ride a model's socket, so the control session must be one the page is
-    connected to — only the *visible* models. Hiding the active model drops it from the page,
-    so commands fall to another visible model; the dummy is the fallback when none is."""
+    connected to. Hiding is a render skip in place, so every model stays connected — the
+    active model always carries commands, and the dummy is the fallback only with no model."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1204,13 +1204,14 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
         assert app._active_model_id == b
         assert app._control_session() is app.session_for(b)
 
-        # Hide the active model -> it leaves the page, so commands fall to the visible one.
+        # Hide the active model -> it stays connected (render skip), so it keeps carrying them.
         app.set_model_visible(b, False)
-        assert f"ws://{app._host}:{app.session_for(b).port}" not in app._model_ws()
-        assert app._control_session() is app.session_for(a)
+        assert f"ws://{app._host}:{app.session_for(b).port}" in app._model_ws()
+        assert app._control_session() is app.session_for(b)
 
-        # Hide it too -> no visible model -> the page (and commands) fall to the dummy.
-        app.set_model_visible(a, False)
+        # Remove every model -> the page (and commands) fall to the dummy.
+        app.remove_model(b)
+        app.remove_model(a)
         app._ensure_dummy_ws()
         assert app._control_session() is app._dummy
     finally:
@@ -1218,10 +1219,9 @@ def test_volume_commands_go_to_a_session_the_viewport_is_connected_to(qapp):
 
 
 def test_software_pins_a_model_and_says_why_on_click(qapp):
-    """On software WebGL hiding a model segfaults (the reload that redraws the scene touches
-    the fragile GL), so models are pinned like maps: the checkbox is non-checkable and refused
-    silently (an internal caller, add-hydrogens, hides the H-less original and must not warn),
-    and a click on the box flashes why. Both hide normally on hardware."""
+    """On software WebGL touching a model's render state segfaults, so models are pinned like
+    maps: the checkbox is non-checkable and refused silently (an internal caller, add-hydrogens,
+    hides the H-less original and must not warn), and a click flashes why. Both hide on hardware."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1239,27 +1239,28 @@ def test_software_pins_a_model_and_says_why_on_click(qapp):
                     if n.data(0, Qt.ItemDataRole.UserRole) == ("model", a))
         assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)  # non-checkable
 
-        warned, loads = [], []
+        warned, calls = [], []
         app.bridge.status_warned.connect(warned.append)
-        ol = app._viewport.load
-        app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
+        sess = app.session_for(a)
+        ov = sess.set_structure_visible
+        sess.set_structure_visible = lambda v: (calls.append(v), ov(v))[1]
 
-        # The setter refuses silently (add-hydrogens relies on this — no warn, no reload).
+        # The setter refuses silently (add-hydrogens relies on this — no warn, no toggle).
         app.set_model_visible(a, False)
         assert app._model_entry(a)["visible"] is True
-        assert loads == [] and warned == []
+        assert calls == [] and warned == []
 
         # But a click on the check column flashes why — touching nothing.
         ctl._on_tree_item_clicked(node, 0)
         assert warned and "hardware WebGL" in warned[-1]
-        assert loads == []
+        assert calls == []
     finally:
         app.stop()
 
 
-def test_hiding_a_model_reloads_the_scene_without_it(qapp):
-    """On hardware a model hides by recomposing the scene without it and reloading — no clip,
-    no in-place GPU mutation. Its socket leaves the page; showing puts it back."""
+def test_hiding_a_model_is_a_render_skip_not_a_reload(qapp):
+    """On hardware a model hides by toggling its own render visibility in place — no reload,
+    so the other objects never flicker; it stays connected and showing flips it back."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1270,26 +1271,26 @@ def test_hiding_a_model_reloads_the_scene_without_it(qapp):
     app._webapp.start()
     try:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
-        app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")  # keeps the page alive
         ws_a = f"ws://{app._host}:{app.session_for(a).port}"
-        loads = []
+        calls, loads = [], []
+        sess = app.session_for(a)
+        ov = sess.set_structure_visible
+        sess.set_structure_visible = lambda v: (calls.append(v), ov(v))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
         app.set_model_visible(a, False)
-        assert ws_a not in app._model_ws()   # dropped from the recomposed scene
-        assert len(loads) == 1                # a reload, the clean teardown
-
         app.set_model_visible(a, True)
-        assert ws_a in app._model_ws()        # back
-        assert len(loads) == 2
+        assert loads == []                 # no reload -> no flicker of other objects
+        assert calls == [False, True]      # hidden then shown, in place
+        assert ws_a in app._model_ws()     # stays connected the whole time
     finally:
         app.stop()
 
 
-def test_hiding_a_map_reloads_the_scene_without_it(qapp):
-    """On hardware a map hides by leaving it out of the recomposed scene and reloading — no
-    isosurface park in place. Its ref leaves the scene; showing reloads with it back."""
+def test_hiding_a_map_is_a_render_skip_not_a_reload(qapp):
+    """On hardware a map hides by toggling its isosurface visibility in place — no reload. It
+    stays in the scene (a reload would re-hide it via _reassert_hidden_volumes)."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1302,10 +1303,13 @@ def test_hiding_a_map_reloads_the_scene_without_it(qapp):
     app = DesktopApp(port=0, can_hide=True)
     app._webapp.start()
     try:
-        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")  # keeps the page alive
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
         ref = app._volume_entry(vid)["ref"]
-        loads = []
+        control = app._control_session()
+        calls, loads = [], []
+        ov = control.set_volume_visible
+        control.set_volume_visible = lambda r, v: (calls.append((r, v)), ov(r, v))[1]
         ol = app._viewport.load
         app._viewport.load = lambda u, *ar, **k: (loads.append(u), ol(u, *ar, **k))[1]
 
@@ -1313,15 +1317,14 @@ def test_hiding_a_map_reloads_the_scene_without_it(qapp):
             path = app._write_volume_scene()
             return "" if path is None else (app._webapp.volume_dir / path.lstrip("/")).read_text()
 
-        assert ref in scene_text()  # visible: in the scene
-
         app.set_volume_visible(vid, False)
-        assert len(loads) == 1            # hidden by a reload without it
-        assert ref not in scene_text()    # the only volume, now left out
+        assert loads == []                # no reload
+        assert calls[-1] == (ref, False)  # hidden in place
+        assert ref in scene_text()        # still baked in the scene (reassert re-hides it)
 
         app.set_volume_visible(vid, True)
-        assert len(loads) == 2
-        assert ref in scene_text()        # back
+        assert loads == []
+        assert calls[-1] == (ref, True)
     finally:
         app.stop()
 
@@ -2070,7 +2073,7 @@ def test_selection_chip_highlight(qapp):
 
 
 def test_tools_and_appearance_setters(qapp):
-    """Measure-from-selection, colour/interactions setters, clashes and axis."""
+    """Measure-from-selection, colour/interactions setters, clashes, reset-view."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2104,7 +2107,6 @@ def test_tools_and_appearance_setters(qapp):
         app.set_probe_channel(0, True)
         app.set_probe_channel(0, False)
         app.clear_measurements()
-        app.set_axis(True)
         app.reset_view()
     finally:
         app.stop()
@@ -2204,9 +2206,9 @@ def test_new_model_focuses_appearance(qapp):
         app.stop()
 
 
-def test_axis_off_by_default_help_and_demos_menu(qapp):
-    """XYZ axes start hidden. Help is a docs placeholder now; guided tutorials live in the
-    Demos menu, in a labelled Tutorials section below the Examples."""
+def test_help_and_demos_menu(qapp):
+    """Help is a docs placeholder now; guided tutorials live in the Demos menu, in a
+    labelled Tutorials section below the Examples."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2217,7 +2219,6 @@ def test_axis_off_by_default_help_and_demos_menu(qapp):
     app._webapp.start()
     try:
         controls = app._controls
-        assert controls._axis_check.isChecked() is False  # axes off by default
         controls._on_help()
         assert "documentation" in controls._status_label.text().lower()
 
