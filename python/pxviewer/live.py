@@ -14,6 +14,11 @@ that topology. See `ATOM_IDENTITY_CONTRACT` below.
 Server -> client (binary, little-endian; first uint32 is a tag):
   - tag 0 TOPOLOGY : [u32 tag=0][BinaryCIF bytes]
   - tag 1 FRAME    : [u32 tag=1][u32 frameIndex][f32 * 3N]  (x0,y0,z0,x1,y1,z1,...)
+  - tag 5 DELTA    : [u32 tag=5][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n]
+                     Only the atoms that moved. A drag moves a fixed zone of ~130 atoms
+                     whatever the structure's size, so sending the whole conformation
+                     makes a frame cost O(model) for O(zone) of actual news. The client
+                     holds the last full conformation and patches it.
 
 Server -> client (UTF-8 JSON text control messages):
   - {"type": "highlight", "atoms": <index-set>}                show selection overlay
@@ -93,6 +98,7 @@ _TAG_FRAME = 1
 _TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
 _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colours)
 _TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
+_TAG_FRAME_DELTA = 5  # only the atoms that moved: [u32 n][u32 * n indices][f32 * 3n]
 
 # probe2 dot overlay channels — independently toggleable (full surface vs clashes).
 PROBE_CONTACTS = 0
@@ -624,17 +630,35 @@ class LiveSession:
 
     # -- python -> scene -------------------------------------------------
 
-    def push(self, coords: Any) -> int:
+    def push(self, coords: Any, changed: Any = None) -> int:
         """Broadcast a coordinate frame to all connected clients.
 
         ``coords`` is any (N,3) array-like in the topology's atom order. Returns the
         frame index. Thread-safe: may be called from any thread.
+
+        ``changed`` names the atoms that actually moved (positional indices). Everything
+        else in ``coords`` must be identical to the previous frame — the client patches
+        its held conformation rather than replacing it, so the wire cost is the size of
+        the change, not of the model. A drag moves a fixed ~130-atom zone whether the
+        structure has 660 atoms or 66,000, so this is the difference between a frame
+        costing O(zone) and O(model). Omit it and the whole conformation is sent.
+
+        The full frame is always kept for replay: a client connecting mid-drag has no
+        conformation to patch, so it is sent the complete one (see ``_handler``).
         """
         arr = _coords_to_f32(coords, self._n_atoms)
         index = self._frame_index
         self._frame_index += 1
-        payload = struct.pack("<II", _TAG_FRAME, index) + arr.tobytes()
-        self._last_frame = payload
+        self._last_frame = struct.pack("<II", _TAG_FRAME, index) + arr.tobytes()
+
+        payload = self._last_frame
+        if changed is not None:
+            idx = np.ascontiguousarray(np.asarray(changed, dtype=np.uint32).ravel())
+            # Only worth it while the change really is small; a delta covering most of
+            # the model is the same bytes plus an index per atom.
+            if len(idx) and len(idx) * 2 < self._n_atoms:
+                payload = (struct.pack("<III", _TAG_FRAME_DELTA, index, len(idx))
+                           + idx.tobytes() + arr[idx].tobytes())
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, payload)

@@ -19,6 +19,7 @@ websockets = pytest.importorskip("websockets")
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
+_TAG_FRAME_DELTA = 5
 
 
 def _sites(n=4):
@@ -52,6 +53,86 @@ def test_client_receives_topology_and_frame(session):
             coords = np.frombuffer(frame[8:], dtype="<f4").reshape(-1, 3)
             assert coords.shape == (4, 3)
             assert coords[1].tolist() == pytest.approx([1.0, 2.0, 0.0])
+
+    asyncio.run(scenario())
+
+
+@pytest.fixture
+def big_session():
+    """Enough atoms that a small change is worth sending as a delta (see ``push``)."""
+    s = LiveSession.from_sites(_sites(20))
+    s.start(port=0)
+    try:
+        yield s
+    finally:
+        s.stop()
+
+
+def _grid(n=20):
+    return np.array([[i, i, i] for i in range(n)], dtype=float)
+
+
+def test_push_sends_only_the_atoms_that_changed(big_session):
+    """``changed`` sends a delta: just those atoms, at their absolute positions.
+
+    A drag moves a fixed zone whatever the structure's size, so a whole-conformation frame
+    spends O(model) to say O(zone) of news. The client patches what it holds.
+    """
+    async def scenario():
+        url = f"ws://{big_session.host}:{big_session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+
+            full = _grid()
+            big_session.push(full)
+            await asyncio.wait_for(ws.recv(), timeout=5)
+
+            moved = full.copy()
+            moved[[1, 3]] += 5.0
+            big_session.push(moved, changed=[1, 3])
+            frame = await asyncio.wait_for(ws.recv(), timeout=5)
+
+            tag, _index, n = struct.unpack_from("<III", frame, 0)
+            assert tag == _TAG_FRAME_DELTA
+            assert n == 2
+            indices = np.frombuffer(frame[12:12 + 4 * n], dtype="<u4")
+            coords = np.frombuffer(frame[12 + 4 * n:], dtype="<f4").reshape(-1, 3)
+            assert indices.tolist() == [1, 3]
+            # Absolute positions, not offsets — so applying only the newest delta is right.
+            assert coords[0].tolist() == pytest.approx([6.0, 6.0, 6.0])
+            assert coords[1].tolist() == pytest.approx([8.0, 8.0, 8.0])
+            # Smaller than the whole conformation it stands in for.
+            assert len(frame) < 8 + full.size * 4
+
+    asyncio.run(scenario())
+
+
+def test_push_falls_back_to_a_whole_frame_when_most_of_it_changed(big_session):
+    """A delta covering most of the model is the same bytes plus an index per atom, so
+    past a point the whole conformation is the cheaper thing to send."""
+    async def scenario():
+        url = f"ws://{big_session.host}:{big_session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            big_session.push(_grid(), changed=list(range(20)))   # every atom
+            frame = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert struct.unpack_from("<I", frame, 0)[0] == _TAG_FRAME
+
+    asyncio.run(scenario())
+
+
+def test_a_client_joining_mid_drag_gets_a_whole_frame(big_session):
+    """A delta is meaningless without a conformation to patch, so replay stays whole."""
+    async def scenario():
+        url = f"ws://{big_session.host}:{big_session.port}"
+        coords = _grid()
+        big_session.push(coords, changed=[1])  # a delta, broadcast before anyone connects
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            frame = await asyncio.wait_for(ws.recv(), timeout=5)
+            assert struct.unpack_from("<I", frame, 0)[0] == _TAG_FRAME
+            got = np.frombuffer(frame[8:], dtype="<f4").reshape(-1, 3)
+            assert got == pytest.approx(coords)
 
     asyncio.run(scenario())
 

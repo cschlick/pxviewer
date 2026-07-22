@@ -388,16 +388,16 @@ const MarkupMesh = PluginStateTransform.BuiltIn({
 });
 type MarkupMesh = typeof MarkupMesh;
 
-function deinterleave(flat: ArrayLike<number>, n: number) {
-    const x = new Float32Array(n);
-    const y = new Float32Array(n);
-    const z = new Float32Array(n);
+/** Split an interleaved [x0,y0,z0,x1,...] frame into existing per-axis arrays. */
+function deinterleaveInto(
+    flat: ArrayLike<number>, n: number,
+    x: Float32Array, y: Float32Array, z: Float32Array,
+) {
     for (let i = 0; i < n; i++) {
         x[i] = flat[i * 3];
         y[i] = flat[i * 3 + 1];
         z[i] = flat[i * 3 + 2];
     }
-    return { x, y, z };
 }
 
 // -- colour by per-atom attribute ----------------------------------------
@@ -474,6 +474,14 @@ export class LiveViewer {
     private structure!: StateObjectSelector<SO.Molecule.Structure>;
     private version = 0;
     private nAtoms = 0;
+    // The conformation as it currently stands, held so a frame can arrive as a delta:
+    // a drag moves a fixed ~130-atom zone, and patching these is O(zone) where rebuilding
+    // them from a whole streamed conformation is O(model). See `updateDelta`.
+    private cx!: Float32Array;
+    private cy!: Float32Array;
+    private cz!: Float32Array;
+    private frameDirty = false;   // the held conformation is newer than the committed one
+    private committing = false;
     private highlightIndices: number[] = [];
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
@@ -525,12 +533,16 @@ export class LiveViewer {
         const conf = model.atomicConformation;
 
         // Seed the live trajectory with the topology's own coordinates so there is
-        // something on screen before the first streamed frame arrives.
+        // something on screen before the first streamed frame arrives. These are also the
+        // conformation deltas are patched into, so the first delta has a base to apply to.
+        this.cx = Float32Array.from(conf.x);
+        this.cy = Float32Array.from(conf.y);
+        this.cz = Float32Array.from(conf.z);
         const build = plugin.state.data.build().to(topologyModel).apply(LiveTrajectory, {
             version: this.version,
-            x: Float32Array.from(conf.x),
-            y: Float32Array.from(conf.y),
-            z: Float32Array.from(conf.z),
+            x: this.cx.slice(),
+            y: this.cy.slice(),
+            z: this.cz.slice(),
         });
         this.liveTraj = build.selector;
         await build.commit();
@@ -621,9 +633,65 @@ export class LiveViewer {
 
     /** Swap in a new frame given interleaved [x0,y0,z0,x1,...] coordinates. */
     async update(interleaved: ArrayLike<number>) {
-        const { x, y, z } = deinterleave(interleaved, this.nAtoms);
+        deinterleaveInto(interleaved, this.nAtoms, this.cx, this.cy, this.cz);
+        await this.scheduleCommit();
+    }
+
+    /**
+     * Swap in a frame that names only the atoms which moved: `indices[i]` is at
+     * `xyz[3i..3i+2]`. Everything else keeps the conformation already held.
+     *
+     * This is the drag's shape made explicit. cctbx only ever moves a fixed zone of ~130
+     * atoms, whatever the structure's size, so a whole-conformation frame spends O(model)
+     * to say O(zone) of news — on the wire, and again unpacking it here. Patching costs
+     * the size of the change instead.
+     */
+    async updateDelta(indices: Uint32Array, xyz: Float32Array) {
+        const n = indices.length;
+        for (let i = 0; i < n; i++) {
+            const a = indices[i];
+            this.cx[a] = xyz[i * 3];
+            this.cy[a] = xyz[i * 3 + 1];
+            this.cz[a] = xyz[i * 3 + 2];
+        }
+        await this.scheduleCommit();
+    }
+
+    /**
+     * Commit the held conformation, coalescing bursts: while one commit is in flight,
+     * further frames only mark it dirty, and a single follow-up commit picks up whatever
+     * the conformation has become.
+     *
+     * Note where this sits — *after* the frame has been patched in, never before. Frames
+     * cannot simply be dropped on arrival: a delta names only its own zone, so skipping
+     * one whose zone differs from the next (a released drag followed by a grab elsewhere)
+     * would strand the first zone's atoms at stale positions. Patching every frame and
+     * committing only the newest state is both correct and cheap, because patching is
+     * O(zone) while committing is what actually costs.
+     */
+    private async scheduleCommit() {
+        this.frameDirty = true;
+        if (this.committing) return;
+        this.committing = true;
+        try {
+            while (this.frameDirty) {
+                this.frameDirty = false;   // cleared first: anything arriving now re-dirties
+                await this.commitFrame();
+            }
+        } finally {
+            this.committing = false;
+        }
+    }
+
+    /** Push the held conformation into the state tree as the next frame. */
+    private async commitFrame() {
         this.version += 1;
         const version = this.version;
+        // Copies, not the held arrays themselves: the transform hands them to the Model
+        // without copying, so writing the next frame into them would retroactively move
+        // the frame Mol* is still working with. A typed-array copy is a memcpy — far
+        // cheaper than the per-element unpacking it replaces.
+        const x = this.cx.slice(), y = this.cy.slice(), z = this.cz.slice();
         await this.plugin.state.data
             .build()
             .to(this.liveTraj)
@@ -1177,6 +1245,9 @@ class InteractiveQuality {
     private lowered = false;
     private timer: any = null;
     private saved: { occlusion?: string; multiSample?: string } = {};
+    private geometryLowered = false;
+    private geometryTimer: any = null;
+    private savedQuality: [string, string][] = [];
 
     constructor(private plugin: PluginContext) {}
 
@@ -1185,6 +1256,73 @@ class InteractiveQuality {
         if (!this.lowered) this.lower();
         if (this.timer !== null) clearTimeout(this.timer);
         this.timer = setTimeout(() => this.restore(), QUALITY_RESTORE_MS);
+    }
+
+    /**
+     * Report that *coordinates* are moving, not just the view. Drops the screen effects as
+     * `ping` does, and additionally coarsens the representation's geometry.
+     *
+     * Kept separate from `ping` on purpose. Coarsening geometry only pays when the geometry
+     * is being rebuilt every frame, which is what streamed coordinates do and what merely
+     * turning the camera does not — the mesh is unchanged while you rotate, so lowering it
+     * there would buy nothing and cost two rebuilds (one down, one back).
+     *
+     * It is worth a lot when it does apply: at 2737 atoms a cartoon's per-frame rebuild
+     * goes 17.5 ms -> 6.2 ms between 'auto' and 'low', and the representation is ~92% of
+     * that frame's cost. Ball-and-stick shows no such gain, but it is already the cheaper
+     * of the two and loses nothing by being included.
+     */
+    pingCoordinates() {
+        this.ping();
+        if (!this.geometryLowered) this.lowerGeometry();
+        if (this.geometryTimer !== null) clearTimeout(this.geometryTimer);
+        this.geometryTimer = setTimeout(() => this.restoreGeometry(), QUALITY_RESTORE_MS);
+    }
+
+    private representationCells(): any[] {
+        return Array.from(this.plugin.state.data.cells.values()).filter((c: any) =>
+            c?.transform?.transformer &&
+            String(c.transform.transformer.id).includes('representation-3d'));
+    }
+
+    private lowerGeometry() {
+        let cells: any[] = [];
+        try { cells = this.representationCells(); } catch { return; }
+        if (!cells.length) return;
+        this.geometryLowered = true;
+        this.savedQuality = [];
+        const b = this.plugin.state.data.build();
+        for (const c of cells) {
+            const q = c.transform.params?.type?.params?.quality;
+            this.savedQuality.push([c.transform.ref, q ?? 'auto']);
+            b.to(c.transform.ref).update((o: any) => ({
+                ...o, type: { ...o.type, params: { ...o.type.params, quality: 'low' } },
+            }));
+        }
+        void b.commit();
+    }
+
+    private restoreGeometry() {
+        this.geometryTimer = null;
+        if (!this.geometryLowered) return;
+        this.geometryLowered = false;
+        const saved = this.savedQuality;
+        this.savedQuality = [];
+        if (!saved.length) return;
+        // Re-resolve by ref: a representation can be rebuilt mid-drag (Python can replace
+        // the whole set), and putting quality back on a cell that no longer exists throws.
+        const live = new Set<string>();
+        try { for (const c of this.representationCells()) live.add(c.transform.ref); } catch { return; }
+        const b = this.plugin.state.data.build();
+        let any = false;
+        for (const [ref, quality] of saved) {
+            if (!live.has(ref)) continue;
+            any = true;
+            b.to(ref).update((o: any) => ({
+                ...o, type: { ...o.type, params: { ...o.type.params, quality } },
+            }));
+        }
+        if (any) void b.commit();
     }
 
     private lower() {
@@ -1274,6 +1412,7 @@ const TAG_FRAME = 1;
 const TAG_ATTRIBUTE = 2;
 const TAG_DOTS = 3;
 const TAG_MAP = 4;
+const TAG_FRAME_DELTA = 5;  // only the atoms that moved; see LiveViewer.updateDelta
 // Dot channels >= this are validation markers (drawn large); must match
 // pxviewer.validation.CHANNEL_BASE.
 const VALIDATION_CHANNEL_BASE = 10;
@@ -1715,30 +1854,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let viewer: LiveViewer | null = null;
     let building = false;
 
-    // Streamed coordinate frames, coalesced. A frame costs a state re-run plus a draw, and
-    // a drag can produce them faster than that; applying every one in turn does not make
-    // the picture more current, it makes it *lag*, because each late frame still has to be
-    // drawn before the next is even started. Only the newest conformation is worth drawing
-    // — the older ones describe positions the atoms have already left — so keep one slot
-    // and let arrivals overwrite it while an update is in flight.
-    //
-    // The camera path above coalesces for the same reason, and setMapBox keeps only the
-    // latest window; this is the same rule on the hottest path.
-    let pendingFrame: Float32Array | null = null;
-    let applyingFrame = false;
-    const applyFrames = async () => {
-        if (applyingFrame) return;
-        applyingFrame = true;
-        try {
-            while (pendingFrame && viewer) {
-                const coords = pendingFrame;
-                pendingFrame = null;   // cleared first: anything arriving now is newer
-                await viewer.update(coords);
-            }
-        } finally {
-            applyingFrame = false;
-        }
-    };
+    // Streamed frames are coalesced inside LiveViewer (see scheduleCommit): a drag can
+    // produce them faster than one can be drawn, and drawing every stale conformation in
+    // turn does not make the picture more current, it makes it lag. The camera path above
+    // coalesces for the same reason, and setMapBox keeps only the latest window.
     // Per-atom attribute values (colour-by-attribute), received as binary and
     // referenced by key from representation specs. Held independent of the viewer,
     // since they may arrive while it is still building.
@@ -2093,11 +2212,17 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
         } else if (tag === TAG_FRAME && viewer) {
-            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8. Each message
-            // owns its buffer, so holding the view until it is applied is safe.
-            pendingFrame = new Float32Array(buffer, 8);
-            quality.ping();   // atoms are moving: hold the cheap image until they stop
-            void applyFrames();
+            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
+            quality.pingCoordinates();  // geometry is being rebuilt, not just redrawn
+            await viewer.update(new Float32Array(buffer, 8));
+        } else if (tag === TAG_FRAME_DELTA && viewer) {
+            // [u32 tag][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n] — only the atoms
+            // that moved, at their absolute positions. See LiveViewer.updateDelta.
+            const n = new DataView(buffer).getUint32(8, true);
+            const indices = new Uint32Array(buffer, 12, n);
+            const xyz = new Float32Array(buffer, 12 + n * 4, n * 3);
+            quality.pingCoordinates();
+            await viewer.updateDelta(indices, xyz);
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching

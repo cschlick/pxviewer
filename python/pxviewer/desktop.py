@@ -5332,14 +5332,19 @@ class DesktopApp:
         self._push_tug(trajectory[-1], force=True)  # the resting position, always shown
 
     def _push_tug(self, coords, force: bool = False) -> None:
-        """Stream a drag frame — paced, and never a repeat of the last.
+        """Stream a drag frame — paced, as a delta, and never a repeat of the last.
 
-        Each frame is a whole set of coordinates and the viewer re-derives geometry from
-        it; pushing them as fast as cctbx computes floods the render, and the frames back
-        up into visible lag. Capping the rate keeps the picture current instead. A frame
-        identical to the last is dropped outright — a settled geometry drag would
-        otherwise send the same conformation over and over. ``force`` bypasses the pacing
-        (not the de-dup) so a final resting frame is never dropped for arriving too soon.
+        Only the drag's zone can have moved, so the frame is sent as just those atoms and
+        the viewer patches its held conformation (see ``LiveSession.push``). That keeps a
+        frame's cost proportional to the zone rather than to the structure, which is what
+        the zone-limited minimizer already does on this side.
+
+        Still paced: the viewer now drops stale frames rather than queueing them, so
+        arriving early is harmless, but computing frames nobody will draw is wasted work
+        the drag itself wants. A frame identical to the last is dropped outright — a
+        settled geometry drag would otherwise send the same conformation over and over.
+        ``force`` bypasses the pacing (not the de-dup) so a final resting frame is never
+        dropped for arriving too soon.
         """
         if self._tug_session is None:
             return
@@ -5350,7 +5355,9 @@ class DesktopApp:
             return  # too soon; the next frame supersedes this one
         self._tug_last = coords
         self._tug_last_push = now
-        self._tug_session.push(coords)
+        # The zone is the only thing that can have moved; everything else is untouched.
+        zone = self._tug.indices if self._tug is not None else None
+        self._tug_session.push(coords, changed=zone)
         self._queue_live_diff(coords)  # follow the drag with a local difference map, if on
 
     def _end_tug(self) -> None:

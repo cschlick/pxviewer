@@ -195,6 +195,16 @@ class Tug:
         """How many atoms are free to move — the per-frame cost, not the model's size."""
         return len(self._indices)
 
+    @property
+    def indices(self) -> np.ndarray:
+        """Which atoms this drag can move, as positional indices into the full model.
+
+        Every atom outside this set is bit-for-bit unchanged for the whole drag, which is
+        what lets a frame be sent as a delta rather than a whole conformation (see
+        ``LiveSession.push``). Fixed when the drag starts.
+        """
+        return self._indices
+
     # -- internals -------------------------------------------------------
 
     def _pin(self, anchors: np.ndarray) -> None:
