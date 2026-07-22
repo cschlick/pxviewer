@@ -53,18 +53,20 @@ _MASK_RADIUS_DEFAULT = 3.0
 
 # Least time between coordinate frames pushed during a drag.
 #
-# This used to be 0.05 (~20 fps), set that low because unpaced frames backed up in the
-# viewer and read as lag. That was the right diagnosis of the wrong layer: the viewer now
-# coalesces frames (see connectLive — only the newest conformation is ever drawn, the rest
-# are dropped), so arriving too fast costs nothing and cannot queue. What the old cap did
-# instead was put a 50 ms floor under every drag update, which is itself most of what made
-# dragging feel detached from the pointer.
+# This was 0.05 (20 fps), then 0.025 (40 fps) — both set to keep frames from "backing up in
+# the viewer." That was the right diagnosis of the wrong layer, twice over. The viewer now
+# coalesces frames (see connectLive — only the newest conformation is drawn, the rest are
+# dropped), so arriving too fast cannot queue. And the perf HUD showed the gate was not a
+# ceiling on waste — it *was* the ceiling on motion: at 0.025 a real drag produced only
+# ~11-30 fps, and the frontend sat idle ~26 ms of every 31, drawing faster than frames
+# arrived (commit ~5 ms, draws 45/s, ~0 coalesced). The drag was starved, not flooded.
 #
-# 40 fps is a deliberate middle: a drag frame costs cctbx ~9 ms (zone-limited, so this
-# holds for any structure), and pushing much beyond the viewer's draw rate only burns CPU
-# that the drag itself wants. The pacing stays because it bounds that waste, not because
-# the viewer needs protecting any more.
-_TUG_PUSH_INTERVAL = 0.025
+# 8 ms is where measured production tops out — the per-frame floor is then the cctbx step
+# (~5 ms) plus GIL contention with the Qt thread, not this gate: a drag produces ~46 fps on
+# a 2737-atom structure and ~88 fps on ubiquitin, both at their natural ceiling, lowering it
+# further changes nothing. A small structure over-produces relative to the draw rate, but
+# that is exactly the case coalescing makes free, so favour not throttling the big ones.
+_TUG_PUSH_INTERVAL = 0.008
 
 # How long the post-release wind-down plays for. The minimization itself converges in a
 # fraction of a second; this stretches its states over a watchable settle so a released
