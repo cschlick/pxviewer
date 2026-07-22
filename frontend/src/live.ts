@@ -22,7 +22,6 @@ import { Mat4, Vec2, Vec3, Vec4, Tensor } from 'molstar/lib/mol-math/linear-alge
 import { Volume } from 'molstar/lib/mol-model/volume';
 import { VolumeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
 import { createVolumeRepresentationParams } from 'molstar/lib/mol-plugin-state/helpers/volume-representation-params';
-import { setSubtreeVisibility } from 'molstar/lib/mol-plugin/behavior/static/state';
 import { ColorNames } from 'molstar/lib/mol-util/color/names';
 import { CustomProperties } from 'molstar/lib/mol-model/custom-property';
 import { arrayMin, arrayMax, arrayMean, arrayRms } from 'molstar/lib/mol-util/array';
@@ -997,14 +996,6 @@ export class LiveViewer {
         this.mapVolume = undefined;
     }
 
-    /** Show or hide this model's whole structure in place — a render skip (no dispose, no
-     *  reload), so hiding one object never disturbs the others. */
-    setStructureVisible(visible: boolean) {
-        if (this.structure?.ref) {
-            setSubtreeVisibility(this.plugin.state.data, this.structure.ref, !visible);
-        }
-    }
-
     /** Remove a probe dot overlay: one `channel`, or all when omitted. */
     async clearProbeDots(channel?: number) {
         const channels = channel === undefined ? [...this.probeChannels.keys()] : [channel];
@@ -1448,13 +1439,6 @@ async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: num
     });
 }
 
-async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boolean) {
-    // A render skip on the map's isosurface (no dispose, no reload) — findVolumeReprCell
-    // waits for the cell, so this also works when replayed just after a scene reload.
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (repr) setSubtreeVisibility(plugin.state.data, repr.transform.ref, !visible);
-}
-
 async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
     const decoded = decodeColor(color);
     if (decoded === undefined) {
@@ -1848,7 +1832,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box', 'structure_visible',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
@@ -1871,10 +1855,6 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
             } else if (msg.type === 'map_box' && viewer) {
                 if (msg.action === 'clear') await viewer.clearMapBox();
-            } else if (msg.type === 'structure_visible' && viewer && typeof msg.value === 'boolean') {
-                viewer.setStructureVisible(msg.value);   // hide/show this model in place
-            } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.value === 'boolean') {
-                await setVolumeVisible(plugin, msg.ref, msg.value);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
