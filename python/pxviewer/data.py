@@ -10,7 +10,7 @@ module is only the schema — which categories and columns a topology has.
 """
 
 import dataclasses
-from typing import List
+from typing import List, Sequence
 
 import numpy as np
 
@@ -88,7 +88,70 @@ def _normalize_ss(secondary_structure) -> tuple:
     return helices, sheets
 
 
-def _atom_site_category(arrays: "AtomArrays", polymer: bool):
+def _label_asym_ids(chains: "Sequence[str]") -> List[str]:
+    """A distinct ``label_asym_id`` for each *contiguous* run of the author chain id.
+
+    An author chain id is not a chain in the mmCIF sense: a PDB routinely reuses one for
+    several blocks — a protein chain, then that chain's waters, then its ligands — which
+    are separate asyms. Writing the author id straight into ``label_asym_id`` tells the
+    reader those blocks are one chain, and Mol* duly gathers each label's atoms together.
+    That *reorders* them relative to the file, which silently breaks the contract this
+    whole protocol rests on: that streamed coordinates are positionally aligned to the
+    topology (see ATOM_IDENTITY_CONTRACT in live.py). Atoms after the first repeat land
+    on the wrong positions — 1TEC (chains E, I, E-waters, I-waters) moves by up to 58 A.
+
+    So label the runs A, B, C, ... in file order, which is what a real mmCIF does and what
+    keeps the reader's atom order equal to ours. ``auth_asym_id`` still carries the author
+    id, so the user sees the chain they expect.
+    """
+    labels: List[str] = []
+    current = None
+    index = -1
+    for chain in chains:
+        if chain != current:
+            current = chain
+            index += 1
+        n, name = index, ""
+        while True:                      # A..Z, AA..AZ, ... so the count is never a limit
+            name = chr(ord("A") + n % 26) + name
+            n = n // 26 - 1
+            if n < 0:
+                break
+        labels.append(name)
+    return labels
+
+
+def _ss_label_lookup(arrays: "AtomArrays", label_asym: "Sequence[str]"):
+    """``(author chain, residue number) -> label_asym_id``, for retargeting SS ranges.
+
+    Secondary structure arrives keyed by *author* chain, but ``_struct_conf`` and
+    ``_struct_sheet_range`` are matched on ``label_asym_id`` — so once the labels stop
+    being the author ids the ranges have to follow, or Mol* finds no residues in them and
+    the cartoon loses every helix and strand.
+
+    First occurrence wins. A repeated author chain is the polymer block followed by its
+    waters and ligands, and it is the polymer block that carries the secondary structure.
+    """
+    lookup: dict = {}
+    for chain, resseq, label in zip(arrays.chain, arrays.resseq, label_asym):
+        lookup.setdefault((str(chain), int(resseq)), label)
+    return lookup
+
+
+def _retarget_ss(rows: list, chain_at: int, beg_at: int, lookup: dict) -> list:
+    """Replace the author chain in each SS row with the label_asym_id it belongs to."""
+    out = []
+    for row in rows:
+        row = list(row)
+        label = lookup.get((str(row[chain_at]), int(row[beg_at])))
+        if label is None:
+            continue  # a range naming residues this topology does not have
+        row[chain_at] = label
+        out.append(tuple(row))
+    return out
+
+
+def _atom_site_category(arrays: "AtomArrays", polymer: bool, label_asym: "Sequence[str]"):
     """``_atom_site`` built directly from the columns — no per-atom Python."""
     cols = [
         bcif.number_column("id", arrays.id, bcif.INT32),
@@ -96,7 +159,7 @@ def _atom_site_category(arrays: "AtomArrays", polymer: bool):
         bcif.string_column("label_atom_id", arrays.name),
         bcif.string_column("label_comp_id", arrays.resname),
         bcif.number_column("label_seq_id", arrays.resseq, bcif.INT32),
-        bcif.string_column("label_asym_id", arrays.chain),
+        bcif.string_column("label_asym_id", label_asym),
         bcif.string_column("auth_asym_id", arrays.chain),
         bcif.number_column("auth_seq_id", arrays.resseq, bcif.INT32),
         bcif.number_column("Cartn_x", arrays.x, bcif.FLOAT32),
@@ -177,7 +240,8 @@ def encode_bcif_arrays(
     """
     if secondary_structure:
         polymer = True
-    cats = [_atom_site_category(arrays, polymer)]
+    label_asym = _label_asym_ids(arrays.chain)
+    cats = [_atom_site_category(arrays, polymer, label_asym)]
     if polymer:
         cats.append(bcif.category("_entity", 1, [
             bcif.string_column("id", ["1"]),
@@ -189,6 +253,10 @@ def encode_bcif_arrays(
         ]))
     if secondary_structure:
         helices, sheets = _normalize_ss(secondary_structure)
+        lookup = _ss_label_lookup(arrays, label_asym)
+        # Rows are (id, chain, beg, end) and (sheet_id, id, chain, beg, end).
+        helices = _retarget_ss(helices, chain_at=1, beg_at=2, lookup=lookup)
+        sheets = _retarget_ss(sheets, chain_at=2, beg_at=3, lookup=lookup)
         if helices:
             cats.append(_struct_conf_category(helices))
         if sheets:
