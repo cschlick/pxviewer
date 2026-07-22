@@ -2201,6 +2201,66 @@ def test_active_model_radio(qapp):
         app.stop()
 
 
+def test_hiding_an_object_does_not_rebuild_the_appearance_pane(qapp):
+    """Showing or hiding an object must leave the Appearance pane alone.
+
+    The pane is rebuilt from _on_loaded_changed, which runs on *any* change to the object
+    list — so a visibility toggle tore its widgets down and rebuilt them, and it visibly
+    flickered on every checkbox click. Nothing in the pane depends on visibility (a hidden
+    object is still editable here), so an unchanged pane must be left standing.
+    """
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    import numpy as np
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    app = DesktopApp(port=0, can_hide=True)
+    app._webapp.start()
+    try:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "map")
+
+        controls = app._controls
+        rebuilds = []
+        real = controls._clear_layout
+        controls._clear_layout = lambda lay: (
+            rebuilds.append(True) if lay is controls._appearance_layout else None, real(lay))[1]
+
+        # Focus a model, then hide/show things — none of it changes what the pane shows.
+        controls._update_appearance("model", b)
+        rebuilds.clear()
+
+        app.set_model_visible(a, False)
+        app.set_model_visible(a, True)
+        app.set_volume_visible(vid, False)
+        app.set_volume_visible(vid, True)
+        assert rebuilds == []                       # the flicker
+        assert controls._focused == ("model", b)    # and focus is untouched
+
+        # Hiding the focused object itself is still no reason to rebuild — it stays editable.
+        app.set_model_visible(b, False)
+        assert rebuilds == []
+        assert controls._focused == ("model", b)
+
+        # But a real appearance change must still rebuild it. Get the pane genuinely showing
+        # 'cartoon' first (set_model_representation does not republish the list — its own
+        # dropdown already shows the new value — so republish explicitly), then switch it.
+        app.set_model_representation(b, "cartoon")
+        app._emit_loaded_changed()
+        rebuilds.clear()
+
+        app.ensure_atoms_shown(b)  # cartoon -> ball-and-stick, and republishes the list
+        assert app._model_entry(b)["rep"] == "ball-and-stick"
+        assert rebuilds != []
+    finally:
+        app.stop()
+
+
 def test_appearance_follows_active_model(qapp):
     """Activating a model via its radio re-points the Appearance pane at it, so its
     dropdowns edit that model — not the previously focused one — and each model keeps

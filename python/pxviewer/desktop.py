@@ -84,6 +84,10 @@ _MARKER_COLOR = [255, 90, 90]
 _TREE_MIN_HEIGHT = 150
 _TREE_MAX_HEIGHT = 440
 
+# "Nothing cached yet" for the Appearance pane's rebuild guard — distinct from any real
+# signature, including the ``(None, None, None)`` of the empty state.
+_UNSET = object()
+
 # Inline representation dropdowns in the Loaded tree (models vs maps differ).
 # The model values must be types the LiveSession API accepts (see live.py's
 # _STRUCTURE_REPR_TYPES / _REPR_ALIASES) — test_model_rep_options_are_valid guards this.
@@ -1120,6 +1124,10 @@ class ViewportWindow:
 class ControlsWindow:
     """Controls for the viewport: open a file, or run a demo from the Demos tab."""
 
+    # Set here as well as in __init__ so a signal arriving mid-construction cannot find it
+    # missing; _UNSET means "no pane built yet", so the first update always builds one.
+    _appearance_sig = _UNSET
+
     def __init__(self, desktop: "DesktopApp", title: str = "pxviewer — controls"):
         _check_qt()
 
@@ -1276,6 +1284,7 @@ class ControlsWindow:
         self._update_tug_density()
         self._update_pair_button()
         self._fit_tree_height()  # the empty list must not reserve space either
+        self._appearance_sig = _UNSET  # no pane built yet, so the first update must build one
         self._update_appearance()  # empty-state placeholder
 
     # -- tabs ------------------------------------------------------------
@@ -2117,12 +2126,52 @@ class ControlsWindow:
             elif child.layout() is not None:
                 self._clear_layout(child.layout())
 
-    def _update_appearance(self, kind=None, ident=None):
-        """Rebuild the Appearance box for the focused object (or an empty-state hint)."""
+    def _appearance_signature(self, kind, ident, it):
+        """Everything the Appearance pane draws, as a comparable snapshot.
+
+        Deliberately excludes ``visible``. Hiding an object changes nothing in this pane — a
+        hidden object is still perfectly editable here — so a visibility toggle must not tear
+        the widgets down and rebuild them. That rebuild is what made the pane flicker on every
+        show/hide, because ``_on_loaded_changed`` runs on *any* change to the object list.
+
+        Live values are folded in as well as the summary snapshot: a volume's level and colour
+        can move without a new summary (the wheel, the console), and the pane reads those
+        directly, so they have to count as a change.
+        """
+        if it is None:
+            return (kind, ident, None, None)
+        live = {}
+        extra = None
+        if it["kind"] == "model":
+            live = self._desktop.model_appearance(it["id"])
+        elif it["kind"] == "volume":
+            live = self._desktop.volume_appearance(it["id"])
+            # Whether a mask is offered depends on the map's pairing, not on the map itself.
+            extra = self._desktop.can_mask_volume(it["id"])
+        elif it["kind"] == "reflections":
+            # The "Make maps" row lists the *other* objects (unpaired models), so it can go
+            # stale even when these reflections have not changed at all.
+            extra = tuple((m["id"], m["name"]) for m in self._desktop.models_for_phasing())
+        merged = {**it, **live}
+        merged.pop("visible", None)
+        return (kind, ident, tuple(sorted((k, repr(v)) for k, v in merged.items())), repr(extra))
+
+    def _update_appearance(self, kind=None, ident=None, force=False):
+        """Rebuild the Appearance box for the focused object (or an empty-state hint).
+
+        Skipped when nothing it displays has changed (see ``_appearance_signature``), so the
+        pane survives unrelated object-list churn instead of flickering. ``force`` rebuilds
+        regardless, for callers that changed something this snapshot cannot see.
+        """
         from PySide6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton
 
-        self._clear_layout(self._appearance_layout)
         it = self._find_item(kind, ident) if ident else None
+        signature = self._appearance_signature(kind, ident, it)
+        if not force and signature == self._appearance_sig:
+            return  # identical pane; rebuilding it would only flicker
+        self._appearance_sig = signature
+
+        self._clear_layout(self._appearance_layout)
         self._focused = (kind, ident) if it else (None, None)
         self._iso_row = None  # rebuilt below only when a volume is focused
         if it is None:
