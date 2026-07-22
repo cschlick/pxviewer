@@ -51,10 +51,20 @@ _ISO_RESOLUTION = 0.01  # QSlider is integer-only, so the level is stored in ste
 # reach, which is what "the density belonging to this model" usually means.
 _MASK_RADIUS_DEFAULT = 3.0
 
-# Least time between coordinate frames pushed during a drag. A drag can compute frames
-# faster than the viewer renders them; unpaced, they back up and read as lag, so this
-# caps the rate (~20 fps) and keeps the picture current rather than queued.
-_TUG_PUSH_INTERVAL = 0.05
+# Least time between coordinate frames pushed during a drag.
+#
+# This used to be 0.05 (~20 fps), set that low because unpaced frames backed up in the
+# viewer and read as lag. That was the right diagnosis of the wrong layer: the viewer now
+# coalesces frames (see connectLive — only the newest conformation is ever drawn, the rest
+# are dropped), so arriving too fast costs nothing and cannot queue. What the old cap did
+# instead was put a 50 ms floor under every drag update, which is itself most of what made
+# dragging feel detached from the pointer.
+#
+# 40 fps is a deliberate middle: a drag frame costs cctbx ~9 ms (zone-limited, so this
+# holds for any structure), and pushing much beyond the viewer's draw rate only burns CPU
+# that the drag itself wants. The pacing stays because it bounds that waste, not because
+# the viewer needs protecting any more.
+_TUG_PUSH_INTERVAL = 0.025
 
 # How long the post-release wind-down plays for. The minimization itself converges in a
 # fraction of a second; this stretches its states over a watchable settle so a released

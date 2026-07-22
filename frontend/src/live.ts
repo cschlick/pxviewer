@@ -1155,6 +1155,81 @@ export class LiveViewer {
 
 const MEASURE_ARITY: Record<string, number> = { distance: 2, angle: 3, dihedral: 4, label: 1 };
 
+// -- interactive quality ---------------------------------------------------
+//
+// Mol*'s default postprocessing is built for looking, not for moving. On an M1 Air at a
+// Retina 1854x1684 (3.1 megapixels) the screen-space ambient occlusion pass alone costs
+// ~12 ms of a ~30 ms frame — measured by toggling it while spinning the camera: 33.7 fps
+// -> 57.7 fps. That is affordable when the picture is still and you are reading it; it is
+// not affordable per frame while you drag atoms, where latency is the whole experience.
+//
+// So drop the expensive passes while anything is moving and put them back once it goes
+// quiet. Mol* already does exactly this for temporal multisampling; this extends the idea
+// to occlusion. The full-quality image is what you get whenever you stop, which is when
+// you are actually looking at it.
+
+/** How long after the last interactive event the full-quality image comes back. Long
+ *  enough to span the gaps between streamed drag frames (paced at ~25 ms) and between
+ *  mouse-move events, short enough that letting go feels immediate. */
+const QUALITY_RESTORE_MS = 250;
+
+class InteractiveQuality {
+    private lowered = false;
+    private timer: any = null;
+    private saved: { occlusion?: string; multiSample?: string } = {};
+
+    constructor(private plugin: PluginContext) {}
+
+    /** Report an interactive event: quality drops now, and is restored once they stop. */
+    ping() {
+        if (!this.lowered) this.lower();
+        if (this.timer !== null) clearTimeout(this.timer);
+        this.timer = setTimeout(() => this.restore(), QUALITY_RESTORE_MS);
+    }
+
+    private lower() {
+        const canvas = this.plugin.canvas3d;
+        if (!canvas) return;
+        // Remember what was actually set rather than assuming the defaults, so restoring
+        // cannot quietly overwrite a setting someone changed.
+        this.saved = {
+            occlusion: canvas.props.postprocessing.occlusion.name,
+            multiSample: canvas.props.multiSample.mode,
+        };
+        if (this.saved.occlusion === 'off' && this.saved.multiSample === 'off') return;
+        this.lowered = true;
+        canvas.setProps((p: Canvas3DProps) => {
+            (p.postprocessing.occlusion as any).name = 'off';
+            (p.multiSample as any).mode = 'off';
+        });
+    }
+
+    private restore() {
+        this.timer = null;
+        if (!this.lowered) return;
+        this.lowered = false;
+        const canvas = this.plugin.canvas3d;
+        if (!canvas) return;
+        canvas.setProps((p: Canvas3DProps) => {
+            if (this.saved.occlusion !== undefined) (p.postprocessing.occlusion as any).name = this.saved.occlusion;
+            if (this.saved.multiSample !== undefined) (p.multiSample as any).mode = this.saved.multiSample;
+        });
+    }
+}
+
+// One per plugin: several live connections share the one canvas, so they must share the
+// governor or they would fight over restoring it.
+const qualityByPlugin = new WeakMap<PluginContext, InteractiveQuality>();
+
+function interactiveQuality(plugin: PluginContext): InteractiveQuality {
+    let q = qualityByPlugin.get(plugin);
+    if (!q) {
+        q = new InteractiveQuality(plugin);
+        qualityByPlugin.set(plugin, q);
+    }
+    return q;
+}
+
 /**
  * Build an element loci for the given (sorted) positional atom indices. Looks
  * each index up per unit by binary search — O(selected·log), not a full scan of
@@ -1634,10 +1709,36 @@ export interface LiveConnectionHandle {
 export function connectLive(plugin: PluginContext, url: string): LiveConnectionHandle {
     registerAttributeColorTheme(plugin);
     void applyCootBindings(plugin);  // the mouse, as a crystallographer expects it
+    const quality = interactiveQuality(plugin);
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;
     let building = false;
+
+    // Streamed coordinate frames, coalesced. A frame costs a state re-run plus a draw, and
+    // a drag can produce them faster than that; applying every one in turn does not make
+    // the picture more current, it makes it *lag*, because each late frame still has to be
+    // drawn before the next is even started. Only the newest conformation is worth drawing
+    // — the older ones describe positions the atoms have already left — so keep one slot
+    // and let arrivals overwrite it while an update is in flight.
+    //
+    // The camera path above coalesces for the same reason, and setMapBox keeps only the
+    // latest window; this is the same rule on the hottest path.
+    let pendingFrame: Float32Array | null = null;
+    let applyingFrame = false;
+    const applyFrames = async () => {
+        if (applyingFrame) return;
+        applyingFrame = true;
+        try {
+            while (pendingFrame && viewer) {
+                const coords = pendingFrame;
+                pendingFrame = null;   // cleared first: anything arriving now is newer
+                await viewer.update(coords);
+            }
+        } finally {
+            applyingFrame = false;
+        }
+    };
     // Per-atom attribute values (colour-by-attribute), received as binary and
     // referenced by key from representation specs. Held independent of the viewer,
     // since they may arrive while it is still building.
@@ -1671,7 +1772,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             reaiming = false;
         }
     };
-    const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => { void reaimSlabs(); });
+    const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => {
+        quality.ping();   // the view is moving — same trade as a drag (see InteractiveQuality)
+        void reaimSlabs();
+    });
 
     // Tugging: Shift + left-drag on any of the model's surface pulls the atom there;
     // a plain drag still rotates. No mode and no arming — you cannot hold Shift by
@@ -1989,9 +2093,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
         } else if (tag === TAG_FRAME && viewer) {
-            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
-            const coords = new Float32Array(buffer, 8);
-            await viewer.update(coords);
+            // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8. Each message
+            // owns its buffer, so holding the view until it is applied is safe.
+            pendingFrame = new Float32Array(buffer, 8);
+            quality.ping();   // atoms are moving: hold the cheap image until they stop
+            void applyFrames();
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching
