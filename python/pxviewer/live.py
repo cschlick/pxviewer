@@ -673,6 +673,18 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_perf_prefs(self, **prefs: Any) -> None:
+        """Push debug render overrides to the viewer (see the frontend PerfMonitor).
+
+        Recognised keys: ``overlay`` (bool, the live HUD), ``occlusionOff`` (bool, pin SSAO
+        off), ``pixelScale`` (float, render-resolution scale). Canvas-global — every session
+        shares the one plugin, so this need only be sent on one. Thread-safe.
+        """
+        message = json.dumps({"type": "perf_prefs", **prefs})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_interactions(self, interactions: Any) -> List[dict]:
         """Draw an explicit set of non-covalent interactions between atom pairs.
 

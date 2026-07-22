@@ -2137,9 +2137,67 @@ class ControlsWindow:
         layout.addWidget(viewer)
 
         layout.addWidget(self._build_drag_group())
+        layout.addWidget(self._build_perf_group())
 
         layout.addStretch()
         return tab
+
+    def _build_perf_group(self):
+        """Performance-debugging controls: a live overlay, render overrides to isolate what
+        costs, and a capture that saves a per-frame log of a drag."""
+        from PySide6.QtWidgets import QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+
+        box = QGroupBox("Performance (debug)")
+        pg = QVBoxLayout(box)
+
+        hint = QLabel("Tools for chasing lag. The overlay shows live frame timings; the "
+                      "toggles isolate one cost at a time; Capture saves a drag's log.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: palette(placeholder-text);")
+        pg.addWidget(hint)
+
+        overlay = QCheckBox("Show performance overlay  (or press F9 in the viewer)")
+        overlay.setToolTip("Live HUD: incoming frame rate, draw rate, state-commit time, and "
+                           "frontend latency — so you can see which stage is the bottleneck.")
+        overlay.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_perf_prefs(overlay=bool(on))))
+        pg.addWidget(overlay)
+
+        ssao = QCheckBox("Disable ambient occlusion")
+        ssao.setToolTip("Pin SSAO off (normally it drops only while moving). It costs ~12 ms "
+                        "of a frame at Retina resolution; turn it off to feel its share.")
+        ssao.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_perf_prefs(occlusionOff=bool(on))))
+        pg.addWidget(ssao)
+
+        halfres = QCheckBox("Render at half resolution")
+        halfres.setToolTip("Halve the render resolution (softer image). If this makes "
+                           "dragging smooth, the bottleneck is GPU fill-rate, not geometry.")
+        halfres.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_perf_prefs(pixelScale=0.5 if on else 1.0)))
+        pg.addWidget(halfres)
+
+        cap_row = QHBoxLayout()
+        self._perf_capture_btn = QPushButton("Start capture")
+        self._perf_capture_btn.setToolTip("Record per-frame drag timings, then save them to a "
+                                          "JSON file you can inspect or share.")
+        self._perf_capturing = False
+        self._perf_capture_btn.clicked.connect(self._on_perf_capture)
+        cap_row.addWidget(self._perf_capture_btn)
+        cap_row.addStretch()
+        pg.addLayout(cap_row)
+
+        return box
+
+    def _on_perf_capture(self) -> None:
+        if not self._perf_capturing:
+            self._perf_capturing = True
+            self._perf_capture_btn.setText("Stop capture && save")
+            self._desktop.start_perf_capture()
+        else:
+            self._perf_capturing = False
+            self._perf_capture_btn.setText("Start capture")
+            self._desktop.stop_perf_capture(on_saved=_reveal_in_file_manager)
 
     # -- appearance (focused object) -------------------------------------
 
@@ -5593,6 +5651,59 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             control.reset_view()
+
+    # -- performance debugging -------------------------------------------
+
+    def set_perf_prefs(self, **prefs) -> None:
+        """Push debug render overrides (overlay, occlusionOff, pixelScale) to the viewer.
+
+        Canvas-global — sent on whichever session the viewport is connected to.
+        """
+        control = self._control_session()
+        if control is not None:
+            control.set_perf_prefs(**prefs)
+
+    def start_perf_capture(self) -> None:
+        """Begin recording per-frame drag timings in the viewer (see stop_perf_capture)."""
+        page = getattr(self._viewport, "_view", None)
+        if page is not None:
+            page.page().runJavaScript(
+                "window.__pxviewerPerf && window.__pxviewerPerf.startCapture()")
+        self._status("performance capture started — drag now, then stop to save the log")
+
+    def stop_perf_capture(self, on_saved=None) -> None:
+        """Stop the capture, write the log to a file, and hand its path to ``on_saved``.
+
+        The samples live in the page, so they are read back through the webview rather than
+        the socket; the file lands next to the app's other scratch output.
+        """
+        import datetime
+        import json as _json
+        import tempfile
+
+        page = getattr(self._viewport, "_view", None)
+        if page is None:
+            return
+
+        def _write(result) -> None:
+            if not result:
+                self._status("performance capture: nothing recorded")
+                return
+            try:
+                data = _json.loads(result)
+            except Exception:
+                self._status("performance capture: could not read the log")
+                return
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            path = Path(tempfile.gettempdir()) / f"pxviewer-perf-{stamp}.json"
+            path.write_text(_json.dumps(data, indent=2))
+            n = data.get("meta", {}).get("samples", 0)
+            self._status(f"performance capture saved: {path} ({n} frames)")
+            if on_saved is not None:
+                on_saved(str(path))
+
+        page.page().runJavaScript(
+            "window.__pxviewerPerf ? window.__pxviewerPerf.stopCapture() : ''", _write)
 
     def write_object(self, kind: str, ident: str, path: str) -> None:
         """Write a loaded object to disk: the model's cctbx coordinates, or the map.

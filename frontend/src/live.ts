@@ -702,6 +702,7 @@ export class LiveViewer {
 
     /** Push the held conformation into the state tree as the next frame. */
     private async commitFrame() {
+        const doneTiming = perfMonitor(this.plugin).beginCommit();
         this.version += 1;
         const version = this.version;
         // Copies, not the held arrays themselves: the transform hands them to the Model
@@ -717,6 +718,7 @@ export class LiveViewer {
         // A frame rebuilds the structure; cheaply remap the cached highlight loci
         // onto it (O(selected)) instead of rebuilding it from indices.
         this.reapplyHighlight();
+        doneTiming();
     }
 
     /** Show the selection overlay on the given positional atom indices (empty clears). */
@@ -1321,8 +1323,33 @@ class InteractiveQuality {
     private geometryLowered = false;
     private geometryTimer: any = null;
     private savedQuality: [string, string][] = [];
+    // Debug overrides (see PerfMonitor / the Settings "Performance (debug)" group). When
+    // occlusion is forced off it stays off through restore(), so the user can feel the
+    // structure without SSAO and judge whether it is what costs them.
+    private occlusionForcedOff = false;
 
     constructor(private plugin: PluginContext) {}
+
+    /** Force ambient occlusion permanently off (or hand it back to the interactive dance). */
+    setOcclusionForcedOff(off: boolean) {
+        this.occlusionForcedOff = off;
+        const canvas = this.plugin.canvas3d;
+        if (!canvas) return;
+        canvas.setProps((p: Canvas3DProps) => {
+            (p.postprocessing.occlusion as any).name = off ? 'off' : (this.saved.occlusion ?? 'on');
+        });
+    }
+
+    /** Set the render resolution scale (1 = native; lower is a cheaper, softer image).
+     *  Pixel scale lives on the canvas *context*, not canvas3d.props — set it there and
+     *  sync so the framebuffers resize. */
+    setPixelScale(scale: number) {
+        const ctx: any = (this.plugin as any).canvas3dContext;
+        if (!ctx) return;
+        ctx.setProps({ pixelScale: scale });
+        ctx.syncPixelScale?.();
+        this.plugin.canvas3d?.requestDraw();
+    }
 
     /** Report an interactive event: quality drops now, and is restored once they stop. */
     ping() {
@@ -1422,10 +1449,218 @@ class InteractiveQuality {
         const canvas = this.plugin.canvas3d;
         if (!canvas) return;
         canvas.setProps((p: Canvas3DProps) => {
-            if (this.saved.occlusion !== undefined) (p.postprocessing.occlusion as any).name = this.saved.occlusion;
+            // Honour a debug force-off: do not hand occlusion back if it is pinned off.
+            if (this.saved.occlusion !== undefined && !this.occlusionForcedOff) {
+                (p.postprocessing.occlusion as any).name = this.saved.occlusion;
+            }
             if (this.saved.multiSample !== undefined) (p.multiSample as any).mode = this.saved.multiSample;
         });
     }
+}
+
+// -- performance instrumentation ------------------------------------------
+//
+// A live diagnostic for drag lag. The drag pipeline is: pointer move -> (frontend throttle)
+// -> socket -> cctbx step -> push -> socket -> coalesce -> state commit -> representation
+// rebuild -> draw. Lag can hide in any stage, and the honest way to find it is to measure
+// the real app during a real drag rather than reason about a synthetic one.
+//
+// PerfMonitor times the stages it can see from here — frame arrival cadence (which reveals
+// whether frames are even coming fast enough, i.e. whether the bottleneck is upstream in
+// Python/network), how many arrivals coalesce away, the state-commit cost, and the draw
+// rate — and shows them in a toggleable overlay. It can also record every sample for a
+// capture, which Python reads back and writes to a file (see DesktopApp perf capture).
+
+interface PerfSample {
+    t: number;          // ms since capture start
+    kind: string;       // 'delta' | 'full'
+    gapMs: number;      // since the previous arrival — the effective incoming interval
+    atoms: number;      // atoms in this frame (delta: only the moved ones)
+    coalesced: number;  // arrivals dropped since the last commit
+    commitMs: number;   // time in the state commit this frame triggered
+    latencyMs: number;  // newest-arrival -> committed, the frontend's own contribution
+}
+
+class PerfMonitor {
+    private hud: HTMLDivElement | null = null;
+    private visible = false;
+    private drawSub: { unsubscribe(): void } | null = null;
+
+    // Rolling windows (kept short; these are rates, not history).
+    private arrivals: number[] = [];   // arrival timestamps
+    private draws: number[] = [];       // draw timestamps
+    private commitMsWin: number[] = [];
+    private gapMsWin: number[] = [];
+    private latencyMsWin: number[] = [];
+
+    private lastArrival = 0;
+    private lastCommitMs = 0;
+    private recvSinceCommit = 0;   // arrivals since the last commit -> coalesced count
+    private totalRecv = 0;
+    private totalCommits = 0;
+
+    private capturing = false;
+    private captureStart = 0;
+    private captureBuf: PerfSample[] = [];
+
+    constructor(private plugin: PluginContext) {}
+
+    /** A coordinate frame arrived off the socket. */
+    frameReceived(kind: string, atoms: number) {
+        const now = performance.now();
+        const gap = this.lastArrival ? now - this.lastArrival : 0;
+        this.lastArrival = now;
+        this.totalRecv++;
+        this.recvSinceCommit++;
+        this.arrivals.push(now);
+        if (gap) this.gapMsWin.push(gap);
+        this.trim();
+        this.pendingArrivalKind = kind;
+        this.pendingArrivalAtoms = atoms;
+        this.pendingArrivalTime = now;
+    }
+    private pendingArrivalKind = 'full';
+    private pendingArrivalAtoms = 0;
+    private pendingArrivalTime = 0;
+
+    /** Wrap a state commit: returns a function to call when it finishes. */
+    beginCommit(): () => void {
+        const t0 = performance.now();
+        return () => {
+            const ms = performance.now() - t0;
+            this.lastCommitMs = ms;
+            this.totalCommits++;
+            this.commitMsWin.push(ms);
+            const coalesced = Math.max(0, this.recvSinceCommit - 1);
+            const latency = this.pendingArrivalTime ? performance.now() - this.pendingArrivalTime : 0;
+            this.latencyMsWin.push(latency);
+            if (this.capturing) {
+                this.captureBuf.push({
+                    t: +(performance.now() - this.captureStart).toFixed(1),
+                    kind: this.pendingArrivalKind,
+                    gapMs: +(this.gapMsWin[this.gapMsWin.length - 1] ?? 0).toFixed(2),
+                    atoms: this.pendingArrivalAtoms,
+                    coalesced,
+                    commitMs: +ms.toFixed(2),
+                    latencyMs: +latency.toFixed(2),
+                });
+            }
+            this.recvSinceCommit = 0;
+            this.trim();
+        };
+    }
+
+    private ensureDrawSub() {
+        if (this.drawSub || !this.plugin.canvas3d) return;
+        this.drawSub = this.plugin.canvas3d.didDraw.subscribe(() => {
+            this.draws.push(performance.now());
+            this.trim();
+        });
+    }
+
+    private trim() {
+        const cutoff = performance.now() - 2000;   // a 2 s window
+        for (const w of [this.arrivals, this.draws]) {
+            while (w.length && w[0] < cutoff) w.shift();
+        }
+        for (const w of [this.commitMsWin, this.gapMsWin, this.latencyMsWin]) {
+            while (w.length > 120) w.shift();
+        }
+    }
+
+    private p(win: number[], q: number): number {
+        if (!win.length) return 0;
+        const s = [...win].sort((a, b) => a - b);
+        return s[Math.min(s.length - 1, Math.floor(q * s.length))];
+    }
+
+    startCapture() {
+        this.capturing = true;
+        this.captureStart = performance.now();
+        this.captureBuf = [];
+    }
+
+    /** Stop capturing and return the log as a JSON string (read by Python). */
+    stopCapture(): string {
+        this.capturing = false;
+        const canvas = this.plugin.canvas3d;
+        const props: any = canvas ? canvas.props : {};
+        const cv = document.querySelector('canvas') as HTMLCanvasElement | null;
+        return JSON.stringify({
+            meta: {
+                samples: this.captureBuf.length,
+                canvas: cv ? `${cv.width}x${cv.height}` : 'n/a',
+                devicePixelRatio: window.devicePixelRatio,
+                pixelScale: (this.plugin as any).canvas3dContext?.props?.pixelScale,
+                occlusion: props.postprocessing?.occlusion?.name,
+                multiSample: props.multiSample?.mode,
+                antialiasing: props.postprocessing?.antialiasing?.name,
+            },
+            samples: this.captureBuf,
+        });
+    }
+
+    toggle() { this.setVisible(!this.visible); }
+
+    setVisible(on: boolean) {
+        this.visible = on;
+        this.ensureDrawSub();
+        if (on && !this.hud) this.mount();
+        if (this.hud) this.hud.style.display = on ? 'block' : 'none';
+    }
+
+    private mount() {
+        this.ensureDrawSub();
+        const el = document.createElement('div');
+        el.style.cssText = [
+            'position:fixed', 'top:8px', 'left:8px', 'z-index:99999',
+            'font:11px/1.45 ui-monospace,Menlo,monospace', 'color:#d7ffd7',
+            'background:rgba(0,0,0,0.72)', 'padding:8px 10px', 'border-radius:6px',
+            'white-space:pre', 'pointer-events:none', 'letter-spacing:0.2px',
+        ].join(';');
+        document.body.appendChild(el);
+        this.hud = el;
+        const tick = () => {
+            if (this.hud && this.visible) this.hud.textContent = this.readout();
+            setTimeout(tick, 250);
+        };
+        tick();
+    }
+
+    private readout(): string {
+        const secs = (win: number[]) => {
+            if (win.length < 2) return 0;
+            return win.length / ((win[win.length - 1] - win[0]) / 1000);
+        };
+        const inFps = secs(this.arrivals);
+        const drawFps = secs(this.draws);
+        const canvas = this.plugin.canvas3d;
+        const props: any = canvas ? canvas.props : {};
+        const scale = (this.plugin as any).canvas3dContext?.props?.pixelScale ?? '?';
+        const cv = document.querySelector('canvas') as HTMLCanvasElement | null;
+        const cap = this.capturing ? `  ●REC ${this.captureBuf.length}` : '';
+        return [
+            `pxviewer perf${cap}`,
+            `frames in   ${inFps.toFixed(0)}/s   gap ${this.p(this.gapMsWin, 0.5).toFixed(0)}ms (p95 ${this.p(this.gapMsWin, 0.95).toFixed(0)})`,
+            `draws       ${drawFps.toFixed(0)}/s`,
+            `commit      ${this.p(this.commitMsWin, 0.5).toFixed(1)}ms (p95 ${this.p(this.commitMsWin, 0.95).toFixed(1)})`,
+            `fe latency  ${this.p(this.latencyMsWin, 0.5).toFixed(1)}ms (p95 ${this.p(this.latencyMsWin, 0.95).toFixed(1)})`,
+            `recv/commit ${this.totalRecv}/${this.totalCommits}  (dropped ${this.totalRecv - this.totalCommits})`,
+            `render      ${cv ? cv.width + 'x' + cv.height : '?'}  scale ${scale}`,
+            `ssao ${props.postprocessing?.occlusion?.name ?? '?'}  msaa ${props.multiSample?.mode ?? '?'}`,
+        ].join('\n');
+    }
+}
+
+const perfByPlugin = new WeakMap<PluginContext, PerfMonitor>();
+
+function perfMonitor(plugin: PluginContext): PerfMonitor {
+    let m = perfByPlugin.get(plugin);
+    if (!m) {
+        m = new PerfMonitor(plugin);
+        perfByPlugin.set(plugin, m);
+    }
+    return m;
 }
 
 // One per plugin: several live connections share the one canvas, so they must share the
@@ -1922,6 +2157,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     registerAttributeColorTheme(plugin);
     void applyCootBindings(plugin);  // the mouse, as a crystallographer expects it
     const quality = interactiveQuality(plugin);
+    const perf = perfMonitor(plugin);
+    // ?perf=1 brings the overlay up from the first frame; it also toggles from the Settings
+    // "Performance (debug)" group and with the F9 key.
+    if (new URLSearchParams(window.location.search).get('perf') === '1') perf.setVisible(true);
+    // Expose the monitor so the desktop can drive a capture (start, then read the log back).
+    (window as any).__pxviewerPerf = perf;
+    (window as any).__pxviewerQuality = quality;
+    window.addEventListener('keydown', (e) => { if (e.key === 'F9') perf.toggle(); });
     const ws = new WebSocket(url);
     ws.binaryType = 'arraybuffer';
     let viewer: LiveViewer | null = null;
@@ -2158,6 +2401,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
                 plugin.managers.camera.reset();  // reframe the whole scene, default orientation
+            } else if (msg.type === 'perf_prefs') {
+                // Debug render overrides from the Settings "Performance (debug)" group.
+                if (typeof msg.overlay === 'boolean') perf.setVisible(msg.overlay);
+                if (typeof msg.occlusionOff === 'boolean') quality.setOcclusionForcedOff(msg.occlusionOff);
+                if (typeof msg.pixelScale === 'number') quality.setPixelScale(msg.pixelScale);
             } else if (msg.type === 'marker-mode') {
                 markerArmed = !!msg.on;  // arm/disarm the next-click place-marker (see onMouseDown)
             } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
@@ -2291,14 +2539,17 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
+            const coords = new Float32Array(buffer, 8);
+            perf.frameReceived('full', coords.length / 3);
             quality.pingCoordinates();  // geometry is being rebuilt, not just redrawn
-            await viewer.update(new Float32Array(buffer, 8));
+            await viewer.update(coords);
         } else if (tag === TAG_FRAME_DELTA && viewer) {
             // [u32 tag][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n] — only the atoms
             // that moved, at their absolute positions. See LiveViewer.updateDelta.
             const n = new DataView(buffer).getUint32(8, true);
             const indices = new Uint32Array(buffer, 12, n);
             const xyz = new Float32Array(buffer, 12 + n * 4, n * 3);
+            perf.frameReceived('delta', n);
             quality.pingCoordinates();
             await viewer.updateDelta(indices, xyz);
         } else if (tag === TAG_ATTRIBUTE) {
