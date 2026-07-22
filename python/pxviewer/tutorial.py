@@ -156,6 +156,72 @@ def cryo_em_refinement_tutorial() -> Tutorial:
     ])
 
 
+def _live_difference_seen(cw: Any) -> bool:
+    return cw._desktop._diff_boxes > 0
+
+
+def xray_refinement_tutorial() -> Tutorial:
+    """Refine against X-ray data and watch the difference map answer back — break the fit by
+    hand, see mFo-DFc light up live under the pointer, then minimize it back."""
+    return Tutorial("X-ray: refine with a live difference map", [
+        Step(
+            "X-ray refinement judges a model against **data**, not against a map someone "
+            "already made. The honest reporter is the **mFo-DFc difference map**: green where "
+            "the data wants density the model does not explain, red where the model puts "
+            "atoms the data will not support.\n\nOpen the example: click **Demos** and pick "
+            "**X-ray — model + reflections (make density)**. It loads a model alongside "
+            "amplitudes computed from that same model, so the two start in exact agreement — "
+            "which gives us a flat difference map to break on purpose.",
+            done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
+            target=lambda cw: cw._demos_btn,
+        ),
+        Step(
+            "Phase the data: in the **Objects** list select the **reflections**, then click "
+            "**Make maps** in the panel below. That computes **2mFo-DFc** — the map you build "
+            "into — and **mFo-DFc**, the difference map, and pairs both with the model so "
+            "they share a frame.\n\nCheck the R-work it reports: essentially zero, because "
+            "this data came from this model. Contour the difference map and it has nothing to "
+            "say — which is a difference map doing its job.",
+            done=lambda cw: cw._desktop.map_for_model() is not None,
+        ),
+        Step(
+            "Now arm the live feedback. On the **Settings** tab, in **Drag atoms**, tick "
+            "**Live difference map**.\n\nFrom here on every drag re-phases mFo-DFc in a small "
+            "box around the atom you are holding and streams it to the viewport as you move. "
+            "Only that window updates — the whole-structure maps are deliberately left alone, "
+            "so what you see is the data disagreeing with you, not a stale map echoing the "
+            "model back.",
+            done=lambda cw: cw._desktop._live_diff,
+            target=lambda cw: cw._tug_livemap_check,
+        ),
+        Step(
+            "Break the fit: **Shift-drag** an atom in the viewport and pull it out of its "
+            "density.\n\nWatch the box that follows your pointer. **Red** blooms where you "
+            "have just parked atoms the data does not support, and **green** stays behind in "
+            "the density they left — the difference map recomputing as fast as you can drag. "
+            "Let go and the window clears, leaving the model genuinely wrong.",
+            done=_live_difference_seen,
+            target=lambda cw: cw._tug_livemap_check,
+        ),
+        Step(
+            "Refine it back. On the **Tools** tab, in **Minimization**, tick **Use map** and "
+            "click **Minimize**.\n\nThe minimizer pulls the model toward the density while "
+            "the geometry restraints keep bonds and angles honest — the two targets X-ray "
+            "refinement always balances. Watch the atom slide home, streaming live.",
+            done=_minimizing,
+            target=lambda cw: cw._minimize_btn,
+        ),
+        Step(
+            "When it stops moving click **Stop**, then select the **reflections** again and "
+            "click **Update maps** to re-phase against the corrected model. The difference "
+            "density you created is gone.\n\nThat is the whole X-ray loop, and why the "
+            "difference map is the one to trust: it shows the error, you fix it — by hand or "
+            "by minimizing — then re-phase and look again.",
+            target=lambda cw: cw._minimize_stop_btn,
+        ),
+    ])
+
+
 def load_edits_tutorial() -> Tutorial:
     """Load a shared restraint-edits file onto a structure — the reading half of the loop."""
     return Tutorial("Load restraint edits", [
@@ -218,7 +284,8 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — validate, fit a ligand, real-space refine
-    into cryo-EM density, then the restraint-edits pair (reading before writing)."""
+    """Every walkthrough offered, in menu order — validate, fit a ligand, then the two
+    refinements (real-space into cryo-EM density, then X-ray against reflections), then the
+    restraint-edits pair (reading before writing)."""
     return [validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
-            load_edits_tutorial(), restraint_edits_tutorial()]
+            xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]

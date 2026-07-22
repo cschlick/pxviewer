@@ -634,6 +634,7 @@ def test_metal_example_and_its_sample_edits_file(qapp):
     assert [t.title for t in tutorial.all_tutorials()] == \
         ["Validate a structure", "Fit a ligand into density",
          "Real-space refine into cryo-EM density",
+         "X-ray: refine with a live difference map",
          "Load restraint edits", "Custom restraint edits"]
 
     site = sample_structure_path("zn_site.pdb")
@@ -660,6 +661,82 @@ def test_metal_example_and_its_sample_edits_file(qapp):
         assert skipped == 0
         loaded = app.model_edits(mid)
         assert len(loaded) == 1 and loaded[0]["kind"] == "bond"
+    finally:
+        app.stop()
+
+
+def test_xray_tutorial_advances_through_the_refinement_loop(qapp):
+    """The X-ray tutorial walks the difference-map loop on the bundled X-ray demo: load model
+    + reflections, phase them, arm the live difference map, see one, then minimize into the
+    density. Each step's predicate ticks off against real app state."""
+    import time
+
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer import tutorial
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        cw, coach = app._controls, app._viewport
+        cw._start_tutorial(tutorial.xray_refinement_tutorial())
+        assert coach.coach_progress.text() == "Step 1 / 6"
+        # Every step points at a control that exists (a dead target would flash nothing).
+        for step in tutorial.xray_refinement_tutorial().steps:
+            if step.target is not None:
+                assert step.target(cw) is not None
+
+        # Step 1: the demo loads a model and reflections, unpaired.
+        app.load_xray_demo()
+        qapp.processEvents()
+        assert len(app._models) == 1 and len(app._reflections) == 1
+        assert app.map_for_model() is None  # not phased yet
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 2 / 6"
+
+        # Step 2: Make maps — phases the data and pairs 2mFo-DFc + mFo-DFc with the model.
+        mid, rid = app._models[0]["id"], app._reflections[0]["id"]
+        app.make_maps(rid, mid)
+        deadline = time.time() + 120
+        while time.time() < deadline and app.map_for_model(mid) is None:
+            qapp.processEvents()
+            time.sleep(0.1)
+        assert app.map_for_model(mid) is not None
+        assert any("mFo-DFc" in v["name"] for v in app._volumes)
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 3 / 6"
+
+        # Step 3: arming the live difference map is what the checkbox does.
+        assert not app._live_diff
+        app.set_live_difference_map(True)
+        assert app._live_diff
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 4 / 6"
+
+        # Step 4 waits for a live difference window to actually reach the viewport. Driving a
+        # real Shift-drag needs the viewer, so stand in for the drag by counting one — the
+        # point here is that the step keys off _diff_boxes, which only _diff_worker bumps and
+        # nothing ever resets.
+        assert app._diff_boxes == 0
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 4 / 6"  # no drag yet, so it waits
+        app._diff_boxes += 1
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 5 / 6"
+
+        # Step 5: minimizing into the density advances it, as in the cryo-EM tutorial.
+        app.minimize_model(use_map=True)
+        deadline = time.time() + 90
+        while time.time() < deadline and app._minimize_idle.is_set():
+            qapp.processEvents()
+            time.sleep(0.02)
+        cw._maybe_advance_tutorial()
+        assert coach.coach_progress.text() == "Step 6 / 6"
+        app.stop_minimization()
+        deadline = time.time() + 10
+        while time.time() < deadline and not app._minimize_idle.is_set():
+            qapp.processEvents()
+            time.sleep(0.05)
     finally:
         app.stop()
 
@@ -2716,12 +2793,14 @@ def test_demos_menu_has_the_curated_examples(qapp):
         assert any("Ligand fitting" in l for l in examples)
         assert any("Cryo-EM" in l for l in examples)
         assert any("Metal site" in l for l in examples)
-        # ...and the tutorials follow: validation, ligand fitting, cryo-EM, then the edits pair.
+        # ...and the tutorials follow: validation, ligand fitting, the two refinements
+        # (real-space then X-ray), then the edits pair.
         tutorials = [a.text() for a in actions[tut_i + 1:]
                      if not a.isSeparator() and a.text().strip()]
         assert [t.lower() for t in tutorials] == \
             ["validate a structure", "fit a ligand into density",
              "real-space refine into cryo-em density",
+             "x-ray: refine with a live difference map",
              "load restraint edits", "custom restraint edits"]
 
         # The demos button is an icon-only menu button (was the text "Sample", then "Demos").

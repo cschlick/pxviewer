@@ -4056,6 +4056,11 @@ class DesktopApp:
         self._diff_ctx: Any = None             # (group id, reflection path) for the running drag
         self._diff_atom: Optional[int] = None  # the dragged atom, the window's centre
         self._diff_gen = 0                      # bumped on each drag start/clear; drops stale recomputes
+        # How many live difference windows have actually reached the viewport. Unlike the
+        # state above it is never reset, because it answers a different question: "has the
+        # user seen one of these yet?" — which is what the X-ray tutorial waits on, and what
+        # distinguishes a drag that recomputed density from one that merely happened.
+        self._diff_boxes = 0
         # The radius new maps from reflections open with (Settings changes it).
         self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
 
@@ -4938,6 +4943,7 @@ class DesktopApp:
                 box = self._diff_engine.recompute_local(center, radius=6.0, sites_cart=sites)
                 if gen == self._diff_gen and self._live_diff:  # not superseded during the recompute
                     session.show_map_box(box, level=3.0)
+                    self._diff_boxes += 1
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 self._status(f"live difference map failed: {exc}")
                 self._diff_ctx = None  # stop hammering a failing recompute for this drag
