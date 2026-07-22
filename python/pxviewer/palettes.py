@@ -43,9 +43,20 @@ class PaletteCycler:
 
     def __init__(self) -> None:
         self._palettes = load_palettes()
+        self._flat = [colour for palette in self._palettes for colour in palette]
         self._cursor = 0
+        self._colour_cursor = 0
 
     def next(self) -> List[str]:
         palette = self._palettes[self._cursor % len(self._palettes)]
         self._cursor += 1
         return list(palette)
+
+    def next_colour(self) -> str:
+        """The next single colour, walking every palette's colours in order — for an object
+        that is not part of a model family (a standalone map) but should still take a default
+        from the palettes rather than a separate list. Consecutive calls are distinct within a
+        palette (its four contrast), so overlaid standalone maps read apart."""
+        colour = self._flat[self._colour_cursor % len(self._flat)]
+        self._colour_cursor += 1
+        return colour

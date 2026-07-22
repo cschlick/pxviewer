@@ -5993,7 +5993,10 @@ class DesktopApp:
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
             "iso": data.suggested_iso() if iso is None else float(iso),
-            "color": color or _VOLUME_COLORS[self._volume_counter % len(_VOLUME_COLORS)],
+            # A given colour wins (a difference map's green, or a caller's choice); else the
+            # map draws its default from the palettes — its model family's if it has one (so a
+            # model and its maps match), or the next palette colour if it stands alone.
+            "color": color or self._next_family_map_color(group) or self._palettes.next_colour(),
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color,
         })
