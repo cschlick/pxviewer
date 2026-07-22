@@ -1489,9 +1489,7 @@ class ControlsWindow:
 
         menu = QMenu(self._window)
         menu.setObjectName("demosMenu")
-        spacer = menu.addAction(" ")  # a blank line so "Examples" isn't flush to the top edge
-        spacer.setEnabled(False)
-        menu.addSection("Examples")
+        self._add_menu_heading(menu, "Samples", first=True)
         menu.addAction("Ubiquitin (1UBQ)",
                        lambda: self._on_load_sample("1ubq.pdb"))
         menu.addAction("Ubiquitin — with density (map + model)",
@@ -1506,12 +1504,40 @@ class ControlsWindow:
                        self._on_run_real_space_refinement_demo)
         menu.addAction("Metal site — Zn coordination (restraint edits)",
                        lambda: self._on_load_sample("zn_site.pdb"))
-        gap = menu.addAction(" ")  # a blank line between the sections, above "Tutorials"
-        gap.setEnabled(False)
-        menu.addSection("Tutorials")
+        self._add_menu_heading(menu, "Tutorials")
         for tut in tutorial.all_tutorials():
             menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))
         return menu
+
+    def _add_menu_heading(self, menu, text: str, *, first: bool = False):
+        """Add a real, visible section heading to a popup menu.
+
+        Not ``QMenu.addSection``: on macOS the style draws the separator and silently drops
+        the label, so the headings were invisible here even though the QAction carried the
+        text (which is why a test asserting on the text still passed). A QWidgetAction owns
+        its own QLabel, so what is written is what is drawn, on every platform.
+
+        Returns the action, and takes ``first`` to skip the divider above the top heading.
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QFont
+        from PySide6.QtWidgets import QLabel, QWidgetAction
+
+        if not first:
+            menu.addSeparator()
+        label = QLabel(text)
+        font = QFont(label.font())
+        font.setBold(True)
+        # Headings label the groups; they must not compete with the items they head.
+        font.setPointSizeF(max(9.0, font.pointSizeF() - 1.0))
+        label.setFont(font)
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        label.setStyleSheet("color: palette(placeholder-text); padding: 6px 12px 2px 12px;")
+        holder = QWidgetAction(menu)
+        holder.setDefaultWidget(label)
+        holder.setEnabled(False)  # a heading is not a target
+        menu.addAction(holder)
+        return holder
 
     def _build_tools_tab(self):
         """Geometry-focused tools: measure from the selection. (Clash/contact analysis

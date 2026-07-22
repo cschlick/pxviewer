@@ -2416,13 +2416,18 @@ def test_help_and_demos_menu(qapp):
         controls._on_help()
         assert "documentation" in controls._status_label.text().lower()
 
+        from PySide6.QtWidgets import QLabel, QWidgetAction
+
         menu = controls._build_demos_menu()
-        labels = [a.text() for a in menu.actions()]
-        assert "Examples" in labels and "Tutorials" in labels  # both labelled sections
-        assert any("ubiquitin" in t.lower() for t in labels)   # an example
+        actions = menu.actions()
+        labels = [a.text() for a in actions]
+        assert any("ubiquitin" in t.lower() for t in labels)   # a sample
         assert any("restraint" in t.lower() for t in labels)   # a tutorial
-        # order: the Examples section header precedes the Tutorials section header
-        assert labels.index("Examples") < labels.index("Tutorials")
+        # Both headings are present, drawn (a QLabel, not addSection's dropped text), and in
+        # order: Samples above Tutorials.
+        headings = [a.defaultWidget().text() for a in actions
+                    if isinstance(a, QWidgetAction) and isinstance(a.defaultWidget(), QLabel)]
+        assert headings == ["Samples", "Tutorials"]
     finally:
         app.stop()
 
@@ -2762,12 +2767,17 @@ def test_multi_model_registry(qapp):
 
 
 def test_demos_menu_has_the_curated_examples(qapp):
-    """The Demos dropdown is the one preload entry point (Samples is gone): a set of bundled
-    examples, each showing off one thing the app does."""
+    """The Demos button is the one preload entry point: bundled **Samples** to open, then
+    guided **Tutorials**, under headings that are actually drawn.
+
+    The headings are asserted through their rendered widget, not through QAction.text().
+    They used to be QMenu.addSection, whose text macOS silently drops — so the menu showed
+    two unlabelled dividers while a test reading .text() passed happily.
+    """
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-    from PySide6.QtWidgets import QPushButton, QTabWidget
+    from PySide6.QtWidgets import QLabel, QPushButton, QTabWidget, QWidgetAction
 
     from pxviewer.desktop import DesktopApp
 
@@ -2776,13 +2786,21 @@ def test_demos_menu_has_the_curated_examples(qapp):
     try:
         ctl = app._controls
         actions = ctl._build_demos_menu().actions()
-        labels = [a.text() for a in actions]
-        # Two labelled sections, Examples above Tutorials.
-        assert "Examples" in labels and "Tutorials" in labels
-        ex_i, tut_i = labels.index("Examples"), labels.index("Tutorials")
-        assert ex_i < tut_i
-        # The curated examples sit between the two section headers (ignoring blank spacer
-        # rows that keep the headers off the edges).
+
+        def heading(action):
+            """The visible text of a section heading, or None if it isn't one."""
+            if not isinstance(action, QWidgetAction):
+                return None
+            widget = action.defaultWidget()
+            return widget.text() if isinstance(widget, QLabel) else None
+
+        headings = [(i, heading(a)) for i, a in enumerate(actions) if heading(a)]
+        assert [text for _i, text in headings] == ["Samples", "Tutorials"]
+        ex_i, tut_i = headings[0][0], headings[1][0]
+        # Drawn, not merely set: an unparented label with no text would render as nothing.
+        assert all(heading(actions[i]).strip() for i, _t in headings)
+
+        # The samples sit between the two headings.
         examples = [a.text() for a in actions[ex_i + 1:tut_i]
                     if not a.isSeparator() and a.text().strip()]
         assert len(examples) == 7
