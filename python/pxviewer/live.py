@@ -511,6 +511,7 @@ class LiveSession:
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
         self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
         self._marker_handlers: List[Callable[[list, Optional[int]], None]] = []
+        self._marker_move_handlers: List[Callable[[str, list, bool], None]] = []
         # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
         # volume's style/colour/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
@@ -1005,6 +1006,25 @@ class LiveSession:
         :meth:`set_marker_mode`; the click reports a point rather than rotating.
         """
         self._marker_handlers.append(handler)
+
+    def on_marker_move(self, handler: Callable[[str, list, bool], None]) -> None:
+        """Register a callback for a marker dragged in the viewport: ``handler(id, position,
+        final)``. A Shift-drag that grabs a marker sphere moves it in the view plane and
+        reports each new position; ``final`` is True on the last one (mouse-up)."""
+        self._marker_move_handlers.append(handler)
+
+    def set_markers(self, markers: Any, radius: float) -> None:
+        """Tell the viewer where the (visible) markers are, so a Shift-drag can grab one.
+
+        ``markers`` is ``[{"id": str, "position": [x, y, z]}, ...]``. The viewer hit-tests
+        against these to decide a drag is a marker move rather than a molecule tug; it does
+        not read the drawn spheres. Thread-safe."""
+        payload = [{"id": str(m["id"]), "position": [float(c) for c in m["position"]]}
+                   for m in markers]
+        message = json.dumps({"type": "markers", "markers": payload, "radius": float(radius)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_marker_mode(self, on: bool) -> None:
         """Arm (or disarm) 'place a marker' mode in the viewport. While on, the next
@@ -1881,6 +1901,17 @@ class LiveSession:
                 for handler in self._marker_handlers:
                     try:
                         handler(pos, idx)
+                    except Exception:  # pragma: no cover - user callback errors
+                        pass
+        elif etype == "marker-move":
+            mid = event.get("id")
+            position = event.get("position")
+            if isinstance(mid, str) and isinstance(position, list) and len(position) == 3:
+                pos = [float(c) for c in position]
+                final = bool(event.get("final"))
+                for handler in self._marker_move_handlers:
+                    try:
+                        handler(mid, pos, final)
                     except Exception:  # pragma: no cover - user callback errors
                         pass
         elif etype == "volume-iso-changed":

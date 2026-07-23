@@ -1116,6 +1116,44 @@ def test_writing_a_restrained_model_as_mmcif_needs_no_probe(qapp, tmp_path):
         app.stop()
 
 
+def test_dragging_a_marker_moves_it_and_never_tugs(qapp):
+    """A marker is a handle, not an atom: a Shift-drag on it moves the marker (detaching it
+    from any snapped atom) and reports its position to the viewer for the hit-test; it must
+    not start a molecule tug."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        # Capture what the viewer is told about markers (for the drag hit-test).
+        sent = []
+        control = app._control_session()
+        real = control.set_markers
+        control.set_markers = lambda ms, r, _r=real: (sent.append((ms, r)), _r(ms, r))[1]
+
+        app._on_marker([1.0, 2.0, 3.0], atom=5)  # placed, snapped to atom 5
+        mid = app._markers[0]["id"]
+        assert app._markers[0]["atom"] == 5
+        assert sent and sent[-1][0][0]["id"] == mid  # the viewer was told where it is
+
+        # Drag it: intermediate move updates the position (still snapped-marker id, atom off).
+        app._on_marker_move(mid, [4.0, 5.0, 6.0], final=False)
+        assert app._markers[0]["position"] == [4.0, 5.0, 6.0]
+        assert app._markers[0]["atom"] is None            # dragged off its atom
+        assert app._tug is None                            # never a molecule tug
+
+        # Final move (mouse-up) leaves it at rest.
+        app._on_marker_move(mid, [7.0, 8.0, 9.0], final=True)
+        assert app._markers[0]["position"] == [7.0, 8.0, 9.0]
+        assert app._tug is None
+    finally:
+        app.stop()
+
+
 def test_placing_a_ligand_clears_the_input_fields(qapp):
     """After a ligand is placed the code and SMILES boxes clear, so the next ligand cannot
     silently inherit the previous code as its name/restraints. A failed build leaves the

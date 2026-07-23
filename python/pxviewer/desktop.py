@@ -4567,6 +4567,7 @@ class DesktopApp:
             # So a ligand marker can be placed on a blank canvas (no model), where the
             # dummy is the session the viewport is connected to.
             self._dummy.on_marker(lambda position, atom: self._on_marker(position, atom))
+            self._dummy.on_marker_move(lambda mid_, pos, final: self._on_marker_move(mid_, pos, final))
             # Render nothing: an empty `on` set draws no atoms, so an empty scene
             # is truly empty (the dummy only keeps the ws channel open).
             try:
@@ -4741,6 +4742,7 @@ class DesktopApp:
         # Markers are a scene-level thing, not this model's — but only the armed (control)
         # session's viewport reports one, so wiring every session is harmless.
         session.on_marker(lambda position, atom: self._on_marker(position, atom))
+        session.on_marker_move(lambda mid_, pos, final: self._on_marker_move(mid_, pos, final))
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         self._wire_active(session)
@@ -5225,13 +5227,36 @@ class DesktopApp:
         return next((m for m in self._markers if m["id"] == mid), None)
 
     def _draw_markers(self) -> None:
-        """(Re)draw every visible marker as a sphere on the marker channel."""
+        """(Re)draw every visible marker as a sphere, and tell the viewer where they are so a
+        Shift-drag can grab one (see :meth:`_on_marker_move`)."""
         session = self._control_session()
         if session is None:
             return
-        balls = [[m["position"], _MARKER_RADIUS] for m in self._markers if m["visible"]]
+        visible = [m for m in self._markers if m["visible"]]
+        balls = [[m["position"], _MARKER_RADIUS] for m in visible]
         primitive = {"kind": "balls", "color": _MARKER_COLOR, "balls": balls}
         session.show_markup(_MARKER_CHANNEL, [primitive] if balls else [])
+        session.set_markers(
+            [{"id": m["id"], "position": m["position"]} for m in visible], _MARKER_RADIUS)
+
+    def _on_marker_move(self, mid: str, position, final: bool) -> None:
+        """A marker was Shift-dragged in the viewport: move it. Runs on a session thread.
+
+        Moving a marker detaches it from any atom it had snapped to — it now sits wherever it
+        was dragged, which is the whole point. The sphere follows every frame (cheap); the
+        heavier refresh of the Objects list and Ligand panel waits for the drop (``final``),
+        so a drag does not thrash them (and the Appearance pane does not flicker)."""
+        entry = self._marker_entry(mid)
+        if entry is None:
+            return
+        entry["position"] = [float(c) for c in position]
+        entry["atom"] = None  # dragged off whatever it was snapped to
+        self._draw_markers()
+        if final:
+            self._emit_loaded_changed()  # refresh the marker's coordinate + the ligand target
+            p = entry["position"]
+            self._status(
+                f"Marker moved to ({p[0]:.2f}, {p[1]:.2f}, {p[2]:.2f})")
 
     def set_marker_visible(self, mid: str, visible: bool) -> None:
         entry = self._marker_entry(mid)

@@ -2055,6 +2055,37 @@ function pointerInSpace(plugin: PluginContext, fx: number, fy: number, anchor: V
         vp.x + fx * vp.width, vp.y + (1 - fy) * vp.height, projected[2]));
 }
 
+// -- marker dragging ------------------------------------------------------
+//
+// A ligand marker (and the generic marker under it) is a handle, not an atom. Shift-drag is
+// already the drag gesture, so it moves a marker too — but a marker drag must never start a
+// tug, or grabbing the sphere would deform whatever molecule is behind it.
+//
+// The state is module-level, shared across every live connection: markers ride the control
+// session (its ws delivers the positions), but the drag can be handled by whichever session
+// sees the mousedown first, and Python routes the marker-move back the same either way.
+let markerPositions: { id: string; position: Vec3 }[] = [];
+let markerRadius = 0.5;
+let markerDrag: { id: string; anchor: Vec3; last: Vec3; ws: WebSocket } | null = null;
+
+/** The marker under the cursor for a Shift-drag, nearest the camera when they overlap. */
+function markerHitTest(plugin: PluginContext, fx: number, fy: number): { id: string; position: Vec3 } | null {
+    if (!plugin.canvas3d || !markerPositions.length) return null;
+    const grab = markerRadius * 1.25;   // a touch forgiving, so the sphere is easy to catch
+    const eye = plugin.canvas3d.camera.state.position;
+    let best: { id: string; position: Vec3 } | null = null;
+    let bestDepth = Infinity;
+    for (const m of markerPositions) {
+        // Where the cursor ray meets the plane through the marker: its distance to the
+        // marker centre is how far off-centre the click is, i.e. a disc test on the sphere.
+        const inPlane = pointerInSpace(plugin, fx, fy, m.position);
+        if (Vec3.distance(inPlane, m.position) > grab) continue;
+        const depth = Vec3.distance(eye, m.position);
+        if (depth < bestDepth) { best = { id: m.id, position: Vec3.clone(m.position) }; bestDepth = depth; }
+    }
+    return best;
+}
+
 /** The atom to grab for whatever is under the pointer, or undefined.
  *
  *  A handle on the whole surface, not just the atom spheres: in ball-and-stick most of
@@ -2236,8 +2267,19 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             ws.send(JSON.stringify({ type: 'marker', position: [pos[0], pos[1], pos[2]], atom: atom ?? null }));
             return;
         }
-        if (!ev.shiftKey || ev.button !== 0 || !viewer || !plugin.canvas3d) return;
+        if (!ev.shiftKey || ev.button !== 0 || !plugin.canvas3d) return;
         const point = canvasPoint(ev);
+        // A marker under the cursor wins over the molecule: Shift-drag moves the marker,
+        // and must not start a tug (see the marker-dragging note). Any session may own the
+        // drag — stopImmediatePropagation keeps the other sessions' handlers off this event.
+        const marker = markerHitTest(plugin, point.fx, point.fy);
+        if (marker) {
+            if (!markerDrag) markerDrag = { id: marker.id, anchor: marker.position, last: marker.position, ws };
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            return;
+        }
+        if (!viewer) return;
         const atom = atomAt(plugin, viewer, point.x, point.y);
         if (atom === undefined) return;  // background: let Mol* rotate, as Coot does
         const anchor = viewer.atomPosition(atom);
@@ -2254,6 +2296,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     };
 
     const onMouseMove = (ev: MouseEvent) => {
+        if (markerDrag && markerDrag.ws === ws && plugin.canvas3d) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            const point = canvasPoint(ev);
+            const pos = pointerInSpace(plugin, point.fx, point.fy, markerDrag.anchor);
+            markerDrag.last = pos;
+            ws.send(JSON.stringify({ type: 'marker-move', id: markerDrag.id, position: [pos[0], pos[1], pos[2]] }));
+            return;
+        }
         if (!tugging || !plugin.canvas3d) return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -2270,7 +2321,21 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         tugPending = null;
     };
 
+    /** Finish a marker drag this session owns: report the resting place and let go. */
+    const endMarkerDrag = () => {
+        if (!markerDrag || markerDrag.ws !== ws) return;
+        const p = markerDrag.last;
+        ws.send(JSON.stringify({ type: 'marker-move', id: markerDrag.id, position: [p[0], p[1], p[2]], final: true }));
+        markerDrag = null;
+    };
+
     const onMouseUp = (ev: MouseEvent) => {
+        if (markerDrag && markerDrag.ws === ws) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            endMarkerDrag();
+            return;
+        }
         if (!tugging) return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -2293,9 +2358,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // the minimizer never keeps running under a hand that has moved on. Same for losing
     // the window — an alt-tab mid-drag must not strand it running.
     const onKeyUp = (ev: KeyboardEvent) => {
-        if (ev.key === 'Shift') { shiftHeld = false; endTug(); }
+        if (ev.key === 'Shift') { shiftHeld = false; endTug(); endMarkerDrag(); }
     };
-    const onBlur = () => { shiftHeld = false; endTug(); };
+    const onBlur = () => { shiftHeld = false; endTug(); endMarkerDrag(); };
 
     window.addEventListener('mousedown', onMouseDown, { capture: true });
     window.addEventListener('mousemove', onMouseMove, { capture: true });
@@ -2371,6 +2436,13 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (typeof msg.overlay === 'boolean') perf.setVisible(msg.overlay);
                 if (typeof msg.occlusionOff === 'boolean') quality.setOcclusionForcedOff(msg.occlusionOff);
                 if (typeof msg.pixelScale === 'number') quality.setPixelScale(msg.pixelScale);
+            } else if (msg.type === 'markers' && Array.isArray(msg.markers)) {
+                // Where the visible markers are, for the Shift-drag hit-test (module-level,
+                // shared across sessions). We hit-test these rather than the drawn spheres.
+                markerPositions = msg.markers
+                    .filter((m: any) => Array.isArray(m.position) && m.position.length === 3)
+                    .map((m: any) => ({ id: String(m.id), position: Vec3.create(m.position[0], m.position[1], m.position[2]) }));
+                if (typeof msg.radius === 'number') markerRadius = msg.radius;
             } else if (msg.type === 'marker-mode') {
                 markerArmed = !!msg.on;  // arm/disarm the next-click place-marker (see onMouseDown)
             } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
