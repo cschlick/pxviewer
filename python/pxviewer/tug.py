@@ -81,6 +81,7 @@ class Tug:
         radius: float = ZONE_RADIUS,
         mode: str = "sphere",
         flank: int = 0,
+        selection: Optional[Any] = None,
         map_data: Any = None,
         map_weight: float = 10.0,
         steps: int = STEPS_PER_FRAME,
@@ -93,6 +94,10 @@ class Tug:
           stretch. Sequence-based, so it does not balloon with a dense neighbourhood the way
           a sphere can, which is what makes it the right tool for nudging one sidechain or
           walking a loop.
+        - ``"selection"``: exactly the residues the user picked (``selection`` is their atom
+          indices), so an arbitrary set — a loop, an active site, two chains at an interface
+          — can be the thing that moves while every atom around it stays put. The dragged
+          atom's own residue is always included, so you can grab any handle.
 
         Everything downstream — the boundary pins, the restraint sub-manager, the map term —
         is the same whatever picks the zone; only the selection differs.
@@ -115,7 +120,9 @@ class Tug:
         if not 0 <= self.atom < len(sites):
             raise ValueError(f"no atom {atom} in this model")
 
-        if mode == "residues":
+        if mode == "selection":
+            zone = _selection_zone(model, self.atom, selection or [], len(sites))
+        elif mode == "residues":
             zone = _residue_zone(model, self.atom, int(flank), len(sites))
         else:
             zone = _zone_selection(model, sites, self.atom, radius)
@@ -335,6 +342,24 @@ def _residue_zone(model: Any, atom: int, flank: int, n_atoms: int) -> np.ndarray
                     for j in range(lo, hi + 1):
                         zone[seqs[j]] = True
                     return zone
+    return zone
+
+
+def _selection_zone(model: Any, atom: int, selection: Any, n_atoms: int) -> np.ndarray:
+    """Whole residues covering the user's ``selection``, plus the dragged atom's residue.
+
+    Whole ones, like every other zone: half a residue in the zone has its own bonds cut by
+    ``grm.select`` and comes apart. Adding the dragged atom's residue means a drag can start
+    on any handle, even one just outside the picked set, without the pull having nothing to
+    act on.
+    """
+    want = set(int(i) for i in selection)
+    want.add(int(atom))
+    zone = np.zeros(n_atoms, dtype=bool)
+    for residue in model.get_hierarchy().residue_groups():
+        iseqs = np.asarray(residue.atoms().extract_i_seq(), dtype=int)
+        if want.intersection(iseqs.tolist()):
+            zone[iseqs] = True
     return zone
 
 

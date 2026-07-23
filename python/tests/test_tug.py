@@ -84,6 +84,34 @@ def test_scope_modes_pick_the_right_atoms():
     sphere.finish()
 
 
+def test_scope_selection_is_exactly_the_picked_residues():
+    """Selection scope moves the residues the user picked — an arbitrary set — and nothing
+    else, whole-residue-expanded from whatever atoms were in the selection."""
+    _require_restraints()
+    from pxviewer.tug import Tug
+
+    model = _model()
+    groups = list(list(model.get_hierarchy().models())[0].chains())[0].residue_groups()
+
+    def iseqs(i):
+        return set(np.asarray(groups[i].atoms().extract_i_seq(), int).tolist())
+
+    # A few atoms from two non-adjacent residues.
+    selection = list(np.asarray(groups[10].atoms().extract_i_seq(), int)[:3]) \
+        + list(np.asarray(groups[50].atoms().extract_i_seq(), int)[:2])
+    atom = int(groups[10].atoms().extract_i_seq()[0])
+
+    tug = Tug(model, atom, mode="selection", selection=selection)
+    zone = set(tug.indices.tolist())
+    assert zone == iseqs(10) | iseqs(50)          # both whole residues, nothing more
+    tug.finish()
+
+    # Grabbing an atom outside the selection still works — its residue joins the zone.
+    empty = Tug(model, atom, mode="selection", selection=[])
+    assert set(empty.indices.tolist()) == iseqs(10)
+    empty.finish()
+
+
 def test_scope_stretch_clamps_at_the_chain_end():
     """A stretch near the start of a chain does not run off into the residue before it (or
     into a different chain block); it clamps."""
@@ -332,6 +360,19 @@ def test_desktop_scope_reaches_the_tug():
 
         assert single_zone < sphere_zone            # one residue is fewer atoms than a sphere
         assert app._tug is None                     # cleaned up after each drag
+
+        # Selection scope needs a selection: with none, it warns and does not start.
+        app.set_tug_scope(mode="selection")
+        app._serve_tug(mid, "begin", 300, None)
+        assert app._tug is None
+
+        # With a selection, the drag builds a Tug bounded to it.
+        app._scene_selection[mid] = list(range(295, 306))
+        app._serve_tug(mid, "begin", 300, None)
+        assert app._tug is not None
+        sel_zone = app._tug.zone_size
+        assert 0 < sel_zone <= sphere_zone          # the picked atoms' residues, not the sphere
+        app._serve_tug(mid, "end", 300, None)
     finally:
         app.stop()
 

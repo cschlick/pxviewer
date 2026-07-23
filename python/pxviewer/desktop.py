@@ -1649,11 +1649,13 @@ class ControlsWindow:
         scope_combo.addItem("Sphere", "sphere")
         scope_combo.addItem("Single residue", "single")
         scope_combo.addItem("Residue stretch", "stretch")
+        scope_combo.addItem("Selection", "selection")
         scope_combo.setToolTip(
             "What a drag is allowed to move:\n"
             "• Sphere — every residue within the radius (the default)\n"
             "• Single residue — only the one you grab\n"
-            "• Residue stretch — that residue and a few each side along the chain")
+            "• Residue stretch — that residue and a few each side along the chain\n"
+            "• Selection — exactly the residues you have picked (select some first)")
         scope_row.addWidget(scope_combo)
         radius_spin = QDoubleSpinBox()
         radius_spin.setRange(2.0, 20.0)
@@ -1682,9 +1684,11 @@ class ControlsWindow:
                     mode="sphere", radius=radius_spin.value()))
             elif kind == "single":
                 self._safe(lambda: self._desktop.set_tug_scope(mode="residues", flank=0))
-            else:
+            elif kind == "stretch":
                 self._safe(lambda: self._desktop.set_tug_scope(
                     mode="residues", flank=flank_spin.value()))
+            else:  # selection
+                self._safe(lambda: self._desktop.set_tug_scope(mode="selection"))
 
         scope_combo.currentIndexChanged.connect(lambda _i: _apply_scope())
         radius_spin.valueChanged.connect(lambda _v: _apply_scope())
@@ -5451,11 +5455,20 @@ class DesktopApp:
             try:
                 # Against the pre-warm (see _warm_restraints): if one is in flight for this
                 # model, wait for it rather than building the same thing alongside it.
+                scope = self._tug_scope
+                selection = None
+                if scope["mode"] == "selection":
+                    with self._scene_lock:
+                        selection = list(self._scene_selection.get(mid, []))
+                    if not selection:
+                        self._status("select atoms first to drag by selection")
+                        self._tug = None
+                        return
                 with self._restraints_lock:
-                    scope = self._tug_scope
                     self._tug = Tug(
                         model, atom,
                         mode=scope["mode"], radius=scope["radius"], flank=scope["flank"],
+                        selection=selection,
                         map_data=self.map_for_model(mid) if self._tug_into_density else None)
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"could not start dragging: {exc}")
