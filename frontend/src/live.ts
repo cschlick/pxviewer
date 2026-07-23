@@ -1317,26 +1317,34 @@ function lockCameraOnceFramed(plugin: PluginContext) {
 const QUALITY_RESTORE_MS = 250;
 
 class InteractiveQuality {
-    private lowered = false;
-    private timer: any = null;
-    private saved: { occlusion?: string; multiSample?: string } = {};
     private geometryLowered = false;
     private geometryTimer: any = null;
     private savedQuality: [string, string][] = [];
-    // Debug overrides (see PerfMonitor / the Settings "Performance (debug)" group). When
-    // occlusion is forced off it stays off through restore(), so the user can feel the
-    // structure without SSAO and judge whether it is what costs them.
     private occlusionForcedOff = false;
 
     constructor(private plugin: PluginContext) {}
 
-    /** Force ambient occlusion permanently off (or hand it back to the interactive dance). */
+    // Why this only coarsens *geometry* and never touches the screen postprocessing.
+    //
+    // The obvious per-frame win looks like dropping ambient occlusion during a drag — a very
+    // first probe put SSAO at ~12 ms of a frame. But changing postprocessing.occlusion (or
+    // multiSample) *while the render loop is actively drawing* recurses inside Mol*'s
+    // setProps/immer produce — "Maximum call stack size exceeded", tens of times per drag —
+    // in both the producer and object forms, in this molstar (5.10). A one-off toggle while
+    // idle is fine, which is why the debug SSAO toggle below is safe; a per-frame toggle
+    // during streaming is not. And measured, msaa 'off' bought nothing anyway.
+    //
+    // Coarsening the representation geometry has no such problem and is the bigger lever
+    // regardless: at 2737 atoms a cartoon's per-frame rebuild goes 17.5 ms -> 6.2 ms between
+    // 'auto' and 'low', and the representation rebuild is ~92% of a streamed frame's cost.
+    // So that is what we do while coordinates stream, and screen effects are left alone.
+
+    /** Force ambient occlusion off (debug toggle). Safe because it is a one-off call made
+     *  while idle — see the note above on why per-frame occlusion changes are not. */
     setOcclusionForcedOff(off: boolean) {
         this.occlusionForcedOff = off;
-        const canvas = this.plugin.canvas3d;
-        if (!canvas) return;
-        canvas.setProps((p: Canvas3DProps) => {
-            (p.postprocessing.occlusion as any).name = off ? 'off' : (this.saved.occlusion ?? 'on');
+        this.plugin.canvas3d?.setProps((p: Canvas3DProps) => {
+            (p.postprocessing.occlusion as any).name = off ? 'off' : 'on';
         });
     }
 
@@ -1351,30 +1359,15 @@ class InteractiveQuality {
         this.plugin.canvas3d?.requestDraw();
     }
 
-    /** Report an interactive event: quality drops now, and is restored once they stop. */
-    ping() {
-        if (!this.lowered) this.lower();
-        if (this.timer !== null) clearTimeout(this.timer);
-        this.timer = setTimeout(() => this.restore(), QUALITY_RESTORE_MS);
-    }
+    /** A camera-only interaction (rotate/zoom). Nothing to do now that screen effects are
+     *  left alone — geometry is unchanged when only the view moves — but kept as the hook
+     *  the camera subscription calls, so that wiring reads clearly. */
+    ping() { /* intentionally empty; see the class note */ }
 
-    /**
-     * Report that *coordinates* are moving, not just the view. Drops the screen effects as
-     * `ping` does, and additionally coarsens the representation's geometry.
-     *
-     * Kept separate from `ping` on purpose. Coarsening geometry only pays when the geometry
-     * is being rebuilt every frame, which is what streamed coordinates do and what merely
-     * turning the camera does not — the mesh is unchanged while you rotate, so lowering it
-     * there would buy nothing and cost two rebuilds (one down, one back).
-     *
-     * It is worth a lot when it does apply: at 2737 atoms a cartoon's per-frame rebuild
-     * goes 17.5 ms -> 6.2 ms between 'auto' and 'low', and the representation is ~92% of
-     * that frame's cost. Ball-and-stick shows no such gain, but it is already the cheaper
-     * of the two and loses nothing by being included.
-     */
+    /** Coordinates are streaming: coarsen the representation geometry, and restore it once
+     *  they stop. This is the whole governor now (see the class note). */
     pingCoordinates() {
-        this.ping();
-        if (!this.geometryLowered) this.lowerGeometry();
+        this.lowerGeometry();
         if (this.geometryTimer !== null) clearTimeout(this.geometryTimer);
         this.geometryTimer = setTimeout(() => this.restoreGeometry(), QUALITY_RESTORE_MS);
     }
@@ -1389,17 +1382,21 @@ class InteractiveQuality {
         let cells: any[] = [];
         try { cells = this.representationCells(); } catch { return; }
         if (!cells.length) return;
-        this.geometryLowered = true;
-        this.savedQuality = [];
+        // Only act on cells not already low, and record each one's own prior quality so it
+        // is restored to what it was. Reading the live params (not trusting a latch) keeps
+        // this correct even if a representation was rebuilt out from under us.
         const b = this.plugin.state.data.build();
+        let any = false;
         for (const c of cells) {
-            const q = c.transform.params?.type?.params?.quality;
-            this.savedQuality.push([c.transform.ref, q ?? 'auto']);
+            const q = c.transform.params?.type?.params?.quality ?? 'auto';
+            if (q === 'low') continue;
+            this.savedQuality.push([c.transform.ref, q]);
             b.to(c.transform.ref).update((o: any) => ({
                 ...o, type: { ...o.type, params: { ...o.type.params, quality: 'low' } },
             }));
+            any = true;
         }
-        void b.commit();
+        if (any) { this.geometryLowered = true; void b.commit(); }
     }
 
     private restoreGeometry() {
@@ -1425,37 +1422,6 @@ class InteractiveQuality {
         if (any) void b.commit();
     }
 
-    private lower() {
-        const canvas = this.plugin.canvas3d;
-        if (!canvas) return;
-        // Remember what was actually set rather than assuming the defaults, so restoring
-        // cannot quietly overwrite a setting someone changed.
-        this.saved = {
-            occlusion: canvas.props.postprocessing.occlusion.name,
-            multiSample: canvas.props.multiSample.mode,
-        };
-        if (this.saved.occlusion === 'off' && this.saved.multiSample === 'off') return;
-        this.lowered = true;
-        canvas.setProps((p: Canvas3DProps) => {
-            (p.postprocessing.occlusion as any).name = 'off';
-            (p.multiSample as any).mode = 'off';
-        });
-    }
-
-    private restore() {
-        this.timer = null;
-        if (!this.lowered) return;
-        this.lowered = false;
-        const canvas = this.plugin.canvas3d;
-        if (!canvas) return;
-        canvas.setProps((p: Canvas3DProps) => {
-            // Honour a debug force-off: do not hand occlusion back if it is pinned off.
-            if (this.saved.occlusion !== undefined && !this.occlusionForcedOff) {
-                (p.postprocessing.occlusion as any).name = this.saved.occlusion;
-            }
-            if (this.saved.multiSample !== undefined) (p.multiSample as any).mode = this.saved.multiSample;
-        });
-    }
 }
 
 // -- performance instrumentation ------------------------------------------
@@ -2208,8 +2174,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         }
     };
     const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => {
-        quality.ping();   // the view is moving — same trade as a drag (see InteractiveQuality)
-        void reaimSlabs();
+        void reaimSlabs();   // (quality.ping is a no-op now — see InteractiveQuality's note)
     });
 
     // Tugging: Shift + left-drag on any of the model's surface pulls the atom there;
