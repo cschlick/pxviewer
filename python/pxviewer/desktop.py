@@ -127,6 +127,12 @@ _MODEL_COLOR_OPTIONS = [
     ("By secondary structure", "secondary-structure"),
     ("By residue", "residue-name"),
     ("By hydrophobicity", "hydrophobicity"),
+    # The refined per-atom numbers. Both come straight from the topology, which already
+    # carries B_iso_or_equiv and occupancy (see data._atom_site_category), so Mol* colors
+    # from them with nothing extra sent. Mol* calls the B-factor theme 'uncertainty'
+    # because it also serves pLDDT; to a crystallographer it is the B-factor.
+    ("By B-factor", "uncertainty"),
+    ("By occupancy", "occupancy"),
 ]
 
 
