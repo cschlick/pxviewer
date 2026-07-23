@@ -161,35 +161,44 @@ def test_set_volume_color_and_opacity():
 
 
 def test_create_volume_view_style():
-    """Build an MVSJ with a wireframe isosurface style."""
-    mvsj = create_volume_view("density.mrc", style="wireframe")
+    """A 'mesh' isosurface is edges only (chickenwire) — faces off, wireframe on."""
+    mvsj = create_volume_view("density.mrc", style="mesh")
     state = json.loads(mvsj)
     repr = state["root"]["children"][0]["children"][0]["children"][0]["children"][0]
     assert repr["params"]["show_wireframe"] is True
     assert repr["params"]["show_faces"] is False
 
 
+def test_wireframe_is_a_legacy_alias_for_mesh():
+    """Old scenes/sessions used 'wireframe'; it still renders as mesh (edges only)."""
+    mvsj = create_volume_view("density.mrc", style="wireframe")
+    repr = json.loads(mvsj)["root"]["children"][0]["children"][0]["children"][0]["children"][0]
+    assert repr["params"]["show_wireframe"] is True
+    assert repr["params"]["show_faces"] is False
+
+
 def test_set_volume_style():
-    """Update the isosurface style of a specific volume by ref."""
+    """Update the isosurface style of a specific volume by ref: surface is filled, mesh is
+    edges only. There is no faces+edges combination."""
     mvsj = create_volume_view(
         volumes=[
-            Volume(url="a.mrc", ref="vol1", style="surface"),
-            Volume(url="b.mrc", ref="vol2", style="wireframe"),
+            Volume(url="a.mrc", ref="vol1", style="mesh"),
+            Volume(url="b.mrc", ref="vol2", style="mesh"),
         ]
     )
 
-    mvsj = set_volume_style(mvsj, "vol1", "mesh")
+    mvsj = set_volume_style(mvsj, "vol1", "surface")
 
     state = json.loads(mvsj)
     volumes = [d["children"][0]["children"][0] for d in state["root"]["children"]]
     by_ref = {v["ref"]: v for v in volumes}
 
     repr1 = by_ref["vol1"]["children"][0]
-    assert repr1["params"]["show_wireframe"] is True
+    assert repr1["params"]["show_wireframe"] is False   # switched to a filled surface
     assert repr1["params"]["show_faces"] is True
 
     repr2 = by_ref["vol2"]["children"][0]
-    assert repr2["params"]["show_wireframe"] is True
+    assert repr2["params"]["show_wireframe"] is True     # still a mesh
     assert repr2["params"]["show_faces"] is False
 
 

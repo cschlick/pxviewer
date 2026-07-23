@@ -425,11 +425,11 @@ def test_set_volume_style_command_reaches_client(session):
         url = f"ws://{session.host}:{session.port}"
         async with websockets.connect(url) as ws:
             await ws.recv()  # topology
-            session.set_volume_style("vol3", "wireframe")
+            session.set_volume_style("vol3", "mesh")
             message = await asyncio.wait_for(ws.recv(), timeout=5)
             assert isinstance(message, str)
             event = json.loads(message)
-            assert event == {"type": "volume_style", "ref": "vol3", "style": "wireframe"}
+            assert event == {"type": "volume_style", "ref": "vol3", "style": "mesh"}
 
     asyncio.run(scenario())
 

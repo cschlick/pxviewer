@@ -19,7 +19,10 @@ __all__ = [
 ]
 
 
-VolumeStyle = Literal["surface", "wireframe", "mesh"]
+# Two isosurface looks: a filled 'surface', or a 'mesh' (chickenwire — edges only, what a
+# crystallographer means by a map "mesh"). 'wireframe' is kept as a legacy alias for 'mesh'
+# so older scenes/sessions still render; there is no longer a faces+edges combination.
+VolumeStyle = Literal["surface", "mesh", "wireframe"]
 
 VolumeFormatT = Literal["map", "dx", "dxbin", "bcif"]
 VolumeRepresentationT = Literal["isosurface", "grid_slice"]
@@ -202,14 +205,11 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         if volume.style == "surface":
             repr_kwargs["show_wireframe"] = False
             repr_kwargs["show_faces"] = True
-        elif volume.style == "wireframe":
+        elif volume.style in ("mesh", "wireframe"):  # 'wireframe' is a legacy alias for 'mesh'
             repr_kwargs["show_wireframe"] = True
             repr_kwargs["show_faces"] = False
-        elif volume.style == "mesh":
-            repr_kwargs["show_wireframe"] = True
-            repr_kwargs["show_faces"] = True
         else:
-            raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {volume.style!r}")
+            raise ValueError(f"style must be 'surface' or 'mesh', got {volume.style!r}")
 
     if volume.representation == "grid_slice":
         if volume.grid_slice_dimension is not None:
@@ -450,21 +450,20 @@ def set_volume_opacity(mvsj: str, ref: str, opacity: float) -> str:
 
 
 def _style_to_show_flags(style: VolumeStyle) -> tuple[bool, bool]:
-    """Return (show_wireframe, show_faces) for a given volume style."""
+    """Return (show_wireframe, show_faces) for a given volume style. 'wireframe' is a
+    legacy alias for 'mesh' (edges only)."""
     if style == "surface":
         return False, True
-    if style == "wireframe":
+    if style in ("mesh", "wireframe"):
         return True, False
-    if style == "mesh":
-        return True, True
-    raise ValueError(f"style must be 'surface', 'wireframe' or 'mesh', got {style!r}")
+    raise ValueError(f"style must be 'surface' or 'mesh', got {style!r}")
 
 
 def set_volume_style(mvsj: str, ref: str, style: VolumeStyle) -> str:
     """Set the isosurface style of a specific volume in an MVSJ string.
 
-    ``style`` is one of ``'surface'`` (filled triangles), ``'wireframe'`` (edges
-    only), or ``'mesh'`` (filled triangles with wireframe overlay).
+    ``style`` is ``'surface'`` (filled triangles) or ``'mesh'`` (chickenwire — edges only).
+    ``'wireframe'`` is accepted as a legacy alias for ``'mesh'``.
     """
     show_wireframe, show_faces = _style_to_show_flags(style)
     state = json.loads(mvsj)

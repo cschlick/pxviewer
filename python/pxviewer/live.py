@@ -911,8 +911,8 @@ class LiveSession:
     def set_volume_style(self, ref: str, style: str) -> None:
         """Broadcast a command to change the isosurface style of a volume by reference.
 
-        ``style`` is one of ``'surface'``, ``'wireframe'`` or ``'mesh'``.
-        Thread-safe: may be called from any thread.
+        ``style`` is ``'surface'`` or ``'mesh'`` (``'wireframe'`` is a legacy alias for
+        ``'mesh'``). Thread-safe: may be called from any thread.
         """
         message = json.dumps({"type": "volume_style", "ref": str(ref), "style": str(style)})
         loop = self._loop

@@ -111,8 +111,7 @@ _MODEL_REP_OPTIONS = [
 ]
 _VOLUME_STYLE_OPTIONS = [
     ("Surface", "surface"),
-    ("Wireframe", "wireframe"),
-    ("Mesh", "mesh"),
+    ("Mesh", "mesh"),  # chickenwire — the crystallographer's map "mesh" (edges only)
 ]
 _MODEL_COLOR_OPTIONS = [
     ("Default", None),
@@ -6013,7 +6012,7 @@ class DesktopApp:
                 pass
 
     def set_volume_style(self, vid: str, style: str) -> None:
-        """Change a volume's isosurface style (surface/wireframe/mesh) live."""
+        """Change a volume's isosurface style (surface or mesh) live."""
         self._volume_command(vid, "style", style,
                              lambda c, ref, v: c.set_volume_style(ref, v))
 

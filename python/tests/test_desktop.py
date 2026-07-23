@@ -2144,8 +2144,8 @@ def test_representation_dropdowns(qapp):
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
         v = app._volume_entry(vid)
         assert v["style"] == "surface"
-        app.set_volume_style(vid, "wireframe")
-        assert v["style"] == "wireframe"
+        app.set_volume_style(vid, "mesh")
+        assert v["style"] == "mesh"
 
         # Focusing the model shows its appearance controls (representation, colour,
         # structure-type show/hide) in the Appearance pane.

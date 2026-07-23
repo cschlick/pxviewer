@@ -1878,8 +1878,8 @@ async function applySlabTo(plugin: PluginContext, ref: string, slab: Slab) {
 
 const STYLE_VISUALS: Record<string, string[]> = {
     surface: ['solid'],
-    wireframe: ['wireframe'],
-    mesh: ['solid', 'wireframe'],
+    mesh: ['wireframe'],        // chickenwire — the crystallographer's map "mesh" (edges only)
+    wireframe: ['wireframe'],   // legacy alias for 'mesh'
 };
 
 /** Update a volume's representation params in place — no scene rebuild, so this is

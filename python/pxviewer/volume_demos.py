@@ -372,7 +372,7 @@ def run_live_volume_demo(
     and starts a `LiveSession` (using a single off-screen atom for the WebSocket
     channel). The main thread then animates the two volumes, demonstrating
     multi-volume addressing, live color changes, live opacity changes and live
-    isosurface style changes (surface, wireframe, mesh).
+    isosurface style changes (surface, mesh).
     """
     frontend_dir = _find_frontend_dir()
     if frontend_dir is None or not (frontend_dir / "build" / "index.js").exists():
@@ -426,7 +426,7 @@ def run_live_volume_demo(
 
         colors = ["red", "green", "blue", "purple", "gold"]
         opacities = [1.0, 0.6, 0.3]
-        styles = ["surface", "wireframe", "mesh"]
+        styles = ["surface", "mesh"]
         positions = [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 0.0, 0.0), (-2.0, 0.0, 0.0)]
         step = 0
         try:
