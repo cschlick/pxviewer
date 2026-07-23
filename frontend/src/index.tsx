@@ -13,6 +13,16 @@ const DEFAULT_WS = 'ws://127.0.0.1:8787';
 function App() {
     const model = useCreatePluginViewModel({
         spec: (s) => {
+            // Drop Mol*'s click-to-focus surroundings representation. By default, clicking
+            // an atom "focuses" it and StructureFocusRepresentation draws the residues within
+            // a radius in a distinct colour *and* their non-covalent interactions (its
+            // nciParams — the stray H-bonds). pxviewer drives its own selection, measurement
+            // and picking on click and never asked for that overlay, so it only reads as two
+            // bugs: a colour change in a radius, and H-bonds that ignore the Interactions
+            // checkbox. Removing this behavior leaves camera-focus and focus *state* intact;
+            // it only stops the representation being drawn.
+            s.behaviors = s.behaviors.filter((b: any) =>
+                b?.transformer?.id !== 'ms-plugin.create-structure-focus-representation');
             s.behaviors.push(MolViewSpecBehavior);
             // Registers the 'interactions' representation type and its computed
             // custom property, so `set_interactions` from Python has something
