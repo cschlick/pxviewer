@@ -79,10 +79,24 @@ class Tug:
         atom: int,
         *,
         radius: float = ZONE_RADIUS,
+        mode: str = "sphere",
+        flank: int = 0,
         map_data: Any = None,
         map_weight: float = 10.0,
         steps: int = STEPS_PER_FRAME,
     ):
+        """Build a drag around ``atom``. What gives way is set by ``mode``:
+
+        - ``"sphere"`` (default): whole residues within ``radius`` A — Coot's sphere refine.
+        - ``"residues"``: the dragged residue and ``flank`` residues each side of it along
+          its chain. ``flank=0`` is a single-residue refine; ``flank=2`` a five-residue
+          stretch. Sequence-based, so it does not balloon with a dense neighbourhood the way
+          a sphere can, which is what makes it the right tool for nudging one sidechain or
+          walking a loop.
+
+        Everything downstream — the boundary pins, the restraint sub-manager, the map term —
+        is the same whatever picks the zone; only the selection differs.
+        """
         from cctbx.array_family import flex
 
         self.model = model
@@ -101,7 +115,10 @@ class Tug:
         if not 0 <= self.atom < len(sites):
             raise ValueError(f"no atom {atom} in this model")
 
-        zone = _zone_selection(model, sites, self.atom, radius)
+        if mode == "residues":
+            zone = _residue_zone(model, self.atom, int(flank), len(sites))
+        else:
+            zone = _zone_selection(model, sites, self.atom, radius)
         self._zone = flex.bool(zone.tolist())
         self._indices = np.flatnonzero(zone)
         # Where the dragged atom sits within the zone: the sub-manager renumbers.
@@ -295,6 +312,29 @@ def _zone_selection(model: Any, sites: np.ndarray, atom: int, radius: float) -> 
         i_seqs = np.asarray(indices, dtype=int)
         if near[i_seqs].any():
             zone[i_seqs] = True
+    return zone
+
+
+def _residue_zone(model: Any, atom: int, flank: int, n_atoms: int) -> np.ndarray:
+    """The dragged atom's residue plus ``flank`` residues each side along its chain.
+
+    Sequence order, not distance: neighbours are the residues before and after in the
+    chain, so the zone is a stretch of the backbone rather than a ball of whatever happens
+    to be nearby. Clamped at the ends of the chain block that holds the atom (a chain id
+    reused for a later block — its waters, say — is a separate block and does not extend
+    the stretch into it).
+    """
+    zone = np.zeros(n_atoms, dtype=bool)
+    for m in model.get_hierarchy().models():
+        for chain in m.chains():
+            groups = list(chain.residue_groups())
+            seqs = [np.asarray(rg.atoms().extract_i_seq(), dtype=int) for rg in groups]
+            for i, iseqs in enumerate(seqs):
+                if (iseqs == atom).any():
+                    lo, hi = max(0, i - flank), min(len(groups) - 1, i + flank)
+                    for j in range(lo, hi + 1):
+                        zone[seqs[j]] = True
+                    return zone
     return zone
 
 

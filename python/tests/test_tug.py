@@ -48,6 +48,62 @@ def test_a_tug_pulls_it_does_not_teleport():
     assert energies.bond_deviations()[2] < 0.1
 
 
+def test_scope_modes_pick_the_right_atoms():
+    """The drag scope decides what gives way: a sphere, a single residue, or a stretch of
+    residues each side along the chain (Coot's refine scopes)."""
+    _require_restraints()
+    from pxviewer.tug import Tug
+
+    model = _model()
+    hierarchy = model.get_hierarchy()
+    chain = list(list(hierarchy.models())[0].chains())[0]
+    groups = list(chain.residue_groups())
+    idx = 40
+    atom = int(groups[idx].atoms().extract_i_seq()[0])
+
+    def residues_in(indices):
+        got = set(indices.tolist())
+        return sum(1 for rg in groups
+                   if set(np.asarray(rg.atoms().extract_i_seq(), int).tolist()) & got)
+
+    single = Tug(model, atom, mode="residues", flank=0)
+    assert residues_in(single.indices) == 1               # just the grabbed residue
+    single.finish()
+
+    stretch = Tug(model, atom, mode="residues", flank=2)
+    assert residues_in(stretch.indices) == 5              # it and two each side
+    # and it is a contiguous run in sequence, not a ball of neighbours
+    expected = set()
+    for j in range(idx - 2, idx + 3):
+        expected |= set(np.asarray(groups[j].atoms().extract_i_seq(), int).tolist())
+    assert set(stretch.indices.tolist()) == expected
+    stretch.finish()
+
+    sphere = Tug(model, atom, mode="sphere", radius=8.0)
+    assert residues_in(sphere.indices) > 5                # the neighbourhood, more than a stretch
+    sphere.finish()
+
+
+def test_scope_stretch_clamps_at_the_chain_end():
+    """A stretch near the start of a chain does not run off into the residue before it (or
+    into a different chain block); it clamps."""
+    _require_restraints()
+    from pxviewer.tug import Tug
+
+    model = _model()
+    chain = list(list(model.get_hierarchy().models())[0].chains())[0]
+    groups = list(chain.residue_groups())
+    atom = int(groups[0].atoms().extract_i_seq()[0])  # first residue
+
+    tug = Tug(model, atom, mode="residues", flank=3)
+    got = set(tug.indices.tolist())
+    # residue 0 plus up to 3 after it — never a residue "before" residue 0.
+    reached = [i for i, rg in enumerate(groups)
+               if set(np.asarray(rg.atoms().extract_i_seq(), int).tolist()) & got]
+    assert reached == [0, 1, 2, 3]
+    tug.finish()
+
+
 def test_only_the_zone_moves_and_it_stays_attached():
     """Two things at once. The zone is what makes this interactive at all — its cost is
     its own size, not the model's — and grm.select drops every restraint reaching out of
@@ -247,6 +303,39 @@ def test_restraints_are_built_once_not_per_drag():
     assert model.get_restraints_manager() is grm
 
 
+def test_desktop_scope_reaches_the_tug():
+    """The Settings 'Moves:' control sets the scope, and a drag started afterwards builds a
+    Tug with it — a single residue moves far fewer atoms than the default sphere."""
+    _require_restraints()
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_file(str(MODEL))
+        mid = app._models[0]["id"]
+
+        app.set_tug_scope(mode="sphere", radius=8.0)
+        app._serve_tug(mid, "begin", 300, None)
+        sphere_zone = app._tug.zone_size
+        app._serve_tug(mid, "end", 300, None)
+
+        app.set_tug_scope(mode="residues", flank=0)
+        app._serve_tug(mid, "begin", 300, None)
+        single_zone = app._tug.zone_size
+        app._serve_tug(mid, "end", 300, None)
+
+        assert single_zone < sphere_zone            # one residue is fewer atoms than a sphere
+        assert app._tug is None                     # cleaned up after each drag
+    finally:
+        app.stop()
+
+
 def test_desktop_continuous_free_runs_and_dedups(qapp=None):
     """The desktop wiring: in continuous mode the worker keeps stepping with no new
     message (so a held-still drag settles), and identical frames are not re-sent (so a
@@ -266,7 +355,9 @@ def test_desktop_continuous_free_runs_and_dedups(qapp=None):
         mid = app._models[0]["id"]
         session = app._models[0]["session"]
         pushed = []
-        session.push = lambda c, _p=session.push: (pushed.append(1), _p(c))[1]
+        # push takes an optional `changed` (the moved-atom set for delta frames); accept and
+        # forward it so the mock matches the real signature.
+        session.push = lambda c, changed=None, _p=session.push: (pushed.append(1), _p(c, changed=changed))[1]
 
         app.set_tug_continuous(True)
         start = session.model.get_sites_cart().as_numpy_array()[300].copy()

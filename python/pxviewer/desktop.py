@@ -1630,13 +1630,67 @@ class ControlsWindow:
 
     def _build_drag_group(self):
         """The 'Drag atoms' options (lives on the Settings tab)."""
-        from PySide6.QtWidgets import QCheckBox, QGroupBox, QLabel, QVBoxLayout
+        from PySide6.QtWidgets import (
+            QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QSpinBox,
+            QVBoxLayout,
+        )
 
         dragging = QGroupBox("Drag atoms")
         dg = QVBoxLayout(dragging)
         hint = QLabel("Shift-drag any atom or bond to pull it; the model bends to follow.")
         hint.setWordWrap(True)
         dg.addWidget(hint)
+
+        # What a drag lets move — Coot's refine scopes. A sphere (whole residues within a
+        # radius), a single residue, or a stretch of residues each side along the chain.
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("Moves:"))
+        scope_combo = QComboBox()
+        scope_combo.addItem("Sphere", "sphere")
+        scope_combo.addItem("Single residue", "single")
+        scope_combo.addItem("Residue stretch", "stretch")
+        scope_combo.setToolTip(
+            "What a drag is allowed to move:\n"
+            "• Sphere — every residue within the radius (the default)\n"
+            "• Single residue — only the one you grab\n"
+            "• Residue stretch — that residue and a few each side along the chain")
+        scope_row.addWidget(scope_combo)
+        radius_spin = QDoubleSpinBox()
+        radius_spin.setRange(2.0, 20.0)
+        radius_spin.setDecimals(0)
+        radius_spin.setSingleStep(1.0)
+        radius_spin.setSuffix(" Å")
+        radius_spin.setValue(self._desktop._tug_scope["radius"])
+        radius_spin.setToolTip("Radius of the sphere that gives way.")
+        scope_row.addWidget(radius_spin)
+        flank_spin = QSpinBox()
+        flank_spin.setRange(1, 20)
+        flank_spin.setPrefix("± ")
+        flank_spin.setSuffix(" res")
+        flank_spin.setValue(2)
+        flank_spin.setToolTip("How many residues each side of the grabbed one also move.")
+        scope_row.addWidget(flank_spin)
+        scope_row.addStretch()
+        dg.addLayout(scope_row)
+
+        def _apply_scope() -> None:
+            kind = scope_combo.currentData()
+            radius_spin.setVisible(kind == "sphere")
+            flank_spin.setVisible(kind == "stretch")
+            if kind == "sphere":
+                self._safe(lambda: self._desktop.set_tug_scope(
+                    mode="sphere", radius=radius_spin.value()))
+            elif kind == "single":
+                self._safe(lambda: self._desktop.set_tug_scope(mode="residues", flank=0))
+            else:
+                self._safe(lambda: self._desktop.set_tug_scope(
+                    mode="residues", flank=flank_spin.value()))
+
+        scope_combo.currentIndexChanged.connect(lambda _i: _apply_scope())
+        radius_spin.valueChanged.connect(lambda _v: _apply_scope())
+        flank_spin.valueChanged.connect(lambda _v: _apply_scope())
+        _apply_scope()  # set initial visibility (radius shown, flank hidden)
+
         self._tug_density_check = QCheckBox("Into the density")
         self._tug_density_check.setToolTip(
             "Let the map pull too, so a drag settles the neighbourhood into density "
@@ -4140,6 +4194,9 @@ class DesktopApp:
         # than a nudge-and-stop; the checkbox in Settings mirrors this.
         self._tug_into_density = False
         self._tug_continuous = True
+        # What a drag lets move (see tug.Tug): a sphere of a given radius, or a stretch of
+        # residues (flank each side; 0 == single residue). Default is the sphere.
+        self._tug_scope = {"mode": "sphere", "radius": 8.0, "flank": 0}
         self._tug: Any = None
         self._tug_model: Optional[str] = None
         self._tug_session: Any = None
@@ -4998,6 +5055,19 @@ class DesktopApp:
         """
         self._tug_continuous = bool(enabled)
 
+    def set_tug_scope(self, *, mode: Optional[str] = None,
+                      radius: Optional[float] = None, flank: Optional[int] = None) -> None:
+        """Set what a drag lets move: a ``sphere`` of ``radius`` A, or a residue stretch of
+        ``flank`` residues each side (``mode='residues'``, ``flank=0`` for a single residue).
+        Takes effect on the next drag; a drag already running keeps the scope it began with.
+        """
+        if mode is not None:
+            self._tug_scope["mode"] = mode
+        if radius is not None:
+            self._tug_scope["radius"] = float(radius)
+        if flank is not None:
+            self._tug_scope["flank"] = int(flank)
+
     def set_live_difference_map(self, enabled: bool) -> None:
         """Whether a drag streams a live mFo-DFc difference map around the dragged atom.
 
@@ -5382,8 +5452,11 @@ class DesktopApp:
                 # Against the pre-warm (see _warm_restraints): if one is in flight for this
                 # model, wait for it rather than building the same thing alongside it.
                 with self._restraints_lock:
-                    self._tug = Tug(model, atom, map_data=self.map_for_model(mid)
-                                    if self._tug_into_density else None)
+                    scope = self._tug_scope
+                    self._tug = Tug(
+                        model, atom,
+                        mode=scope["mode"], radius=scope["radius"], flank=scope["flank"],
+                        map_data=self.map_for_model(mid) if self._tug_into_density else None)
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"could not start dragging: {exc}")
                 self._tug = None
