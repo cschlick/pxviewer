@@ -893,6 +893,35 @@ def test_a_model_and_its_reflections_are_one_group_before_phasing(qapp):
         app.stop()
 
 
+def test_a_standalone_object_is_not_indented_like_a_group_member(qapp):
+    """Qt indents column 0 only, so without help a group member's *name* sits at the same x
+    as a standalone object's and everything looks like it belongs to the group above. The
+    name column carries its own indent so a root object reads as standing alone."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp, _GROUP_MEMBER_INDENT
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_xray_demo()                    # a group: model + reflections
+        qapp.processEvents()
+        app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "loose")
+        qapp.processEvents()
+
+        tree = app._controls._loaded_tree
+        roots = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+        group = next(r for r in roots if r.childCount())
+        loose = next(r for r in roots if not r.childCount() and r.text(2))
+
+        assert group.child(0).text(2).startswith(_GROUP_MEMBER_INDENT)  # member: indented
+        assert not loose.text(2).startswith(" ")                        # standalone: flush
+        assert loose.text(2).startswith("loose")
+    finally:
+        app.stop()
+
+
 def test_separately_loaded_models_stay_out_of_a_group(qapp):
     """Grouping is for objects opened as a unit. Models opened on their own stay top-level
     — they must not be swept into a group made by a later load."""

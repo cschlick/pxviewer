@@ -109,6 +109,10 @@ _MODEL_REP_OPTIONS = [
     ("Spacefill", "spacefill"),
     ("Surface", "surface"),
 ]
+# Prefix for a grouped object's name in the Objects tree — see _on_loaded_changed. Qt only
+# indents column 0, so the name column needs its own indent to show depth.
+_GROUP_MEMBER_INDENT = "     "
+
 _VOLUME_STYLE_OPTIONS = [
     ("Surface", "surface"),
     ("Mesh", "mesh"),  # chickenwire — the crystallographer's map "mesh" (edges only)
@@ -3912,8 +3916,13 @@ class ControlsWindow:
                     self._loaded_tree.setItemWidget(node, 1, radio)
                 # No marker suffix: its name ("Ligand marker N") already says what it is.
                 suffix = {"volume": "   [map]", "reflections": "   [data]"}
-                name = it["name"] + suffix.get(it["kind"], "")
-                node.setText(2, name)
+                # Indent a group member's name by hand. Qt applies tree indentation to
+                # column 0 only, so the checkbox shifts with depth but the name — the part
+                # you actually read — sits at the same x whether the object is in a group or
+                # standing alone, which made every object look like a group member. Indent
+                # the name to match, and an object at the root reads as standing alone.
+                indent = _GROUP_MEMBER_INDENT if it["group"] else ""
+                node.setText(2, indent + it["name"] + suffix.get(it["kind"], ""))
                 node.setToolTip(2, it["name"])  # full name on hover when elided
                 if it.get("active"):
                     active_item = node
