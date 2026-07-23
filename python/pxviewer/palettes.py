@@ -1,21 +1,23 @@
 """Default-colour palettes for objects as they open.
 
-A bundled set of named four-colour palettes (``data/palettes.json``). Each new *family* —
-a model together with the maps phased from it, or a standalone object — is handed the next
-palette, and its objects draw their opening colours from it: the model, its 2mFo-DFc/regular
-maps, and so on. Everything stays a *default* — the moment a colour is changed by hand it
-sticks; this only decides what a fresh object looks like before anyone touches it.
+A bundled set of named four-colour palettes (``data/palettes.json``). One :class:`PaletteCycler`
+lives on the app and hands each new object an opening colour: it picks a *random* palette group
+when the app starts, gives each object a random colour from that group, and rolls to a fresh
+random group every fourth object. So colours differ from run to run (not a fixed sequence),
+objects that open close together share a group and therefore contrast rather than clash, and
+across a session the palette keeps changing.
 
-The palettes are deliberately loud and mutually-contrasting within a set, so a structure and
-its maps read apart while still looking like a coordinated family, and successive structures
-get visibly different palettes.
+Everything stays a *default* — the moment a colour is changed by hand it sticks; this only
+decides what a fresh object looks like before anyone touches it. Difference maps are exempt
+(they keep their conventional green/red) and so never draw a palette colour.
 """
 
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 _PALETTES_PATH = Path(__file__).resolve().parent / "data" / "palettes.json"
 
@@ -23,8 +25,8 @@ _PALETTES_PATH = Path(__file__).resolve().parent / "data" / "palettes.json"
 def load_palettes() -> List[List[str]]:
     """Every bundled palette as a list of ``[c0, c1, c2, c3]`` hex-colour lists.
 
-    Order follows the file (insertion order), so the cycle is stable across runs. Returns a
-    single neutral fallback if the data file is somehow missing, so colouring never fails.
+    Returns a single neutral fallback if the data file is somehow missing, so colouring
+    never fails.
     """
     try:
         data = json.loads(_PALETTES_PATH.read_text())
@@ -33,30 +35,32 @@ def load_palettes() -> List[List[str]]:
     return [list(colours) for colours in data.values() if len(colours) >= 4]
 
 
-class PaletteCycler:
-    """Hands out palettes one after another, wrapping at the end.
+#: How many objects share one random group before a new one is rolled.
+_GROUP_SIZE = 4
 
-    Stateful and deterministic: the Nth call to :meth:`next` returns palette ``N % count``,
-    so the first structure of a session gets the first palette, the next the second, and so
-    on. One cycler lives on the app; each family calls :meth:`next` once when it forms.
+
+class PaletteCycler:
+    """Hands out random opening colours (see the module docstring).
+
+    A random group is chosen when the cycler is created; each :meth:`next_colour` returns a
+    random colour from it, avoiding the one just handed out so two objects in a row are never
+    identical; every ``_GROUP_SIZE`` colours a fresh random group is rolled. Seeded from
+    system entropy, so a session's colours differ from the last.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, seed: Optional[int] = None) -> None:
         self._palettes = load_palettes()
-        self._flat = [colour for palette in self._palettes for colour in palette]
-        self._cursor = 0
-        self._colour_cursor = 0
-
-    def next(self) -> List[str]:
-        palette = self._palettes[self._cursor % len(self._palettes)]
-        self._cursor += 1
-        return list(palette)
+        self._rng = random.Random(seed)  # seed only for tests; None -> entropy, different runs
+        self._group = list(self._rng.choice(self._palettes))
+        self._assigned = 0
+        self._last: Optional[str] = None
 
     def next_colour(self) -> str:
-        """The next single colour, walking every palette's colours in order — for an object
-        that is not part of a model family (a standalone map) but should still take a default
-        from the palettes rather than a separate list. Consecutive calls are distinct within a
-        palette (its four contrast), so overlaid standalone maps read apart."""
-        colour = self._flat[self._colour_cursor % len(self._flat)]
-        self._colour_cursor += 1
+        """A random colour for the next object — see the class docstring."""
+        if self._assigned and self._assigned % _GROUP_SIZE == 0:
+            self._group = list(self._rng.choice(self._palettes))  # a new group every four
+        choices = [c for c in self._group if c != self._last] or list(self._group)
+        colour = self._rng.choice(choices)
+        self._assigned += 1
+        self._last = colour
         return colour

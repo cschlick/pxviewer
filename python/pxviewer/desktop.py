@@ -4687,30 +4687,14 @@ class DesktopApp:
 
     def _model_colour_kwargs(self, entry, rep: str) -> dict:
         """How to colour a model's representation: an explicit user colour wins; else the
-        family palette (carbon-tint for atoms, uniform for ribbons); else the theme default."""
+        palette default (carbon-tint for atoms, uniform for ribbons); else the theme default."""
         explicit = entry.get("color")
         if explicit:
             return {"color": explicit}  # a colour the user set by hand — uniform, as before
-        base = (entry.get("palette") or [None])[0]  # the family's model colour
+        base = entry.get("color_default")  # the random palette default set at creation
         if base:
             return {"carbon_color": base} if _rep_shows_atoms(rep) else {"color": base}
-        return {"color": _model_rep_color(rep)}  # no palette (fallback): the theme default
-
-    def _next_family_map_color(self, gid: Optional[str]) -> Optional[str]:
-        """The next map colour from group ``gid``'s model-family palette, advancing its slot.
-
-        Returns None when the group has no palette-bearing model (then the caller keeps the
-        map's conventional colour) — and is only for *non-difference* maps; a difference map
-        keeps green/red regardless, so it never draws a slot."""
-        if gid is None:
-            return None
-        for entry in self._models:
-            if entry.get("group") == gid and entry.get("palette"):
-                palette = entry["palette"]
-                slot = entry.get("palette_slot", 1)
-                entry["palette_slot"] = slot + 1
-                return palette[slot % len(palette)]
-        return None
+        return {"color": _model_rep_color(rep)}  # no default (fallback): the theme default
 
     def _default_model_rep(self, session) -> str:
         from . import cctbx_io
@@ -4734,10 +4718,10 @@ class DesktopApp:
                  "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
                  "type_groups": None, "clip": (0.0, 1.0),
                  "interactions": False, "edits": [],
-                 # This model + the maps phased from it are one family, coloured from one
-                 # palette: the model takes slot 0, its maps the rest (palette_slot is the
-                 # next map slot). See _model_colour_kwargs and _next_family_map_color.
-                 "palette": self._palettes.next(), "palette_slot": 1}
+                 # Opening colour: a random pick from the session's current palette group
+                 # (see palettes.PaletteCycler). Overridden the moment the user sets one by
+                 # hand. Read by _model_colour_kwargs.
+                 "color_default": self._palettes.next_colour()}
         self._models.append(entry)
         self._apply_model_rep(entry)
         self._active_model_id = mid
@@ -6356,9 +6340,8 @@ class DesktopApp:
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
             "iso": data.suggested_iso() if iso is None else float(iso),
             # A given colour wins (a difference map's green, or a caller's choice); else the
-            # map draws its default from the palettes — its model family's if it has one (so a
-            # model and its maps match), or the next palette colour if it stands alone.
-            "color": color or self._next_family_map_color(group) or self._palettes.next_colour(),
+            # map draws a random default from the session's current palette group.
+            "color": color or self._palettes.next_colour(),
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color,
         })
@@ -6635,9 +6618,9 @@ class DesktopApp:
                         is_diff = map_type in DIFFERENCE_MAP_TYPES
                         colour, iso, negative = MAP_STYLE[is_diff]
                         # Difference maps keep green/red (Coot semantics); the 2mFo-DFc map
-                        # takes the next colour from the model's family palette.
+                        # takes a random colour from the session's current palette group.
                         if not is_diff:
-                            colour = self._next_family_map_color(gid) or colour
+                            colour = self._palettes.next_colour()
                         self._add_volume(
                             VolumeData.from_map_manager(
                                 mmm.get_map_manager_by_id(map_type),
@@ -6774,8 +6757,8 @@ class DesktopApp:
                 label = coefficients.info().label_string()
                 is_diff = is_difference_map(label)
                 colour, iso, negative = MAP_STYLE[is_diff]
-                if not is_diff:  # a no-op here (no model in this group), consistent with make_maps
-                    colour = self._next_family_map_color(gid) or colour
+                if not is_diff:  # a random palette colour; difference maps keep green/red
+                    colour = self._palettes.next_colour()
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
                 # A map from reflections fills the unit cell: open it with a radius,

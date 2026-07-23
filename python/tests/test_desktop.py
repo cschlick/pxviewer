@@ -854,9 +854,9 @@ def test_cryo_em_demo_refines_a_shaken_model_into_its_density(qapp):
 
 
 def test_palette_default_colours_flow_through_a_family(qapp):
-    """A new model and the maps phased from it draw opening colours from one palette: the
-    model (uniform ribbon, or carbon-tint on atoms) and its 2mFo-DFc map take successive
-    palette slots, while the difference map keeps its conventional green/red."""
+    """A new model and the 2mFo-DFc map phased from it open in random colours drawn from the
+    bundled palettes (the model as a uniform ribbon, or carbon-tint on atoms), while the
+    difference map keeps its conventional green/red."""
     import tempfile
     import time
     from pathlib import Path
@@ -865,6 +865,9 @@ def test_palette_default_colours_flow_through_a_family(qapp):
     from pxviewer.cctbx_io import read_model
     from pxviewer.desktop import DesktopApp
     from pxviewer.loader import sample_structure_path
+    from pxviewer.palettes import load_palettes
+
+    palette_colours = {c for palette in load_palettes() for c in palette}
 
     path = sample_structure_path()  # 1UBQ, a polymer
     model = read_model(str(path))
@@ -885,19 +888,19 @@ def test_palette_default_colours_flow_through_a_family(qapp):
             qapp.processEvents()
             time.sleep(0.02)
         entry = app._models[0]
-        palette = entry["palette"]
-        assert len(palette) == 4 and all(c.startswith("#") for c in palette)
+        model_colour = entry["color_default"]
+        assert model_colour in palette_colours  # a random pick from a bundled palette
         session = entry["session"]
 
         def rep():
             return list(session._representations.values())[0]
 
-        # Polymer default is a cartoon in a uniform palette[0] (a solid ribbon).
+        # Polymer default is a cartoon in that colour, uniform (a solid ribbon).
         assert entry["rep"] == "cartoon"
-        assert rep()["color"] == "uniform" and rep()["colorValue"] == palette[0]
+        assert rep()["color"] == "uniform" and rep()["colorValue"] == model_colour
         # Switched to an atom view, the same colour becomes a carbon tint (O/N/S standard).
         app.set_model_representation(entry["id"], "ball-and-stick")
-        assert rep().get("carbonColor") == palette[0]
+        assert rep().get("carbonColor") == model_colour
 
         app.load_files([str(mtz)])
         deadline = time.time() + 40
@@ -910,8 +913,8 @@ def test_palette_default_colours_flow_through_a_family(qapp):
             qapp.processEvents()
             time.sleep(0.05)
         maps = {v["name"]: v for v in app._volumes}
-        assert maps["2mFo-DFc"]["color"] == palette[1]   # next palette slot
-        assert maps["mFo-DFc"]["color"] == "green"        # difference map untouched
+        assert maps["2mFo-DFc"]["color"] in palette_colours  # a random palette colour
+        assert maps["mFo-DFc"]["color"] == "green"           # difference map untouched
         assert maps["mFo-DFc"]["negative_color"] == "red"
     finally:
         app.stop()
