@@ -14,6 +14,7 @@ decides what a fresh object looks like before anyone touches it. Difference maps
 
 from __future__ import annotations
 
+import colorsys
 import json
 import random
 from pathlib import Path
@@ -37,6 +38,37 @@ def load_palettes() -> List[List[str]]:
 
 #: How many objects share one random group before a new one is rolled.
 _GROUP_SIZE = 4
+
+
+def _hue(colour: str) -> float:
+    """A ``#RRGGBB`` colour's hue in [0, 1); anything unparseable sorts first."""
+    try:
+        r, g, b = (int(colour[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+    except (ValueError, IndexError):  # pragma: no cover - the bundled file is hex
+        return -1.0
+    return colorsys.rgb_to_hsv(r, g, b)[0]
+
+
+def suggested_colours(count: int = 8) -> List[str]:
+    """A short list of distinct colours to offer when picking one by hand.
+
+    Drawn from the same bundled palettes the automatic defaults come from, so a colour set
+    deliberately sits in the same family as the ones objects open in, rather than looking
+    imported from somewhere else. Spread around the hue circle and de-duplicated, so
+    neighbouring swatches read apart instead of being three versions of the same pink.
+    """
+    seen: List[str] = []
+    for palette in load_palettes():
+        for colour in palette:
+            if colour not in seen:
+                seen.append(colour)
+    if not seen:  # pragma: no cover - load_palettes always yields its fallback
+        return []
+    by_hue = sorted(seen, key=_hue)
+    if count >= len(by_hue):
+        return by_hue
+    step = len(by_hue) / count
+    return [by_hue[int(i * step)] for i in range(count)]
 
 
 class PaletteCycler:

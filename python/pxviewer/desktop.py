@@ -32,10 +32,13 @@ from .loader import (
     file_kind,
     sample_structure_path,
 )
+from .palettes import suggested_colours
 from .webapp import Webapp
 
-# Distinct default isosurface colours so overlaid volumes read apart.
-_VOLUME_COLORS = ["gold", "dodgerblue", "salmon", "mediumseagreen", "orchid", "orange"]
+# The swatches offered when colouring an object by hand — hex, drawn from the bundled
+# palettes (see palettes.suggested_colours) so a hand-picked colour comes from the same
+# inventory as the ones objects open in.
+_VOLUME_COLORS = suggested_colours()
 # Sentinel for the "Custom…" entry in a colour dropdown (never a real colour value).
 _CUSTOM_COLOR = "\x00custom"
 
@@ -2681,7 +2684,9 @@ class ControlsWindow:
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(6)
         for name in _VOLUME_COLORS:
-            combo.addItem(swatch(name), name.capitalize(), name)
+            # The swatch is what identifies it; the text is just the hex, kept as written
+            # (capitalize() would lower-case the digits of a colour like #FF2D95).
+            combo.addItem(swatch(name), name.upper(), name)
         custom = None
         if current and current not in _VOLUME_COLORS:
             custom = current  # a picked colour: keep it on the list so it stays selected

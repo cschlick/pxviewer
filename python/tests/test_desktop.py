@@ -3051,20 +3051,22 @@ def test_custom_colour_previews_live_not_only_on_close(qapp):
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QColorDialog
 
-    from pxviewer.desktop import DesktopApp
+    from pxviewer.desktop import _VOLUME_COLORS, DesktopApp
+
+    first, second = _VOLUME_COLORS[0], _VOLUME_COLORS[1]
 
     app = DesktopApp(port=0)
     app._webapp.start()
     try:
         applied = []
-        combo = app._controls._add_color_row("gold", applied.append)
+        combo = app._controls._add_color_row(first, applied.append)
 
         # A preset still applies at once.
-        combo.setCurrentIndex(combo.findData("salmon"))
-        assert applied[-1] == "salmon"
+        combo.setCurrentIndex(combo.findData(second))
+        assert applied[-1] == second
 
         # The live wire the picker uses: currentColorChanged -> apply, per move.
-        dialog = QColorDialog(QColor("gold"))
+        dialog = QColorDialog(QColor(first))
         dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
         live = []
         dialog.currentColorChanged.connect(
