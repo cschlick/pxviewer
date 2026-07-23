@@ -853,6 +853,72 @@ def test_cryo_em_demo_refines_a_shaken_model_into_its_density(qapp):
         app.stop()
 
 
+def test_a_model_and_its_reflections_are_one_group_before_phasing(qapp):
+    """A model opened with its reflections is shown as one group straight away, and Make
+    maps fills that same group in rather than starting a second one.
+
+    A group is how the panel shows things that belong together; only some groups carry a
+    cctbx map_model_manager. Grouping the pair before it is phased must therefore not make
+    the model look 'already paired' — it has to stay phasable.
+    """
+    import time
+
+    pytest.importorskip("mmtbx.f_model")
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_xray_demo()
+        qapp.processEvents()
+
+        model = app._models[0]
+        refl = app._reflections[0]
+        gid = model["group"]
+        assert gid is not None and refl["group"] == gid   # one group, from the moment it loads
+        assert app.group_mmm(gid) is None                 # but no manager yet — not paired
+        assert model["id"] in [m["id"] for m in app.models_for_phasing()]  # so still phasable
+
+        groups_before = set(app._groups)
+        app.make_maps(refl["id"], model["id"])
+        deadline = time.time() + 180
+        while time.time() < deadline and app.map_for_model(model["id"]) is None:
+            qapp.processEvents()
+            time.sleep(0.05)
+
+        assert set(app._groups) == groups_before          # filled in, not a second group
+        assert app.group_mmm(gid) is not None             # now it has its manager
+        assert all(v["group"] == gid for v in app._volumes)  # the maps landed in it too
+    finally:
+        app.stop()
+
+
+def test_separately_loaded_models_stay_out_of_a_group(qapp):
+    """Grouping is for objects opened as a unit. Models opened on their own stay top-level
+    — they must not be swept into a group made by a later load."""
+    pytest.importorskip("websockets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        loose_a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        loose_b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert app._model_entry(loose_a)["group"] is None
+        assert app._model_entry(loose_b)["group"] is None
+
+        app.load_xray_demo()          # a later unit-load forms its own group
+        qapp.processEvents()
+
+        # The two loose models are untouched by it.
+        assert app._model_entry(loose_a)["group"] is None
+        assert app._model_entry(loose_b)["group"] is None
+        assert len(app._groups) == 1  # only the x-ray pair grouped
+    finally:
+        app.stop()
+
+
 def test_palette_default_colours_flow_through_a_family(qapp):
     """A new model and the 2mFo-DFc map phased from it open in random colours drawn from the
     bundled palettes (the model as a uniform ribbon, or carbon-tint on atoms), while the

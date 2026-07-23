@@ -3870,6 +3870,12 @@ class ControlsWindow:
                     node = QTreeWidgetItem(self._loaded_tree, [heading])
                     node.setData(0, Qt.ItemDataRole.UserRole, ("group", gid))
                     node.setFirstColumnSpanned(True)  # the header spans the whole row
+                    # Bold, so a header reads as one. Without it a group's members and the
+                    # loose top-level objects below them look like one flat run, and the
+                    # loose ones appear to belong to the group above.
+                    font = node.font(0)
+                    font.setBold(True)
+                    node.setFont(0, font)
                     node.setExpanded(True)
                     group_nodes[gid] = node
             for it in items:
@@ -4502,20 +4508,58 @@ class DesktopApp:
         self._groups[gid] = {"name": name, "mmm": mmm, "label": label}
         return gid
 
+    def _object_ids(self) -> set:
+        """Every loaded object's id — snapshot it before a load to tell what that load added."""
+        return {e["id"] for e in (*self._models, *self._volumes, *self._reflections)}
+
+    def _group_loaded_together(self, before: set, name: str,
+                               label: str = "model + data") -> None:
+        """Group the objects this load just added (anything new and still ungrouped).
+
+        Files opened as a unit — a model and the reflections to phase it against — belong
+        together in the panel from the moment they land, not only once cctbx has a manager
+        for them. Scoped to what the load added, so objects already sitting loose from
+        earlier are left alone.
+
+        The group carries no ``mmm``, so nothing is treated as paired (see
+        :meth:`_is_paired`); Make maps later fills this same group in rather than starting a
+        second one.
+        """
+        members = [e for e in (*self._models, *self._volumes, *self._reflections)
+                   if e.get("group") is None and e["id"] not in before]
+        if len(members) < 2:
+            return  # a lone object is not a group
+        gid = self._new_group(name, label=label)
+        for entry in members:
+            entry["group"] = gid
+
     def group_mmm(self, gid: Optional[str]) -> Any:
         """The ``map_model_manager`` a group came from, or None if it did not come from one."""
         group = self._groups.get(gid) if gid else None
         return group["mmm"] if group else None
 
+    def _is_paired(self, entry) -> bool:
+        """Whether this object is already held by a cctbx ``map_model_manager``.
+
+        Not the same question as "is it in a group". A group is how the Objects panel shows
+        things that belong together — a model with its reflections and the maps made from
+        them. Only *some* groups carry a manager (a cryo-EM map+model load, or a phasing);
+        a model grouped with its reflections before Make maps has none, and is still free to
+        be phased or paired. Keying the pairing rules off the manager rather than off group
+        membership is what lets the panel group things it would otherwise have to leave loose.
+        """
+        return self.group_mmm(entry.get("group")) is not None
+
     def pairable(self) -> tuple:
         """``(models, volumes)`` that are not paired with anything yet.
 
-        Only ungrouped objects: an object already in a group has a manager speaking for
-        it, and re-pairing it would move it out from under that.
+        Keyed off the manager, not group membership (see :meth:`_is_paired`): an object a
+        manager already speaks for cannot be re-paired without moving it out from under
+        that, but merely being grouped in the panel does not stop anything.
         """
         models = [m for m in self._models
-                  if m.get("group") is None and getattr(m["session"], "model", None) is not None]
-        volumes = [v for v in self._volumes if v.get("group") is None]
+                  if not self._is_paired(m) and getattr(m["session"], "model", None) is not None]
+        volumes = [v for v in self._volumes if not self._is_paired(v)]
         return models, volumes
 
     def pair_model_with_map(self, mid: str, vid: str) -> str:
@@ -4544,7 +4588,13 @@ class DesktopApp:
             model=model, map_manager=ventry["data"].map_manager,
             ignore_symmetry_conflicts=True)
 
-        gid = self._new_group(f"{mentry['name']} + {ventry['name']}", mmm=mmm)
+        # Reuse whichever group these two are already shown in (a model grouped with its
+        # reflections, say), so pairing fills that group in rather than starting a second
+        # one and stranding the rest of it.
+        gid = mentry.get("group") or ventry.get("group")
+        if gid is None:
+            gid = self._new_group(f"{mentry['name']} + {ventry['name']}")
+        self._groups[gid]["mmm"] = mmm
         mentry["group"] = gid
         ventry["group"] = gid
         # cctbx moves the model (and possibly the map) into the shared frame, so show
@@ -6546,7 +6596,7 @@ class DesktopApp:
         from under it.
         """
         return [m for m in self._models
-                if m.get("group") is None
+                if not self._is_paired(m)
                 and getattr(m["session"], "model", None) is not None]
 
     def make_maps(self, rid: str, mid: str) -> None:
@@ -6567,7 +6617,7 @@ class DesktopApp:
             raise ValueError("this file already carries maps; nothing to phase")
         if rentry["data"].path is None:
             raise ValueError("these reflections did not come from a file")
-        if mentry.get("group") is not None:
+        if self._is_paired(mentry):
             raise ValueError("that model is already paired with something")
         model = getattr(mentry["session"], "model", None)
         if model is None:
@@ -6605,8 +6655,15 @@ class DesktopApp:
                     # Also by its own id, so recomputing can put each new map back where
                     # the old one was. The primary keeps cctbx's 'map_manager' id too.
                     mmm.add_map_manager_by_id(out["maps"][map_type], map_type)
-                gid = self._new_group(f"{mentry['name']} + {rentry['name']}",
-                                      mmm=mmm, label="phased from reflections")
+                # Reuse the group the model and its reflections are already shown in (they
+                # are grouped from the moment they load together); phasing just gives that
+                # group its manager and its maps. Only make a new one if they were loaded
+                # apart and are meeting here for the first time.
+                gid = mentry.get("group") or rentry.get("group")
+                if gid is None:
+                    gid = self._new_group(f"{mentry['name']} + {rentry['name']}")
+                self._groups[gid]["mmm"] = mmm
+                self._groups[gid]["label"] = "phased from reflections"
                 mentry["group"] = gid
                 rentry["group"] = gid
                 # Before the batch: leaving it opens _emit_loaded_changed publishes the
@@ -6802,10 +6859,26 @@ class DesktopApp:
 
         models = [p for p in paths if file_kind(p) == "model"]
         maps = [p for p in paths if file_kind(p) == "volume"]
+        reflections = [p for p in paths if file_kind(p) == "reflections"]
         if len(models) > 1:
             raise ValueError("a group can contain at most one model")
+        if not maps and not reflections:
+            raise ValueError("a group needs at least one map or reflection file")
+
         if not maps:
-            raise ValueError("a group needs at least one map file")
+            # A model opened with its reflections: they belong together in the panel even
+            # though cctbx has no manager for them until Make maps phases them.
+            before = self._object_ids()
+            name = Path(models[0]).name if models else Path(reflections[0]).name
+            with self._batch_load():
+                for path in models:
+                    self._load_model_file(path)
+                for path in reflections:
+                    self._load_reflection_file(path)
+                self._group_loaded_together(before, f"{name} + reflections",
+                                            label="not yet phased")
+            self._status(f"Loaded {name} with {len(reflections)} reflection file(s)")
+            return "group"
 
         group_name = Path(models[0]).name if models else Path(maps[0]).name
         mmm = map_model_manager_from_files(model_file=models[0] if models else None, map_files=maps)
@@ -6911,11 +6984,14 @@ class DesktopApp:
         dataset.add_miller_array(flags, column_root_label="R-free-flags")
         dataset.mtz_object().write(mtz)
 
-        # Loaded separately (not paired — pairing them is the demo), but in one batch so
-        # the viewport reloads and the pane rebuilds once rather than twice.
+        # Not paired — pairing them is the demo — but loaded in one batch so the viewport
+        # reloads once, and shown as one group so the pair reads as the unit it is.
+        before = self._object_ids()
         with self._batch_load():
             self._load_model_file(str(sample))
             self._load_reflection_file(mtz)
+            self._group_loaded_together(
+                before, f"{Path(sample).name} + reflections", label="not yet phased")
         self._status(
             f"X-ray demo: {SAMPLE_STRUCTURE[0]} + reflections — open the reflections and "
             "click Make maps")
@@ -6964,9 +7040,12 @@ class DesktopApp:
         dataset.add_miller_array(flags, column_root_label="R-free-flags")
         dataset.mtz_object().write(mtz)
 
+        before = self._object_ids()
         with self._batch_load():
             self._load_model_file(str(sample))
             self._load_reflection_file(mtz)
+            self._group_loaded_together(
+                before, f"{Path(sample).name} + reflections", label="not yet phased")
         self._status(
             "Ligand-fitting demo: a ligand-free model + reflections that contain ATP — open "
             "the reflections, Make maps, then fit ATP into the mFo-DFc blob")
