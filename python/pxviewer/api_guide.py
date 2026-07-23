@@ -27,7 +27,7 @@ _CATEGORIES: List[Tuple[str, List[str]]] = [
         "enable_mouse_selection", "enable_measure_mode", "disable_mouse_selection",
         "wait_for_selection", "on_selection", "on_pick", "on_measurement",
     ]),
-    ("Representations & colour", [
+    ("Representations & color", [
         "set_representation", "add_representation", "remove_representation",
         "clear_representations", "color_by",
     ]),

@@ -246,7 +246,7 @@ def test_custom_atom_site_column_auto_exposed(tmp_path):
     session = LiveSession.from_model_file(_write(tmp_path, "m.cif", cif))
     assert "plddt" in session.attributes()
     assert list(session._attributes["plddt"]) == [88.5, 72.1, 95.0]
-    # and it's usable for colouring
+    # and it's usable for coloring
     session.color_by("plddt")
 
 

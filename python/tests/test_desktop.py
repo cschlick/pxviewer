@@ -948,8 +948,8 @@ def test_separately_loaded_models_stay_out_of_a_group(qapp):
         app.stop()
 
 
-def test_palette_default_colours_flow_through_a_family(qapp):
-    """A new model and the 2mFo-DFc map phased from it open in random colours drawn from the
+def test_palette_default_colors_flow_through_a_family(qapp):
+    """A new model and the 2mFo-DFc map phased from it open in random colors drawn from the
     bundled palettes (the model as a uniform ribbon, or carbon-tint on atoms), while the
     difference map keeps its conventional green/red."""
     import tempfile
@@ -962,7 +962,7 @@ def test_palette_default_colours_flow_through_a_family(qapp):
     from pxviewer.loader import sample_structure_path
     from pxviewer.palettes import load_palettes
 
-    palette_colours = {c for palette in load_palettes() for c in palette}
+    palette_colors = {c for palette in load_palettes() for c in palette}
 
     path = sample_structure_path()  # 1UBQ, a polymer
     model = read_model(str(path))
@@ -983,19 +983,19 @@ def test_palette_default_colours_flow_through_a_family(qapp):
             qapp.processEvents()
             time.sleep(0.02)
         entry = app._models[0]
-        model_colour = entry["color_default"]
-        assert model_colour in palette_colours  # a random pick from a bundled palette
+        model_color = entry["color_default"]
+        assert model_color in palette_colors  # a random pick from a bundled palette
         session = entry["session"]
 
         def rep():
             return list(session._representations.values())[0]
 
-        # Polymer default is a cartoon in that colour, uniform (a solid ribbon).
+        # Polymer default is a cartoon in that color, uniform (a solid ribbon).
         assert entry["rep"] == "cartoon"
-        assert rep()["color"] == "uniform" and rep()["colorValue"] == model_colour
-        # Switched to an atom view, the same colour becomes a carbon tint (O/N/S standard).
+        assert rep()["color"] == "uniform" and rep()["colorValue"] == model_color
+        # Switched to an atom view, the same color becomes a carbon tint (O/N/S standard).
         app.set_model_representation(entry["id"], "ball-and-stick")
-        assert rep().get("carbonColor") == model_colour
+        assert rep().get("carbonColor") == model_color
 
         app.load_files([str(mtz)])
         deadline = time.time() + 40
@@ -1008,7 +1008,7 @@ def test_palette_default_colours_flow_through_a_family(qapp):
             qapp.processEvents()
             time.sleep(0.05)
         maps = {v["name"]: v for v in app._volumes}
-        assert maps["2mFo-DFc"]["color"] in palette_colours  # a random palette colour
+        assert maps["2mFo-DFc"]["color"] in palette_colors  # a random palette color
         assert maps["mFo-DFc"]["color"] == "green"           # difference map untouched
         assert maps["mFo-DFc"]["negative_color"] == "red"
     finally:
@@ -1348,7 +1348,7 @@ def test_pairing_a_boxed_map_keeps_model_and_map_drawn_together(qapp, tmp_path):
 
 
 def test_volume_appearance_controls(qapp, tmp_path):
-    """A focused volume gets style, colour, opacity and a contour level. Each is kept
+    """A focused volume gets style, color, opacity and a contour level. Each is kept
     on the entry (so a scene rebuild restores it) and pushed live (so nothing reloads)."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -1674,8 +1674,8 @@ def test_contour_changed_in_the_viewport_updates_the_controls(qapp):
         app.stop()
 
 
-def test_volume_colour_swatches_and_custom(qapp):
-    """Colours are shown as swatches rather than named, with a picker for anything off
+def test_volume_color_swatches_and_custom(qapp):
+    """Colors are shown as swatches rather than named, with a picker for anything off
     the preset list — the wire takes any hex Mol* can decode."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -1701,7 +1701,7 @@ def test_volume_colour_swatches_and_custom(qapp):
         combo.setCurrentIndex(2)
         assert app._volume_entry(vid)["color"] == _VOLUME_COLORS[2]
 
-        # A picked colour is a hex string; it stays on the list so it stays selected.
+        # A picked color is a hex string; it stays on the list so it stays selected.
         app.set_volume_color(vid, "#3fa9f5")
         ctl._update_appearance("volume", vid)
         combo = ctl._appearance_box.findChildren(QComboBox)[1]
@@ -1964,7 +1964,7 @@ def test_restraint_table_geostd_column(qapp):
     assert model.data(model.index(1, 3)) == "(link)"
     assert model.source_for_row(0) == ("ALA", "/geostd/a/data_ALA.cif")
     assert model.source_for_row(1)[1] is None
-    # link styling (coloured foreground) only when there is a file
+    # link styling (colored foreground) only when there is a file
     assert model.data(model.index(0, 3), Qt.ItemDataRole.ForegroundRole) is not None
     assert model.data(model.index(1, 3), Qt.ItemDataRole.ForegroundRole) is None
 
@@ -2245,12 +2245,12 @@ def test_representation_dropdowns(qapp):
         app.set_volume_style(vid, "mesh")
         assert v["style"] == "mesh"
 
-        # Focusing the model shows its appearance controls (representation, colour,
+        # Focusing the model shows its appearance controls (representation, color,
         # structure-type show/hide) in the Appearance pane.
         controls = app._controls
         controls._update_appearance("model", mid)
         assert controls._appearance_box.title().endswith("1ubq")
-        assert len(controls._appearance_box.findChildren(QComboBox)) >= 2  # rep + colour (+ show)
+        assert len(controls._appearance_box.findChildren(QComboBox)) >= 2  # rep + color (+ show)
 
         # Focusing the volume shows a style dropdown.
         controls._update_appearance("volume", vid)
@@ -2339,7 +2339,7 @@ def test_selection_chip_highlight(qapp):
 
 
 def test_tools_and_appearance_setters(qapp):
-    """Measure-from-selection, colour/interactions setters, clashes, reset-view."""
+    """Measure-from-selection, color/interactions setters, clashes, reset-view."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2669,7 +2669,7 @@ def test_atom_precision_actions_switch_a_ribbon_to_ball_and_stick(qapp):
         app.ensure_atoms_shown(mid)
         assert app._model_entry(mid)["rep"] == "spacefill"
 
-        # Measuring also switches a ribbon (select/colour do not — they aren't hooked).
+        # Measuring also switches a ribbon (select/color do not — they aren't hooked).
         app.set_model_representation(mid, "cartoon")
         app._scene_selection[mid] = [0, 1]
         app.measure_selection("distance")
@@ -3041,9 +3041,9 @@ def test_mouse_bindings_are_shown_in_the_gui(qapp):
         app.stop()
 
 
-def test_custom_colour_previews_live_not_only_on_close(qapp):
-    """The custom colour picker changed the map only after the dialog closed, which read
-    as broken until you gave up. The fix drives the colour from the dialog's live
+def test_custom_color_previews_live_not_only_on_close(qapp):
+    """The custom color picker changed the map only after the dialog closed, which read
+    as broken until you gave up. The fix drives the color from the dialog's live
     currentColorChanged, so it updates as the wheel moves."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -3071,16 +3071,16 @@ def test_custom_colour_previews_live_not_only_on_close(qapp):
         live = []
         dialog.currentColorChanged.connect(
             lambda c: live.append(c.name()) if c.isValid() else None)
-        for hex_colour in ("#112233", "#445566", "#778899"):
-            dialog.setCurrentColor(QColor(hex_colour))
+        for hex_color in ("#112233", "#445566", "#778899"):
+            dialog.setCurrentColor(QColor(hex_color))
         assert live == ["#112233", "#445566", "#778899"]  # fired live, one per move
     finally:
         app.stop()
 
 
-def test_committing_a_custom_colour_does_not_reopen_the_dialog(qapp):
+def test_committing_a_custom_color_does_not_reopen_the_dialog(qapp):
     """Pressing OK looked like it closed the dialog and immediately reopened it. The
-    cause: inserting the picked colour into the combo shifts the still-selected "Custom…"
+    cause: inserting the picked color into the combo shifts the still-selected "Custom…"
     entry, which re-fires currentIndexChanged with the sentinel and reopens the picker.
     The commit re-indexes with the combo's signals blocked to stop exactly that."""
     from PySide6.QtWidgets import QComboBox

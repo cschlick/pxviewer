@@ -10,7 +10,7 @@ class _Api:
         """Show a set of atoms in the viewer."""
 
     def color_by(self, attribute):
-        """Colour atoms by a per-atom attribute."""
+        """Color atoms by a per-atom attribute."""
 
     def wobble(self):
         """An uncategorised extra method."""
@@ -48,13 +48,13 @@ def test_apiguide_repr_and_find(monkeypatch):
     assert "session.select(…)" in text
     assert "Show a set of atoms" in text
 
-    filtered = guide.find("colour")  # matches color_by's docstring
+    filtered = guide.find("color")  # matches color_by's docstring
     ftext = repr(filtered)
     assert "color_by" in ftext and "select(" not in ftext
     assert "matching" in ftext
 
-    # `api("colour")` is the same as `.find(...)`.
-    assert repr(guide("colour")) == ftext
+    # `api("color")` is the same as `.find(...)`.
+    assert repr(guide("color")) == ftext
 
 
 def test_apiguide_html(monkeypatch):
@@ -71,5 +71,5 @@ def test_apiguide_covers_real_livesession():
 
     groups = dict((c, [r[0] for r in rows]) for c, rows in build_groups(LiveSession))
     assert "select" in groups["Selecting atoms"]
-    assert "color_by" in groups["Representations & colour"]
+    assert "color_by" in groups["Representations & color"]
     assert "set_volume_color" in groups["Volumes"]

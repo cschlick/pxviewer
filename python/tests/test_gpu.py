@@ -2,7 +2,7 @@
 
 The QtWebEngine parts can't be unit-tested headlessly, but the decision logic — mode
 resolution, the software-flag fallback, remembering a verdict, and the one-shot restart
-— is pure and is what actually governs behaviour. os.execv is stubbed so the "restart"
+— is pure and is what actually governs behavior. os.execv is stubbed so the "restart"
 is observable without replacing the process.
 """
 

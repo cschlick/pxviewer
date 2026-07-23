@@ -39,7 +39,7 @@ __all__ = [
 DEFAULT_RESOLUTION_FACTOR = 1.0 / 3.0
 
 #: How each kind of map is shown, following crystallographic convention (and Coot):
-#: ``(colour, level, negative colour)``. A 2Fo-Fc map is blue at 1.5 sigma and has no
+#: ``(color, level, negative color)``. A 2Fo-Fc map is blue at 1.5 sigma and has no
 #: negative side worth drawing. A difference map is read at both signs at once — green
 #: where the density wants more than the model has, red where it wants less — so it is
 #: drawn twice, at +level and -level, and is only half a map without both.
@@ -76,7 +76,7 @@ def is_difference_map(label: str) -> bool:
     """Whether a map-coefficient label names a difference map, by convention.
 
     A guess, and unavoidably so — the file does not say. It decides how the map is
-    contoured and coloured, not what it contains, so being wrong is cosmetic.
+    contoured and colored, not what it contains, so being wrong is cosmetic.
     """
     return _root_label(label) in _DIFFERENCE_ROOTS
 
@@ -228,7 +228,7 @@ class LiveDifferenceMap:
         xray_structure: Any = None,
         map_type: str = "mFo-DFc",
     ) -> Any:
-        """A small difference-map box (~``2*radius`` A on a side) centred on ``center``
+        """A small difference-map box (~``2*radius`` A on a side) centered on ``center``
         (Cartesian ``(x, y, z)`` in A) — the map to stream while tugging *there*.
 
         The full map is recomputed and only then cropped: the FFT is over all of reciprocal

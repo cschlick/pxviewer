@@ -2,7 +2,7 @@
 it into density.
 
 For a library component the ideal coordinates come from geostd (the same CIFs that carry
-the restraints), so any of its ~54,000 entries can be dropped in centred on a chosen point
+the restraints), so any of its ~54,000 entries can be dropped in centered on a chosen point
 (a marker). For anything else, a SMILES string is embedded to a 3D conformer by rdkit and
 that conformer's geometry is written into a monomer restraint CIF on the fly, so a novel
 ligand is placed and restrained the same way. Either way, where a map is available the
@@ -327,11 +327,11 @@ def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str]
     out += ["loop_", "_chem_comp_bond.comp_id", "_chem_comp_bond.atom_id_1",
             "_chem_comp_bond.atom_id_2", "_chem_comp_bond.type",
             "_chem_comp_bond.value_dist", "_chem_comp_bond.value_dist_esd"]
-    neighbours: dict = {i: set() for i in range(n_all)}
+    neighbors: dict = {i: set() for i in range(n_all)}
     for b in mol.GetBonds():
         i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-        neighbours[i].add(j)
-        neighbours[j].add(i)
+        neighbors[i].add(j)
+        neighbors[j].add(i)
         dist = float(np.linalg.norm(xyz[i] - xyz[j]))
         out.append(f"{code} {names[i]} {names[j]} "
                    f"{_BOND_TYPES.get(b.GetBondType(), 'single')} {dist:.4f} 0.020")
@@ -340,7 +340,7 @@ def _monomer_cif_text(mol: Any, code: str, names: List[str], elements: List[str]
             "_chem_comp_angle.atom_id_2", "_chem_comp_angle.atom_id_3",
             "_chem_comp_angle.value_angle", "_chem_comp_angle.value_angle_esd"]
     for j in range(n_all):  # every pair of bonds sharing atom j is an angle about j
-        ns = sorted(neighbours[j])
+        ns = sorted(neighbors[j])
         for a in range(len(ns)):
             for b in range(a + 1, len(ns)):
                 i, k = ns[a], ns[b]

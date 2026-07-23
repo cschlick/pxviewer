@@ -212,7 +212,7 @@ def test_set_interactions_from_mapping_reaches_client(session):
             event = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
             assert event["type"] == "interactions"
             assert event["action"] == "set"
-            # aliases normalised to canonical Mol* kinds; indices preserved
+            # aliases normalized to canonical Mol* kinds; indices preserved
             assert {"kind": "hydrogen-bond", "a": 0, "b": 1} in event["contacts"]
             assert {"kind": "ionic", "a": 2, "b": 3} in event["contacts"]
 
@@ -450,7 +450,7 @@ def test_set_volume_iso_command_reaches_client(session):
 
 
 def test_volume_scroll_target_is_replayed_to_late_clients(session):
-    """A volume's style/colour/level survive a viewport reload because the scene
+    """A volume's style/color/level survive a viewport reload because the scene
     carries them. The scroll target is not part of the scene, so it must be replayed
     on connect — otherwise wheel contouring goes dead after any scene change."""
     async def scenario():
@@ -489,7 +489,7 @@ def test_volume_iso_changed_from_the_viewport_reaches_a_handler(session):
 
 def test_clip_is_replayed_to_late_clients(session):
     """A clip is worked out from the camera and re-aimed as it moves, so unlike a
-    colour or a level it cannot be baked into the MVSJ scene. The session has to replay
+    color or a level it cannot be baked into the MVSJ scene. The session has to replay
     it, or every viewport reload silently drops it."""
     async def scenario():
         session.set_clip(0.2, 0.8, radius=12.0, ref="vol9")  # before anyone connects
@@ -857,7 +857,7 @@ def test_representations_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
-# -- colour by per-atom attribute --------------------------------------------
+# -- color by per-atom attribute --------------------------------------------
 
 def test_bfactor_and_occupancy_available(session):
     # from_sites writes occupancy 1.0 / B 0.0, so both attributes exist.

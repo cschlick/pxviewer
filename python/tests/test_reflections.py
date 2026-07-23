@@ -30,7 +30,7 @@ def _mtz(tmp_path, *, coefficients: bool):
     return path
 
 
-def test_file_kind_recognises_reflections():
+def test_file_kind_recognizes_reflections():
     from pxviewer.loader import file_kind
 
     assert file_kind("data.mtz") == "reflections"
@@ -148,8 +148,13 @@ def test_refinement_mtz_opens_its_maps(tmp_path):
 
         by_name = {v["name"]: v for v in app._volumes}
         assert set(by_name) == {"2FOFCWT", "FOFCWT"}
-        # Convention, not the palette: blue at 1.5 sigma, difference green at 3.
-        assert (by_name["2FOFCWT"]["color"], by_name["2FOFCWT"]["iso"]) == ("dodgerblue", 1.5)
+        # A regular map opens in a palette color at 1.5 sigma; a difference map keeps the
+        # convention it has to keep — green/red — at 3.
+        from pxviewer.palettes import load_palettes
+
+        palette_colors = {c for group in load_palettes() for c in group}
+        assert by_name["2FOFCWT"]["color"] in palette_colors
+        assert by_name["2FOFCWT"]["iso"] == 1.5
         assert (by_name["FOFCWT"]["color"], by_name["FOFCWT"]["iso"]) == ("green", 3.0)
 
         # Data and maps are one group: the maps came from the file, and go with it.
@@ -258,7 +263,10 @@ def test_making_maps_pairs_them_with_the_model_that_phased_them(tmp_path):
 
         by_name = {v["name"]: v for v in app._volumes}
         assert set(by_name) == {"2mFo-DFc", "mFo-DFc"}
-        assert by_name["2mFo-DFc"]["color"] == "dodgerblue"
+        from pxviewer.palettes import load_palettes
+
+        # The 2mFo-DFc map opens in a palette color; the difference map keeps green/red.
+        assert by_name["2mFo-DFc"]["color"] in {c for g in load_palettes() for c in g}
         assert (by_name["mFo-DFc"]["color"], by_name["mFo-DFc"]["iso"]) == ("green", 3.0)
 
         gid = app._models[0]["group"]
@@ -326,7 +334,7 @@ def test_updating_maps_replaces_them_in_place(tmp_path):
     model that no longer exists — the difference map most of all, since it answers "what
     does the density have that the model does not" about the old positions.
 
-    Replaced in place, so a level or a colour set on them survives."""
+    Replaced in place, so a level or a color set on them survives."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
     import time

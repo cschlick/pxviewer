@@ -167,7 +167,7 @@ def _atom_site_category(arrays: "AtomArrays", polymer: bool, label_asym: "Sequen
         bcif.number_column("Cartn_z", arrays.z, bcif.FLOAT32),
     ]
     # cctbx gives these cheaply; they enable alt-conf handling and b-factor /
-    # occupancy colouring in Mol*.
+    # occupancy coloring in Mol*.
     if any(alt for alt in (arrays.altloc or [])):
         cols.append(bcif.string_column("label_alt_id", arrays.altloc))
     if arrays.occ is not None:

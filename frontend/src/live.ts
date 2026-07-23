@@ -164,7 +164,7 @@ type LiveDiffVolume = typeof LiveDiffVolume;
 // -- probe2 contact-dot surface ------------------------------------------
 //
 // A probe2 "dotkin": a point cloud of contact dots plus line "spikes" for the
-// overlaps, both at raw model coordinates and coloured MolProbity-style. Two
+// overlaps, both at raw model coordinates and colored MolProbity-style. Two
 // custom state transforms turn the parsed arrays into Mol* Shapes (Points and
 // Lines), each rendered by ShapeRepresentation3D.
 
@@ -256,7 +256,7 @@ type ProbeDotsLines = typeof ProbeDotsLines;
 // A validator's markup is a list of primitives (see pxviewer/kinemage.py): each is
 // {kind: vectors|dots|balls|triangles, color:[r,g,b], + geometry}. We render them all
 // into one Mesh — spheres for balls/dots, cylinders for vectors, filled triangles —
-// coloured per primitive via its group id.
+// colored per primitive via its group id.
 
 // Kinemage line widths are screen-space pixels; we draw vectors as world-space
 // cylinders, so map width -> radius. MolProbity's markup lists are mostly width=4, and
@@ -400,11 +400,11 @@ function deinterleaveInto(
     }
 }
 
-// -- colour by per-atom attribute ----------------------------------------
+// -- color by per-atom attribute ----------------------------------------
 //
-// A custom colour theme driven by a Python-supplied per-atom scalar array
+// A custom color theme driven by a Python-supplied per-atom scalar array
 // (indexed by i_seq == model element index == wire index). Values are mapped
-// through a Mol* ColorScale; non-finite values take the missing colour. This one
+// through a Mol* ColorScale; non-finite values take the missing color. This one
 // theme handles b-factor, occupancy and any arbitrary attribute uniformly.
 
 const ATTRIBUTE_MISSING_COLOR = Color(0x808080);
@@ -435,7 +435,7 @@ function attributeColorTheme(_ctx: any, props: any) {
         preferSmoothing: true,
         color,
         props,
-        description: 'Colour by a pxviewer per-atom attribute.',
+        description: 'Color by a pxviewer per-atom attribute.',
         legend: scale.legend,
     };
 }
@@ -452,14 +452,14 @@ const AttributeColorThemeProvider: any = {
 
 const attributeThemeRegistered = new WeakSet<PluginContext>();
 
-/** Register the pxviewer per-atom-attribute colour theme on a plugin (once). */
+/** Register the pxviewer per-atom-attribute color theme on a plugin (once). */
 export function registerAttributeColorTheme(plugin: PluginContext) {
     if (attributeThemeRegistered.has(plugin)) return;
     plugin.representation.structure.themes.colorThemeRegistry.add(AttributeColorThemeProvider);
     attributeThemeRegistered.add(plugin);
 }
 
-/** Resolve a wire palette (a Mol* colour-list name, or explicit colours) for the scale. */
+/** Resolve a wire palette (a Mol* color-list name, or explicit colors) for the scale. */
 function resolvePalette(palette: any): any {
     if (Array.isArray(palette)) return palette.map((c) => decodeColor(c));
     return palette; // a ColorListName string
@@ -612,7 +612,7 @@ export class LiveViewer {
             }
             if (spec.colorValue != null) params.colorParams = { value: decodeColor(spec.colorValue) };
             if (spec.carbonColor != null) {
-                // Element theme with a custom carbon colour: tint carbons, keep O/N/S standard.
+                // Element theme with a custom carbon color: tint carbons, keep O/N/S standard.
                 params.color = 'element-symbol';
                 params.colorParams = {
                     ...(params.colorParams || {}),
@@ -794,7 +794,7 @@ export class LiveViewer {
         if (!camera) return;
         // getInvariantFocus sets up/dir absolutely; camera.focus() instead runs them
         // through matchDirection (flips to stay near the current view), which would
-        // not honour the requested orientation.
+        // not honor the requested orientation.
         const snapshot = camera.getInvariantFocus(
             Vec3.create(target[0], target[1], target[2]),
             radius,
@@ -1202,7 +1202,7 @@ export class LiveViewer {
         this.pickHandler = onPick;
         this.plugin.behaviors.interaction.click.subscribe((e) => {
             const loci = e.current.loci;
-            // The click behaviour is plugin-global, so in a multi-structure scene
+            // The click behavior is plugin-global, so in a multi-structure scene
             // every viewer is notified. A click that landed on an atom belongs to
             // exactly one structure — only that structure's viewer responds. (An
             // empty-space click has no structure, so all viewers see it.)
@@ -1290,7 +1290,7 @@ const MEASURE_ARITY: Record<string, number> = { distance: 2, angle: 3, dihedral:
  * structure is never framed at all, leaving the camera at its default with nothing in view.
  * So poll until the scene has real extent, allow the reset animation to land, and only then
  * set `manualReset`. Gives up after a few seconds rather than polling forever, which leaves
- * the stock (self-fitting) behaviour rather than a blank viewport.
+ * the stock (self-fitting) behavior rather than a blank viewport.
  */
 function lockCameraOnceFramed(plugin: PluginContext) {
     const canvas = plugin.canvas3d;
@@ -1797,7 +1797,7 @@ export interface Slab {
      *  when the two meet, everything is clipped and the object disappears. */
     front: number;
     back: number;
-    /** Angstrom around the view centre; null draws the whole thing. A crystallographic
+    /** Angstrom around the view center; null draws the whole thing. A crystallographic
      *  map fills the unit cell, and contouring all of it buries the model in density —
      *  which is what Coot's map radius exists to stop. */
     radius?: number | null;
@@ -1830,15 +1830,15 @@ function clipPlane(normal: Vec3, at: Vec3) {
     };
 }
 
-/** A sphere keeping only what is within `radius` of the view centre.
+/** A sphere keeping only what is within `radius` of the view center.
  *
  *  `invert` because the shader discards where the signed distance is negative — which
  *  for a sphere is its inside — and we want the opposite. `scale` is twice the radius:
  *  the shader halves it (getSignedDistance passes scale * 0.5 as the size).
  */
-function clipRadius(centre: Vec3, radius: number) {
+function clipRadius(center: Vec3, radius: number) {
     return {
-        type: 'sphere', invert: true, position: Vec3.clone(centre),
+        type: 'sphere', invert: true, position: Vec3.clone(center),
         rotation: { axis: Vec3.create(1, 0, 0), angle: 0 },
         scale: Vec3.create(radius * 2, radius * 2, radius * 2), transform: Mat4.identity(),
     };
@@ -1861,7 +1861,7 @@ function slabClip(plugin: PluginContext, slab: Slab) {
         objects.push(clipPlane(dir, at(slab.back)));                        // drop further
     }
     if (slab.radius !== null && slab.radius !== undefined && slab.radius > 0) {
-        // Centred on what the camera is looking at, so it follows the view like Coot's.
+        // Centered on what the camera is looking at, so it follows the view like Coot's.
         objects.push(clipRadius(camera.state.target, slab.radius));
     }
     return { variant: 'pixel', objects };
@@ -1886,7 +1886,7 @@ const STYLE_VISUALS: Record<string, string[]> = {
  *  cheap enough to drive from a slider being dragged.
  *
  *  Applies to both contours of a difference map: they are one object, and anything but
- *  the level (which mirrors) and the colour (which differs) is shared.
+ *  the level (which mirrors) and the color (which differs) is shared.
  */
 async function updateVolumeRepr(plugin: PluginContext, ref: string, mutate: (old: any) => void) {
     const repr = await findVolumeReprCell(plugin, ref);
@@ -1946,11 +1946,11 @@ async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boo
 async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
     const decoded = decodeColor(color);
     if (decoded === undefined) {
-        console.warn('Unknown volume colour:', color);
+        console.warn('Unknown volume color:', color);
         return;
     }
-    // Only the positive contour: a difference map's negative lobe keeps its own colour,
-    // and the pair being different colours is the whole point of drawing both.
+    // Only the positive contour: a difference map's negative lobe keeps its own color,
+    // and the pair being different colors is the whole point of drawing both.
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
     await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
@@ -2077,7 +2077,7 @@ function markerHitTest(plugin: PluginContext, fx: number, fy: number): { id: str
     let bestDepth = Infinity;
     for (const m of markerPositions) {
         // Where the cursor ray meets the plane through the marker: its distance to the
-        // marker centre is how far off-centre the click is, i.e. a disc test on the sphere.
+        // marker center is how far off-center the click is, i.e. a disc test on the sphere.
         const inPlane = pointerInSpace(plugin, fx, fy, m.position);
         if (Vec3.distance(inPlane, m.position) > grab) continue;
         const depth = Vec3.distance(eye, m.position);
@@ -2171,7 +2171,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // produce them faster than one can be drawn, and drawing every stale conformation in
     // turn does not make the picture more current, it makes it lag. The camera path above
     // coalesces for the same reason, and setMapBox keeps only the latest window.
-    // Per-atom attribute values (colour-by-attribute), received as binary and
+    // Per-atom attribute values (color-by-attribute), received as binary and
     // referenced by key from representation specs. Held independent of the viewer,
     // since they may arrive while it is still building.
     const attributeValues = new Map<string, Float32Array>();
@@ -2258,7 +2258,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const point = canvasPoint(ev);
             const atom = atomAt(plugin, viewer, point.x, point.y);
             // Snap to the atom under the cursor; for empty space, unproject at the
-            // camera's focus depth — the plane through the rotation centre.
+            // camera's focus depth — the plane through the rotation center.
             let pos = atom !== undefined ? viewer.atomPosition(atom) : undefined;
             if (!pos) pos = pointerInSpace(plugin, point.fx, point.fy, plugin.canvas3d!.camera.state.target);
             markerArmed = false;  // one-shot
@@ -2507,7 +2507,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await viewer.setMarkup(msg.channel, msg.primitives ?? []);
             } else if (msg.type === 'representations' && viewer) {
                 // Attach the per-atom values (received on the binary attribute
-                // channel) to any attribute-coloured spec before applying.
+                // channel) to any attribute-colored spec before applying.
                 const reprs = (msg.reprs ?? []).map((r: any) =>
                     r.color === 'attribute' && r.attribute
                         ? { ...r, attribute: { ...r.attribute, resolved: attributeValues.get(r.attribute.key) } }

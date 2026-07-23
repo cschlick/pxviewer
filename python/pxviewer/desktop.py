@@ -32,14 +32,14 @@ from .loader import (
     file_kind,
     sample_structure_path,
 )
-from .palettes import suggested_colours
+from .palettes import suggested_colors
 from .webapp import Webapp
 
-# The swatches offered when colouring an object by hand — hex, drawn from the bundled
-# palettes (see palettes.suggested_colours) so a hand-picked colour comes from the same
+# The swatches offered when coloring an object by hand — hex, drawn from the bundled
+# palettes (see palettes.suggested_colors) so a hand-picked color comes from the same
 # inventory as the ones objects open in.
-_VOLUME_COLORS = suggested_colours()
-# Sentinel for the "Custom…" entry in a colour dropdown (never a real colour value).
+_VOLUME_COLORS = suggested_colors()
+# Sentinel for the "Custom…" entry in a color dropdown (never a real color value).
 _CUSTOM_COLOR = "\x00custom"
 
 # Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
@@ -68,7 +68,7 @@ _MASK_RADIUS_DEFAULT = 3.0
 # (~5 ms) plus GIL contention with the Qt thread, not this gate: a drag produces ~46 fps on
 # a 2737-atom structure and ~88 fps on ubiquitin, both at their natural ceiling, lowering it
 # further changes nothing. A small structure over-produces relative to the draw rate, but
-# that is exactly the case coalescing makes free, so favour not throttling the big ones.
+# that is exactly the case coalescing makes free, so favor not throttling the big ones.
 _TUG_PUSH_INTERVAL = 0.008
 
 # How long the post-release wind-down plays for. The minimization itself converges in a
@@ -76,7 +76,7 @@ _TUG_PUSH_INTERVAL = 0.008
 # fling comes visibly to rest — the clearest signal that the fragment is done, not broken.
 _TUG_SETTLE_DURATION = 1.2
 
-# How much density to draw around the view centre, for maps that need it. A map made
+# How much density to draw around the view center, for maps that need it. A map made
 # from reflections fills the unit cell, so drawing all of it buries the model — those
 # open with a radius. A map read from a file is already a box around its subject, so it
 # does not. (Coot applies its radius to every map; ours can tell the two apart.)
@@ -131,12 +131,12 @@ _MODEL_COLOR_OPTIONS = [
 
 
 def _model_rep_color(rep: str) -> str:
-    """A sensible default colour theme for a representation type (no palette in play)."""
+    """A sensible default color theme for a representation type (no palette in play)."""
     return "secondary-structure" if rep == "cartoon" else "element-symbol"
 
 
-# Representations that draw individual atoms: a palette colour tints their *carbons* (O/N/S
-# keep their standard hues). Ribbons/surfaces have no atoms to tint, so a palette colour is
+# Representations that draw individual atoms: a palette color tints their *carbons* (O/N/S
+# keep their standard hues). Ribbons/surfaces have no atoms to tint, so a palette color is
 # applied uniformly instead. See _apply_model_rep.
 _ATOM_REPS = frozenset({"ball-and-stick", "ball_and_stick", "spacefill", "sphere"})
 
@@ -248,9 +248,9 @@ def _highlight_overlay_class():
             def paintEvent(self, _event) -> None:
                 painter = QPainter(self)
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-                colour = QColor(255, 152, 0)  # amber, matching the app's accents
-                colour.setAlphaF(self._alpha)
-                painter.setPen(QPen(colour, 3))
+                color = QColor(255, 152, 0)  # amber, matching the app's accents
+                color.setAlphaF(self._alpha)
+                painter.setPen(QPen(color, 3))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawRoundedRect(self.rect().adjusted(2, 2, -2, -2), 7, 7)
 
@@ -264,7 +264,7 @@ def _line_icon(name: str, color, size: int = 20):
     Looked up in ``assets/icons_custom`` (our own icons) first, then ``assets/icons`` (the
     Lucide set), so a custom icon can also override a stock name. The icons draw with
     ``stroke="currentColor"``, which Qt's SVG renderer does not resolve on its own, so the
-    colour is substituted in before rendering. Rendered at 3x the display size so it stays
+    color is substituted in before rendering. Rendered at 3x the display size so it stays
     crisp on a HiDPI screen. Returns None if the asset is missing."""
     from PySide6.QtCore import QByteArray, Qt
     from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
@@ -286,7 +286,7 @@ def _line_icon(name: str, color, size: int = 20):
     return QIcon(pm)
 
 
-# Semantic accent colours, in (light-theme, dark-theme) shades so each reads on its own
+# Semantic accent colors, in (light-theme, dark-theme) shades so each reads on its own
 # background — dark greens/ambers on a light UI, brighter ones on a dark UI. Everything else
 # follows the palette directly (QSS ``palette(...)`` refs); only these carry meaning the
 # palette has no role for, so they are chosen by hand and resolved against the live palette.
@@ -309,7 +309,7 @@ def _accent(widget, name: str) -> str:
 
 # macOS renders icon-only QPushButtons as tall, near-borderless native bezels, so the glyphs
 # read as oversized and unframed (Linux/Adwaita frames them tightly, which looks right). Give
-# them a compact, theme-adaptive frame *only on macOS* — palette() colours so it still tracks
+# them a compact, theme-adaptive frame *only on macOS* — palette() colors so it still tracks
 # light/dark — and leave the good native look on other platforms untouched.
 _IS_MAC = sys.platform == "darwin"
 _ICON_BUTTON_QSS = (
@@ -322,7 +322,7 @@ _ICON_BUTTON_QSS = (
 
 # macOS gives icon-only tabs a wide size hint and sprawls them across the bar (setExpanding
 # does not touch it); only a stylesheet overrides the native tab metrics. It also makes Qt
-# paint the bar itself — so paint the bar and tabs the panel colour (palette(window)) to cover
+# paint the bar itself — so paint the bar and tabs the panel color (palette(window)) to cover
 # the native grey base, rather than leaving it transparent (which shows that grey through).
 # Applied on macOS only, so the native Linux tabs are untouched.
 _TAB_BAR_QSS = (
@@ -360,7 +360,7 @@ def _tab_hover_filter(tabbar, on_hover):
 def _palette_watch_filter(widget, on_change):
     """A QObject filter, parented to ``widget``, that calls ``on_change()`` when the palette
     changes — a light/dark switch, or the real theme landing once the window is shown. Lets
-    baked-pixmap icons re-tint (palette() stylesheets already re-colour themselves)."""
+    baked-pixmap icons re-tint (palette() stylesheets already re-color themselves)."""
     from PySide6.QtCore import QEvent, QObject
 
     class _PaletteFilter(QObject):
@@ -875,7 +875,7 @@ def _make_restraint_table_model():
                     from PySide6.QtGui import QPalette
                     from PySide6.QtWidgets import QApplication
 
-                    return QApplication.palette().color(QPalette.ColorRole.Link)  # theme's link colour
+                    return QApplication.palette().color(QPalette.ColorRole.Link)  # theme's link color
                 if path is not None and role == Qt.ItemDataRole.FontRole:
                     font = QFont()
                     font.setUnderline(True)
@@ -1172,7 +1172,7 @@ class ControlsWindow:
         # icon dark-on-dark. WindowText follows the system appearance reliably everywhere.
         self._icon_role = QPalette.ColorRole.WindowText
         self._btn_tint = self._window.palette().color(self._icon_role)
-        # Icons are baked pixmaps, so (unlike palette() stylesheets) they do not re-colour on a
+        # Icons are baked pixmaps, so (unlike palette() stylesheets) they do not re-color on a
         # theme change on their own. Register each so _retint_icons can rebuild them — needed
         # both for a live light/dark switch and because the real palette may only land once the
         # window is shown (the tint read here can be the pre-show default).
@@ -1212,7 +1212,7 @@ class ControlsWindow:
         if _IS_MAC:
             tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
         tabs.setIconSize(QSize(20, 20))
-        # Lucide line icons, tinted to the tab text colour so they read in light and dark.
+        # Lucide line icons, tinted to the tab text color so they read in light and dark.
         tint = self._btn_tint
         specs = [
             (self._build_scene_tab(), "Scene", "layers"),
@@ -1359,7 +1359,7 @@ class ControlsWindow:
         # -- Actions on the objects: a compact icon toolbar -----------------
         # Icon-only (the words move to richer tooltips), one row in two groups: get data in
         # and out | act on what is loaded and the view. Lucide icons tinted to the button
-        # text colour, with the old label kept as fallback text if an asset is missing.
+        # text color, with the old label kept as fallback text if an asset is missing.
         def _icon_button(icon_name, label, tooltip, on_click=None):
             b = self._make_icon_button(icon_name, label, tooltip)
             if on_click is not None:
@@ -1714,7 +1714,7 @@ class ControlsWindow:
 
         self._tug_density_check = QCheckBox("Into the density")
         self._tug_density_check.setToolTip(
-            "Let the map pull too, so a drag settles the neighbourhood into density "
+            "Let the map pull too, so a drag settles the neighborhood into density "
             "rather than only bending it. Needs a map paired with the model.")
         self._tug_density_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_into_density(on)))
@@ -1790,7 +1790,7 @@ class ControlsWindow:
 
         self._lig_fit_btn = QPushButton("Fit ligand here")
         self._lig_fit_btn.setToolTip(
-            "Build the ligand (from the monomer library, or the SMILES string), centre it "
+            "Build the ligand (from the monomer library, or the SMILES string), center it "
             "on the ligand marker, and add it as a new object.")
         self._lig_fit_btn.clicked.connect(lambda: self._safe(self._on_fit_ligand))
         lg.addWidget(self._lig_fit_btn)
@@ -1817,7 +1817,7 @@ class ControlsWindow:
                                ("Dihedral", "dihedral", 4)]:
             b = QPushButton(label)
             b.setToolTip(f"Add a custom {kind} restraint from {n} selected atoms of the "
-                         "active model, honoured by this app's minimize/drag and exportable "
+                         "active model, honored by this app's minimize/drag and exportable "
                          "for phenix.refine.")
             b.clicked.connect(lambda _c=False, k=kind: self._on_add_edit(k))
             add_row.addWidget(b)
@@ -1973,7 +1973,7 @@ class ControlsWindow:
     def _on_minimizing_changed(self, running: bool) -> None:
         """Stop is only meaningful while a run is going; Minimize only while one is not.
 
-        Beyond enable/disable, colour the live control so a glance tells you the state:
+        Beyond enable/disable, color the live control so a glance tells you the state:
         Minimize glows green (ready to run) while idle, Stop glows amber (a run is going)
         while minimizing. The inactive one stays a plain, quiet button."""
         self._minimize_btn.setEnabled(not running)
@@ -1982,14 +1982,14 @@ class ControlsWindow:
         self._paint_minimize_button(self._minimize_stop_btn, "pause", "stop", active=running)
 
     def _paint_minimize_button(self, btn, icon_name: str, accent: str, *, active: bool) -> None:
-        """Give the active play/pause button a filled accent (white glyph on colour); leave
+        """Give the active play/pause button a filled accent (white glyph on color); leave
         the inactive one in its default look. ``accent`` is a semantic name (see
         :func:`_accent`) so the fill tracks light/dark. Falls back to the button's text if
         the icon asset is gone (the accent style still applies)."""
         if active:
-            colour = _accent(btn, accent)
+            color = _accent(btn, accent)
             btn.setStyleSheet(
-                f"QPushButton {{ background:{colour}; border:1px solid {colour}; "
+                f"QPushButton {{ background:{color}; border:1px solid {color}; "
                 f"border-radius:4px; }}")
             icon = _line_icon(icon_name, "#ffffff", size=18)
         else:
@@ -2205,7 +2205,7 @@ class ControlsWindow:
         radius_spin.setSuffix(" Å")
         radius_spin.setValue(self._desktop.view_radius_default)
         radius_spin.setToolTip(
-            "How much density around the view centre a map made from reflections opens "
+            "How much density around the view center a map made from reflections opens "
             "with. Each map's own radius is on its Appearance pane.")
         radius_spin.valueChanged.connect(self._desktop.set_view_radius_default)
         radius_row.addWidget(radius_spin)
@@ -2305,7 +2305,7 @@ class ControlsWindow:
         the widgets down and rebuild them. That rebuild is what made the pane flicker on every
         show/hide, because ``_on_loaded_changed`` runs on *any* change to the object list.
 
-        Live values are folded in as well as the summary snapshot: a volume's level and colour
+        Live values are folded in as well as the summary snapshot: a volume's level and color
         can move without a new summary (the wheel, the console), and the pane reads those
         directly, so they have to count as a change.
         """
@@ -2438,7 +2438,10 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_model_color(mid, v))
 
             add_combo("Representation", _MODEL_REP_OPTIONS, it.get("rep"), _set_rep)
-            add_combo("Colour", _MODEL_COLOR_OPTIONS, it.get("color"), _set_color)
+            # Color-by themes *and* flat colors: a model can be colored by a property or
+            # just set to one color, and the swatches/wheel are the only way to say the latter.
+            self._add_color_row(it.get("color"), _set_color,
+                                themes=_MODEL_COLOR_OPTIONS, title="Model color")
             types = it.get("types") or []
             if len(types) > 1:
                 r = QHBoxLayout()
@@ -2487,7 +2490,7 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
-            self._add_color_row(live.get("color"), _set_color)
+            self._add_color_row(live.get("color"), _set_color, title="Map color")
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -2580,7 +2583,7 @@ class ControlsWindow:
         self._appearance_layout.addLayout(row)
 
     def _add_radius_row(self, current, on_change):
-        """How much density to draw around the view centre.
+        """How much density to draw around the view center.
 
         The map is untouched — this only stops it being drawn everywhere at once, which
         is what Coot's map radius is for. It follows the view, so it is closer to
@@ -2659,12 +2662,16 @@ class ControlsWindow:
         self._appearance_layout.addLayout(row)
         return {"check": check, "spin": spin}
 
-    def _add_color_row(self, current, on_pick):
-        """A volume's colour: swatches, and a picker for anything else.
+    def _add_color_row(self, current, on_pick, *, themes=None, title="Color"):
+        """A color control: optional color-by themes, then swatches, then a picker.
 
-        Colours are shown rather than named — a swatch says what "orchid" is and a word
-        does not. The picker is the escape hatch, since the wire takes any hex Mol* can
-        decode, not just the presets.
+        Colors are shown rather than named — a swatch says what a hex is and the word does
+        not. The picker is the escape hatch, since the wire takes any hex Mol* can decode,
+        not just the presets.
+
+        ``themes`` are leading (label, value) entries for color-*by* schemes (by element, by
+        chain, …). A model gets them; a volume, whose density has nothing to color by, does
+        not — but both get the swatches and the wheel, so either can be set to a flat color.
         """
         from PySide6.QtCore import QSize, Qt
         from PySide6.QtGui import QColor, QIcon, QPixmap
@@ -2675,27 +2682,32 @@ class ControlsWindow:
             pixmap.fill(QColor(name))
             return QIcon(pixmap)
 
+        themes = list(themes or [])
+        theme_values = {value for _label, value in themes}
+
         row = QHBoxLayout()
-        lab = QLabel("Colour")
+        lab = QLabel("Color")
         lab.setMinimumWidth(80)
         row.addWidget(lab)
         combo = QComboBox()
         combo.setIconSize(QSize(28, 14))
         combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         combo.setMinimumContentsLength(6)
+        for label, value in themes:
+            combo.addItem(label, value)
+        if themes:
+            combo.insertSeparator(combo.count())  # themes above, flat colors below
         for name in _VOLUME_COLORS:
             # The swatch is what identifies it; the text is just the hex, kept as written
-            # (capitalize() would lower-case the digits of a colour like #FF2D95).
+            # (capitalize() would lower-case the digits of a color like #FF2D95).
             combo.addItem(swatch(name), name.upper(), name)
-        custom = None
-        if current and current not in _VOLUME_COLORS:
-            custom = current  # a picked colour: keep it on the list so it stays selected
-            combo.addItem(swatch(current), current, current)
+        if current and current not in _VOLUME_COLORS and current not in theme_values:
+            combo.addItem(swatch(current), current, current)  # a picked color, kept selectable
         combo.addItem("Custom…", _CUSTOM_COLOR)
         idx = combo.findData(current)
         combo.setCurrentIndex(idx if idx >= 0 else 0)
 
-        # The last colour actually committed — the target to revert to if a custom pick
+        # The last color actually committed — the target to revert to if a custom pick
         # is cancelled, since by then the live preview has already changed the map.
         committed = {"value": current}
 
@@ -2706,10 +2718,14 @@ class ControlsWindow:
                 on_pick(value)
                 return
             revert_to = committed["value"]
-            dialog = QColorDialog(QColor(revert_to or _VOLUME_COLORS[0]), self._window)
-            dialog.setWindowTitle("Volume colour")
-            # Qt's own dialog, not the native one: the macOS colour panel is a shared
-            # singleton that emits its live-colour signal unreliably, and this preview
+            # Seed the wheel with the current color — but a theme name ("by chain") is not
+            # one, so fall back to a swatch rather than opening on an invalid color.
+            seed = revert_to if (isinstance(revert_to, str) and revert_to not in theme_values
+                                 and QColor(revert_to).isValid()) else _VOLUME_COLORS[0]
+            dialog = QColorDialog(QColor(seed), self._window)
+            dialog.setWindowTitle(title)
+            # Qt's own dialog, not the native one: the macOS color panel is a shared
+            # singleton that emits its live-color signal unreliably, and this preview
             # depends on that signal firing every time.
             dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
             # Apply as the wheel moves, not only on OK — otherwise it looks broken until
@@ -3465,15 +3481,15 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _icon(self, name: str, size: int = 18):
-        """A Lucide icon tinted to the button text colour (or None if the asset is gone)."""
+        """A Lucide icon tinted to the button text color (or None if the asset is gone)."""
         return _line_icon(name, self._btn_tint, size=size)
 
     def _retint_icons(self) -> None:
-        """Re-tint every registered icon to the current theme's text colour.
+        """Re-tint every registered icon to the current theme's text color.
 
         Called on a palette change (a light/dark switch, or the real palette finally landing
         once the window is shown), since baked-pixmap icons — unlike palette() stylesheets —
-        do not re-colour themselves. Idempotent and cheap; a no-op if the tint is unchanged."""
+        do not re-color themselves. Idempotent and cheap; a no-op if the tint is unchanged."""
         from PySide6.QtGui import QPalette
 
         tint = self._window.palette().color(self._icon_role)
@@ -4166,7 +4182,7 @@ class DesktopApp:
         # the active model (drives the atoms table + selection sync).
         self._models: List[dict] = []
         self._model_counter = 0
-        # Default-colour palettes handed to each new family (model + its maps) as it opens.
+        # Default-color palettes handed to each new family (model + its maps) as it opens.
         from .palettes import PaletteCycler
 
         self._palettes = PaletteCycler()
@@ -4245,7 +4261,7 @@ class DesktopApp:
         self._diff_engine_key: Optional[str] = None  # the group id it was built for
         self._diff_queue: Any = None
         self._diff_ctx: Any = None             # (group id, reflection path) for the running drag
-        self._diff_atom: Optional[int] = None  # the dragged atom, the window's centre
+        self._diff_atom: Optional[int] = None  # the dragged atom, the window's center
         self._diff_gen = 0                      # bumped on each drag start/clear; drops stale recomputes
         # How many live difference windows have actually reached the viewport. Unlike the
         # state above it is never reset, because it answers a different question: "has the
@@ -4325,7 +4341,7 @@ class DesktopApp:
         # Fill the screen. showMaximized() is enough on X11 and most compositors, but some
         # Wayland compositors drop a maximized state requested before the surface is mapped,
         # leaving the window at its default size. So also size it to the available screen
-        # area (a size request Wayland does honour) as a floor, and re-assert the maximized
+        # area (a size request Wayland does honor) as a floor, and re-assert the maximized
         # state once the window is really up — hence the delayed pass as well as the
         # immediate one. Re-applying is idempotent where the first request already took.
         screen = self._app.primaryScreen()
@@ -4664,12 +4680,12 @@ class DesktopApp:
 
         Hidden volumes stay in the scene (a render skip, re-applied after the reload by
         ``_reassert_hidden_volumes``) so a reload never rebuilds an isosurface from empty.
-        Only the first visible volume is focused, and only when no model is there to centre."""
+        Only the first visible volume is focused, and only when no model is there to center."""
         if not self._volumes:
             return None
         from .volume import Volume, create_volume_view
 
-        focus_first = not self._visible_model_ws()  # centre a lone volume; don't fight a model
+        focus_first = not self._visible_model_ws()  # center a lone volume; don't fight a model
         first_visible = next((v for v in self._volumes if v["visible"]), None)
         nodes = []
         for v in self._volumes:
@@ -4744,17 +4760,17 @@ class DesktopApp:
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
         on = self._shown_indices(entry)  # restrict to shown structure types
-        kwargs = self._model_colour_kwargs(entry, rep)
+        kwargs = self._model_color_kwargs(entry, rep)
         if on is not None:
             kwargs["on"] = on
         session.set_representation(rep, **kwargs)
 
-    def _model_colour_kwargs(self, entry, rep: str) -> dict:
-        """How to colour a model's representation: an explicit user colour wins; else the
+    def _model_color_kwargs(self, entry, rep: str) -> dict:
+        """How to color a model's representation: an explicit user color wins; else the
         palette default (carbon-tint for atoms, uniform for ribbons); else the theme default."""
         explicit = entry.get("color")
         if explicit:
-            return {"color": explicit}  # a colour the user set by hand — uniform, as before
+            return {"color": explicit}  # a color the user set by hand — uniform, as before
         base = entry.get("color_default")  # the random palette default set at creation
         if base:
             return {"carbon_color": base} if _rep_shows_atoms(rep) else {"color": base}
@@ -4782,10 +4798,10 @@ class DesktopApp:
                  "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
                  "type_groups": None, "clip": (0.0, 1.0),
                  "interactions": False, "edits": [],
-                 # Opening colour: a random pick from the session's current palette group
+                 # Opening color: a random pick from the session's current palette group
                  # (see palettes.PaletteCycler). Overridden the moment the user sets one by
-                 # hand. Read by _model_colour_kwargs.
-                 "color_default": self._palettes.next_colour()}
+                 # hand. Read by _model_color_kwargs.
+                 "color_default": self._palettes.next_color()}
         self._models.append(entry)
         self._apply_model_rep(entry)
         self._active_model_id = mid
@@ -4924,7 +4940,7 @@ class DesktopApp:
         return list(self._type_groups(entry).keys()) if entry else []
 
     def set_model_color(self, mid: str, color: Optional[str]) -> None:
-        """Set a model's colour theme (None = the representation's default)."""
+        """Set a model's color theme (None = the representation's default)."""
         entry = self._model_entry(mid)
         if entry is None or entry.get("color") == color:
             return
@@ -5114,7 +5130,7 @@ class DesktopApp:
 
         Off, a drag is a series of nudges: each pointer move relaxes the zone toward it
         and stops. On, the minimizer never stops while the button is down — the target
-        moves under it and the neighbourhood keeps settling even when the pointer is
+        moves under it and the neighborhood keeps settling even when the pointer is
         still, which is what lets it flow into density rather than only bend. Next drag.
         """
         self._tug_continuous = bool(enabled)
@@ -5386,7 +5402,7 @@ class DesktopApp:
     def _place_ligand(self, mid: str, code: str, builder, *, fit: bool = True,
                       trials: int = 20) -> None:
         """Shared machinery behind the ligand actions: build the model with ``builder``
-        (``builder(position, crystal_symmetry) -> model``) centred on the marker, fit it
+        (``builder(position, crystal_symmetry) -> model``) centered on the marker, fit it
         into the active model's density if asked, and add it as a standalone object — all
         off the GUI thread, the add marshalled back onto it."""
         from . import ligands
@@ -5598,7 +5614,7 @@ class DesktopApp:
         Fling an atom and let go and it should visibly come to rest, not stop dead
         wherever it happened to be — which is what makes it possible to tell a settled
         fragment from a broken or frozen one. The pull is kept on at its last target so
-        the atom stays where you left it while the neighbourhood relaxes around it; the
+        the atom stays where you left it while the neighborhood relaxes around it; the
         loop ends when the motion dies away, and the resting frame is forced out past the
         pacing so the final position always shows. On the worker's thread.
         """
@@ -6090,7 +6106,7 @@ class DesktopApp:
                              lambda c, ref, v: c.set_volume_opacity(ref, v))
 
     def set_volume_color(self, vid: str, color: str) -> None:
-        """Set a volume's colour live."""
+        """Set a volume's color live."""
         self._volume_command(vid, "color", color,
                              lambda c, ref, v: c.set_volume_color(ref, v))
 
@@ -6126,7 +6142,7 @@ class DesktopApp:
         self._status("taking a picture…")
 
     def volume_appearance(self, vid: str) -> dict:
-        """A volume's current style/colour/opacity/level.
+        """A volume's current style/color/opacity/level.
 
         The Loaded summary is a snapshot taken when it was emitted, and these can change
         without one — from the console, or by the wheel in the viewport — so the
@@ -6157,7 +6173,7 @@ class DesktopApp:
         self.view_radius_default = float(radius)
 
     def set_volume_radius(self, vid: str, radius: Optional[float]) -> None:
-        """Draw only density within ``radius`` A of the view centre (None = all of it).
+        """Draw only density within ``radius`` A of the view center (None = all of it).
 
         A crystallographic map fills the unit cell, and contouring the whole thing buries
         the model in density — this is the control Coot has for that, and it follows the
@@ -6174,7 +6190,7 @@ class DesktopApp:
         """Re-tell the control session every volume's clip, before the page reloads.
 
         A clip is worked out from the camera and re-aimed as it moves, so unlike a
-        colour or a level it cannot be baked into the scene — the session has to replay
+        color or a level it cannot be baked into the scene — the session has to replay
         it when the fresh page connects. Both ends of that move underneath it: the
         session carrying volume commands changes (dummy <-> active model), and the page
         is new. So the clips are re-asserted on every reload rather than sent once.
@@ -6391,8 +6407,8 @@ class DesktopApp:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
-        difference map is green at 3 sigma whatever colour the palette is up to.
-        ``radius`` limits drawing to near the view centre (see :meth:`set_volume_radius`).
+        difference map is green at 3 sigma whatever color the palette is up to.
+        ``radius`` limits drawing to near the view center (see :meth:`set_volume_radius`).
         ``negative_color`` draws a second contour at the negative of the level, which is
         how a difference map is read (see MAP_STYLE).
         """
@@ -6403,9 +6419,9 @@ class DesktopApp:
             "id": vid, "name": name, "data": data, "visible": True, "group": group,
             "ref": vid, "map_url": f"{self._webapp.url}vols/{vid}.map",
             "iso": data.suggested_iso() if iso is None else float(iso),
-            # A given colour wins (a difference map's green, or a caller's choice); else the
+            # A given color wins (a difference map's green, or a caller's choice); else the
             # map draws a random default from the session's current palette group.
-            "color": color or self._palettes.next_colour(),
+            "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color,
         })
@@ -6455,25 +6471,37 @@ class DesktopApp:
     # -- groups --
 
     def remove_group(self, gid: str) -> None:
-        """Unload a whole group (its model + maps) at once."""
+        """Unload a whole group (its model + maps + data) at once.
+
+        Every member is named up front: removing them one at a time dissolves the group on
+        the way through (see :meth:`_prune_group`), which clears the survivors' group and
+        would leave anything enumerated afterwards unowned and un-removed.
+        """
+        models = [m["id"] for m in self._models if m["group"] == gid]
+        volumes = [v["id"] for v in self._volumes if v["group"] == gid]
+        reflections = [r["id"] for r in self._reflections if r["group"] == gid]
         with self._batch_load():
-            for m in [m for m in self._models if m["group"] == gid]:
-                self.remove_model(m["id"])
-            for v in [v for v in self._volumes if v["group"] == gid]:
-                self.remove_volume(v["id"])
-            for r in [r for r in self._reflections if r["group"] == gid]:
-                self.remove_reflections(r["id"])
+            for mid in models:
+                self.remove_model(mid)
+            for vid in volumes:
+                self.remove_volume(vid)
+            for rid in reflections:
+                self.remove_reflections(rid)
 
     def _prune_group(self, gid: Optional[str]) -> None:
-        """Drop a group's name once it has no members left."""
+        """Dissolve a group once it no longer holds more than one object.
+
+        A group says "these belong together". With one member left — its partner unloaded —
+        it says nothing, and leaving it puts a lone object under a header naming a pairing
+        that no longer exists. So the survivor is set loose and the group goes.
+        """
         if gid is None:
             return
-        members = (
-            any(m["group"] == gid for m in self._models)
-            or any(v["group"] == gid for v in self._volumes)
-            or any(r["group"] == gid for r in self._reflections)
-        )
-        if not members:
+        members = [e for e in (*self._models, *self._volumes, *self._reflections)
+                   if e.get("group") == gid]
+        if len(members) < 2:
+            for entry in members:
+                entry["group"] = None
             self._groups.pop(gid, None)
 
     def _clear_all(self) -> None:
@@ -6687,16 +6715,16 @@ class DesktopApp:
                 with self._batch_load():
                     for map_type in types:
                         is_diff = map_type in DIFFERENCE_MAP_TYPES
-                        colour, iso, negative = MAP_STYLE[is_diff]
+                        color, iso, negative = MAP_STYLE[is_diff]
                         # Difference maps keep green/red (Coot semantics); the 2mFo-DFc map
-                        # takes a random colour from the session's current palette group.
+                        # takes a random color from the session's current palette group.
                         if not is_diff:
-                            colour = self._palettes.next_colour()
+                            color = self._palettes.next_color()
                         self._add_volume(
                             VolumeData.from_map_manager(
                                 mmm.get_map_manager_by_id(map_type),
                                 name=map_type, map_id=map_type),
-                            map_type, group=gid, color=colour, iso=iso,
+                            map_type, group=gid, color=color, iso=iso,
                             radius=self.view_radius_default, negative_color=negative)
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
@@ -6723,7 +6751,7 @@ class DesktopApp:
         density have that the model does not", and after the model moves it is the
         answer to that question about the old one.
 
-        The maps are replaced in place, so a level, a colour or a radius set on them
+        The maps are replaced in place, so a level, a color or a radius set on them
         survives. Runs on a background thread.
         """
         rentry = self._reflection_entry(rid)
@@ -6827,15 +6855,15 @@ class DesktopApp:
             for coefficients in data.map_coefficient_arrays():
                 label = coefficients.info().label_string()
                 is_diff = is_difference_map(label)
-                colour, iso, negative = MAP_STYLE[is_diff]
-                if not is_diff:  # a random palette colour; difference maps keep green/red
-                    colour = self._palettes.next_colour()
+                color, iso, negative = MAP_STYLE[is_diff]
+                if not is_diff:  # a random palette color; difference maps keep green/red
+                    color = self._palettes.next_color()
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
                 # A map from reflections fills the unit cell: open it with a radius,
                 # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
-                                 color=colour, iso=iso, radius=self.view_radius_default,
+                                 color=color, iso=iso, radius=self.view_radius_default,
                                  negative_color=negative)
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")

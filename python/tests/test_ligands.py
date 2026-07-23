@@ -26,7 +26,7 @@ def test_ideal_atoms_have_coordinates():
     assert xyz.shape[1] == 3
 
 
-def test_build_model_is_centred_and_restraint_ready():
+def test_build_model_is_centered_and_restraint_ready():
     m = ligands.build_ligand_model("GOL", (12.0, 8.0, 20.0))
     assert m.get_number_of_atoms() == 14
     assert np.allclose(m.get_sites_cart().mean(), (12.0, 8.0, 20.0), atol=1e-6)
@@ -41,10 +41,10 @@ def test_unknown_code_raises():
         ligands.ideal_atoms("NOTACODE")
 
 
-def test_build_from_smiles_is_centred_and_restraint_ready():
+def test_build_from_smiles_is_centered_and_restraint_ready():
     """A ligand not in the library, built from SMILES: rdkit embeds a conformer whose
     geometry both places the atoms and supplies the on-the-fly restraints, so the model
-    comes out centred and with a real (bond + angle) geometry restraints manager."""
+    comes out centered and with a real (bond + angle) geometry restraints manager."""
     pytest.importorskip("rdkit")
     from cctbx import crystal
 

@@ -94,10 +94,10 @@ def test_a_difference_map_is_drawn_at_both_signs():
     # One download and one parse feed both.
     assert len([n for n in nodes if n["kind"] == "download"]) == 1
     assert len([n for n in nodes if n["kind"] == "volume"]) == 1
-    # The colours differ; that is the entire point of drawing both.
-    colours = [c["params"]["color"] for r in reprs
+    # The colors differ; that is the entire point of drawing both.
+    colors = [c["params"]["color"] for r in reprs
                for c in (r.get("children") or []) if c["kind"] == "color"]
-    assert colours == ["green", "red"]
+    assert colors == ["green", "red"]
 
 
 def test_a_regular_map_has_one_contour():

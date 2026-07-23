@@ -48,7 +48,7 @@ class Volume:
     grid_slice_index: float | None = None
     grid_slice_index_kind: Literal["absolute", "relative"] = "relative"
     color: str | None = "gold"
-    #: A second isosurface at the negative of ``isosurface_value``, in its own colour.
+    #: A second isosurface at the negative of ``isosurface_value``, in its own color.
     #: A difference map is only readable as a pair — green where the density wants more
     #: than the model has, red where it wants less — so both contours are one object,
     #: sharing one download and one level.

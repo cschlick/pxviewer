@@ -68,8 +68,8 @@ from .cctbx_io import ModelData
 __all__ = ["LiveSession", "Selection", "Primitive", "ComponentExpression", "ATOM_IDENTITY_CONTRACT"]
 
 # Representation vocabulary is MVS's RepresentationTypeT (structure subset), mapped
-# to Mol*'s internal representation names. Colours are MVS ColorNamesT (uniform)
-# or a Mol* colour theme layered on top (e.g. 'element-symbol').
+# to Mol*'s internal representation names. Colors are MVS ColorNamesT (uniform)
+# or a Mol* color theme layered on top (e.g. 'element-symbol').
 _SVG_COLOR_NAMES = set(get_args(ColorNamesT))
 _STRUCTURE_REPR_TYPES = set(get_args(RepresentationTypeT)) - {"isosurface"}  # isosurface is for volumes
 _REPR_ALIASES = {
@@ -95,8 +95,8 @@ _MAX_MESSAGE_BYTES = 64 * 1024 * 1024
 
 _TAG_TOPOLOGY = 0
 _TAG_FRAME = 1
-_TAG_ATTRIBUTE = 2  # per-atom scalar values for colour-by-attribute
-_TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colours)
+_TAG_ATTRIBUTE = 2  # per-atom scalar values for color-by-attribute
+_TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colors)
 _TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
 _TAG_FRAME_DELTA = 5  # only the atoms that moved: [u32 n][u32 * n indices][f32 * 3n]
 
@@ -306,7 +306,7 @@ def _dihedral_deg(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray
 
 
 def _coords_to_f32(coords: Any, n_atoms: int) -> np.ndarray:
-    """Normalise an (N,3) coordinate input to a contiguous little-endian f32 array."""
+    """Normalize an (N,3) coordinate input to a contiguous little-endian f32 array."""
     arr = np.ascontiguousarray(np.asarray(coords, dtype="<f4"))
     if arr.ndim == 2 and arr.shape == (n_atoms, 3):
         return arr
@@ -485,7 +485,7 @@ class LiveSession:
         self._representations: dict = {}
         self._representation_counter = 0
         # Named per-atom scalar attributes (name -> float array of length N), for
-        # colour-by-attribute. Custom _atom_site columns from the model's mmCIF are
+        # color-by-attribute. Custom _atom_site columns from the model's mmCIF are
         # seeded here; b-factor / occupancy are always available from the topology.
         self._attributes: dict = {k: np.asarray(v, dtype=float) for k, v in self._data.attributes.items()}
         # Binary payloads (wire key -> bytes) for attributes referenced by a current
@@ -513,7 +513,7 @@ class LiveSession:
         self._marker_handlers: List[Callable[[list, Optional[int]], None]] = []
         self._marker_move_handlers: List[Callable[[str, list, bool], None]] = []
         # Which volume the scroll wheel contours. Not part of the MVSJ scene (unlike a
-        # volume's style/colour/level, which a rebuild restores), so it has to be
+        # volume's style/color/level, which a rebuild restores), so it has to be
         # replayed to late clients or the wheel goes dead after every scene reload.
         self._volume_scroll_target: Optional[str] = None
         # Clips, keyed by ref (None = this session's model). Replayed to late clients for
@@ -677,7 +677,7 @@ class LiveSession:
     def set_perf_prefs(self, **prefs: Any) -> None:
         """Push debug render overrides to the viewer (see the frontend PerfMonitor).
 
-        Recognised keys: ``overlay`` (bool, the live HUD), ``occlusionOff`` (bool, pin SSAO
+        Recognized keys: ``overlay`` (bool, the live HUD), ``occlusionOff`` (bool, pin SSAO
         off), ``pixelScale`` (float, render-resolution scale). Canvas-global — every session
         shares the one plugin, so this need only be sent on one. Thread-safe.
         """
@@ -692,7 +692,7 @@ class LiveSession:
         You supply the contacts; nothing is inferred. Each is a typed pair of
         positional atom indices (the same 0-based identity the rest of the live
         protocol uses). They are drawn as Mol*'s non-covalent interaction notation
-        (dashed cylinders, coloured by kind) and — because they reference atoms,
+        (dashed cylinders, colored by kind) and — because they reference atoms,
         not fixed positions — their endpoints track streamed coordinates.
 
         ``interactions`` may be:
@@ -712,7 +712,7 @@ class LiveSession:
         ``metal-coordination``, ``water-bridge``, ``covalent`` and ``unknown``;
         common aliases like ``h-bond`` and ``salt-bridge`` are accepted.
 
-        Returns the normalised contacts. Raises ``ValueError`` for an unknown kind
+        Returns the normalized contacts. Raises ``ValueError`` for an unknown kind
         or an out-of-range atom index (fail loud, per the identity contract).
         Thread-safe; the set is replayed to viewers that connect later. Pass an
         empty collection (or call :meth:`clear_interactions`) to remove them.
@@ -768,7 +768,7 @@ class LiveSession:
         of ``(i, j)`` tuples or ``{"a", "b"}`` dicts; indices are positional and
         validated against the atom count, self-pairs are rejected, and duplicates are
         collapsed. Because the markers reference atoms, they track streamed
-        coordinates. Returns the normalised ``(a, b)`` pairs. Thread-safe; replayed to
+        coordinates. Returns the normalized ``(a, b)`` pairs. Thread-safe; replayed to
         late viewers. Pass an empty iterable (or call :meth:`clear_clashes`) to remove
         them. (Rigorous clash analysis is done with hydrogens via the probe2 dot
         overlay — see :meth:`show_probe_dots`.)
@@ -797,7 +797,7 @@ class LiveSession:
 
         ``channel`` selects an independently toggleable overlay (:data:`PROBE_CONTACTS`
         for the full surface, :data:`PROBE_CLASHES` for a clash-only overlay). Sent as
-        one binary payload (positions + spike tips + colours) and drawn as a Mol*
+        one binary payload (positions + spike tips + colors) and drawn as a Mol*
         point cloud plus clash spikes. Thread-safe; replayed to late viewers. Returns
         the number of dots. Pass an empty list (or :meth:`clear_probe_dots`) to remove
         that channel.
@@ -967,7 +967,7 @@ class LiveSession:
 
         ``front`` and ``back`` run 0..1 across the scene's depth: ``(0, 1)`` clips
         nothing, and when the two meet everything is clipped and the object disappears.
-        ``radius`` (Angstrom) draws only what is near the view centre; None draws it all.
+        ``radius`` (Angstrom) draws only what is near the view center; None draws it all.
         ``ref`` names a volume; without one this session's own model is clipped.
 
         Both follow the camera, and both are per representation deliberately — it is
@@ -1227,13 +1227,13 @@ class LiveSession:
 
         ``type`` is an MVS representation — ``'ball_and_stick'``, ``'spacefill'``
         (alias ``'sphere'``), ``'cartoon'`` (alias ``'ribbon'``), ``'surface'``, or
-        ``'carbohydrate'``. ``color`` is either a **uniform** colour (an SVG name
-        such as ``'orange'``, or ``'#ff8800'``) or a Mol* **colour theme** name
+        ``'carbohydrate'``. ``color`` is either a **uniform** color (an SVG name
+        such as ``'orange'``, or ``'#ff8800'``) or a Mol* **color theme** name
         (``'element-symbol'``, ``'chain-id'``, ``'secondary-structure'``,
         ``'residue-name'``, ``'hydrophobicity'``, …); ``color_value`` also forces a
-        uniform colour. ``carbon_color`` tints only the carbons (an SVG name / hex) while
-        the other elements keep their standard colours — the "element theme, but carbon is
-        this colour" look — and implies the ``element-symbol`` theme. ``on`` restricts it to
+        uniform color. ``carbon_color`` tints only the carbons (an SVG name / hex) while
+        the other elements keep their standard colors — the "element theme, but carbon is
+        this color" look — and implies the ``element-symbol`` theme. ``on`` restricts it to
         a subset (a :class:`Selection`, an MVS ``ComponentExpression``, or anything
         coercible); omit for the whole structure. ``opacity`` sets transparency and
         ``params`` passes type-specific options. Returns the id; representations track
@@ -1255,13 +1255,13 @@ class LiveSession:
         self._representations.clear()
         self._send_representations()
 
-    # -- colour by per-atom attribute ------------------------------------
+    # -- color by per-atom attribute ------------------------------------
 
     def set_attribute(self, name: str, values: Any) -> None:
         """Register a named per-atom scalar attribute (a length-N array).
 
         Once registered it can be used with :meth:`color_by`. Values are floats
-        (use ``nan`` for "missing" — those atoms take the theme's missing colour).
+        (use ``nan`` for "missing" — those atoms take the theme's missing color).
         ``bfactor`` and ``occupancy`` are always available from the topology and
         need not be registered.
         """
@@ -1367,18 +1367,18 @@ class LiveSession:
         on: Any = None,
         id: Optional[str] = None,
     ) -> str:
-        """Colour atoms by a per-atom attribute, mapped through a colour scale.
+        """Color atoms by a per-atom attribute, mapped through a color scale.
 
         ``attribute`` is ``'bfactor'``, ``'occupancy'``, the name of an attribute
         registered with :meth:`set_attribute`, or a raw length-N array of values.
-        The values are mapped onto ``palette`` (a Mol* colour-list name such as
-        ``'turbo'``, ``'viridis'``, ``'spectral'``, or an explicit list of colours)
+        The values are mapped onto ``palette`` (a Mol* color-list name such as
+        ``'turbo'``, ``'viridis'``, ``'spectral'``, or an explicit list of colors)
         over ``domain`` (``(min, max)``; taken from the finite values when omitted).
-        Non-finite values render in the theme's missing colour.
+        Non-finite values render in the theme's missing color.
 
         This sets a single representation of ``type`` (optionally limited to ``on``),
         replacing any current ones — like :meth:`set_representation`. Returns the
-        representation id. The colouring is replayed to viewers that connect later.
+        representation id. The coloring is replayed to viewers that connect later.
         """
         values = self._resolve_attribute(attribute)
         if domain is None:
@@ -1390,7 +1390,7 @@ class LiveSession:
 
         # The per-atom values go over the wire as a compact binary message (f32,
         # NaN = missing), keyed so the representation JSON can stay small — this is
-        # what makes colouring very large structures cheap. See _TAG_ATTRIBUTE.
+        # what makes coloring very large structures cheap. See _TAG_ATTRIBUTE.
         self._attribute_counter += 1
         key = f"attr-{self._attribute_counter}"
         key_bytes = key.encode("utf-8")
@@ -1598,16 +1598,16 @@ class LiveSession:
             "id": id if id is not None else self._next_representation_id(),
             "type": self._normalize_repr_type(type),
         }
-        # Colour: a uniform SVG name / hex (MVS ColorT), else a Mol* colour theme.
+        # Color: a uniform SVG name / hex (MVS ColorT), else a Mol* color theme.
         if carbon_color is not None:
-            # Element theme, but carbon is this one colour (O/N/S keep their standard hues).
+            # Element theme, but carbon is this one color (O/N/S keep their standard hues).
             spec["color"], spec["carbonColor"] = "element-symbol", carbon_color
         elif color_value is not None:
             spec["color"], spec["colorValue"] = "uniform", color_value
         elif color is not None and (color.startswith("#") or color in _SVG_COLOR_NAMES):
             spec["color"], spec["colorValue"] = "uniform", color
         elif color is not None:
-            spec["color"] = color  # a Mol* colour theme, e.g. 'element-symbol'
+            spec["color"] = color  # a Mol* color theme, e.g. 'element-symbol'
         if on is not None:
             spec["on"] = _encode_index_set(self._as_selection(on).indices)
         if opacity is not None:
@@ -1806,7 +1806,7 @@ class LiveSession:
                 # Bring a late-joining viewer up to the active drawing primitives.
                 await self._locked_send(websocket, json.dumps(message))
             # Attribute values (binary) must precede the representations that
-            # reference them by key, so the client has them when it colours.
+            # reference them by key, so the client has them when it colors.
             for payload in self._attribute_payloads.values():
                 await self._locked_send(websocket, payload)
             if self._representations:

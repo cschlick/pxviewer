@@ -40,7 +40,7 @@ def test_a_tug_pulls_it_does_not_teleport():
     moved = np.linalg.norm(now - start, axis=1)
     assert 1.0 < moved[300] < 3.0            # it followed, but the geometry argued
     assert np.linalg.norm(now[300] - target) > 0.01
-    assert (moved > 0.05).sum() > 10         # the neighbourhood gave way with it
+    assert (moved > 0.05).sum() > 10         # the neighborhood gave way with it
 
     # And the model is still a model: strained, not torn.
     energies = model.get_restraints_manager().geometry.energies_sites(
@@ -72,7 +72,7 @@ def test_scope_modes_pick_the_right_atoms():
 
     stretch = Tug(model, atom, mode="residues", flank=2)
     assert residues_in(stretch.indices) == 5              # it and two each side
-    # and it is a contiguous run in sequence, not a ball of neighbours
+    # and it is a contiguous run in sequence, not a ball of neighbors
     expected = set()
     for j in range(idx - 2, idx + 3):
         expected |= set(np.asarray(groups[j].atoms().extract_i_seq(), int).tolist())
@@ -80,7 +80,7 @@ def test_scope_modes_pick_the_right_atoms():
     stretch.finish()
 
     sphere = Tug(model, atom, mode="sphere", radius=8.0)
-    assert residues_in(sphere.indices) > 5                # the neighbourhood, more than a stretch
+    assert residues_in(sphere.indices) > 5                # the neighborhood, more than a stretch
     sphere.finish()
 
 

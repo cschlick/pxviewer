@@ -1,7 +1,7 @@
 """CaBLAM (CA-based low-resolution annotation) validation via mmtbx's cablamalyze.
 
 Run cablamalyze over the model's hierarchy, turn every residue into a table
-row, and drop a distinctly-coloured marker on each of the three kinds of flag
+row, and drop a distinctly-colored marker on each of the three kinds of flag
 CaBLAM raises: a CaBLAM *outlier*, a CaBLAM *disfavored* conformation, and a
 *CA-geometry* outlier. Mirrors :mod:`pxviewer.validation.ramachandran`.
 """

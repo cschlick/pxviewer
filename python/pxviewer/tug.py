@@ -28,7 +28,7 @@ __all__ = [
 ]
 
 #: How much of the structure gives way, in Angstrom around the dragged atom. Big enough
-#: that a residue can move without its neighbours fighting it; small enough to stay
+#: that a residue can move without its neighbors fighting it; small enough to stay
 #: interactive on any structure, since the cost is the zone's, not the model's.
 ZONE_RADIUS = 8.0
 
@@ -91,7 +91,7 @@ class Tug:
         - ``"sphere"`` (default): whole residues within ``radius`` A — Coot's sphere refine.
         - ``"residues"``: the dragged residue and ``flank`` residues each side of it along
           its chain. ``flank=0`` is a single-residue refine; ``flank=2`` a five-residue
-          stretch. Sequence-based, so it does not balloon with a dense neighbourhood the way
+          stretch. Sequence-based, so it does not balloon with a dense neighborhood the way
           a sphere can, which is what makes it the right tool for nudging one sidechain or
           walking a loop.
         - ``"selection"``: exactly the residues the user picked (``selection`` is their atom
@@ -114,7 +114,7 @@ class Tug:
         # what is already there, which at the start of every drag is a freeze.
         if not model.restraints_manager_available():
             from . import edits
-            edits.build_restraints(model)  # honours user restraint edits on the model
+            edits.build_restraints(model)  # honors user restraint edits on the model
         self._full_sites = model.get_sites_cart()
         sites = self._full_sites.as_numpy_array()
         if not 0 <= self.atom < len(sites):
@@ -325,7 +325,7 @@ def _zone_selection(model: Any, sites: np.ndarray, atom: int, radius: float) -> 
 def _residue_zone(model: Any, atom: int, flank: int, n_atoms: int) -> np.ndarray:
     """The dragged atom's residue plus ``flank`` residues each side along its chain.
 
-    Sequence order, not distance: neighbours are the residues before and after in the
+    Sequence order, not distance: neighbors are the residues before and after in the
     chain, so the zone is a stretch of the backbone rather than a ball of whatever happens
     to be nearby. Clamped at the ends of the chain block that holds the atom (a chain id
     reused for a later block — its waters, say — is a separate block and does not extend

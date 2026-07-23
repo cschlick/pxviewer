@@ -2,7 +2,7 @@
 
 Selections are resolved by cctbx's own atom-selection machinery (the full Phenix
 selection language), so a session must be model-backed. Representations map MVS
-types/colours onto Mol*'s vocabulary.
+types/colors onto Mol*'s vocabulary.
 """
 
 import pytest

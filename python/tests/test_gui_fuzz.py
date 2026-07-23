@@ -231,14 +231,14 @@ def test_random_gui_walk_keeps_the_model_consistent(seed, guarded_modals):
 #
 # The backend walk above never touches a Qt signal; this does. It clicks buttons, cycles
 # combos, toggles checkboxes and drags sliders in the real controls window, which is where
-# the wiring bugs live (the colour dialog reopening on OK was one). Modals are auto-closed
+# the wiring bugs live (the color dialog reopening on OK was one). Modals are auto-closed
 # so nothing blocks, and the invariant bank runs after every interaction.
 #
 # The threaded buttons (Minimize/Stop/Add H + analyze) are left out: they start background
 # work whose races are a separate concern from signal wiring.
 
 # Buttons that start background work — Minimize, Stop, Add H + analyze. All icon-only now,
-# so they are recognised by their tooltip prefix.
+# so they are recognized by their tooltip prefix.
 _THREADED_TOOLTIPS = (
     "Minimize the active model", "Halt the run", "Add hydrogens with reduce2",
     "Build the ligand")
@@ -277,7 +277,7 @@ def _interactive_widgets(ctl):
     for button in root.findChildren(QPushButton):
         if not (button.isEnabled() and button.isVisibleTo(root)):
             continue
-        # Threaded buttons start background work; skip them (recognised by tooltip since
+        # Threaded buttons start background work; skip them (recognized by tooltip since
         # they are icon-only).
         if button.toolTip().startswith(_THREADED_TOOLTIPS):
             continue

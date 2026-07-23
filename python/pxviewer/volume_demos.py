@@ -35,7 +35,7 @@ __all__ = [
 
 
 def _grid(shape: Tuple[int, int, int]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Create a normalised [x, y, z] meshgrid for volume data of the given shape.
+    """Create a normalized [x, y, z] meshgrid for volume data of the given shape.
 
     The returned arrays have shape ``(nx, ny, nz)`` and are indexed in ``xyz``
     order, matching the ``data_order='xyz'`` convention used by ``write_volume``.
@@ -113,7 +113,7 @@ VOLUME_DEMOS: Dict[str, VolumeDemo] = {
     for d in [
         VolumeDemo(
             "gaussian",
-            "A single Gaussian density blob centred at the origin.",
+            "A single Gaussian density blob centered at the origin.",
             _make_gaussian,
             {"isosurface_value": 2.0, "isosurface_kind": "relative", "color": "gold"},
         ),
@@ -258,7 +258,7 @@ class _VolumeDemoHandler(http.server.SimpleHTTPRequestHandler):
 
     def translate_path(self, path: str) -> str:
         """Resolve against the volume directory first, then the frontend directory."""
-        # Reproduce SimpleHTTPRequestHandler's path normalisation, then try each base.
+        # Reproduce SimpleHTTPRequestHandler's path normalization, then try each base.
         path = path.split("?", 1)[0]
         path = path.split("#", 1)[0]
         path = urllib.parse.unquote(path)

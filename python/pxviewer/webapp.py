@@ -136,7 +136,7 @@ class _WebappHandler(http.server.SimpleHTTPRequestHandler):
 
     def translate_path(self, path: str) -> str:
         """Resolve requests against the volume directory or the frontend directory."""
-        # Strip query string and fragment, then normalise.
+        # Strip query string and fragment, then normalize.
         path = path.split("?", 1)[0]
         path = path.split("#", 1)[0]
         path = urllib.parse.unquote(path)

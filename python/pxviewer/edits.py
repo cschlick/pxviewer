@@ -7,12 +7,12 @@ enumerate. Two common cases where that bites:
 
   * a **covalent ligand** — the bond from a ligand's warhead to a catalytic Cys is not in
     any link definition, so minimization/refinement lets the two drift apart;
-  * a **metal centre** — there are no Zn–N/Zn–S bonds in the library, so the site collapses.
+  * a **metal center** — there are no Zn–N/Zn–S bonds in the library, so the site collapses.
 
 An *edits* file is the escape hatch: a small PHIL scope
 (``geometry_restraints.edits``) adding those bonds/angles/dihedrals by hand. This module
 parses such a file into a simple list of dicts, serialises the list back out, and applies it
-when a model's restraints are built — so pxviewer's own minimize/drag honour the same
+when a model's restraints are built — so pxviewer's own minimize/drag honor the same
 restraints a downstream phenix.refine would. See :mod:`pxviewer.desktop` for the wiring and
 the authoring UI (which turns two/three/four picked atoms into an edit).
 
@@ -217,10 +217,10 @@ def set_edits(model: Any, edits: List[dict]) -> None:
 def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = False) -> None:
     """Process ``model``'s restraints, folding in any edits carried on it — the one call
     every pxviewer restraint build (minimize, drag) goes through, so custom bonds/angles/
-    dihedrals are honoured everywhere.
+    dihedrals are honored everywhere.
 
     ``force=False`` (minimize/drag): reuse an existing restraints manager if there is one —
-    matching the old ``process()`` behaviour and avoiding a costly rebuild every minimize
+    matching the old ``process()`` behavior and avoiding a costly rebuild every minimize
     cycle. The manager it reuses already reflects the current edits, because changing them
     goes through ``force=True``, which unsets and rebuilds. ``force=True`` (after edits
     change): always rebuild, so an edit added or removed takes effect (and a cleared edit

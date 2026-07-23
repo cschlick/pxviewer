@@ -2,7 +2,7 @@
 
 Run omegalyze over the model's hierarchy, turn every residue into a table row,
 and drop a marker on each non-trans peptide's anchor position. Cis-prolines,
-cis-nonprolines, and twisted peptides each get a distinct marker colour.
+cis-nonprolines, and twisted peptides each get a distinct marker color.
 Mirror ramachandran.py's shape.
 """
 

@@ -16,7 +16,7 @@ A primitive is a dict: always ``kind``, ``name`` (the kinemage list's name, so c
 can pick lists out) and ``color`` ([r,g,b]); geometry per kind: ``vectors``->
 ``segments`` [[p,p],..], ``dots``->``points`` [p,..], ``balls``->``balls``
 [[p,radius],..], ``triangles``->``triangles`` [[p,p,p],..]. A list with per-point
-colours yields one primitive per colour.
+colors yields one primitive per color.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
-# Kinemage named colours -> RGB (the palette MolProbity validation markup uses).
+# Kinemage named colors -> RGB (the palette MolProbity validation markup uses).
 _KIN_COLORS = {
     "green": (0x00, 0xFF, 0x00), "gold": (0xFF, 0xD7, 0x00), "magenta": (0xFF, 0x00, 0xFF),
     "sea": (0x00, 0xFF, 0xC0), "lime": (0x80, 0xFF, 0x00), "yellow": (0xFF, 0xFF, 0x00),
@@ -53,9 +53,9 @@ _POINT_RE = re.compile(r"\{[^}]*\}([^{]*)")  # capture the text after each {labe
 
 
 def _parse_point(chunk: str):
-    """Parse the text after one ``{label}`` into (flags, xyz, radius, colour). xyz is
-    None if the chunk has no coordinate triple; colour is None unless the point names
-    one (a per-point colour overrides the list's, e.g. CaBLAM's score-coded wheels)."""
+    """Parse the text after one ``{label}`` into (flags, xyz, radius, color). xyz is
+    None if the chunk has no coordinate triple; color is None unless the point names
+    one (a per-point color overrides the list's, e.g. CaBLAM's score-coded wheels)."""
     flags = set()
     radius = None
     color = None
@@ -81,7 +81,7 @@ def _parse_point(chunk: str):
 
 
 def _points_in_line(line: str):
-    """Yield (flags, xyz, radius, colour) for every ``{label} … x y z`` point."""
+    """Yield (flags, xyz, radius, color) for every ``{label} … x y z`` point."""
     for chunk in _POINT_RE.findall(line):
         flags, xyz, radius, color = _parse_point(chunk)
         if xyz is not None:
@@ -89,8 +89,8 @@ def _points_in_line(line: str):
 
 
 def _resolve_colors(points, header_color):
-    """Give each point its effective colour: the list's, overridden by a per-point
-    colour which then persists for the following points (kinemage's rule)."""
+    """Give each point its effective color: the list's, overridden by a per-point
+    color which then persists for the following points (kinemage's rule)."""
     resolved = []
     current = header_color
     for flags, xyz, radius, color in points:
@@ -101,8 +101,8 @@ def _resolve_colors(points, header_color):
 
 
 def _segments(points) -> dict:
-    """colour -> line segments. P is a pen-up move; others draw from the previous
-    point (the segment takes the colour of the point it draws to)."""
+    """color -> line segments. P is a pen-up move; others draw from the previous
+    point (the segment takes the color of the point it draws to)."""
     segments: dict = {}
     prev = None
     for flags, xyz, _r, color in points:
@@ -115,7 +115,7 @@ def _segments(points) -> dict:
 
 
 def _triangles(points) -> dict:
-    """colour -> triangles. P starts a new strip; within a strip each new point makes
+    """color -> triangles. P starts a new strip; within a strip each new point makes
     a triangle with the previous two."""
     triangles: dict = {}
     strip: List[tuple] = []
@@ -140,7 +140,7 @@ def parse_kinemage(text: str) -> List[dict]:
     points: List[tuple] = []
 
     def flush():
-        """Emit one primitive per distinct colour in the list just parsed."""
+        """Emit one primitive per distinct color in the list just parsed."""
         if kind is None or not points:
             return
         resolved = _resolve_colors(points, color)

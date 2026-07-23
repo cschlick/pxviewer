@@ -4,7 +4,7 @@ probe2 produces a flat list of contact "dots": each has a surface position
 (``loc``), a spike tip (``spike``; for an overlap it points into the clash), an
 interaction ``type`` (wide/close contact, H-bond, small/bad overlap), and the
 ``gap`` between atoms. We turn that into drawable dots — a position, a spike tip,
-and a MolProbity colour — for the viewer to render as a point cloud plus clash
+and a MolProbity color — for the viewer to render as a point cloud plus clash
 spikes.
 
 probe2 wants explicit hydrogens for a full analysis; when the model has none we
@@ -93,7 +93,7 @@ _CLASH_TYPES = {"bo"}
 def probe_dots(
     model: Any, *, only_clashes: bool = False, data_manager: Any = None,
 ) -> List[Tuple[Tuple[float, float, float], Tuple[float, float, float], Tuple[int, int, int]]]:
-    """``[(loc, spike, rgb), ...]`` — drawable dots with MolProbity colours.
+    """``[(loc, spike, rgb), ...]`` — drawable dots with MolProbity colors.
 
     With ``only_clashes`` the result is limited to bad-overlap dots (the MolProbity
     clashes), for drawing a clash-only overlay separate from the full surface.

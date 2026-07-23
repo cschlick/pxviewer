@@ -122,7 +122,7 @@ def minimize_geometry(
             return None
 
     from . import edits
-    edits.build_restraints(model)  # honours any user restraint edits carried on the model
+    edits.build_restraints(model)  # honors any user restraint edits carried on the model
     grm = model.get_restraints_manager().geometry
     sites_cart = model.get_sites_cart()  # shifted in place by the minimizer
     bonds_before, angles_before = _deviations(grm, sites_cart)
@@ -178,7 +178,7 @@ def minimize_to_map(
     from mmtbx.refinement.real_space import individual_sites
 
     from . import edits
-    edits.build_restraints(model)  # honours any user restraint edits carried on the model
+    edits.build_restraints(model)  # honors any user restraint edits carried on the model
     restraints = model.get_restraints_manager()
     grm = restraints.geometry
     bonds_before, angles_before = _deviations(grm, model.get_sites_cart())
