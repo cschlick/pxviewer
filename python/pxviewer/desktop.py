@@ -1626,7 +1626,18 @@ class ControlsWindow:
         layout.addWidget(minimization)
 
         layout.addStretch()
-        return tab
+        # Wrap in a scroll area (like the Scene tab). Without it, when the four groups are
+        # taller than the pane the layout compresses them instead — and the icon buttons,
+        # whose stylesheet lowers their minimum height, get squashed flat (the Ligand
+        # placement row rendered 30x17 rather than 30x26). Scrolling keeps every widget at
+        # its natural size.
+        from PySide6.QtWidgets import QScrollArea
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(tab)
+        return scroll
 
     def _build_drag_group(self):
         """The 'Drag atoms' options (lives on the Settings tab)."""
