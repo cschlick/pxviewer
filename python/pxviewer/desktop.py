@@ -44,6 +44,11 @@ _CUSTOM_COLOR = "\x00custom"
 # Color a model by its per-atom fit to the map. Not a Mol* theme — the values are computed
 # by cctbx and pushed as an attribute (see qscore.py and color_model_by_qscore).
 _QSCORE_COLOR = "qscore"
+# Color a model by aggregated validation severity (see hotspots.py and the Hotspots tab).
+_HOTSPOT_COLOR = "hotspot"
+# Colors that are computed per-atom arrays rather than Mol* theme names. They travel on
+# entry["attribute"] and are applied by _apply_model_rep's attribute branch.
+_ATTRIBUTE_COLORS = frozenset({_QSCORE_COLOR, _HOTSPOT_COLOR})
 
 # Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
 # for any map and one fixed slider range serves all of them. The slider covers the range
@@ -139,6 +144,9 @@ _MODEL_COLOR_OPTIONS = [
     # Not a Mol* theme: computed against the map by cctbx and sent as per-atom values.
     # See DesktopApp.color_model_by_qscore.
     ("By Q-score (fit to map)", _QSCORE_COLOR),
+    # Likewise computed, but only re-applies a field the Hotspots tab already produced —
+    # the score depends on which map-fit term was chosen, so it is not guessed here.
+    ("By hotspot severity", _HOTSPOT_COLOR),
 ]
 
 
@@ -467,6 +475,7 @@ def _make_bridge():
         run_on_main = Signal(object)        # call a thunk on the GUI thread
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
+        hotspots_ready = Signal(object)     # hotspots finished: (model id, Hotspots, columns, rows)
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
         ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
         volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
@@ -1214,12 +1223,12 @@ class ControlsWindow:
 
         tabs = QTabWidget()
         # The controls pane is narrow — a third of the window, down to 300px, narrower
-        # still when floated — so six text tabs overflow. Use an icon per tab instead (the
-        # label becomes its tooltip): icon-only tabs are compact enough that all six fit at
+        # still when floated — so seven text tabs overflow. Use an icon per tab instead (the
+        # label becomes its tooltip): icon-only tabs are compact enough that all seven fit at
         # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
-        # Keep the six icon tabs tight and left-aligned (see _TAB_BAR_QSS for the macOS case).
+        # Keep the seven icon tabs tight and left-aligned (see _TAB_BAR_QSS for the macOS case).
         tabs.tabBar().setExpanding(False)
         if _IS_MAC:
             tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
@@ -1230,6 +1239,7 @@ class ControlsWindow:
             (self._build_scene_tab(), "Scene", "layers"),
             (self._build_tools_tab(), "Tools", "wrench"),
             (self._build_validation_tab(), "Validation", "award"),
+            (self._build_hotspots_tab(), "Hotspots", "flame"),
             (self._build_geometry_tab(), "Geometry", "drafting-compass"),
             (self._build_console_tab(), "Console", "square-terminal"),
             (self._build_settings_tab(), "Settings", "sliders-horizontal"),
@@ -1307,6 +1317,7 @@ class ControlsWindow:
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
+        desktop.bridge.hotspots_ready.connect(self._on_hotspots_ready)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
         desktop.bridge.ligand_placed.connect(self._on_ligand_placed)
         desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
@@ -2191,6 +2202,100 @@ class ControlsWindow:
             if tabs.tabText(i) == current:
                 tabs.setCurrentIndex(i)
                 break
+
+    def _build_hotspots_tab(self):
+        """Validation hotspots: several metrics aggregated into one per-atom severity field.
+
+        The tab is deliberately the aggregate *and* its parts — the score is only allowed to
+        rank, and the per-component columns are what say what is actually wrong. See
+        HOTSPOTS.md for why that separation is load-bearing rather than a nicety.
+        """
+        from PySide6.QtWidgets import (
+            QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QPushButton, QTableWidget,
+            QVBoxLayout, QWidget,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+
+        intro = QLabel(
+            "Aggregates Ramachandran, rotamer, clash and map-fit severity into one score per "
+            "atom, and colors the model by it — green clean, yellow at the outlier "
+            "threshold, red past it. Work down the table; the columns show what fired.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Map fit term:"))
+        self._hotspot_fit = QComboBox()
+        for label, key in self._desktop.hotspot_fit_choices():
+            self._hotspot_fit.addItem(label, key)
+        self._hotspot_fit.setToolTip(
+            "Which measure of agreement with the map to fold in.\n"
+            "Q-score: per-atom radial fit (slower, the cryo-EM standard).\n"
+            "Local map-model CC: correlation in a 2 A sphere (faster).\n"
+            "None: geometry only — also what you get with no map loaded. Severities keep the "
+            "same absolute meaning either way; the map term is dropped, not rescaled.")
+        row.addWidget(self._hotspot_fit, stretch=1)
+        layout.addLayout(row)
+
+        find = QPushButton("Find hotspots")
+        find.setToolTip("Score the active model and color it by severity (background thread).")
+        find.clicked.connect(self._on_find_hotspots)
+        self._hotspot_btn = find
+        layout.addWidget(find)
+
+        self._hotspot_summary = QLabel("Not computed yet.")
+        self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
+        self._hotspot_summary.setWordWrap(True)
+        layout.addWidget(self._hotspot_summary)
+
+        table = QTableWidget(0, 0)
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.itemSelectionChanged.connect(self._on_hotspot_row_selected)
+        self._hotspot_table = table
+        layout.addWidget(table, stretch=1)
+        return tab
+
+    def _on_find_hotspots(self) -> None:
+        try:
+            self._desktop.compute_hotspots(fit=self._hotspot_fit.currentData())
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_hotspots_ready(self, payload) -> None:
+        """Hotspots finished (GUI thread): fill the residue table, worst first."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        _mid, result, columns, rows = payload
+        self._hotspot_summary.setText(result.summary)
+        table = self._hotspot_table
+        table.clearContents()
+        table.setColumnCount(len(columns))
+        table.setHorizontalHeaderLabels(columns)
+        table.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            for c, value in enumerate(row):
+                table.setItem(r, c, QTableWidgetItem(str(value)))
+        table.resizeColumnsToContents()
+        self._hotspot_columns = columns
+
+    def _on_hotspot_row_selected(self) -> None:
+        """Selecting a hotspot focuses that residue — the table is a worklist, so picking a
+        row should put you in front of the thing to fix."""
+        columns = getattr(self, "_hotspot_columns", None)
+        table = self._hotspot_table
+        row = table.currentRow()
+        if not columns or row < 0:
+            return
+        chain = table.item(row, columns.index("chain"))
+        resid = table.item(row, columns.index("resid"))
+        if chain is not None and resid is not None:
+            self._desktop.focus_residue(chain.text(), resid.text())
 
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
@@ -4772,18 +4877,24 @@ class DesktopApp:
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
         on = self._shown_indices(entry)  # restrict to shown structure types
-        values = entry.get("attribute_values")
-        if entry.get("color") == _QSCORE_COLOR and values is not None:
-            # A computed per-atom quantity, so it colors through the attribute path rather
-            # than a Mol* theme: the values go over as an array and the frontend's
-            # pxviewer-attribute theme maps them. Same representation type as ever — only
-            # what decides each atom's color changes.
-            from .qscore import DOMAIN, PALETTE
-
-            # Register it by name rather than passing the bare array, so the representation
+        attribute = entry.get("attribute")
+        if attribute is not None and entry.get("color") == attribute["name"]:
+            values = attribute["values"]
+            # A ribbon draws no side chains, so per-atom values that live there (hotspot
+            # rotamer severity) would simply not be on screen. Where one is supplied, use the
+            # residue-broadcast array instead — what the representation can actually show.
+            if not _rep_shows_atoms(rep) and attribute.get("residue_values") is not None:
+                values = attribute["residue_values"]
+            # A computed per-atom quantity (Q-score, hotspot severity), so it colors through
+            # the attribute path rather than a Mol* theme: the values go over as an array and
+            # the frontend's pxviewer-attribute theme maps them. Same representation type as
+            # ever — only what decides each atom's color changes.
+            #
+            # Registered by name rather than passed as a bare array, so the representation
             # says what it is coloring by instead of "values".
-            session.set_attribute(_QSCORE_COLOR, values)
-            session.color_by(_QSCORE_COLOR, type=rep, palette=PALETTE, domain=DOMAIN, on=on)
+            session.set_attribute(attribute["name"], values)
+            session.color_by(attribute["name"], type=rep, palette=attribute["palette"],
+                             domain=attribute["domain"], on=on)
             return
         kwargs = self._model_color_kwargs(entry, rep)
         if on is not None:
@@ -4794,7 +4905,7 @@ class DesktopApp:
         """How to color a model's representation: an explicit user color wins; else the
         palette default (carbon-tint for atoms, uniform for ribbons); else the theme default."""
         explicit = entry.get("color")
-        if explicit == _QSCORE_COLOR:
+        if explicit in _ATTRIBUTE_COLORS:
             # Chosen but not computed yet (or it failed): Mol* has no such theme, so fall
             # through to the default rather than handing it a name it cannot resolve.
             explicit = None
@@ -4981,7 +5092,12 @@ class DesktopApp:
         if color == _QSCORE_COLOR:
             self.color_model_by_qscore(mid)
             return
-        entry.pop("attribute_values", None)  # leaving Q-score drops the values it colored by
+        if color == _HOTSPOT_COLOR:
+            self.color_model_by_hotspots(mid)
+            return
+        # Leaving a computed color drops the values it colored by: they belong to one model
+        # (and for Q-score/hotspots, to one pairing with a map), not to the entry forever.
+        entry.pop("attribute", None)
         self._apply_model_rep(entry)
 
     def color_model_by_qscore(self, mid: str) -> None:
@@ -5014,12 +5130,15 @@ class DesktopApp:
                 return
 
             def apply_on_main() -> None:
+                from .qscore import DOMAIN, PALETTE
+
                 current = self._model_entry(mid)
                 # The model may have been unloaded, or the user may have picked another
                 # color while this ran — either way these values are no longer wanted.
                 if current is None or current.get("color") != _QSCORE_COLOR:
                     return
-                current["attribute_values"] = values
+                current["attribute"] = {"name": _QSCORE_COLOR, "values": values,
+                                        "domain": DOMAIN, "palette": PALETTE}
                 self._apply_model_rep(current)
                 finite = values[np.isfinite(values)]
                 if finite.size:
@@ -5031,6 +5150,96 @@ class DesktopApp:
             self.bridge.run_on_main.emit(apply_on_main)
 
         threading.Thread(target=work, name="pxviewer-qscore", daemon=True).start()
+
+    # -- validation hotspots ---------------------------------------------
+
+    def hotspot_fit_choices(self) -> list:
+        """The selectable map-fit terms as ``(label, key)``, for the Hotspots tab."""
+        from . import hotspots
+
+        return [(hotspots.FIT_TITLES[key], key) for key in hotspots.FIT_CHOICES]
+
+    def compute_hotspots(self, mid: Optional[str] = None, *, fit: str = "qscore") -> None:
+        """Aggregate the validation metrics into one per-atom severity field, and color by it.
+
+        ``fit`` picks the map term: Q-score, local map-model CC, or none. Unlike Q-score
+        coloring — where a missing map means the metric itself is undefined — this degrades
+        rather than refuses: the map term is dropped and the geometry metrics still score.
+        That is safe because the p-norm has no denominator, so the remaining severities keep
+        their absolute meaning (1.0 is still the outlier cut) instead of being rescaled.
+
+        Runs on a thread: probe2 plus two mmtbx validators plus a map metric is seconds.
+        """
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            raise ValueError("the active object has no cctbx model")
+        mid, name = entry["id"], entry["name"]
+        mmm = self.group_mmm(entry.get("group"))
+        if mmm is None and fit != "none":
+            self._status(f"no map paired with {name} — scoring geometry only")
+
+        def work() -> None:
+            from . import hotspots
+
+            try:
+                self._status(f"finding hotspots in {name}…")
+                result = hotspots.score(model, mmm=mmm, fit=fit)
+                columns = hotspots.residue_columns(result)
+                rows = hotspots.residue_rows(model, result)
+            except Exception as exc:  # pragma: no cover - validator/runtime errors
+                self._status(f"hotspots failed: {exc}")
+                return
+
+            def apply_on_main() -> None:
+                current = self._model_entry(mid)
+                if current is None:  # unloaded while we worked
+                    return
+                current["hotspots"] = result
+                current["color"] = _HOTSPOT_COLOR
+                current["attribute"] = {
+                    "name": _HOTSPOT_COLOR, "values": result.values,
+                    "residue_values": hotspots.residue_broadcast(model, result.values),
+                    "domain": hotspots.DOMAIN, "palette": hotspots.PALETTE,
+                }
+                self._apply_model_rep(current)
+                self._emit_loaded_changed()
+                self._status(f"{name}: {result.summary}")
+                self.bridge.hotspots_ready.emit((mid, result, columns, rows))
+
+            self.bridge.run_on_main.emit(apply_on_main)
+
+        threading.Thread(target=work, name="pxviewer-hotspots", daemon=True).start()
+
+    def color_model_by_hotspots(self, mid: str) -> None:
+        """Color a model by a hotspot field already computed for it.
+
+        Nothing is recomputed here — if there is no cached field the choice is refused and
+        reverted, because the score depends on which map term the user picked and guessing
+        one silently would put a number on screen they never asked for.
+        """
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        from . import hotspots
+
+        result = entry.get("hotspots")
+        if result is None:
+            self._status("no hotspots computed yet — use Find hotspots on the Hotspots tab")
+            entry["color"] = None
+            self._apply_model_rep(entry)
+            self._emit_loaded_changed()
+            return
+        model = getattr(entry["session"], "model", None)
+        entry["attribute"] = {
+            "name": _HOTSPOT_COLOR, "values": result.values,
+            "residue_values": (hotspots.residue_broadcast(model, result.values)
+                               if model is not None else None),
+            "domain": hotspots.DOMAIN, "palette": hotspots.PALETTE,
+        }
+        self._apply_model_rep(entry)
 
     def set_model_interactions(self, mid: str, visible: bool) -> None:
         """Show/hide the computed non-covalent interactions overlay for a model."""

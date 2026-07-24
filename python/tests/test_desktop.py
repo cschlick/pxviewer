@@ -2965,7 +2965,8 @@ def test_demos_menu_has_the_curated_examples(qapp):
 
         tabs = ctl.widget().findChild(QTabWidget)
         # Tabs are icon-only; the label lives in the tooltip.
-        assert [tabs.tabToolTip(i) for i in range(4)] == ["Scene", "Tools", "Validation", "Geometry"]
+        assert [tabs.tabToolTip(i) for i in range(5)] == [
+            "Scene", "Tools", "Validation", "Hotspots", "Geometry"]
         assert all(not tabs.tabIcon(i).isNull() for i in range(tabs.count()))
     finally:
         app.stop()

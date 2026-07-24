@@ -103,7 +103,7 @@ def test_coloring_by_qscore_needs_a_map(qapp):
 
         entry = app._model_entry(mid)
         assert entry["color"] is None                        # reverted, not left claiming
-        assert entry.get("attribute_values") is None
+        assert entry.get("attribute") is None
         assert any("Q-score needs a map" in s for s in said)  # and it says why
     finally:
         app.stop()
@@ -125,10 +125,10 @@ def test_coloring_by_qscore_sends_per_atom_values(qapp):
         app.set_model_color(mid, _QSCORE_COLOR)
 
         deadline = time.time() + 300
-        while time.time() < deadline and entry.get("attribute_values") is None:
+        while time.time() < deadline and entry.get("attribute") is None:
             qapp.processEvents()  # the worker applies via the main thread
             time.sleep(0.05)
-        assert entry.get("attribute_values") is not None, "Q-score never landed"
+        assert entry.get("attribute") is not None, "Q-score never landed"
 
         session = entry["session"]
         assert len(session._attributes[_QSCORE_COLOR]) == session._n_atoms
@@ -156,14 +156,14 @@ def test_leaving_qscore_drops_the_values_it_colored_by(qapp):
         entry = app._models[0]
         app.set_model_color(entry["id"], _QSCORE_COLOR)
         deadline = time.time() + 300
-        while time.time() < deadline and entry.get("attribute_values") is None:
+        while time.time() < deadline and entry.get("attribute") is None:
             qapp.processEvents()
             time.sleep(0.05)
-        assert entry.get("attribute_values") is not None
+        assert entry.get("attribute") is not None
 
         app.set_model_color(entry["id"], "chain-id")
 
-        assert entry.get("attribute_values") is None
+        assert entry.get("attribute") is None
         spec = list(entry["session"]._representations.values())[0]
         assert spec["color"] == "chain-id"
     finally:

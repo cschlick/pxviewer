@@ -1,8 +1,28 @@
 # Validation hotspots — design notes
 
-Status: **design only, nothing built.** This records the reasoning behind a proposed
-per-residue "hotspot" score that aggregates several validation metrics into one field you
-can color by, so the eye goes straight to the places worth rebuilding.
+Status: **implemented** — `python/pxviewer/hotspots.py`, the Hotspots tab (flame icon), and
+`python/tests/test_hotspots.py`. This records the reasoning behind the per-atom "hotspot"
+score that aggregates several validation metrics into one field you can color by, so the eye
+goes straight to the places worth rebuilding.
+
+What shipped, against what is written below:
+
+* Rules 1–7 are implemented as stated. Each has a test that names it.
+* The **consistency constraint holds**: on 1TEC the `severity = 1.0` level set reproduces
+  mmtbx's Ramachandran and rotamer outlier sets exactly, which is the evidence that the
+  calibration is inherited rather than invented.
+* Components: Ramachandran, rotamer, clash, and a **selectable** map-fit term — Q-score,
+  local map-model CC, or none. cablam/cbetadev/omegalyze and bond/angle deviations are still
+  out, as argued below.
+* Working with no map needed no special case. Rule 4's no-denominator property already gives
+  it: the map term is dropped, every other severity keeps its meaning, and an atom whose fit
+  was clean scores identically either way. Geometry-only and map-inclusive runs sit on the
+  same absolute scale.
+* One thing the design missed, found by looking at a render: per-atom severity is invisible on
+  a **cartoon**, which draws no side chains — so the rotamer component, which by Rule 2 lives
+  precisely there, simply was not on screen. Fixed with a display-only residue broadcast
+  (`residue_broadcast`), used when the representation does not draw atoms. It changes where
+  the color is carried, never the ranking or the numbers reported.
 
 ## The idea
 
@@ -469,3 +489,13 @@ Leave as badges rather than score components:
 - Does `sₘ = 0` for an inapplicable metric ever mislead? It reads as "clean" in the field even
   though it means "not measured here" — the same distinction Q-score draws with `nan`. For a
   p-norm the arithmetic is right either way, but a breakdown panel should show the difference.
+  *(Partly addressed: the residue table leaves the cell blank rather than printing 0.00, so
+  GLY shows no rotamer value and the first residue no Ramachandran value. But blank currently
+  means both "not applicable" and "applicable and clean", which is still the conflation.)*
+- The map-fit anchors (`QSCORE_GOOD/OUTLIER`, `CC_GOOD/OUTLIER`) are conventions, not
+  calibrated cuts — the only component whose severity 1.0 does not correspond to a community
+  threshold. Everything else in the score is anchored; this one is asserted. Calibrating it
+  against a reference set is the highest-value remaining work.
+- `residue_broadcast` currently triggers on "the representation does not draw atoms". A
+  ball-and-stick that hides hydrogens has the same problem in miniature. Worth revisiting if
+  clash severity on H turns out to hide there too.
