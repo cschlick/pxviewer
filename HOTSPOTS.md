@@ -147,10 +147,98 @@ metric is per-atom (clash, Q-score), display per-residue as the max over its ato
   typical." It is *global*. This proposal is essentially **localizing MolProbity score to a
   per-residue field**, which nobody has really shipped in a viewer. (Check the exact
   coefficients against MolProbity source before relying on them — not trusted from memory.)
-- **MolProbity multi-criterion kinemage** — closest existing tool. Note what it does:
+- **MolProbity multi-criterion kinemage / chart** — closest existing tool. Note what it does:
   *superimposes* markers, does not average them.
-- **wwPDB validation report per-residue plots** — stack colored bands per metric rather than
-  merging them, for exactly the reasons above.
+- **wwPDB validation report per-residue plots** — per-chain strips marking residues by their
+  issues rather than merging the underlying values.
+
+## How this differs from wwPDB validation and MolProbity
+
+The point of this section is to be clear about what is genuinely new here and what is just
+re-plumbing something that already exists. Most of it is re-plumbing. Two things are not.
+
+|                        | MolProbity score            | wwPDB validation report                            | this proposal                      |
+| ---------------------- | --------------------------- | -------------------------------------------------- | ---------------------------------- |
+| granularity            | global (one number)         | global sliders + per-residue strips                 | per-residue continuous field       |
+| inputs                 | clash, rotamer, Ramachandran| R/Rfree, clashscore, rama, rotamer, RSRZ            | rama, rotamer, clash, map fit      |
+| value type             | rates of boolean events     | percentiles; per-residue outlier flags              | continuous surprisal               |
+| combination            | weighted log-sum (additive) | count of outlier categories per residue             | p-norm, `p ≈ 4`                    |
+| weights                | fitted to track resolution  | not combined at all                                 | none — inherited from thresholds   |
+| resolution-normalized  | yes, by construction        | yes for percentiles and RSRZ; **no** for rama/rota %| yes throughout                     |
+| data support           | absent                      | RSRZ, reported separately                           | multiplies geometry severity       |
+| purpose                | judge / compare structures  | judge / report                                      | navigate within one structure      |
+
+### The closest existing thing is RSRZ
+
+wwPDB's real-space R Z-score is per-residue, continuous, and normalized against what is
+expected at that resolution. That is exactly the philosophy argued for above — "surprise, not
+badness" — and it is already standard practice.
+
+The gap is that **RSRZ does it only for map fit.** Geometry is still reported as boolean
+outlier flags. A fair one-line summary of this proposal is: *apply RSRZ's treatment to the
+geometry metrics too, and put the result on one scale.*
+
+### wwPDB's per-residue aggregate is a boolean count
+
+The residue-property strips color a residue by how many outlier *categories* it trips. That is
+an aggregate, and it is precisely the design argued against above: counting booleans discards
+severity entirely, so a 0.45 Å clash and a 1.2 Å clash are the same pixel, and a residue with
+three marginal flags outranks a residue with one catastrophic one.
+
+Useful for a report you have to defend and audit. Not useful for deciding where to click.
+
+*(Verify the exact color bands against a current wwPDB report before matching them — the
+0/1/2/3+ scheme here is from memory.)*
+
+### MolProbity already excludes bond/angle RMSD — precedent for objection 2
+
+The MolProbity score is built from clashscore, rotamer and Ramachandran, and pointedly leaves
+out restraint-geometry RMSD, which the wwPDB report does show (as bond/angle RMSZ). The usual
+justification is the one given above: those terms are restrained during refinement, so they
+report on the restraints and their weight rather than on the model.
+
+So objection 2 is not a novel worry — it is the existing consensus, and we are following it
+rather than departing from it.
+
+### What is actually new
+
+1. **Per-residue, continuous, across *all* the metrics at once.** MolProbity score is global.
+   RSRZ is per-residue but map-fit only. wwPDB per-residue is boolean. Nothing currently
+   combines calibrated continuous severity across geometry *and* fit at residue granularity.
+2. **Multiplying severity by data support.** No existing metric asks "is this residue wrong
+   *and* well-supported by density." wwPDB carries RSRZ alongside geometry flags but never
+   crosses them. This is the part most likely to surface things a crystallographer would not
+   otherwise find, and also the part with no prior calibration to lean on.
+
+Also new, though more of a design choice than a contribution: **no fitted weights.** MolProbity
+fits coefficients so the score tracks resolution; here the relative importance falls out of
+each metric's own reference distribution. Different philosophy — theirs is calibrated to a
+target, ours is calibrated to nothing but the null hypothesis.
+
+### Consistency constraint (testable)
+
+Because our booleans are the level set at `severity = 1.0`, the outlier counts we display
+**must reproduce MolProbity's** — same residues flagged, same totals. If they diverge, our
+severity mapping is miscalibrated, not MolProbity.
+
+This is worth an actual test: run both over a structure and assert the flagged sets match.
+
+### X-ray vs cryo-EM: the fit term forks
+
+Q-score is a cryo-EM metric (Pintilie; now in EMDB validation). For X-ray the established
+per-residue fit measures are RSRZ / RSCC. So `confidence` — and any map-fit severity component
+— needs a per-experiment implementation rather than one shared path.
+
+### One thing we lose
+
+MolProbity score and wwPDB percentiles are standard, so people compare them across structures
+and across papers. A bespoke score is not comparable to anything.
+
+The surprisal scale is *absolute* rather than relative to the current structure, so in
+principle it stays comparable across structures — but only if the calibration is right. Worth
+protecting deliberately: resist any temptation to normalize the color ramp to the current
+structure's own min/max, which would destroy exactly this property (the same reason Q-score is
+colored on a fixed 0–1 domain rather than a stretched one).
 
 ## The hazard
 
@@ -180,7 +268,13 @@ Continuous surprisal + p-norm over the four metrics that are cleanest and alread
 1. Ramachandran (percentage → surprisal)
 2. Rotamer (percentage → surprisal)
 3. Clash (overlap Å, 0.4 Å ≡ severity 1.0)
-4. Q-score (against the expected-Q-vs-resolution curve)
+4. Map fit — Q-score against the expected-Q-vs-resolution curve for cryo-EM; RSRZ/RSCC for
+   X-ray (see the fork noted above)
+
+Validate it against the existing tools before trusting it: the `severity = 1.0` level set must
+reproduce MolProbity's flagged residues exactly, and the hotspots it ranks highest should be a
+superset of what the wwPDB per-residue strips already mark — if it misses something the
+boolean count catches, the severity mapping is wrong.
 
 Leave as badges rather than score components:
 
@@ -200,3 +294,8 @@ Leave as badges rather than score components:
   hue, confidence to opacity) so the two are not conflated into one number?
 - Resolution normalization: normalize each component, or normalize `S` once at the end?
 - Should `p` be exposed to the user, or fixed after tuning?
+- Rama/rota percentages are **not** resolution-normalized (unlike RSRZ and unlike MolProbity
+  score's fitted calibration). Do we normalize them ourselves, and against what reference?
+- Is there any value in also reporting a global roll-up of the hotspot field, or does that
+  just reinvent MolProbity score worse? Leaning: don't — the global question is answered, and
+  a second incomparable global number is exactly the Goodhart risk above.
