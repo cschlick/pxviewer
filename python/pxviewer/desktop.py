@@ -41,6 +41,9 @@ from .webapp import Webapp
 _VOLUME_COLORS = suggested_colors()
 # Sentinel for the "Custom…" entry in a color dropdown (never a real color value).
 _CUSTOM_COLOR = "\x00custom"
+# Color a model by its per-atom fit to the map. Not a Mol* theme — the values are computed
+# by cctbx and pushed as an attribute (see qscore.py and color_model_by_qscore).
+_QSCORE_COLOR = "qscore"
 
 # Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
 # for any map and one fixed slider range serves all of them. The slider covers the range
@@ -133,6 +136,9 @@ _MODEL_COLOR_OPTIONS = [
     # because it also serves pLDDT; to a crystallographer it is the B-factor.
     ("By B-factor", "uncertainty"),
     ("By occupancy", "occupancy"),
+    # Not a Mol* theme: computed against the map by cctbx and sent as per-atom values.
+    # See DesktopApp.color_model_by_qscore.
+    ("By Q-score (fit to map)", _QSCORE_COLOR),
 ]
 
 
@@ -4766,6 +4772,19 @@ class DesktopApp:
     def _apply_model_rep(self, entry) -> None:
         session, rep = entry["session"], entry["rep"]
         on = self._shown_indices(entry)  # restrict to shown structure types
+        values = entry.get("attribute_values")
+        if entry.get("color") == _QSCORE_COLOR and values is not None:
+            # A computed per-atom quantity, so it colors through the attribute path rather
+            # than a Mol* theme: the values go over as an array and the frontend's
+            # pxviewer-attribute theme maps them. Same representation type as ever — only
+            # what decides each atom's color changes.
+            from .qscore import DOMAIN, PALETTE
+
+            # Register it by name rather than passing the bare array, so the representation
+            # says what it is coloring by instead of "values".
+            session.set_attribute(_QSCORE_COLOR, values)
+            session.color_by(_QSCORE_COLOR, type=rep, palette=PALETTE, domain=DOMAIN, on=on)
+            return
         kwargs = self._model_color_kwargs(entry, rep)
         if on is not None:
             kwargs["on"] = on
@@ -4775,6 +4794,10 @@ class DesktopApp:
         """How to color a model's representation: an explicit user color wins; else the
         palette default (carbon-tint for atoms, uniform for ribbons); else the theme default."""
         explicit = entry.get("color")
+        if explicit == _QSCORE_COLOR:
+            # Chosen but not computed yet (or it failed): Mol* has no such theme, so fall
+            # through to the default rather than handing it a name it cannot resolve.
+            explicit = None
         if explicit:
             return {"color": explicit}  # a color the user set by hand — uniform, as before
         base = entry.get("color_default")  # the random palette default set at creation
@@ -4946,12 +4969,68 @@ class DesktopApp:
         return list(self._type_groups(entry).keys()) if entry else []
 
     def set_model_color(self, mid: str, color: Optional[str]) -> None:
-        """Set a model's color theme (None = the representation's default)."""
+        """Set a model's color theme (None = the representation's default).
+
+        ``'qscore'`` is not a theme the viewer knows: it is computed here against the map and
+        pushed as per-atom values (see :meth:`color_model_by_qscore`).
+        """
         entry = self._model_entry(mid)
         if entry is None or entry.get("color") == color:
             return
         entry["color"] = color
+        if color == _QSCORE_COLOR:
+            self.color_model_by_qscore(mid)
+            return
+        entry.pop("attribute_values", None)  # leaving Q-score drops the values it colored by
         self._apply_model_rep(entry)
+
+    def color_model_by_qscore(self, mid: str) -> None:
+        """Color a model by per-atom Q-score — its fit to the map, computed by cctbx.
+
+        Needs a map paired with the model: Q-score is a measure of the model *against
+        density*, so without one there is nothing to score and the choice is refused rather
+        than silently showing something else. Runs on a thread (seconds on a large
+        structure) and applies when it lands, if the user has not moved on.
+        """
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        mmm = self.group_mmm(entry.get("group"))
+        if mmm is None:
+            self._status("Q-score needs a map paired with this model — pair one, or Make maps")
+            entry["color"] = None  # nothing was applied; do not leave the menu claiming it was
+            self._apply_model_rep(entry)
+            self._emit_loaded_changed()
+            return
+        self._status(f"computing Q-score for {entry['name']}…")
+
+        def work() -> None:
+            try:
+                from .qscore import per_atom_qscore
+
+                values = per_atom_qscore(mmm)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                self._status(f"Q-score failed: {exc}")
+                return
+
+            def apply_on_main() -> None:
+                current = self._model_entry(mid)
+                # The model may have been unloaded, or the user may have picked another
+                # color while this ran — either way these values are no longer wanted.
+                if current is None or current.get("color") != _QSCORE_COLOR:
+                    return
+                current["attribute_values"] = values
+                self._apply_model_rep(current)
+                finite = values[np.isfinite(values)]
+                if finite.size:
+                    self._status(f"Q-score for {current['name']}: mean {finite.mean():.2f} "
+                                 f"over {finite.size} atoms (red poor, green good)")
+                else:  # pragma: no cover - defensive
+                    self._status("Q-score produced no values")
+
+            self.bridge.run_on_main.emit(apply_on_main)
+
+        threading.Thread(target=work, name="pxviewer-qscore", daemon=True).start()
 
     def set_model_interactions(self, mid: str, visible: bool) -> None:
         """Show/hide the computed non-covalent interactions overlay for a model."""
