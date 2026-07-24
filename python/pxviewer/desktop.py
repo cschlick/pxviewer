@@ -2211,8 +2211,8 @@ class ControlsWindow:
         HOTSPOTS.md for why that separation is load-bearing rather than a nicety.
         """
         from PySide6.QtWidgets import (
-            QAbstractItemView, QComboBox, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-            QVBoxLayout, QWidget,
+            QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton,
+            QTableWidget, QVBoxLayout, QWidget,
         )
 
         tab = QWidget()
@@ -2246,6 +2246,18 @@ class ControlsWindow:
         self._hotspot_btn = find
         layout.addWidget(find)
 
+        contour = QCheckBox("Severity contour in 3-D")
+        contour.setToolTip(
+            "Draw a translucent shell around the regions past the outlier threshold.\n"
+            "Per-atom color only shows the surface, so a buried hotspot stays hidden; the "
+            "shell is visible through the structure.\n"
+            "Its level is the outlier cut — raise it to 2.0 on the Appearance panel for "
+            "severe-only.")
+        contour.setEnabled(False)  # nothing to contour until a score exists
+        contour.toggled.connect(self._on_hotspot_contour)
+        self._hotspot_contour = contour
+        layout.addWidget(contour)
+
         self._hotspot_summary = QLabel("Not computed yet.")
         self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
         self._hotspot_summary.setWordWrap(True)
@@ -2267,12 +2279,23 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
+    def _on_hotspot_contour(self, on: bool) -> None:
+        try:
+            self._desktop.show_hotspot_field(on=bool(on))
+        except Exception as exc:
+            self._set_status(str(exc))
+
     def _on_hotspots_ready(self, payload) -> None:
         """Hotspots finished (GUI thread): fill the residue table, worst first."""
         from PySide6.QtWidgets import QTableWidgetItem
 
         _mid, result, columns, rows = payload
         self._hotspot_summary.setText(result.summary)
+        self._hotspot_contour.setEnabled(True)
+        if self._hotspot_contour.isChecked():
+            # A shell already up is showing the previous run's field; redraw it from this one
+            # rather than leaving a stale surface next to a fresh table.
+            self._on_hotspot_contour(True)
         table = self._hotspot_table
         table.clearContents()
         table.setColumnCount(len(columns))
@@ -4808,7 +4831,11 @@ class DesktopApp:
         for v in self._volumes:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
-                isosurface_kind="relative", isosurface_value=v["iso"],
+                # Maps contour in sigma, which is what makes one slider range serve every
+                # map. A severity field is the exception: its levels are calibrated (1.0 *is*
+                # the outlier cut), so it must contour on the absolute value or the level
+                # would mean something different for every structure.
+                isosurface_kind=v.get("iso_kind", "relative"), isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
@@ -5240,6 +5267,53 @@ class DesktopApp:
             "domain": hotspots.DOMAIN, "palette": hotspots.PALETTE,
         }
         self._apply_model_rep(entry)
+
+    def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True) -> None:
+        """Show/hide a contoured 3-D shell around the hotspots of a scored model.
+
+        The per-atom coloring only shows the surface, so a buried hotspot stays hidden until
+        you rotate into it, and while it is on you have lost element/chain coloring. A shell
+        is visible through the structure and leaves that channel free.
+
+        Contoured rather than volume-rendered: the level *is* the calibrated outlier cut, so
+        the surface means something exact instead of being a tuned opacity ramp, and it costs
+        one isosurface rather than a transparent raymarch. Raise the level to 2.0 on the
+        Appearance panel for severe-only.
+        """
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        existing = entry.get("hotspot_volume")
+        if existing is not None:
+            self.remove_volume(existing)     # never two shells for one model
+            entry.pop("hotspot_volume", None)
+        if not on:
+            return
+
+        from . import hotspots
+        from .volume_io import VolumeData
+
+        result = entry.get("hotspots")
+        if result is None:
+            self._status("no hotspots computed yet — use Find hotspots first")
+            return
+        model = getattr(entry["session"], "model", None)
+        if model is None:  # pragma: no cover - defensive
+            return
+        field, spacing, origin = hotspots.severity_field(model, result.values)
+        if not (field >= hotspots.FIELD_ISO).any():
+            self._status("nothing reaches the outlier threshold — no severity contour to draw")
+            return
+        data = VolumeData.from_numpy(field, spacing=spacing, origin=origin,
+                                     name=f"{entry['name']} hotspots")
+        vid = self._add_volume(data, f"{entry['name']} hotspots", group=entry.get("group"),
+                               color=hotspots.FIELD_COLOR, iso=hotspots.FIELD_ISO,
+                               iso_kind="absolute")
+        # Translucent, so the model stays readable through it — the shell is a pointer, not
+        # the thing you are looking at.
+        self.set_volume_opacity(vid, 0.45)
+        entry["hotspot_volume"] = vid
+        self._status(f"severity contour at {hotspots.FIELD_ISO:.1f} for {entry['name']}")
 
     def set_model_interactions(self, mid: str, visible: bool) -> None:
         """Show/hide the computed non-covalent interactions overlay for a model."""
@@ -6390,9 +6464,25 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             try:
-                control.set_volume_iso(entry["ref"], value)
+                control.set_volume_iso(entry["ref"], self._iso_for_wire(entry, value))
             except Exception:  # pragma: no cover - defensive
                 pass
+
+    @staticmethod
+    def _iso_for_wire(entry, value: float) -> float:
+        """A contour level in the sigma units the live command speaks.
+
+        The wire protocol is sigma-only, which is right for maps: it means one slider range
+        serves any map without the viewer knowing its absolute scale. A severity field is
+        contoured on absolute values instead, because its levels are calibrated — so its
+        level has to be converted here, or a live change would land somewhere else entirely
+        from where the same number puts it on a scene rebuild.
+        """
+        if entry.get("iso_kind") != "absolute":
+            return float(value)
+        stats = entry["data"].stats()
+        std = stats["std"] or 1.0
+        return (float(value) - stats["mean"]) / std
 
     def set_volume_opacity(self, vid: str, value: float) -> None:
         """Set a volume's opacity (0-1) live."""
@@ -6697,7 +6787,8 @@ class DesktopApp:
     def _add_volume(self, data, name: str, *, group: Optional[str] = None,
                     color: Optional[str] = None, iso: Optional[float] = None,
                     radius: Optional[float] = None,
-                    negative_color: Optional[str] = None) -> str:
+                    negative_color: Optional[str] = None,
+                    iso_kind: str = "relative") -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
@@ -6717,7 +6808,7 @@ class DesktopApp:
             # map draws a random default from the session's current palette group.
             "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
-            "radius": radius, "negative_color": negative_color,
+            "radius": radius, "negative_color": negative_color, "iso_kind": iso_kind,
         })
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()

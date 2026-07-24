@@ -411,6 +411,103 @@ def residue_broadcast(model: Any, values: np.ndarray) -> np.ndarray:
     return out
 
 
+# -- the spatial field ----------------------------------------------------------------
+
+#: Voxel size for the severity field. Coarse on purpose: the field is smoothed over several
+#: angstroms, so there is nothing finer to resolve and a fine grid only costs memory.
+FIELD_SPACING = 1.0
+
+#: Kernel width. Chosen as the *action* scale — a residue plus its environment — rather than
+#: the map resolution, because the claim a contour makes is "there is work to do here", and
+#: that is the granularity at which work happens.
+FIELD_SIGMA = 2.5
+
+#: Kernel support, past which the weight is negligible.
+FIELD_CUTOFF = 3.0 * FIELD_SIGMA
+
+#: Atoms below this contribute nothing worth splatting. Most atoms in a decent model are
+#: exactly 0, so skipping them is most of why this is cheap.
+FIELD_FLOOR = 0.05
+
+#: The contour to open at: the calibrated outlier cut, so the shell has an exact meaning
+#: rather than being a tuned opacity ramp. Raise the level to 2.0 for severe-only.
+FIELD_ISO = 1.0
+
+#: Fixed, and deliberately unlike any map color, so a severity shell is never misread as
+#: density sitting in the same scene.
+FIELD_COLOR = "#FF2D95"
+
+
+def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPACING,
+                   sigma: float = FIELD_SIGMA, p: float = P_NORM,
+                   floor: float = FIELD_FLOOR):
+    """Smear the per-atom severity into a grid, for contouring in 3-D.
+
+    Returns ``(array, spacing, origin)`` where ``origin`` is the integer grid offset — what
+    :meth:`VolumeData.from_numpy` wants — so the box lands on the model's own coordinates.
+
+    Per-atom coloring only shows the surface, so a buried hotspot stays hidden until you
+    rotate or clip into it, and it costs the atom-color channel. A contour of this field is
+    visible through the structure and leaves that channel free.
+
+    The combination is the same distance-weighted p-norm used across metrics, **not a sum**:
+    summing would light up the core for no better reason than having more atoms in it, which
+    would make the field a map of where the protein is rather than of where the trouble is.
+
+    The weight is 1 within a voxel's reach of an atom, so the field at its nearest grid point
+    is *at least* that atom's severity — a contour at 1.0 therefore always encloses every
+    outlier atom, which a bare Gaussian would not guarantee. Neighbours can
+    only add, so a cluster of merely-poor atoms can also reach 1.0 with none of them
+    individually past the cut. That is the regional aggregation the field is for, and it is
+    the one place the field says something the per-atom coloring does not; read the shell as
+    "there is work in here", and the table for which residue it is.
+    """
+    values = np.asarray(values, dtype=float)
+    xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
+    hot = np.flatnonzero(np.nan_to_num(values) > floor)
+
+    # Half a voxel diagonal: the furthest an atom can be from the nearest grid point.
+    plateau = spacing * np.sqrt(3.0) / 2.0
+
+    pad = FIELD_CUTOFF
+    lo = (xyz.min(axis=0) - pad) if len(xyz) else np.zeros(3)
+    hi = (xyz.max(axis=0) + pad) if len(xyz) else np.ones(3)
+    origin = np.floor(lo / spacing).astype(int)
+    shape = tuple(int(np.ceil(h / spacing)) - o + 1 for h, o in zip(hi, origin))
+
+    # Accumulate the p-th powers, then take the p-th root once at the end — that *is* the
+    # p-norm, and doing it per voxel would be the same arithmetic done many more times.
+    acc = np.zeros(shape, dtype=float)
+    if hot.size:
+        reach = int(np.ceil(FIELD_CUTOFF / spacing))
+        axes = [np.arange(n) for n in shape]
+        for i in hot:
+            centre = xyz[i] / spacing - origin
+            slices, coords = [], []
+            for axis in range(3):
+                start = max(0, int(np.floor(centre[axis])) - reach)
+                stop = min(shape[axis], int(np.ceil(centre[axis])) + reach + 1)
+                if start >= stop:
+                    break
+                slices.append(slice(start, stop))
+                coords.append((axes[axis][start:stop] - centre[axis]) * spacing)
+            if len(slices) < 3:
+                continue  # the atom's support falls entirely outside the box
+            d2 = (coords[0][:, None, None] ** 2 + coords[1][None, :, None] ** 2
+                  + coords[2][None, None, :] ** 2)
+            # Flat-topped within a voxel's reach of the atom. An atom sits between grid
+            # points, so the nearest voxel samples the kernel up to half a voxel diagonal
+            # away; with a bare Gaussian that lands *below* the atom's own severity and a
+            # contour at 1.0 could miss an atom the table lists as an outlier. The plateau
+            # makes "the shell encloses every outlier" exact rather than nearly true.
+            d = np.sqrt(d2) - plateau
+            weight = np.exp(-np.maximum(d, 0.0) ** 2 / (2.0 * sigma * sigma))
+            acc[tuple(slices)] += (weight * values[i]) ** p
+
+    field = np.clip(acc ** (1.0 / p), 0.0, SEVERITY_CAP)
+    return field, spacing, tuple(int(o) for o in origin)
+
+
 def residue_columns(hotspots: Hotspots) -> List[str]:
     """Columns of :func:`residue_rows` — the score, then every component behind it.
 

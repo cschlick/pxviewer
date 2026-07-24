@@ -18,11 +18,13 @@ What shipped, against what is written below:
   it: the map term is dropped, every other severity keeps its meaning, and an atom whose fit
   was clean scores identically either way. Geometry-only and map-inclusive runs sit on the
   same absolute scale.
-* One thing the design missed, found by looking at a render: per-atom severity is invisible on
-  a **cartoon**, which draws no side chains — so the rotamer component, which by Rule 2 lives
-  precisely there, simply was not on screen. Fixed with a display-only residue broadcast
-  (`residue_broadcast`), used when the representation does not draw atoms. It changes where
-  the color is carried, never the ranking or the numbers reported.
+* Both displays are built: per-atom coloring, and the 3-D **severity contour** (see "The
+  spatial field" below). The contour is a shell at the calibrated level, not a volume render.
+* Two things the design missed, both found by looking at renders rather than by a test:
+  per-atom severity is invisible on a **cartoon**, which draws no side chains — so the rotamer
+  component, which by Rule 2 lives precisely there, was not on screen at all (fixed by a
+  display-only `residue_broadcast`); and the contour level had to be **absolute** rather than
+  the sigma every other volume here uses, which took a wire-level conversion to get right.
 
 ## The idea
 
@@ -300,7 +302,29 @@ assignment is more truthful about which coordinates produced the number.
 - *Residue i's backbone only* (chosen). Start narrow; widening is easy and reversible, and
   cablam is the better tool for genuinely multi-residue backbone problems anyway.
 
-### Deferred: the spatial field
+### The spatial field (shipped as a contour, not a volume render)
+
+Built, as `severity_field` + the "Severity contour in 3-D" toggle. The reasoning below is why
+it is a **contour** and not a semi-transparent volume; the deferral no longer applies, but the
+argument against direct volume rendering still does.
+
+Three things only became apparent once it was on screen:
+
+* **The level had to be absolute.** Map contours in this app are in sigma, which is right for
+  maps — one slider range serves any of them. A severity level is calibrated (1.0 *is* the
+  outlier cut), so contouring it in sigma made the level mean something different for every
+  structure and produced a shell that swallowed the whole molecule. Volumes now carry an
+  `iso_kind`, and the field uses `absolute`.
+* **The live wire protocol speaks sigma only.** So an absolute level has to be converted at
+  the boundary (`_iso_for_wire`), or dragging the level slider lands somewhere different from
+  where the same number puts it on a scene rebuild. That was visible as raising the level from
+  1.0 to 2.0 making the blobs *bigger*.
+* **A bare Gaussian kernel could miss an outlier.** An atom sits between grid points, so its
+  nearest voxel samples the kernel up to half a voxel diagonal away and falls just below the
+  atom's own severity — a contour at 1.0 could exclude an atom the table lists. The kernel is
+  flat-topped within that radius, which makes "the shell encloses every outlier" exact.
+
+### Why a contour rather than a volume render
 
 Computing severity into a voxel grid and drawing it as a semi-transparent volume was
 considered. Real advantages: it is visible through the structure (per-atom coloring only shows
@@ -308,19 +332,29 @@ the surface, so buried hotspots stay hidden), it aggregates regionally (six mild
 residues in one loop are a better target than one isolated severe residue), and it leaves the
 atom-color channel free so element/chain coloring survives.
 
-Deferred because: a voxel field asserts the quantity is defined everywhere in space when it is
-a property of discrete model objects; it smears attribution onto innocent neighbors; a
-translucent cloud is visually ambiguous against an actual density surface, which is a worse
-hazard in this app than in a generic viewer; and transparent direct volume rendering is
-exactly the kind of cost the earlier performance work was fighting.
+Rejected as a *volume render* because: a voxel field asserts the quantity is defined everywhere
+in space when it is a property of discrete model objects; it smears attribution onto innocent
+neighbors; a translucent cloud is visually ambiguous against an actual density surface, which
+is a worse hazard in this app than in a generic viewer; and transparent direct volume
+rendering is exactly the kind of cost the earlier performance work was fighting.
 
-If revisited, **contour the severity field rather than direct-volume-render it** — a
-translucent shell at `severity = 1.0` (optionally a second at 2.0). That reuses the existing
-isosurface pipeline, carries an exact meaning rather than a tuned opacity ramp, and is read
-fluently by anyone used to contour levels. Two traps if so: do not *sum* severity into voxels
-or the core lights up merely for having more atoms (it must be a neighborhood statistic — the
-same p-norm, distance-weighted, works), and choose the kernel width to be the *action* scale
-(~4–6 Å, a residue plus its environment) rather than the map resolution.
+So: **contoured, not volume-rendered** — a translucent shell at `severity = 1.0`, with the
+existing level control giving 2.0 for severe-only. That reuses the isosurface pipeline, carries
+an exact meaning rather than a tuned opacity ramp, and is read fluently by anyone used to
+contour levels. Both traps were real and both are handled: the combination is the same
+distance-weighted p-norm rather than a **sum** (a sum lights the core up for having more atoms
+in it, making the field a map of where the protein is), and the kernel width is the *action*
+scale (σ = 2.5 Å, a residue plus its environment) rather than the map resolution.
+
+The shell is fixed magenta, never a map color, so it is not misread as density in a scene that
+also holds one.
+
+**What the shell says that the coloring does not.** The weight is 1 at an atom, so the field
+there is at least that atom's severity and the contour always encloses every outlier. But
+neighbors can only add, so a cluster of merely-poor atoms can reach 1.0 with none of them
+individually past the cut. That is the regional aggregation the field is for — and it is the
+one honest difference from the per-atom view. Read the shell as "there is work in here" and
+the table for which residue it is.
 
 ## Prior art
 

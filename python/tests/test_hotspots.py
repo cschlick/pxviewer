@@ -282,7 +282,125 @@ def test_an_unknown_fit_term_is_rejected():
         hotspots.score(_model(), fit="rsrz")
 
 
+# -- the spatial field ----------------------------------------------------------------
+
+
+def test_the_field_lands_on_the_models_own_coordinates():
+    """The grid box has to sit where the model is, or the shell draws somewhere else
+    entirely. Grid index i maps to Cartesian (i + origin) * spacing."""
+    model = _model()
+    result = hotspots.score(model, fit="none")
+    field, spacing, origin = hotspots.severity_field(model, result.values)
+    xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
+
+    # Every atom falls inside the box...
+    lo = np.array(origin) * spacing
+    hi = (np.array(origin) + np.array(field.shape)) * spacing
+    assert (xyz >= lo).all() and (xyz <= hi).all()
+    # ... and the worst atom's own voxel carries at least its own severity, because the
+    # kernel weight is 1 at zero distance. This is what makes contouring at 1.0 mean
+    # "at the outlier cut" rather than something arbitrary.
+    worst = int(np.argmax(result.values))
+    voxel = tuple(int(round(xyz[worst][k] / spacing - origin[k])) for k in range(3))
+    assert field[voxel] >= result.values[worst] - 1e-9
+
+
+def test_the_contour_encloses_every_outlier_atom():
+    """A shell at 1.0 must not miss an atom the table lists as past the cut."""
+    model = _model()
+    result = hotspots.score(model, fit="none")
+    field, spacing, origin = hotspots.severity_field(model, result.values)
+    xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
+
+    outliers = np.flatnonzero(result.values >= 1.0)
+    assert outliers.size
+    for i in outliers:
+        voxel = tuple(int(round(xyz[i][k] / spacing - origin[k])) for k in range(3))
+        assert field[voxel] >= hotspots.FIELD_ISO
+
+
+def test_the_field_is_not_a_sum_so_dense_clean_regions_stay_dark():
+    """The trap the design names: summing severity into voxels would light up the core for
+    no better reason than having more atoms in it, making the field a map of where the
+    protein is rather than of where the trouble is."""
+    model = _model()
+    n = model.get_number_of_atoms()
+    # Every atom mildly imperfect but none anywhere near the cut. A sum over a packed core
+    # would sail past 1.0; a p-norm of small numbers stays small.
+    field, _spacing, _origin = hotspots.severity_field(model, np.full(n, 0.2))
+    assert field.max() < 1.0
+
+
+def test_an_all_clean_model_produces_an_empty_field():
+    model = _model()
+    field, _spacing, _origin = hotspots.severity_field(
+        model, np.zeros(model.get_number_of_atoms()))
+    assert field.max() == 0.0
+
+
 # -- the desktop wiring ---------------------------------------------------------------
+
+
+def test_an_absolute_contour_level_is_converted_for_the_sigma_only_wire(qapp):
+    """The live volume_iso command speaks sigma, which is right for maps — one slider range
+    serves any of them. A severity field contours on absolute values because its levels are
+    calibrated, so its level must be converted or a live change would land somewhere else
+    from where the same number puts it on a scene rebuild."""
+    pytest.importorskip("PySide6")
+    from pxviewer.desktop import DesktopApp
+
+    stats = {"mean": 0.02, "std": 0.25}
+    absolute = {"iso_kind": "absolute", "data": type("D", (), {"stats": lambda self: stats})()}
+    # (1.0 - 0.02) / 0.25
+    assert DesktopApp._iso_for_wire(absolute, 1.0) == pytest.approx(3.92)
+    # A map is untouched: its level already is sigma.
+    assert DesktopApp._iso_for_wire({"iso_kind": "relative"}, 3.0) == 3.0
+    assert DesktopApp._iso_for_wire({}, 3.0) == 3.0
+
+
+def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
+    """One shell per model: recomputing or re-showing must replace it, never stack a second
+    surface on the first."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        got = []
+        app.bridge.hotspots_ready.connect(got.append)
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+
+        # Refuses politely before there is anything to contour.
+        said = []
+        app.bridge.status_changed.connect(said.append)
+        app.show_hotspot_field(mid, on=True)
+        assert not app._volumes and any("no hotspots computed" in s for s in said)
+
+        app.compute_hotspots(mid, fit="none")
+        deadline = time.time() + 300
+        while time.time() < deadline and not got:
+            qapp.processEvents()
+            time.sleep(0.05)
+        assert got, "hotspots never landed"
+
+        app.show_hotspot_field(mid, on=True)
+        assert len(app._volumes) == 1
+        volume = app._volumes[0]
+        assert volume["iso_kind"] == "absolute"      # calibrated level, not sigma
+        assert volume["iso"] == hotspots.FIELD_ISO
+        assert volume["color"] == hotspots.FIELD_COLOR
+        assert volume["opacity"] < 1.0               # the model stays readable through it
+
+        app.show_hotspot_field(mid, on=True)         # re-show replaces
+        assert len(app._volumes) == 1
+        app.show_hotspot_field(mid, on=False)        # and off removes
+        assert not app._volumes
+        assert app._model_entry(mid).get("hotspot_volume") is None
+    finally:
+        app.stop()
 
 
 def test_computing_hotspots_colours_the_model_through_the_attribute_path(qapp):
