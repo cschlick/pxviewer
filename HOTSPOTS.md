@@ -137,8 +137,170 @@ keeps it honest.
 booleans for the countable annotations we report and cross-check against the PDB validation
 report. They stay consistent because the boolean is simply the level set at `severity = 1.0`.
 
-**Per-residue is the display unit.** A residue is what you rebuild. Compute per-atom where the
-metric is per-atom (clash, Q-score), display per-residue as the max over its atoms.
+**The atom is the unit of the score.** See the localization rules below — this replaces an
+earlier hand-wave ("compute per-atom where the metric is per-atom, display per-residue as the
+max over its atoms") that skipped the actual problem, which is that most of these metrics are
+not per-atom and have to be *assigned* to atoms by an explicit rule.
+
+## Localization: explicit rules
+
+Scope decision: **atom-localized only for now.** A spatial severity field rendered as a
+semi-transparent volume was considered and deferred — see "Deferred: the spatial field" at
+the end of this section.
+
+The gap these rules close: the aggregation formula above is written as if severity arrives
+per-locus already, but the metrics have different native loci and several are *sub-residue*.
+Until each metric says which atoms it implicates, "per-atom score" is not defined.
+
+### Rule 1 — the atom is the unit; the residue is a roll-up
+
+**Alternatives considered:**
+
+- *Residue as the unit of computation.* Simpler, and matches "a residue is what you rebuild."
+  Rejected because it destroys the sidechain/backbone distinction: a rotamer outlier says
+  nothing about that residue's backbone, and painting the whole residue asserts that it does.
+  It also discards Q-score's genuine per-atom detail, which shows *which end* of a sidechain
+  is unsupported.
+- *Atom as the unit* (chosen). The picture then tells you what to fix, not just where — a
+  rotamer-outlier sidechain glows while its own backbone stays cool.
+
+Residue-level values remain available as a roll-up (Rule 6) for sorting, lists and badge
+counts, so nothing is lost by computing at the finer level.
+
+### Rule 2 — each metric implicates a named set of atoms, topologically
+
+| metric | native locus | atoms it implicates |
+| --- | --- | --- |
+| Q-score | atom | itself |
+| clash | atom **pair** | both atoms, full severity each |
+| rotamer | sidechain χ angles | sidechain atoms only — **not** N/CA/C/O |
+| Ramachandran | φ/ψ of residue *i* | backbone N, CA, C, O of *i* |
+| C-beta deviation | CB | CB alone |
+| omega | peptide bond *i → i+1* | C, O of *i* and N, CA of *i+1* |
+| bond / angle | the restraint itself | its 2 or 3 atoms |
+
+**Alternatives considered:**
+
+- *Paint the whole residue for every metric.* Loses the sidechain/backbone distinction, which
+  is the single most useful thing computing per-atom buys.
+- *Distance-weighted splat from the residue centroid.* Invents a length scale with no
+  justification and smears severity onto innocent neighboring residues — it reintroduces the
+  spatial field's attribution problem without gaining its benefits.
+- *Explicit topological assignment* (chosen). No free parameters, and it matches how each
+  metric is actually computed — the atoms named are the atoms whose coordinates entered the
+  calculation.
+
+### Rule 3 — aggregate in two stages: within a metric, then across metrics
+
+```
+sₘ(a) = worst instance of metric m on atom a      (0 if m does not apply to a)
+S(a)  = ( Σₘ sₘ(a)ᵖ )^(1/p)                       p ≈ 4
+```
+
+The first stage exists because one atom can carry several instances of one metric — a badly
+placed atom typically clashes with three neighbors at once.
+
+**Alternatives for the within-metric stage:**
+
+- *Sum the instances.* Rejected for the same reason sums fail across metrics: three clashes
+  from one misplaced atom are one error observed three times, and summing triples it.
+- *Count the instances.* Discards depth entirely — a 0.45 Å and a 1.2 Å clash become equal.
+- *Worst instance* (chosen). Consistent with the correlated-readout argument: multiple clashes
+  on one atom are usually one mistake. (Formally this is the `p → ∞` limit of the same
+  operator, so the two stages are one family. Using a finite `p` here too is a defensible
+  refinement if corroboration among distinct clashes turns out to matter.)
+
+### Rule 4 — combine metrics with the p-norm, and never divide by a count
+
+Atoms carry **different numbers of applicable metrics**: a backbone N has Ramachandran +
+Q-score + possibly a clash; a CG has rotamer + Q-score + possibly a clash; a carbonyl O has no
+rotamer term at all.
+
+The p-norm needs no denominator, and `0` is its natural identity, so "this metric does not
+apply here" and "this metric applies and is clean" both contribute nothing, and atoms with
+ragged metric coverage stay directly comparable.
+
+**Alternatives considered:**
+
+- *Mean across applicable metrics.* Breaks precisely here — it forces a choice of denominator,
+  and an atom with 2 clean metrics scores identically to one with 4 clean metrics despite
+  meaning something quite different. Also dilutes severity (objection 1).
+- *Sum.* Triple-counts correlated readouts of one physical error.
+- *Max.* Safe, but gives no credit for corroboration.
+- *p-norm, p ≈ 4* (chosen). Severity-preserving, rewards corroboration modestly, and — the
+  reason it wins at the atom level specifically — needs no denominator. The operator chosen
+  earlier for severity-preservation turns out to also be the one that survives ragged
+  per-atom coverage.
+
+### Rule 5 — a heavy atom inherits the worst severity of its hydrogens
+
+Probe needs hydrogens to find clashes, so most clash severity lands on H. But Q-score returns
+`nan` for hydrogens (they are never scored), and in ribbon or heavy-atom views hydrogens are
+not drawn at all — so without this rule most of the clash signal disappears the moment
+hydrogens are hidden, which is the default in most views.
+
+So: `clash severity(heavy atom) = max(its own, its hydrogens')`, with the hydrogen keeping its
+own value for views that draw them.
+
+**Alternatives considered:**
+
+- *Leave severity on the hydrogen only.* The signal vanishes in exactly the views people use
+  most.
+- *Discard clashes involving hydrogens.* Throws away the majority of the clash signal, since
+  Probe's contacts are largely H-mediated; it would also stop reproducing MolProbity's
+  clashscore, breaking the consistency constraint.
+- *Move severity to the parent and clear the hydrogen.* Wrong when hydrogens are shown.
+- *Max onto the parent, keep the hydrogen's own* (chosen). Correct in both display modes. Must
+  be a max, not a sum, or a heavy atom with several clashing hydrogens is inflated.
+
+### Rule 6 — roll up to a residue with max, never sum
+
+Ramachandran assigned to four backbone atoms appears four times in the atom field. That is
+correct for display (one residue's backbone glows), but any residue-level roll-up must take
+the max, or one φ/ψ pair is counted four times.
+
+**Alternatives considered:**
+
+- *Sum over the residue's atoms.* Quadruple-counts Ramachandran and scales with residue size,
+  so TRP outranks GLY for being large.
+- *Mean over the residue's atoms.* A single catastrophic atom vanishes into a 15-atom average
+  — objection 1 again, at a different granularity.
+- *Max over the residue's atoms* (chosen). Size-independent and severity-preserving.
+
+### Rule 7 — assign Ramachandran narrowly, to residue *i*'s backbone only
+
+φ/ψ involve atoms from three residues (C of *i−1*, N/CA/C of *i*, N of *i+1*), so a wider
+assignment is more truthful about which coordinates produced the number.
+
+**Alternatives considered:**
+
+- *Include the flanking C(i−1) and N(i+1).* More faithful to the evidence, but it smears one
+  residue's problem onto both neighbors, and those neighbors then look implicated in a
+  backbone error that is not theirs.
+- *Residue i's backbone only* (chosen). Start narrow; widening is easy and reversible, and
+  cablam is the better tool for genuinely multi-residue backbone problems anyway.
+
+### Deferred: the spatial field
+
+Computing severity into a voxel grid and drawing it as a semi-transparent volume was
+considered. Real advantages: it is visible through the structure (per-atom coloring only shows
+the surface, so buried hotspots stay hidden), it aggregates regionally (six mildly bad
+residues in one loop are a better target than one isolated severe residue), and it leaves the
+atom-color channel free so element/chain coloring survives.
+
+Deferred because: a voxel field asserts the quantity is defined everywhere in space when it is
+a property of discrete model objects; it smears attribution onto innocent neighbors; a
+translucent cloud is visually ambiguous against an actual density surface, which is a worse
+hazard in this app than in a generic viewer; and transparent direct volume rendering is
+exactly the kind of cost the earlier performance work was fighting.
+
+If revisited, **contour the severity field rather than direct-volume-render it** — a
+translucent shell at `severity = 1.0` (optionally a second at 2.0). That reuses the existing
+isosurface pipeline, carries an exact meaning rather than a tuned opacity ramp, and is read
+fluently by anyone used to contour levels. Two traps if so: do not *sum* severity into voxels
+or the core lights up merely for having more atoms (it must be a neighborhood statistic — the
+same p-norm, distance-weighted, works), and choose the kernel width to be the *action* scale
+(~4–6 Å, a residue plus its environment) rather than the map resolution.
 
 ## Prior art
 
@@ -299,3 +461,11 @@ Leave as badges rather than score components:
 - Is there any value in also reporting a global roll-up of the hotspot field, or does that
   just reinvent MolProbity score worse? Leaning: don't — the global question is answered, and
   a second incomparable global number is exactly the Goodhart risk above.
+- Rule 2 assigns a rotamer outlier to the whole sidechain at equal severity. Should it instead
+  decay along the chain — a χ1 outlier implicating CB outward more than the terminal atoms?
+  More faithful, but it needs a decay shape nobody has calibrated. Equal severity first.
+- Rule 5 makes a heavy atom inherit its hydrogens' clash severity. Does the same inheritance
+  make sense for any other metric, or is clash the only H-mediated one in the set?
+- Does `sₘ = 0` for an inapplicable metric ever mislead? It reads as "clean" in the field even
+  though it means "not measured here" — the same distinction Q-score draws with `nan`. For a
+  p-norm the arithmetic is right either way, but a breakdown panel should show the difference.
