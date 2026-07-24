@@ -338,7 +338,95 @@ def test_an_all_clean_model_produces_an_empty_field():
     assert field.max() == 0.0
 
 
+# -- the cloud wire format ------------------------------------------------------------
+
+
+def test_the_severity_box_normalizes_to_zero_one_with_the_cut_marked():
+    """Mol*'s direct-volume shader feeds the raw voxel value straight into the opacity
+    transfer function as a 0..1 coordinate, so the grid has to arrive normalized or the ramp
+    lands in the wrong place. cutFrac tells the frontend where the outlier threshold sits on
+    that scale without it having to know the cap."""
+    import struct
+
+    model = _model()
+    result = hotspots.score(model, fit="none")
+    field, spacing, origin = hotspots.severity_field(model, result.values)
+    payload = hotspots.encode_severity_box(field, spacing, origin)
+
+    cut, nx, ny, nz = struct.unpack_from("<fiii", payload, 0)
+    assert (nx, ny, nz) == field.shape
+    assert cut == pytest.approx(hotspots.FIELD_ISO / hotspots.SEVERITY_CAP)  # 1.0 / 4.0
+
+    # Geometry: origin in Cartesian, axis-aligned steps of one voxel.
+    ox, oy, oz = struct.unpack_from("<fff", payload, 16)
+    assert (ox, oy, oz) == pytest.approx(tuple(o * spacing for o in origin))
+    steps = struct.unpack_from("<fffffffff", payload, 28)
+    assert steps == pytest.approx((spacing, 0, 0, 0, spacing, 0, 0, 0, spacing))
+
+    data = np.frombuffer(payload, dtype="<f4", offset=64)
+    assert data.size == nx * ny * nz
+    assert 0.0 <= data.min() and data.max() <= 1.0
+    # The worst voxel should be severity/cap, not clamped away.
+    assert data.max() == pytest.approx(min(field.max() / hotspots.SEVERITY_CAP, 1.0), abs=1e-6)
+
+
+def test_streaming_a_severity_cloud_sets_the_replay_payload(qapp):
+    """The cloud rides its own wire tag on the model's session and is replayed to late
+    viewers, so it survives a viewport reload the way the difference map does."""
+    pytest.importorskip("websockets")
+    from pxviewer.live import LiveSession, _TAG_HOTSPOT_VOLUME
+
+    session = LiveSession.from_model_file(_MODEL)
+    assert session._last_hotspot_volume is None
+    session.show_hotspot_volume(b"\x00\x01\x02\x03")
+    assert session._last_hotspot_volume[:4] == _TAG_HOTSPOT_VOLUME.to_bytes(4, "little")
+    assert session._last_hotspot_volume[4:] == b"\x00\x01\x02\x03"
+    session.clear_hotspot_volume()
+    assert session._last_hotspot_volume is None
+
+
 # -- the desktop wiring ---------------------------------------------------------------
+
+
+def test_the_cloud_and_contour_are_mutually_exclusive(qapp):
+    """One 3-D field per model. The cloud streams on the session; the contour is an MVS-scene
+    volume. Switching between them, or turning the field off, must leave neither behind."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        got = []
+        app.bridge.hotspots_ready.connect(got.append)
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        app.compute_hotspots(mid, fit="none")
+        deadline = time.time() + 300
+        while time.time() < deadline and not got:
+            qapp.processEvents()
+            time.sleep(0.05)
+        assert got, "hotspots never landed"
+        entry = app._model_entry(mid)
+
+        app.show_hotspot_field(mid, on=True, style="cloud")
+        assert entry.get("hotspot_cloud") is True
+        assert entry.get("hotspot_volume") is None       # no MVS contour
+        assert not app._volumes
+        assert entry["session"]._last_hotspot_volume is not None
+
+        app.show_hotspot_field(mid, on=True, style="contour")
+        assert entry.get("hotspot_cloud") is None         # the cloud was torn down
+        assert entry["session"]._last_hotspot_volume is None
+        assert entry.get("hotspot_volume") is not None    # and a contour drawn
+        assert len(app._volumes) == 1
+
+        app.show_hotspot_field(mid, on=False)
+        assert entry.get("hotspot_cloud") is None and entry.get("hotspot_volume") is None
+        assert not app._volumes
+    finally:
+        app.stop()
 
 
 def test_an_absolute_contour_level_is_converted_for_the_sigma_only_wire(qapp):
@@ -376,7 +464,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
         # Refuses politely before there is anything to contour.
         said = []
         app.bridge.status_changed.connect(said.append)
-        app.show_hotspot_field(mid, on=True)
+        app.show_hotspot_field(mid, on=True, style="contour")
         assert not app._volumes and any("no hotspots computed" in s for s in said)
 
         app.compute_hotspots(mid, fit="none")
@@ -386,7 +474,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
             time.sleep(0.05)
         assert got, "hotspots never landed"
 
-        app.show_hotspot_field(mid, on=True)
+        app.show_hotspot_field(mid, on=True, style="contour")
         assert len(app._volumes) == 1
         volume = app._volumes[0]
         assert volume["iso_kind"] == "absolute"      # calibrated level, not sigma
@@ -394,7 +482,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
         assert volume["color"] == hotspots.FIELD_COLOR
         assert volume["opacity"] < 1.0               # the model stays readable through it
 
-        app.show_hotspot_field(mid, on=True)         # re-show replaces
+        app.show_hotspot_field(mid, on=True, style="contour")  # re-show replaces
         assert len(app._volumes) == 1
         app.show_hotspot_field(mid, on=False)        # and off removes
         assert not app._volumes

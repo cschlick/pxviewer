@@ -161,6 +161,34 @@ export const LiveDiffVolume = PluginStateTransform.BuiltIn({
 });
 type LiveDiffVolume = typeof LiveDiffVolume;
 
+// A validation-severity grid, built as a Mol* Volume the same way as the difference map —
+// same affine-plus-grid machinery — but rendered as a value-colored cloud rather than a
+// contour (see LiveViewer.setHotspotVolume). Its own transform so it can coexist with a
+// live difference map on the same model.
+export const HotspotVolume = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-hotspot-volume',
+    display: { name: 'pxviewer Hotspot Volume', description: 'A validation-severity grid drawn as a cloud.' },
+    from: SO.Root,
+    to: SO.Volume.Data,
+    params: {
+        nx: PD.Numeric(0), ny: PD.Numeric(0), nz: PD.Numeric(0),
+        values: PD.Value<Float32Array>(new Float32Array(0), { isHidden: true }),
+        origin: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepX: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepY: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+        stepZ: PD.Value<Vec3>(Vec3(), { isHidden: true }),
+    },
+})({
+    apply({ params }) {
+        return Task.create('pxviewer Hotspot Volume', async () => {
+            const p = params as any;
+            const vol = buildDiffVolume(p.nx, p.ny, p.nz, p.values, p.origin, p.stepX, p.stepY, p.stepZ);
+            return new SO.Volume.Data(vol, { label: 'Validation hotspots' });
+        });
+    },
+});
+type HotspotVolume = typeof HotspotVolume;
+
 // -- probe2 contact-dot surface ------------------------------------------
 //
 // A probe2 "dotkin": a point cloud of contact dots plus line "spikes" for the
@@ -493,6 +521,7 @@ export class LiveViewer {
     private markupChannels: Map<number, StateObjectSelector[]> = new Map();
     private mapVolume: StateObjectSelector | undefined;  // the live difference-map density window
     private mapVersion = 0;
+    private hotspotVolume: StateObjectSelector | undefined;  // the validation-severity cloud
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -1112,6 +1141,72 @@ export class LiveViewer {
         this.mapVolume = undefined;
     }
 
+    /**
+     * Show a validation-severity cloud: `[f32 cutFrac][i32 nx,ny,nz][f32 origin][f32 stepX,
+     * stepY,stepZ][f32 grid]` at `offset` (see pxviewer.hotspots.encode_severity_box). The
+     * grid is normalized to [0, 1] as severity/cap, so `cutFrac` is where the outlier
+     * threshold falls on that scale.
+     *
+     * Rendered as a `direct-volume` — every voxel raymarched, colored by value and made
+     * transparent where clean. Color comes from the `volume-value` theme (which normalizes
+     * by the palette domain), opacity from the transfer function's control points (which the
+     * shader feeds the raw 0..1 value), so both are anchored at the cut regardless of this
+     * structure's worst severity. Rebuilt, not updated: a hotspot run is a one-shot, unlike
+     * the per-frame difference map.
+     */
+    async setHotspotVolume(buffer: ArrayBuffer, offset: number) {
+        const dv = new DataView(buffer);
+        const cutFrac = dv.getFloat32(offset, true);
+        const nx = dv.getInt32(offset + 4, true);
+        const ny = dv.getInt32(offset + 8, true);
+        const nz = dv.getInt32(offset + 12, true);
+        let p = offset + 16;
+        const v3 = () => { const w = Vec3.create(dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)); p += 12; return w; };
+        const origin = v3(), stepX = v3(), stepY = v3(), stepZ = v3();
+        const values = new Float32Array(buffer, p, nx * ny * nz).slice();
+
+        await this.clearHotspotVolume();
+        const build = this.plugin.state.data.build();
+        const vol = build.toRoot().apply(HotspotVolume, { nx, ny, nz, values, origin, stepX, stepY, stepZ });
+
+        // Color: green (clean) -> yellow at the cut -> orange -> red, with the cut at cutFrac
+        // of the [0, 1] range. Placing yellow exactly at the cut makes the threshold legible.
+        const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+        const colorList: [Color, number][] = [
+            [ColorNames.green, 0.0],
+            [ColorNames.yellow, clamp01(cutFrac)],
+            [ColorNames.orange, clamp01(cutFrac * 1.5)],
+            [ColorNames.red, clamp01(cutFrac * 2.5)],
+        ];
+        // Opacity: invisible below the cut, then ramping up. The knee sits just under the cut
+        // so an at-cut voxel is faintly visible rather than exactly on the zero edge.
+        const controlPoints = [
+            Vec2.create(0.0, 0.0),
+            Vec2.create(clamp01(cutFrac * 0.92), 0.0),
+            Vec2.create(clamp01(cutFrac), 0.12),
+            Vec2.create(clamp01(cutFrac * 2.0), 0.35),
+            Vec2.create(1.0, 0.6),
+        ];
+        vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
+            type: 'direct-volume',
+            typeParams: { controlPoints },
+            color: 'volume-value',
+            colorParams: { domain: { name: 'custom', params: [0, 1] }, colorList: { kind: 'interpolate', colors: colorList } },
+        }));
+        await build.commit();
+        this.hotspotVolume = vol.selector;
+    }
+
+    /** Remove the severity cloud (see `setHotspotVolume`). */
+    async clearHotspotVolume() {
+        if (this.hotspotVolume && this.hotspotVolume.ref) {
+            const b = this.plugin.state.data.build();
+            b.delete(this.hotspotVolume.ref);
+            await b.commit();
+        }
+        this.hotspotVolume = undefined;
+    }
+
     /** Show or hide this model's whole structure in place — a render skip (no dispose, no
      *  reload), so hiding one object never disturbs the others. */
     setStructureVisible(visible: boolean) {
@@ -1687,6 +1782,7 @@ const TAG_ATTRIBUTE = 2;
 const TAG_DOTS = 3;
 const TAG_MAP = 4;
 const TAG_FRAME_DELTA = 5;  // only the atoms that moved; see LiveViewer.updateDelta
+const TAG_HOTSPOT_VOLUME = 6;  // a validation-severity cloud; see LiveViewer.setHotspotVolume
 // Dot channels >= this are validation markers (drawn large); must match
 // pxviewer.validation.CHANNEL_BASE.
 const VALIDATION_CHANNEL_BASE = 10;
@@ -2427,6 +2523,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
     let pendingMapBox: ArrayBuffer | null = null;  // a density window that beat the viewer build (latest only)
+    let pendingHotspotVolume: ArrayBuffer | null = null;  // a severity cloud that beat the viewer build (latest only)
 
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
@@ -2457,6 +2554,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
             } else if (msg.type === 'map_box' && viewer) {
                 if (msg.action === 'clear') await viewer.clearMapBox();
+            } else if (msg.type === 'hotspot_volume' && viewer) {
+                if (msg.action === 'clear') await viewer.clearHotspotVolume();
             } else if (msg.type === 'structure_visible' && viewer && typeof msg.value === 'boolean') {
                 viewer.setStructureVisible(msg.value);   // hide/show this model in place
             } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.value === 'boolean') {
@@ -2574,6 +2673,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const m of queued) await handleControlMessage(m);
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
+            if (pendingHotspotVolume) { await viewer.setHotspotVolume(pendingHotspotVolume, 4); pendingHotspotVolume = null; }
         } else if (tag === TAG_FRAME && viewer) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -2609,6 +2709,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // if the viewer is still building just keep the most recent one.
             if (viewer) await viewer.setMapBox(buffer, 4);
             else pendingMapBox = buffer;
+        } else if (tag === TAG_HOTSPOT_VOLUME) {
+            // A validation-severity cloud (see viewer.setHotspotVolume). Like the map box,
+            // only the most recent matters while the viewer is still building.
+            if (viewer) await viewer.setHotspotVolume(buffer, 4);
+            else pendingHotspotVolume = buffer;
         }
     };
 

@@ -2246,17 +2246,30 @@ class ControlsWindow:
         self._hotspot_btn = find
         layout.addWidget(find)
 
-        contour = QCheckBox("Severity contour in 3-D")
-        contour.setToolTip(
-            "Draw a translucent shell around the regions past the outlier threshold.\n"
-            "Per-atom color only shows the surface, so a buried hotspot stays hidden; the "
-            "shell is visible through the structure.\n"
-            "Its level is the outlier cut — raise it to 2.0 on the Appearance panel for "
-            "severe-only.")
-        contour.setEnabled(False)  # nothing to contour until a score exists
-        contour.toggled.connect(self._on_hotspot_contour)
-        self._hotspot_contour = contour
-        layout.addWidget(contour)
+        field_row = QHBoxLayout()
+        show3d = QCheckBox("Show in 3-D")
+        show3d.setToolTip(
+            "Draw the severity field around the model in 3-D.\n"
+            "Per-atom color only shows the surface, so a buried hotspot stays hidden; a 3-D "
+            "field is visible through the structure.")
+        show3d.setEnabled(False)  # nothing to draw until a score exists
+        show3d.toggled.connect(self._on_hotspot_field_changed)
+        self._hotspot_show3d = show3d
+        field_row.addWidget(show3d)
+
+        style = QComboBox()
+        style.addItem("Cloud", "cloud")
+        style.addItem("Contour", "contour")
+        style.setToolTip(
+            "Cloud: every voxel colored by value, transparent where clean through yellow to "
+            "red — the local-resolution-map look.\n"
+            "Contour: a single translucent shell at the outlier cut — cheaper, and "
+            "unambiguous as a surface.")
+        style.setEnabled(False)
+        style.currentIndexChanged.connect(self._on_hotspot_field_changed)
+        self._hotspot_style = style
+        field_row.addWidget(style, stretch=1)
+        layout.addLayout(field_row)
 
         self._hotspot_summary = QLabel("Not computed yet.")
         self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
@@ -2279,9 +2292,12 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
-    def _on_hotspot_contour(self, on: bool) -> None:
+    def _on_hotspot_field_changed(self, *_args) -> None:
+        """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
+        on = self._hotspot_show3d.isChecked()
+        self._hotspot_style.setEnabled(on)
         try:
-            self._desktop.show_hotspot_field(on=bool(on))
+            self._desktop.show_hotspot_field(on=on, style=self._hotspot_style.currentData())
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2291,11 +2307,11 @@ class ControlsWindow:
 
         _mid, result, columns, rows = payload
         self._hotspot_summary.setText(result.summary)
-        self._hotspot_contour.setEnabled(True)
-        if self._hotspot_contour.isChecked():
-            # A shell already up is showing the previous run's field; redraw it from this one
+        self._hotspot_show3d.setEnabled(True)
+        if self._hotspot_show3d.isChecked():
+            # A field already up is showing the previous run's scores; redraw it from this one
             # rather than leaving a stale surface next to a fresh table.
-            self._on_hotspot_contour(True)
+            self._on_hotspot_field_changed()
         table = self._hotspot_table
         table.clearContents()
         table.setColumnCount(len(columns))
@@ -5268,30 +5284,27 @@ class DesktopApp:
         }
         self._apply_model_rep(entry)
 
-    def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True) -> None:
-        """Show/hide a contoured 3-D shell around the hotspots of a scored model.
+    def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True,
+                           style: str = "cloud") -> None:
+        """Show/hide a 3-D severity field for a scored model.
 
-        The per-atom coloring only shows the surface, so a buried hotspot stays hidden until
-        you rotate into it, and while it is on you have lost element/chain coloring. A shell
-        is visible through the structure and leaves that channel free.
+        Per-atom coloring only shows the surface, so a buried hotspot stays hidden until you
+        rotate into it, and while it is on you have lost element/chain coloring. A 3-D field is
+        visible through the structure and leaves that channel free.
 
-        Contoured rather than volume-rendered: the level *is* the calibrated outlier cut, so
-        the surface means something exact instead of being a tuned opacity ramp, and it costs
-        one isosurface rather than a transparent raymarch. Raise the level to 2.0 on the
-        Appearance panel for severe-only.
+        ``style`` is ``'cloud'`` — every voxel colored by value, transparent where clean
+        through yellow to red, the local-resolution-map look — or ``'contour'``, a single
+        translucent shell at the calibrated outlier cut (cheaper, unambiguous as a surface).
+        Whichever is showing is torn down before the other is drawn; only one at a time.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
             raise ValueError("load a model first")
-        existing = entry.get("hotspot_volume")
-        if existing is not None:
-            self.remove_volume(existing)     # never two shells for one model
-            entry.pop("hotspot_volume", None)
+        self._clear_hotspot_field(entry)
         if not on:
             return
 
         from . import hotspots
-        from .volume_io import VolumeData
 
         result = entry.get("hotspots")
         if result is None:
@@ -5302,8 +5315,20 @@ class DesktopApp:
             return
         field, spacing, origin = hotspots.severity_field(model, result.values)
         if not (field >= hotspots.FIELD_ISO).any():
-            self._status("nothing reaches the outlier threshold — no severity contour to draw")
+            self._status("nothing reaches the outlier threshold — nothing to draw in 3-D")
             return
+
+        if style == "cloud":
+            # A value-colored raymarched cloud, streamed to the model's own viewer as a
+            # direct-volume (MVS has no such node, so it cannot go through the shared scene).
+            payload = hotspots.encode_severity_box(field, spacing, origin)
+            entry["session"].show_hotspot_volume(payload)
+            entry["hotspot_cloud"] = True
+            self._status(f"severity cloud for {entry['name']} (transparent clean → red severe)")
+            return
+
+        from .volume_io import VolumeData
+
         data = VolumeData.from_numpy(field, spacing=spacing, origin=origin,
                                      name=f"{entry['name']} hotspots")
         vid = self._add_volume(data, f"{entry['name']} hotspots", group=entry.get("group"),
@@ -5314,6 +5339,17 @@ class DesktopApp:
         self.set_volume_opacity(vid, 0.45)
         entry["hotspot_volume"] = vid
         self._status(f"severity contour at {hotspots.FIELD_ISO:.1f} for {entry['name']}")
+
+    def _clear_hotspot_field(self, entry) -> None:
+        """Tear down whichever 3-D severity field a model is showing (cloud or contour)."""
+        vid = entry.pop("hotspot_volume", None)
+        if vid is not None:
+            self.remove_volume(vid)          # the MVS-scene contour
+        if entry.pop("hotspot_cloud", None):
+            try:
+                entry["session"].clear_hotspot_volume()   # the streamed cloud
+            except Exception:  # pragma: no cover - defensive
+                pass
 
     def set_model_interactions(self, mid: str, visible: bool) -> None:
         """Show/hide the computed non-covalent interactions overlay for a model."""

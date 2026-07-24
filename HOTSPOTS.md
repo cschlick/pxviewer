@@ -25,6 +25,8 @@ What shipped, against what is written below:
   component, which by Rule 2 lives precisely there, was not on screen at all (fixed by a
   display-only `residue_broadcast`); and the contour level had to be **absolute** rather than
   the sigma every other volume here uses, which took a wire-level conversion to get right.
+* The 3-D field has **two looks**: the value-colored **cloud** (default, added on request —
+  the local-resolution-map look) and the **contour** shell. See "The spatial field" below.
 
 ## The idea
 
@@ -302,11 +304,36 @@ assignment is more truthful about which coordinates produced the number.
 - *Residue i's backbone only* (chosen). Start narrow; widening is easy and reversible, and
   cablam is the better tool for genuinely multi-residue backbone problems anyway.
 
-### The spatial field (shipped as a contour, not a volume render)
+### The spatial field: a value-colored cloud, and a contour
 
-Built, as `severity_field` + the "Severity contour in 3-D" toggle. The reasoning below is why
-it is a **contour** and not a semi-transparent volume; the deferral no longer applies, but the
-argument against direct volume rendering still does.
+Two 3-D looks are built, chosen by a selector next to the "Show in 3-D" toggle:
+
+* **Cloud** (default) — a Mol* `direct-volume`: every voxel raymarched, colored by value
+  (transparent where clean, through yellow at the cut to red), the local-resolution-map look.
+* **Contour** — a single translucent shell at the calibrated outlier cut. Cheaper, and
+  unambiguous as a surface.
+
+The contour came first and the reasoning below is why it was the *initial* choice. The cloud
+was added later on request; the honest note is that it reintroduces the very costs the contour
+was avoiding (a transparent raymarch, and a translucent haze that can read as density), traded
+for the finer value gradient the contour cannot show. Both remain, because which is better
+depends on the structure and the question.
+
+**How the cloud is built.** MVS has no direct-volume node, so the cloud cannot go through the
+shared scene the contour uses. It streams instead on the model's own websocket, on a wire tag
+of its own (`encode_severity_box` → `_TAG_HOTSPOT_VOLUME` → `setHotspotVolume`), parallel to
+the live difference map — which proves a native Mol* volume composes with the MVS scene, and
+which it must not evict, since an X-ray model can be following both at once.
+
+**The one subtlety worth recording.** Mol*'s direct-volume shader colors by the *palette
+domain* (so color is anchored to the severity scale) but feeds the *raw* voxel value straight
+into the opacity transfer function as a 0..1 texture coordinate — it does not normalize that
+path. So the grid is sent already normalized to [0, 1] as `severity / cap`, and the header
+carries `cutFrac` (where the outlier threshold falls on that scale) so the frontend can anchor
+both the color stops and the opacity knee at the cut without knowing the cap. Get this wrong
+and the opacity ramp silently lands in the wrong place.
+
+### Why the contour was the first choice
 
 Three things only became apparent once it was on screen:
 
@@ -324,7 +351,11 @@ Three things only became apparent once it was on screen:
   atom's own severity — a contour at 1.0 could exclude an atom the table lists. The kernel is
   flat-topped within that radius, which makes "the shell encloses every outlier" exact.
 
-### Why a contour rather than a volume render
+### The original case against a volume render (why the contour came first)
+
+This was the reasoning when only the contour existed. The cloud has since been added on
+request, so the conclusion is no longer "don't" — but every cost listed here is real and is
+what you accept when you choose the cloud over the contour.
 
 Computing severity into a voxel grid and drawing it as a semi-transparent volume was
 considered. Real advantages: it is visible through the structure (per-atom coloring only shows

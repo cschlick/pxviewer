@@ -99,6 +99,7 @@ _TAG_ATTRIBUTE = 2  # per-atom scalar values for color-by-attribute
 _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colors)
 _TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
 _TAG_FRAME_DELTA = 5  # only the atoms that moved: [u32 n][u32 * n indices][f32 * 3n]
+_TAG_HOTSPOT_VOLUME = 6  # a validation-severity grid drawn as a cloud; see hotspots.encode_severity_box
 
 # probe2 dot overlay channels — independently toggleable (full surface vs clashes).
 PROBE_CONTACTS = 0
@@ -453,6 +454,7 @@ class LiveSession:
         self._last_frame: Optional[bytes] = None
         self._structure_visible = True  # this model's own visibility (replayed to late clients)
         self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
+        self._last_hotspot_volume: Optional[bytes] = None  # current severity cloud, replayed to late clients
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -852,6 +854,32 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps({"type": "map_box", "action": "clear"}))
+
+    def show_hotspot_volume(self, payload: bytes) -> None:
+        """Stream a validation-severity grid to the viewport as a value-colored cloud.
+
+        ``payload`` is a pre-encoded severity box (see
+        :func:`pxviewer.hotspots.encode_severity_box`) — the same affine-plus-grid shape as a
+        density box, so it builds a Mol* volume the same way, but rendered as a direct-volume
+        cloud (transparent where clean, ramping through yellow to red) rather than a contour.
+
+        On its own channel, not the density box's: an X-ray model can be following a live
+        difference map at the same time, and the two must not evict each other. Thread-safe;
+        replayed to late viewers. Call :meth:`clear_hotspot_volume` to remove it.
+        """
+        message = struct.pack("<I", _TAG_HOTSPOT_VOLUME) + payload
+        self._last_hotspot_volume = message
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast, message)
+
+    def clear_hotspot_volume(self) -> None:
+        """Remove the severity cloud (see :meth:`show_hotspot_volume`). Thread-safe."""
+        self._last_hotspot_volume = None
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(
+                self._broadcast_text, json.dumps({"type": "hotspot_volume", "action": "clear"}))
 
     def show_markup(self, channel: int, primitives: Any) -> int:
         """Draw MolProbity validation markup on ``channel``: ``primitives`` is a list
@@ -1835,6 +1863,8 @@ class LiveSession:
                 await self._locked_send(websocket, payload)
             if self._last_map_box is not None:
                 await self._locked_send(websocket, self._last_map_box)
+            if self._last_hotspot_volume is not None:
+                await self._locked_send(websocket, self._last_hotspot_volume)
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:

@@ -508,6 +508,44 @@ def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPA
     return field, spacing, tuple(int(o) for o in origin)
 
 
+def encode_severity_box(field: np.ndarray, spacing: float, origin,
+                        *, cap: float = SEVERITY_CAP, cut: float = FIELD_ISO) -> bytes:
+    """Serialize a severity grid for the frontend's direct-volume cloud.
+
+    The counterpart of :func:`pxviewer.volume_io.encode_map_box`, but for a value-colored
+    cloud rather than a contour, so it carries the two things that view needs and a density
+    box does not: the grid is **normalized to [0, 1]** (as ``severity / cap``), and the header
+    states where the outlier cut falls on that scale.
+
+    Both are here for the same reason. Mol*'s direct-volume shader feeds the raw voxel value
+    straight into the opacity transfer function as a 0..1 texture coordinate — it does *not*
+    normalize it the way the color path does — so an un-normalized severity of 2.5 would just
+    clamp. Sending [0, 1] values makes the opacity ramp land where we mean it to regardless of
+    what this particular structure's worst severity happens to be, and ``cutFrac`` lets the
+    frontend anchor the ramp and the palette at the outlier threshold without knowing ``cap``.
+
+    Layout (little-endian; the sender prepends the u32 message tag), mirroring encode_map_box's
+    geometry so the frontend can share the volume-building code:
+        f32 cutFrac; i32 nx, ny, nz; f32 origin[3];
+        f32 step0[3], step1[3], step2[3]; f32 data[nx*ny*nz]
+    """
+    import struct
+
+    arr = np.ascontiguousarray(field, dtype="float64")
+    nx, ny, nz = arr.shape
+    normalized = np.clip(arr / cap, 0.0, 1.0).astype("<f4")
+    ox, oy, oz = (float(o) * spacing for o in origin)  # grid units -> Cartesian
+
+    header = struct.pack("<f", float(cut) / cap)
+    header += struct.pack("<iii", int(nx), int(ny), int(nz))
+    header += struct.pack("<fff", ox, oy, oz)
+    # Axis-aligned steps: the field grid is orthogonal by construction.
+    header += struct.pack("<fff", float(spacing), 0.0, 0.0)
+    header += struct.pack("<fff", 0.0, float(spacing), 0.0)
+    header += struct.pack("<fff", 0.0, 0.0, float(spacing))
+    return header + normalized.tobytes()
+
+
 def residue_columns(hotspots: Hotspots) -> List[str]:
     """Columns of :func:`residue_rows` — the score, then every component behind it.
 
