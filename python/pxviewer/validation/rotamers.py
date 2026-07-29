@@ -55,10 +55,11 @@ def _chi(chi_angles: Optional[list], index: int) -> str:
 
 
 @register("rotamers", "Rotamers")
-def run(model: Any) -> ValidationResult:
-    from mmtbx.validation.rotalyze import rotalyze
+def run(model: Any, analysis: Any = None) -> ValidationResult:
+    # Shared with the hotspot score; see ramachandran.run for the rationale.
+    from ..analysis import for_model
 
-    result = rotalyze(pdb_hierarchy=model.get_hierarchy(), outliers_only=False)
+    result = for_model(model, analysis).rotalyze()
 
     rows = []
     for res in result.results:

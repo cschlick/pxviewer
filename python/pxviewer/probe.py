@@ -106,16 +106,26 @@ def probe_dots(
     return dots
 
 
-def probe_dots_split(model: Any, *, data_manager: Any = None):
-    """Run probe2 once and return ``(contacts, clashes)`` — the full dot surface and
-    the bad-overlap (clash) subset — so both overlays come from a single run."""
+def split_dots(rows: Any):
+    """Split probe2 ``flat_results`` into ``(contacts, clashes)`` drawable dots.
+
+    Separate from the probe run so a caller holding cached rows (see
+    :class:`pxviewer.analysis.ModelAnalysis`) can draw both overlays without paying for probe
+    again — it is by far the most expensive step in the validation stack.
+    """
     contacts, clashes = [], []
-    for row in run_probe_dots(model, data_manager=data_manager):
+    for row in rows:
         dot = (tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"]))
         contacts.append(dot)
         if row["type"] in _CLASH_TYPES:
             clashes.append(dot)
     return contacts, clashes
+
+
+def probe_dots_split(model: Any, *, data_manager: Any = None):
+    """Run probe2 once and return ``(contacts, clashes)`` — the full dot surface and
+    the bad-overlap (clash) subset — so both overlays come from a single run."""
+    return split_dots(run_probe_dots(model, data_manager=data_manager))
 
 
 def encode_dots(dots) -> bytes:

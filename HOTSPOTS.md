@@ -333,6 +333,55 @@ carries `cutFrac` (where the outlier threshold falls on that scale) so the front
 both the color stops and the opacity knee at the cut without knowing the cap. Get this wrong
 and the opacity ramp silently lands in the wrong place.
 
+**The opacity knee is adjustable.** Where the cloud starts to become visible is a slider on
+the tab, in severity units (default the cut, 1.0). Raise it to keep only the worst regions;
+lower it to let more of the protein haze in. It updates the direct-volume transfer function
+in place — no grid re-stream — so it is cheap enough to drag, and it is remembered and re-sent
+to late viewers so a reload keeps the setting. Color stays anchored at the cut; only the
+opacity onset moves, so raising the knee thins the haze without changing what a color means.
+
+**Performance, and the shell trap.** Direct-volume is the heaviest renderer in Mol* — a
+per-pixel raymarch — so the cloud is the one thing here that can lag a light laptop. Two
+levers make it cheaper *without touching how it looks*: the cloud uses a **coarser grid** than
+the contour (`CLOUD_SPACING` 2.0 A vs 1.0), which is ~8x fewer voxels and so much less texture
+to sample, and the sigma=2.5 haze loses nothing visible at 2.0; and **`jumpLength` empty-space
+skipping**, which pays off because most of the box is transparent below the cut, and that empty
+space is where the raymarch would otherwise waste its steps.
+
+What does *not* work is taking bigger steps through the volume itself. The raymarch composites
+opacity front-to-back, so the visible density comes from many steps each adding a little. Make
+the steps big (a coarse grid with a low `stepsPerCell`, or — worse — inflating the per-step
+opacity to "compensate" for the coarse grid) and each step paints a visible band: the cloud
+turns into a stack of concentric **shells** instead of a diffuse haze. Mol* has no ray
+dithering to hide that, so per-step opacity — not average density — is what must stay small.
+
+**The quality dial.** Because the sweet spot depends on the hardware, smoothness-vs-frame-rate
+is a **low/medium/high** control (`CLOUD_QUALITY`), defaulting to **low** — the floor we
+develop on (a MacBook Air) must stay interactive. Each preset moves *both* knobs that drive the
+look and the cost, because both matter: the **grid spacing** (a finer grid is a less blocky
+field — coarse trilinear interpolation itself reads as onion facets, separate from the raymarch
+banding) and **`stepsPerCell`** (more steps = smaller step = smoother compositing). Low is a
+coarse grid with few steps (fast, some facets); high is a fine grid with the full 10 steps (a
+clean diffuse render for a still figure, at the cost of interactivity). `stepsPerCell` travels
+in the cloud's wire header next to the grid it was chosen for, so a re-stream carries both. The
+frame-rate win over a naive fine cloud still comes from the coarse grid (less texture) and the
+`jumpLength` empty-space jump; the dial just lets the user spend that budget on smoothness when
+they have it. (An earlier fixed setting that lowered `stepsPerCell` and scaled up the opacities
+to match density was faster but visibly shelled — that mistake is why per-step opacity is now
+held low and the smoothness is bought with steps, not opacity.)
+
+### Clean atoms fade into the background
+
+The per-atom model coloring runs the *background color* at its clean end, not green — so
+unremarkable protein disappears into the viewport and only the hotspots read. A green clean end
+dominated the view and stopped it looking like hotspots at all (this was the original green
+palette). The background is genuinely queried from the browser (`background_color`, a round-trip
+like `screenshot`, since the renderer's background only exists there) rather than assumed, and
+the palette is `[bg, bg, yellow, orange, red]` over the (0, 2) domain — background from clean to
+the cut, warm beyond. A failed query falls back to white, which reads as faded against the usual
+near-white viewport. The cloud needs no equivalent: it is already transparent below the cut, so
+clean regions vanish there for free.
+
 ### Why the contour was the first choice
 
 Three things only became apparent once it was on screen:
@@ -508,6 +557,53 @@ Most ingredients are in place:
 
 Delivery is solved: the Q-score work built the per-atom attribute path — `session.set_attribute(name, values)` + `session.color_by(name, palette=…, domain=…)` pushes a float array to the frontend's `pxviewer-attribute` theme. A hotspot score is one more array through the same pipe.
 
+## One shared analysis, for hotspots + validation + clashes
+
+Every validation feature leans on the same handful of expensive mmtbx steps on the same model,
+so `pxviewer.analysis.ModelAnalysis` memoizes them and all three consumers — the hotspot score,
+the Validation tab, and the Clashes tab — take one shared instance. It is held per model on the
+desktop entry and **dropped the moment the atoms move** (a minimization, a tug, an edit), so it
+can never serve a stale geometry.
+
+Measured on 1TEC (2737 atoms), the costs are wildly uneven:
+
+| step | time | needed by |
+| --- | --- | --- |
+| `ramalyze` | 0.2 s | validation, hotspots |
+| `rotalyze` | 0.7 s | validation, hotspots |
+| cablam / C-beta / omega / Rama-Z | ~2.8 s | validation only |
+| **reduce2** (add hydrogens) | **~11 s** | clashes, hotspots |
+| **probe2** | **~12-22 s** | clashes, hotspots |
+
+reduce2 and probe2 dominate everything else combined, and both are needed by the Clashes tab
+*and* the hotspot score — so they are the sharing that actually matters. Running all three
+features went from **78 s to 45 s**, and the Clashes tab is essentially **free** after a hotspot
+run (its dots come from the cache).
+
+**Hydrogens are the accurate path, and opt-in.** Clashes are overwhelmingly hydrogen-mediated:
+on 1TEC, probing with hydrogens flags 380 heavy atoms where the bare model finds 52 — the
+MolProbity clashscore is *defined* with explicit hydrogens. But adding them (reduce2) plus
+probing three times as many atoms is the slowest thing in the stack, so the hotspot score
+defaults to a fast heavy-atom-only pass and offers a **"Use hydrogens for clashes"** checkbox
+for the accurate one. Only the clash component changes; every other severity, and the scale
+itself, is identical. The two passes cache under separate keys, so flipping the checkbox — which
+drops the now-mismatched cached score — does not throw away the shared Ramachandran/rotamer runs
+or the other pass. (The Clashes tab is unaffected: MolProbity contacts require hydrogens, so it
+always uses them, and now shares that run with an accurate hotspot score.)
+
+When hydrogens are used, the probed model has atoms the scored model does not, so clash severity
+is accumulated in its indexing, Rule 5 hands each hydrogen's severity up to its parent heavy
+atom, and the result is mapped back onto the scored model's atom order.
+
+**Either button populates both tabs.** Running validation scores hotspots too (and vice versa)
+on the one shared analysis, so whichever the user presses, the other tab is already filled and
+instant — which matters precisely because they share reduce2 and probe. Validation fills the
+Hotspots *table* but does not recolor the model; that stays the user's choice.
+
+Running one feature also **populates** the others: a hotspot run fills the Validation tab using
+the analyzers it already ran, with markers left off so the markup does not pile onto the hotspot
+coloring.
+
 ## Proposed first pass
 
 Continuous surprisal + p-norm over the four metrics that are cleanest and already available:
@@ -531,6 +627,206 @@ Leave as badges rather than score components:
   than a smooth ramp
 - **bond/angle deviations** — objection 2 above; add only if shown to carry signal
   independent of the refinement weight
+
+## Making it rigorous: from surprisal to a concentration field
+
+This section records where the thinking went when we asked "what would make the hotspot score a
+*rigorous* metric, not a plausible heuristic?" — and it is written as a hand-off to an agent
+with PDB (and ideally PDB-REDO) access, because that is what the next step needs. It supersedes
+nothing above: the code still implements the surprisal design. This is the trajectory *away* from
+it, and why, so the drift is legible to whoever picks it up.
+
+### The trajectory (so the drift is legible)
+
+**Where we started — surprisal severity.** Everything above: a per-atom severity, calibrated so
+`1.0` = the community outlier threshold (surprisal `−log₁₀(p) / −log₁₀(p_cut)` for the geometry
+metrics), the metrics combined at each atom by a p-norm with *no denominator*, the result rendered
+as a spatial cloud/contour. The value was *semi-interpretable* — "how many thresholds deep" — and
+that semi-interpretability is exactly what got interrogated.
+
+**The rigor question, in three parts.** (1) Do we enforce full inclusion of components to show a
+score, or tolerate ones that omit clash, or hydrogens, or the map term? (2) How do we validate
+that the number is meaningful? (3) What figures demonstrate it?
+
+**Fork 1 — ranking vs. calibrated probability.** The first framing offered was a fork: is the
+score a *discriminative ranking* (only the order matters; validate by ROC/PR) or a *calibrated
+quantity* (the value means something; validate by calibration)? Ranking was the initial
+recommendation, because it is validatable with data you can synthesize yourself.
+
+**Detour — how does MolProbity do it?** Worth knowing before inventing. The MolProbity *score* is
+**not** a probability: it is a log-linear regression (`≈ 0.43·ln(1+clashscore) + 0.33·ln(1+…rota…)
++ 0.25·ln(1+…rama…) + 0.5`) whose coefficients were fit so the composite predicts the *resolution*
+at which those statistics would be unremarkable. Its unit is Ångströms. The *individual* checks are
+percentile calls against reference distributions (rota outlier = <1% likely; rama contours), but
+the headline number is a regression to an external observable, and it is **global — one number per
+structure, with no spatial/per-residue aggregate at all.** That last fact is the gap this whole
+project fills. It also surfaced a *third* option beyond Fork 1: calibrate against an external
+physical quantity (as MolProbity calibrates to resolution), e.g. PDB-REDO displacement.
+
+**The calibrated-probability elaboration.** We then developed `P(residue mismodeled | evidence)`
+as an additive-log-odds / logistic model: `logit P = b₀(context) + Σ_m w_m·f_m`, features `f_m` the
+per-component severities, `w_m` learned evidence weights. It was appealing because (a) omission
+became exact — a missing component is a *dropped term*, still a valid posterior; (b) the
+uncalibrated clash tail stopped being a blocker, because the model *learns* clash's evidence weight
+from labels rather than needing its tail probability asserted; (c) resolution could enter as
+*context* (`b₀`), so an outlier at 3.5 Å is correctly less alarming than the same outlier at 1.2 Å.
+
+**The course correction (the important one).** That probability model drifted in two ways from the
+original imagining, and both were wrong:
+
+- It had quietly become **per-residue / per-model**, not *localized*. The hotspot was always meant
+  to be a *spatial* thing — a field over the structure — not a verdict attached to each residue.
+- It made the **value itself interpretable** ("72% mismodeled"). But the original idea was never a
+  per-site probability; it was a **concentration of errors** — a density that says *errors pile up
+  here*, whose absolute value is deliberately *not* meant to be read as anything but relative.
+
+**Where it landed — a concentration field.** Correcting both lands on a specific, well-established
+object, and — pointedly — one that already owns the word we are using.
+
+### The object, stated properly
+
+The hotspot field is a **marked spatial point process** and its intensity:
+
+```
+λ(x) = Σ_i  s_i · K(x − x_i)
+```
+
+Each validation problem `i` is an *event* at atom position `x_i` carrying a *severity mark* `s_i`;
+`K` is a spatial kernel of some bandwidth. This is **kernel density estimation of a marked point
+process** — the density of validation trouble in space. Two stages, and only the second is new:
+
+1. **Combine metrics at a point → the mark.** This is the existing per-atom p-norm across
+   rama/rota/clash/fit. The surprisal work is *not discarded* — it is demoted from "the score" to
+   "the magnitude of an event." The `1.0`-at-threshold anchoring becomes a principled *feature
+   scaling* for the marks, not a claim about the field's value.
+2. **Concentrate in space → the field.** Smoothing the marked events into `λ(x)` is the cloud/
+   contour already on screen. The rendering *already commits to the concentration view* — a
+   probability is pointwise, but we are drawing a field. The probability detour was inconsistent
+   with what the app already shows.
+
+The value of `λ` is **relative and non-interpretable by design**: high = errors concentrated here,
+low = not. The superlinear emphasis on *coincidence* — several problems (across metrics, across
+neighbouring residues) landing in one region making a tall peak where any one alone makes a bump —
+is the entire point, and the thing a per-metric outlier *list* cannot express.
+
+### Why the name forces the framing
+
+"Find where events concentrate more than chance" is an established subfield: **spatial hotspot
+analysis** — Getis-Ord `Gi*`, local Moran's `I` / LISA, kernel-density hotspots in epidemiology and
+crime mapping, peak-calling over background in genomics. We literally call this feature *hotspots*.
+We cannot keep the name and ignore the discipline that named it. The rigorous move is to adopt
+hotspot analysis *proper*: a **hotspot is a statistically significant local concentration** (a
+`Gi*`-style call against a null), not merely a bright patch of summed severity.
+
+### What "rigorous" means for a concentration field
+
+Not calibration to a probability — **significance of a concentration against a null.** Three nested
+claims, cheapest and most decisive first:
+
+1. **Do errors cluster in space at all?** — justifies having a *field* rather than a *list*.
+   Test with **Ripley's `K` / the pair-correlation function** on validation outliers across a
+   benchmark, versus complete spatial randomness (CSR). If outliers are spatially random, a
+   concentration field adds nothing over the outlier list and the concept is dead. If they cluster,
+   the test *measures the correlation length* — which fixes the kernel bandwidth non-arbitrarily.
+   **This is the load-bearing first experiment, and it needs no ground-truth labels.**
+2. **Does concentration localize real trouble?** — rank *regions* (not atoms) by field value and
+   measure recovery of ground-truth error *patches*. Ground truth from a synthetic-corruption
+   harness (exact labels, controlled error type) and from PDB-REDO high-displacement regions
+   (real, at scale). Report region-level precision/recall.
+3. **Does concentration beat the raw outlier list?** — the novelty claim. Where several
+   *sub-threshold* signals coincide, does the field flag real problems that no single metric
+   called an outlier? Compare region-recovery of the field against the union of per-metric outlier
+   flags. If the field wins, "coincidence carries signal" is demonstrated, not asserted.
+
+**Optional — a scale reference, still not a probability.** To make "high" comparable across
+structures, express the field as **excess over the null background** a clean structure of the same
+size and resolution would produce — a fold-enrichment, or a `Gi*` z-score. That calibrates
+*significance* ("more concentrated than chance for a structure like this"), never the probability
+that a given atom is wrong.
+
+### The omission question, dissolved
+
+Under this framing it is barely a question. Components are just **marks summed into one density.**
+Omitting clash, or hydrogens, or the map term means *fewer events* → a lower field: honest and
+graceful, because a density is a sum of contributions. There are no incomparable profiles, no
+lower-bound gymnastics, no per-profile scales. The *only* bookkeeping is that the **null background
+must be computed under the same mark set**, so "excess over background" compares like with like.
+Concentration degrades by construction — which is why it, not the p-norm severity and not the
+per-residue probability, is the right home for the "tolerate omission" answer.
+
+### Figures
+
+- **Pair-correlation / Ripley's `K`** of outliers against the CSR envelope — "errors cluster, and
+  here is the length scale" (justifies the field and fixes the bandwidth).
+- **Region-level PR / ROC** for recovering injected (synthetic) and PDB-REDO error patches.
+- **Field vs. raw-outlier-union** region recovery, overlaid — does concentration, especially
+  coincidence, beat the list.
+- **Excess-over-background maps** — the field minus its null, so "hot" means *significantly*
+  concentrated rather than merely present.
+- **Coincidence anatomy** — for the top hotspots, show each is driven by *multiple* nearby or
+  overlapping weak signals, not one loud one. This is the visual case for a field over a list.
+
+### For the PDB-access agent: data and first steps
+
+- **Clustering test first (no labels needed).** Take a resolution-stratified sample of PDB entries,
+  compute per-atom validation outliers (rama, rota, clash via reduce/probe, map-fit where a map is
+  available), treat the outlier atoms as a point pattern per structure, and run Ripley's `K` /
+  pair-correlation against CSR. Answer the one question everything rests on: *are structural errors
+  spatially clustered, and over what length scale?* This sets the bandwidth for everything after.
+- **Ground truth for claims 2–3.** (a) A local **synthetic-corruption harness** — take a
+  high-quality structure, inject a *typed* error (rotamer flip, backbone distortion, injected clash,
+  local map misfit) at known sites, keep the ground-truth mask; exact labels, no external data,
+  build this first for controlled experiments. (b) **PDB-REDO** — per-atom/-residue displacement
+  between deposited and re-refined coordinates, thresholded, as a real and largely *independent*
+  error label at scale (independent because it is not one of the input metrics).
+- **A clean reference set** for the null background — a high-resolution, well-validated subset
+  (a Top-*N*–style set) to characterise what `λ` looks like in the *absence* of concentrated error,
+  per size/resolution bin.
+- **Regime splits.** Expect to characterise X-ray vs. cryo-EM, and resolution bins, separately —
+  clustering length and background level will differ; do not assume one transfers.
+
+### What survives from the surprisal design
+
+The per-atom severity (p-norm across metrics, threshold-anchored) **stays** — as the *mark* on each
+event, i.e. the magnitude the density integrates. What changes is its status: it is no longer "the
+score," and its absolute value is no longer asked to mean anything on its own. The score is the
+*field*, and the field's rigor is spatial-statistical significance, not calibration of the mark.
+
+## Future work: dynamic updates
+
+The natural next step is a **dynamic** hotspot field: as the user tugs, minimizes, or otherwise
+moves atoms, the colouring updates to show the score improving or worsening in real time. The
+appeal is obvious — you would see a rotamer flip out of the red as you correct it, without
+stopping to re-run validation.
+
+It is not shipped, and the honest reason is that it is hard to make *both* correct and smooth.
+Two costs sit in the way, and they are separate:
+
+1. **The re-score.** A full `score()` is seconds; far too slow per frame. The score's
+   no-denominator design does make a *partial* re-score exact — severity is per-atom and the
+   p-norm has nothing structure-wide to renormalize, so recomputing just the moved residues and
+   splicing them in equals a full re-score of that conformation. Of the four metrics, the two
+   geometry ones (Ramachandran, rotamer) are cheap per-residue lookups and can be redone in a
+   few milliseconds over a drag's local zone; clash and map fit are not, so a live pass would
+   have to hold them frozen and reconcile with one full `score()` when the drag settles. That
+   approximation is defensible, but it is an approximation.
+2. **The recolour.** Pushing new per-atom values to the viewer every frame is where a naive
+   implementation actually stalls — re-sending a representation rebuilds its mesh on the GPU.
+   An in-place colour-theme update (values only, geometry untouched) avoids the rebuild, but
+   even that, driven at drag frame-rate alongside the coordinate stream, did not feel smooth on
+   the MacBook Air that is the hardware floor.
+
+A proof of concept of all of the above was built and then removed — it added enough moving parts
+(a pre-built incremental scorer with cached mmtbx evaluators, a one-slot re-score worker, a
+private model copy to dodge cctbx's thread-unsafety, a new in-place-recolour wire path) that
+carrying it dormant was not worth the weight. The git history has it if we return to the idea.
+
+**What shipped instead** is the cheap, honest half: a *staleness detector*. When a model is
+validated its coordinates are fingerprinted (a hash of `sites_cart`); any subsequent move flips
+the Validation tab to a warning that the results on screen no longer describe the structure, and
+re-running clears it. It does not tell you whether the move helped — only that what you are
+looking at is stale — but it is exact, costs microseconds, and never touches the drag. If we
+pick dynamic updates back up, this fingerprint is the seam a live re-score would hang off.
 
 ## Open questions
 

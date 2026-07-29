@@ -94,6 +94,22 @@ def channel_for(key: str) -> int:
     return CHANNEL_BASE + order.index(key)
 
 
-def run_all(model: Any) -> List[ValidationResult]:
-    """Run every registered validator on ``model``, in stable order."""
-    return [spec.run(model) for spec in validators()]
+def run_all(model: Any, analysis: Any = None) -> List[ValidationResult]:
+    """Run every registered validator on ``model``, in stable order.
+
+    ``analysis`` is an optional :class:`pxviewer.analysis.ModelAnalysis` shared with the
+    hotspot score, so validators that lean on the same mmtbx analyzers (Ramachandran,
+    rotamers) reuse a single run instead of each paying for their own. Validators that do not
+    need it simply ignore the argument.
+    """
+    return [_run_validator(spec.run, model, analysis) for spec in validators()]
+
+
+def _run_validator(run: Callable, model: Any, analysis: Any) -> ValidationResult:
+    """Call a validator, passing ``analysis`` only to those that accept it (the shared ones);
+    the rest keep their plain ``run(model)`` signature."""
+    import inspect
+
+    if "analysis" in inspect.signature(run).parameters:
+        return run(model, analysis)
+    return run(model)

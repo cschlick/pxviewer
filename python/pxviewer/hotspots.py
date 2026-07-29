@@ -71,9 +71,33 @@ CC_OUTLIER = 0.4
 #: the same reasoning that puts Q-score on a fixed 0-1 domain.
 DOMAIN = (0.0, 2.0)
 
-#: Green (clean) through yellow at the outlier cut to red (severe). Explicit rather than a
-#: Mol* colour-list name because the built-in ramps run the wrong way for a badness scale.
-PALETTE = ["#1A9850", "#A6D96A", "#FFD400", "#F46D43", "#B2182B"]
+#: The warm end of the scale: yellow at the outlier cut, through orange, to red at severe.
+#: Explicit rather than a Mol* colour-list name because the built-in ramps run the wrong way
+#: for a badness scale.
+WARM = ["#FFD400", "#F46D43", "#B2182B"]
+
+#: Fallback for the clean end when the viewport background cannot be queried. White, because
+#: the default renderer background is a near-white and a light clean-end reads as "faded".
+_DEFAULT_CLEAN = "#FFFFFF"
+
+
+def hotspot_palette(background: Optional[str] = None) -> List[str]:
+    """The model-colouring palette: clean atoms take the ``background`` colour and fade into
+    it, so only the hotspots stand out.
+
+    Evenly spaced across :data:`DOMAIN` ``(0, 2)``, so the two background stops cover 0..1
+    (clean up to the outlier cut) and the warm stops cover the cut and beyond. Colouring the
+    unremarkable protein the background colour is the whole point — a green "clean" end
+    dominates the view and stops it reading as hotspots at all.
+
+    Without a background (the query timed out, no viewer connected) it falls back to white,
+    which reads as faded against the usual near-white viewport.
+    """
+    clean = background if (isinstance(background, str) and background.startswith("#")) else _DEFAULT_CLEAN
+    return [clean, clean] + WARM  # 5 stops over (0,2): bg@0, bg@1 (the cut), then warm to 2
+
+#: Backwards-compatible default palette (green->red) is gone; call :func:`hotspot_palette`.
+PALETTE = hotspot_palette()
 
 #: Backbone atoms of the residue whose phi/psi produced a Ramachandran score.
 _RAMA_ATOMS = frozenset({"N", "CA", "C", "O"})
@@ -204,19 +228,22 @@ def _hydrogen_parents(hierarchy: Any) -> Dict[int, int]:
     return parents
 
 
-def ramachandran_severity(model: Any, n_atoms: int) -> np.ndarray:
+def ramachandran_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.ndarray:
     """Per-atom Ramachandran severity, on the backbone N/CA/C/O of the scored residue.
 
     Assigned narrowly: phi/psi involve atoms from three residues, but implicating the
     neighbours would smear one residue's problem onto two innocent ones.
+
+    ``analysis`` (a :class:`pxviewer.analysis.ModelAnalysis`) shares the ramalyze run with the
+    Validation tab, so whichever ran first pays for it.
     """
-    from mmtbx.validation.ramalyze import ramalyze
+    from .analysis import for_model
 
     values = np.zeros(n_atoms, dtype=float)
     hierarchy = model.get_hierarchy()
     index = _residue_atoms(hierarchy)
     names = _atom_names(hierarchy)
-    result = ramalyze(pdb_hierarchy=hierarchy, outliers_only=False)
+    result = for_model(model, analysis).ramalyze()
     for res in result.results:
         if res.score is None:
             continue
@@ -229,19 +256,20 @@ def ramachandran_severity(model: Any, n_atoms: int) -> np.ndarray:
     return values
 
 
-def rotamer_severity(model: Any, n_atoms: int) -> np.ndarray:
+def rotamer_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.ndarray:
     """Per-atom rotamer severity, on side-chain atoms only.
 
     A rotamer outlier is a statement about chi angles, so it says nothing about that residue's
-    own backbone — painting the whole residue would assert that it does.
+    own backbone — painting the whole residue would assert that it does. ``analysis`` shares
+    the rotalyze run with the Validation tab.
     """
-    from mmtbx.validation.rotalyze import rotalyze
+    from .analysis import for_model
 
     values = np.zeros(n_atoms, dtype=float)
     hierarchy = model.get_hierarchy()
     index = _residue_atoms(hierarchy)
     names = _atom_names(hierarchy)
-    result = rotalyze(pdb_hierarchy=hierarchy, outliers_only=False)
+    result = for_model(model, analysis).rotalyze()
     for res in result.results:
         if res.score is None:
             continue
@@ -254,21 +282,31 @@ def rotamer_severity(model: Any, n_atoms: int) -> np.ndarray:
     return values
 
 
-def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None) -> np.ndarray:
+def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None,
+                   analysis: Any = None, use_hydrogens: bool = False) -> np.ndarray:
     """Per-atom clash severity from Probe's all-atom contacts.
 
     Both atoms of a clashing pair carry the full severity — neither is the innocent party. An
     atom in several clashes keeps its *worst*, not their sum: a badly placed atom typically
-    hits three neighbours at once, and that is one mistake seen three times.
+    hits three neighbours at once, and that is one mistake seen three times. ``analysis`` caches
+    the probe run so a re-score (e.g. a different map-fit term) does not repeat it.
     """
-    from .probe import run_probe_dots
+    from .analysis import for_model
 
-    values = np.zeros(n_atoms, dtype=float)
-    hierarchy = model.get_hierarchy()
-    by_key: Dict[tuple, int] = {}
-    for i, atom in enumerate(hierarchy.atoms_with_labels()):
-        by_key[(atom.chain_id.strip(), atom.resid().strip(),
-                atom.name.strip(), atom.altloc.strip())] = i
+    shared = for_model(model, analysis, data_manager=data_manager)
+    # With hydrogens this is the MolProbity path and much the more accurate one (clashes are
+    # mostly hydrogen-mediated), but it costs reduce2 plus a probe over three times the atoms.
+    # Either way the probed model may have atoms ``model`` does not, so severity is accumulated
+    # in *its* indexing and mapped back onto ``model`` at the end.
+    probe_hierarchy = shared.probe_model(use_hydrogens).get_hierarchy()
+    probe_atoms = list(probe_hierarchy.atoms_with_labels())
+    probe_values = np.zeros(len(probe_atoms), dtype=float)
+
+    def _key(atom) -> tuple:
+        return (atom.chain_id.strip(), atom.resid().strip(),
+                atom.name.strip(), atom.altloc.strip())
+
+    by_key: Dict[tuple, int] = {_key(a): i for i, a in enumerate(probe_atoms)}
 
     def lookup(side: dict) -> Optional[int]:
         resid = f"{side.get('resID', '')}{side.get('iCode', '') or ''}".strip()
@@ -276,7 +314,7 @@ def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None) -> np.
                            str(side.get("atomName", "")).strip(),
                            str(side.get("alt", "")).strip()))
 
-    for row in run_probe_dots(model, data_manager=data_manager):
+    for row in shared.probe_dots(use_hydrogens):
         # Probe reports a signed gap; an overlap is negative. Severity is anchored so that
         # MolProbity's 0.4 A "serious clash" is exactly 1.0.
         overlap = -float(row.get("gap", 0.0))
@@ -288,12 +326,21 @@ def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None) -> np.
                 continue
             i = lookup(side)
             if i is not None:
-                values[i] = max(values[i], severity)
+                probe_values[i] = max(probe_values[i], severity)
 
     # Rule 5: a heavy atom inherits the worst of its hydrogens, so the signal survives views
-    # that do not draw them. Max, not sum, or an atom with several clashing H is inflated.
-    for h, parent in _hydrogen_parents(hierarchy).items():
-        values[parent] = max(values[parent], values[h])
+    # that do not draw them (and survives the map back to a model with no hydrogens at all).
+    # Max, not sum, or an atom with several clashing H is inflated.
+    for h, parent in _hydrogen_parents(probe_hierarchy).items():
+        probe_values[parent] = max(probe_values[parent], probe_values[h])
+
+    # Map onto the scored model's atom order. Heavy atoms match by chain/resid/name/altloc;
+    # any hydrogen that only exists in the probe model has already handed its severity up.
+    values = np.zeros(n_atoms, dtype=float)
+    for i, atom in enumerate(model.get_hierarchy().atoms_with_labels()):
+        j = by_key.get(_key(atom))
+        if j is not None:
+            values[i] = probe_values[j]
     return values
 
 
@@ -346,7 +393,8 @@ def combine(components: Dict[str, np.ndarray], *, p: float = P_NORM) -> np.ndarr
 
 
 def score(model: Any, *, mmm: Any = None, fit: str = "qscore", p: float = P_NORM,
-          data_manager: Any = None) -> Hotspots:
+          data_manager: Any = None, analysis: Any = None,
+          use_hydrogens: bool = False) -> Hotspots:
     """Compute the hotspot field for ``model``.
 
     ``fit`` selects the map term — ``'qscore'``, ``'cc'``, or ``'none'`` for geometry only.
@@ -357,16 +405,29 @@ def score(model: Any, *, mmm: Any = None, fit: str = "qscore", p: float = P_NORM
     every metric that *is* present, so a geometry-only score is directly comparable to a
     map-inclusive one — it is the same scale with one fewer term, and identical for any atom
     whose fit was clean.
+
+    ``analysis`` (a :class:`pxviewer.analysis.ModelAnalysis`) shares the Ramachandran, rotamer
+    and probe runs with the Validation tab: pass the same one to both and whichever runs first
+    pays for them. One is created privately if none is given.
+
+    ``use_hydrogens`` picks the clash pass. Off (the default) is a fast heavy-atom-only probe;
+    on adds hydrogens with reduce2 first, which is what MolProbity's clashscore means and finds
+    an order of magnitude more clashes — at several times the cost. Only the clash component
+    changes; every other severity, and the scale itself, is identical either way.
     """
     if fit not in FIT_CHOICES:
         raise ValueError(f"fit must be one of {FIT_CHOICES}, not {fit!r}")
+    from .analysis import for_model
+
+    analysis = for_model(model, analysis, data_manager=data_manager)
     n_atoms = model.get_number_of_atoms()
     components: Dict[str, np.ndarray] = {}
     missing: List[str] = []
 
-    components["ramachandran"] = ramachandran_severity(model, n_atoms)
-    components["rotamer"] = rotamer_severity(model, n_atoms)
-    components["clash"] = clash_severity(model, n_atoms, data_manager=data_manager)
+    components["ramachandran"] = ramachandran_severity(model, n_atoms, analysis)
+    components["rotamer"] = rotamer_severity(model, n_atoms, analysis)
+    components["clash"] = clash_severity(model, n_atoms, data_manager=data_manager,
+                                         analysis=analysis, use_hydrogens=use_hydrogens)
 
     if fit == "none":
         missing.append("map fit (geometry only)")
@@ -416,6 +477,21 @@ def residue_broadcast(model: Any, values: np.ndarray) -> np.ndarray:
 #: Voxel size for the severity field. Coarse on purpose: the field is smoothed over several
 #: angstroms, so there is nothing finer to resolve and a fine grid only costs memory.
 FIELD_SPACING = 1.0
+
+#: Cloud quality presets: name -> (voxel spacing A, raymarch steps per cell). The cloud is
+#: direct-volume raymarched — the heaviest renderer in Mol* — and *two* things drive both its
+#: smoothness and its cost: a finer grid makes the field itself less blocky (smoother trilinear
+#: interpolation), and more steps per cell make the raymarch composite without banding. Coarse
+#: + few steps is fast but shows onion-shell facets; fine + many steps is a clean diffuse haze
+#: but slow. So this is a single interactivity/quality dial. ``low`` is tuned to stay
+#: interactive on a light laptop (the floor we develop on); ``high`` is for a still figure,
+#: where interactivity is spent on a clean render. Mol* caps steps-per-cell at 10.
+CLOUD_QUALITY = {
+    "low": (2.0, 5),
+    "medium": (1.5, 8),
+    "high": (1.0, 10),
+}
+CLOUD_QUALITY_DEFAULT = "low"
 
 #: Kernel width. Chosen as the *action* scale — a residue plus its environment — rather than
 #: the map resolution, because the claim a contour makes is "there is work to do here", and
@@ -508,25 +584,28 @@ def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPA
     return field, spacing, tuple(int(o) for o in origin)
 
 
-def encode_severity_box(field: np.ndarray, spacing: float, origin,
-                        *, cap: float = SEVERITY_CAP, cut: float = FIELD_ISO) -> bytes:
+def encode_severity_box(field: np.ndarray, spacing: Any, origin, *,
+                        steps_per_cell: float = 8.0,
+                        cap: float = SEVERITY_CAP, cut: float = FIELD_ISO) -> bytes:
     """Serialize a severity grid for the frontend's direct-volume cloud.
 
     The counterpart of :func:`pxviewer.volume_io.encode_map_box`, but for a value-colored
-    cloud rather than a contour, so it carries the two things that view needs and a density
-    box does not: the grid is **normalized to [0, 1]** (as ``severity / cap``), and the header
-    states where the outlier cut falls on that scale.
+    cloud rather than a contour, so it carries what that view needs and a density box does not:
+    the grid is **normalized to [0, 1]** (as ``severity / cap``); the header states where the
+    outlier cut falls on that scale (``cutFrac``); and it carries the raymarch ``stepsPerCell``,
+    which is half of the quality dial (the grid spacing is the other half) and so belongs with
+    the grid it was chosen for — a coarse grid wants more steps to stay smooth.
 
-    Both are here for the same reason. Mol*'s direct-volume shader feeds the raw voxel value
+    The normalization is here because Mol*'s direct-volume shader feeds the raw voxel value
     straight into the opacity transfer function as a 0..1 texture coordinate — it does *not*
     normalize it the way the color path does — so an un-normalized severity of 2.5 would just
-    clamp. Sending [0, 1] values makes the opacity ramp land where we mean it to regardless of
-    what this particular structure's worst severity happens to be, and ``cutFrac`` lets the
-    frontend anchor the ramp and the palette at the outlier threshold without knowing ``cap``.
+    clamp. Sending [0, 1] values makes the opacity ramp land where we mean it regardless of what
+    this structure's worst severity happens to be, and ``cutFrac`` lets the frontend anchor the
+    ramp and the palette at the outlier threshold without knowing ``cap``.
 
     Layout (little-endian; the sender prepends the u32 message tag), mirroring encode_map_box's
     geometry so the frontend can share the volume-building code:
-        f32 cutFrac; i32 nx, ny, nz; f32 origin[3];
+        f32 cutFrac; f32 stepsPerCell; i32 nx, ny, nz; f32 origin[3];
         f32 step0[3], step1[3], step2[3]; f32 data[nx*ny*nz]
     """
     import struct
@@ -534,15 +613,17 @@ def encode_severity_box(field: np.ndarray, spacing: float, origin,
     arr = np.ascontiguousarray(field, dtype="float64")
     nx, ny, nz = arr.shape
     normalized = np.clip(arr / cap, 0.0, 1.0).astype("<f4")
-    ox, oy, oz = (float(o) * spacing for o in origin)  # grid units -> Cartesian
+    sx, sy, sz = ((float(spacing),) * 3 if np.isscalar(spacing)
+                  else tuple(float(v) for v in spacing))
+    ox, oy, oz = (float(o) * s for o, s in zip(origin, (sx, sy, sz)))
 
-    header = struct.pack("<f", float(cut) / cap)
+    header = struct.pack("<ff", float(cut) / cap, float(steps_per_cell))
     header += struct.pack("<iii", int(nx), int(ny), int(nz))
     header += struct.pack("<fff", ox, oy, oz)
     # Axis-aligned steps: the field grid is orthogonal by construction.
-    header += struct.pack("<fff", float(spacing), 0.0, 0.0)
-    header += struct.pack("<fff", 0.0, float(spacing), 0.0)
-    header += struct.pack("<fff", 0.0, 0.0, float(spacing))
+    header += struct.pack("<fff", sx, 0.0, 0.0)
+    header += struct.pack("<fff", 0.0, sy, 0.0)
+    header += struct.pack("<fff", 0.0, 0.0, sz)
     return header + normalized.tobytes()
 
 

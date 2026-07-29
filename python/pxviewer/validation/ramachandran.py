@@ -21,10 +21,12 @@ def _fmt(value: Optional[float], ndigits: int) -> str:
 
 
 @register("ramachandran", "Ramachandran")
-def run(model: Any) -> ValidationResult:
-    from mmtbx.validation.ramalyze import ramalyze
+def run(model: Any, analysis: Any = None) -> ValidationResult:
+    # Share the ramalyze run with the hotspot score (and anything else): if an analysis was
+    # passed it may already hold it; otherwise this computes and caches it there.
+    from ..analysis import for_model
 
-    result = ramalyze(pdb_hierarchy=model.get_hierarchy(), outliers_only=False)
+    result = for_model(model, analysis).ramalyze()
 
     rows = []
     for res in result.results:

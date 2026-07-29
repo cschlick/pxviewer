@@ -40,6 +40,7 @@ Client -> server (UTF-8 JSON text):
   - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  Shift-drag of an atom
       (action "arm" — Shift pressed, drag imminent — carries no atom/target)
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
+  - {"type": "background-result", "reqId": int, "color": str}   viewport background #rrggbb
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -100,6 +101,7 @@ _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colors)
 _TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
 _TAG_FRAME_DELTA = 5  # only the atoms that moved: [u32 n][u32 * n indices][f32 * 3n]
 _TAG_HOTSPOT_VOLUME = 6  # a validation-severity grid drawn as a cloud; see hotspots.encode_severity_box
+_TAG_LOCALRES = 7  # a second grid that colours the primary map's surface; see volume_io.encode_localres
 
 # probe2 dot overlay channels — independently toggleable (full surface vs clashes).
 PROBE_CONTACTS = 0
@@ -455,6 +457,8 @@ class LiveSession:
         self._structure_visible = True  # this model's own visibility (replayed to late clients)
         self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
         self._last_hotspot_volume: Optional[bytes] = None  # current severity cloud, replayed to late clients
+        self._hotspot_knee: Optional[float] = None  # current cloud opacity knee, replayed to late clients
+        self._last_localres: Optional[bytes] = None  # current local-resolution colouring, replayed to late clients
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -869,17 +873,59 @@ class LiveSession:
         """
         message = struct.pack("<I", _TAG_HOTSPOT_VOLUME) + payload
         self._last_hotspot_volume = message
+        self._hotspot_knee = None  # a fresh cloud starts at its header's default knee (the cut)
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, message)
 
+    def set_hotspot_opacity(self, knee: float) -> None:
+        """Move the severity cloud's opacity knee — where it starts to become visible — in the
+        grid's own [0, 1] units (severity / cap).
+
+        A lightweight control message that updates the existing cloud's transfer function in
+        place, so it can be driven from a dragging slider without re-streaming the grid. The
+        value is remembered and re-sent to late viewers so a reload keeps the chosen knee.
+        Thread-safe.
+        """
+        self._hotspot_knee = float(knee)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(
+                self._broadcast_text,
+                json.dumps({"type": "hotspot_opacity", "knee": float(knee)}))
+
     def clear_hotspot_volume(self) -> None:
         """Remove the severity cloud (see :meth:`show_hotspot_volume`). Thread-safe."""
         self._last_hotspot_volume = None
+        self._hotspot_knee = None
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps({"type": "hotspot_volume", "action": "clear"}))
+
+    def show_localres_grid(self, payload: bytes) -> None:
+        """Stream a local-resolution colouring to the viewport (see
+        :func:`pxviewer.volume_io.encode_localres`).
+
+        ``payload`` carries two co-registered grids — the primary map (contoured to the
+        surface the user sees) and a second field sampled at each surface vertex — so the
+        frontend redraws the *actual* map's surface value-coloured by the second map. On its
+        own channel, independent of the density box and the severity cloud. Thread-safe;
+        replayed to late viewers. Call :meth:`clear_localres_grid` to remove it.
+        """
+        message = struct.pack("<I", _TAG_LOCALRES) + payload
+        self._last_localres = message
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast, message)
+
+    def clear_localres_grid(self) -> None:
+        """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
+        self._last_localres = None
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(
+                self._broadcast_text, json.dumps({"type": "localres", "action": "clear"}))
 
     def show_markup(self, channel: int, primitives: Any) -> int:
         """Draw MolProbity validation markup on ``channel``: ``primitives`` is a list
@@ -982,6 +1028,28 @@ class LiveSession:
         if "," not in uri:
             return None
         return base64.b64decode(uri.split(",", 1)[1])
+
+    def background_color(self, *, timeout: float = 5.0) -> Optional[str]:
+        """The viewport's background color as ``#rrggbb``, asked of the browser (None if no
+        viewer answers in time).
+
+        The renderer's background only exists in the browser, so — like :meth:`screenshot` —
+        this is a round-trip. Used to color a model's clean atoms to match, so the
+        unremarkable protein fades into the background and only the hotspots stand out.
+        Blocks; call it off the GUI thread.
+        """
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "color": None, "error": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        self._send_control({"type": "query-background", "reqId": req_id})
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        if not answered or slot["error"]:
+            return None
+        color = slot["color"]
+        return color if isinstance(color, str) and color.startswith("#") else None
 
     def set_clip(
         self,
@@ -1863,8 +1931,13 @@ class LiveSession:
                 await self._locked_send(websocket, payload)
             if self._last_map_box is not None:
                 await self._locked_send(websocket, self._last_map_box)
+            if self._last_localres is not None:
+                await self._locked_send(websocket, self._last_localres)
             if self._last_hotspot_volume is not None:
                 await self._locked_send(websocket, self._last_hotspot_volume)
+                if self._hotspot_knee is not None:  # keep a slider-adjusted knee across reloads
+                    await self._locked_send(websocket, json.dumps(
+                        {"type": "hotspot_opacity", "knee": self._hotspot_knee}))
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
             async for message in websocket:
@@ -1967,6 +2040,14 @@ class LiveSession:
             if slot is not None:
                 # First responder wins (harmless with multiple viewers connected).
                 slot["indices"] = event.get("indices")
+                slot["error"] = event.get("error")
+                slot["event"].set()
+        elif etype == "background-result":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                slot["color"] = event.get("color")
                 slot["error"] = event.get("error")
                 slot["event"].set()
 

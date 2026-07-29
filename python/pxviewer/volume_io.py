@@ -238,6 +238,22 @@ def encode_map_box(map_manager: Any, *, level: float = 3.0, is_difference: bool 
     """
     import struct
 
+    header = struct.pack("<If", int(bool(is_difference)), float(level))
+    return header + _encode_affine_grid(map_manager)
+
+
+def _encode_affine_grid(map_manager: Any) -> bytes:
+    """The affine + f32 grid common to every live map payload, without any per-payload
+    header: everything the browser needs to *place* a grid but nothing about how to draw it.
+
+    Layout (little-endian): ``i32 nx, ny, nz; f32 origin[3]; f32 step0[3], step1[3],
+    step2[3]; f32 data[nx*ny*nz]`` — grid point ``(i, j, k)`` sits at Cartesian
+    ``origin + i*step0 + j*step1 + k*step2`` and is at ``data[(i*ny + j)*nz + k]``.
+    Two maps on the same physical grid encode to the same origin+steps, which is what lets
+    one map's surface be coloured by another's values (see :func:`encode_localres`).
+    """
+    import struct
+
     md = map_manager.map_data()
     nx, ny, nz = md.all()
     data = np.ascontiguousarray(md.as_numpy_array(), dtype="<f4")
@@ -252,12 +268,61 @@ def encode_map_box(map_manager: Any, *, level: float = 3.0, is_difference: bool 
     shift = map_manager.shift_cart()  # translation that moved the box to a zero origin
     origin = (-shift[0], -shift[1], -shift[2])  # so grid (0,0,0) sits back at its Cartesian place
 
-    header = struct.pack("<If", int(bool(is_difference)), float(level))
-    header += struct.pack("<iii", int(nx), int(ny), int(nz))
+    header = struct.pack("<iii", int(nx), int(ny), int(nz))
     header += struct.pack("<fff", *origin)
     for j in range(3):
         header += struct.pack("<fff", float(steps[0, j]), float(steps[1, j]), float(steps[2, j]))
     return header + data.tobytes()
+
+
+def encode_localres(
+    surface_map: Any, color_map: Any, *, iso_level: float, domain: Tuple[float, float]
+) -> bytes:
+    """Serialise a local-resolution colouring: two co-registered grids the frontend turns
+    into one surface whose *shape* is the primary map and whose *colour* is a second field.
+
+    ``surface_map`` (grid A) is the primary/display map — the browser contours it at
+    ``iso_level`` (an **absolute** value on A's own scale) to get the surface the user
+    already sees. ``color_map`` (grid B) is the local-resolution map — its value is sampled
+    at every surface vertex and mapped through ``domain`` = ``(lo, hi)`` onto a colour ramp.
+    Both grids ride along so the frontend needs no crystallography and no state-tree lookup;
+    they must share a physical grid for the sampling to line up (see :func:`_encode_affine_grid`).
+
+    Layout (little-endian; the sender prepends the u32 message tag):
+        f32 isoLevel; f32 domainLo, domainHi; <affine-grid A>; <affine-grid B>
+    """
+    import struct
+
+    lo, hi = domain
+    header = struct.pack("<fff", float(iso_level), float(lo), float(hi))
+    return header + _encode_affine_grid(surface_map) + _encode_affine_grid(color_map)
+
+
+def local_resolution_from_half_maps(
+    half_map_1: Any, half_map_2: Any, full_map: Any = None, *, d_min: Optional[float] = None,
+) -> "VolumeData":
+    """Compute a local-resolution map from two half-maps (native cctbx).
+
+    Returns a :class:`VolumeData` whose every voxel is the local resolution in Ångström,
+    from :meth:`map_model_manager.local_resolution_map` (the resolution at which the local
+    half-map FSC crosses 0.143 at each point). ``half_map_1``/``half_map_2``/``full_map``
+    may each be a :class:`VolumeData` or a bare cctbx ``map_manager``; if ``full_map`` is
+    omitted the average of the two halves stands in for it. The three must share a grid —
+    which fetched EMDB half-maps and their full map always do.
+    """
+    from iotbx.map_model_manager import map_model_manager
+
+    def _mm(x: Any) -> Any:
+        return getattr(x, "map_manager", x)  # VolumeData -> its manager, or pass a manager through
+
+    hm1, hm2 = _mm(half_map_1), _mm(half_map_2)
+    full = _mm(full_map) if full_map is not None else None
+    if full is None:
+        full = hm1.deep_copy()
+        full.set_map_data((hm1.map_data() + hm2.map_data()) * 0.5)
+    mmm = map_model_manager(map_manager=full, map_manager_1=hm1, map_manager_2=hm2)
+    resolution_map = mmm.local_resolution_map(d_min=d_min)
+    return VolumeData.from_map_manager(resolution_map, name="local resolution")
 
 
 def map_model_manager_from_files(
@@ -277,8 +342,35 @@ def map_model_manager_from_files(
 
     dm = _dm(data_manager)
     maps = [str(p) for p in (map_files or ())]
-    return dm.get_map_model_manager(
+    # Preserve raw MRC ORIGIN values before get_map_model_manager shifts every map to its
+    # working origin. A non-grid external origin is otherwise warned about, discarded and
+    # cleared by cctbx, leaving a later user-requested density alignment without its best
+    # starting hypothesis.
+    origin_hints = {}
+    if maps:
+        for path in maps:
+            dm.process_real_map_file(path)
+            probe = dm.get_real_map(path)
+            hint = tuple(getattr(probe, "external_origin", (0, 0, 0)) or (0, 0, 0))
+            origin_hints[str(Path(path).resolve())] = hint
+            probe._pxviewer_external_origin = hint
+            # map_model_manager.shift_origin would emit a warning and discard a sub-voxel
+            # external origin. We have preserved it for the explicit Align action, so prevent
+            # that destructive attempted conversion during automatic pairing.
+            if any(abs(float(v)) > 1e-6 for v in hint):
+                if not probe.external_origin_is_compatible_with_gridding():
+                    probe.external_origin = (0, 0, 0)
+
+    mmm = dm.get_map_model_manager(
         model_file=str(model_file) if model_file is not None else None,
         map_files=maps,
         ignore_symmetry_conflicts=ignore_symmetry_conflicts,
     )
+    for map_id in mmm.map_id_list():
+        mm = mmm.get_map_manager_by_id(map_id)
+        source = getattr(mm, "file_name", None)
+        if source:
+            hint = origin_hints.get(str(Path(source).resolve()))
+            if hint is not None:
+                mm._pxviewer_external_origin = hint
+    return mmm

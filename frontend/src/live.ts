@@ -44,6 +44,7 @@ import { Mesh } from 'molstar/lib/mol-geo/geometry/mesh/mesh';
 import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder';
 import { addSphere } from 'molstar/lib/mol-geo/geometry/mesh/builder/sphere';
 import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder';
+import { computeMarchingCubesMesh } from 'molstar/lib/mol-geo/util/marching-cubes/algorithm';
 
 export interface AtomInfo {
     id: number;
@@ -188,6 +189,65 @@ export const HotspotVolume = PluginStateTransform.BuiltIn({
     },
 });
 type HotspotVolume = typeof HotspotVolume;
+
+// -- local-resolution surface --------------------------------------------
+// The primary map's isosurface, coloured not by its own density but by a second,
+// co-registered grid (a local-resolution map). The surface is extracted with Mol*'s
+// marching cubes on grid A; each vertex is sampled in grid B and coloured through a
+// [lo, hi] ramp (see LiveViewer.setLocalresSurface / pxviewer.volume_io.encode_localres).
+// The heavy work (marching cubes + per-vertex sampling) is done up front in the viewer and
+// the finished Shape handed to this transform, which only surfaces it into the state tree.
+
+// Blue (lowest value on the scale) through to red (highest) — the resolution-map reading,
+// where a low value (good local resolution) is cool and a high value is hot.
+const LOCALRES_PALETTE: Color[] = [
+    Color(0x2166ac), Color(0x67a9cf), Color(0xd1e5f0),
+    Color(0xfddbc7), Color(0xef8a62), Color(0xb2182b),
+];
+
+/** Trilinear sample of a C-order grid (`data[(i*ny + j)*nz + k]`) at a fractional index. */
+function sampleGridTrilinear(
+    data: Float32Array, nx: number, ny: number, nz: number, x: number, y: number, z: number,
+): number {
+    // Clamp to the grid: a surface vertex can fall a hair outside grid B's extent, and the
+    // edge value is the honest answer there (better than wrapping or a zero seam).
+    x = x < 0 ? 0 : x > nx - 1 ? nx - 1 : x;
+    y = y < 0 ? 0 : y > ny - 1 ? ny - 1 : y;
+    z = z < 0 ? 0 : z > nz - 1 ? nz - 1 : z;
+    const x0 = Math.floor(x), y0 = Math.floor(y), z0 = Math.floor(z);
+    const x1 = Math.min(x0 + 1, nx - 1), y1 = Math.min(y0 + 1, ny - 1), z1 = Math.min(z0 + 1, nz - 1);
+    const fx = x - x0, fy = y - y0, fz = z - z0;
+    const at = (i: number, j: number, k: number) => data[(i * ny + j) * nz + k];
+    const c00 = at(x0, y0, z0) * (1 - fx) + at(x1, y0, z0) * fx;
+    const c10 = at(x0, y1, z0) * (1 - fx) + at(x1, y1, z0) * fx;
+    const c01 = at(x0, y0, z1) * (1 - fx) + at(x1, y0, z1) * fx;
+    const c11 = at(x0, y1, z1) * (1 - fx) + at(x1, y1, z1) * fx;
+    const c0 = c00 * (1 - fy) + c10 * fy;
+    const c1 = c01 * (1 - fy) + c11 * fy;
+    return c0 * (1 - fz) + c1 * fz;
+}
+
+const LocalresSurface = PluginStateTransform.BuiltIn({
+    name: 'pxviewer-localres-surface',
+    display: { name: 'pxviewer Local-resolution Surface', description: 'The primary map surface, coloured by a second map.' },
+    from: SO.Root,
+    to: SO.Shape.Provider,
+    params: {
+        shape: PD.Value<Shape<Mesh>>(undefined as any, { isHidden: true }),
+    },
+})({
+    apply({ params }) {
+        const shape = (params as any).shape as Shape<Mesh>;
+        return new SO.Shape.Provider({
+            label: 'Local-resolution Surface',
+            data: shape,
+            params: PD.withDefaults(Mesh.Params, {}),
+            getShape: (_ctx, data) => data,
+            geometryUtils: Mesh.Utils,
+        }, { label: 'Local-resolution Surface' });
+    },
+});
+type LocalresSurface = typeof LocalresSurface;
 
 // -- probe2 contact-dot surface ------------------------------------------
 //
@@ -522,6 +582,12 @@ export class LiveViewer {
     private mapVolume: StateObjectSelector | undefined;  // the live difference-map density window
     private mapVersion = 0;
     private hotspotVolume: StateObjectSelector | undefined;  // the validation-severity cloud
+    private hotspotRepr: StateObjectSelector | undefined;    // its direct-volume representation
+    private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
+    private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
+    private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
+    private hotspotCellDim = 1.0;    // voxel size in A, sizes the empty-space jump
+    private hotspotSteps = 8;        // raymarch steps per cell (the quality dial)
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
     private measurePending: number[] = [];
@@ -1157,44 +1223,81 @@ export class LiveViewer {
     async setHotspotVolume(buffer: ArrayBuffer, offset: number) {
         const dv = new DataView(buffer);
         const cutFrac = dv.getFloat32(offset, true);
-        const nx = dv.getInt32(offset + 4, true);
-        const ny = dv.getInt32(offset + 8, true);
-        const nz = dv.getInt32(offset + 12, true);
-        let p = offset + 16;
+        const stepsPerCell = dv.getFloat32(offset + 4, true);  // the quality dial's step count
+        const nx = dv.getInt32(offset + 8, true);
+        const ny = dv.getInt32(offset + 12, true);
+        const nz = dv.getInt32(offset + 16, true);
+        let p = offset + 20;
         const v3 = () => { const w = Vec3.create(dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)); p += 12; return w; };
         const origin = v3(), stepX = v3(), stepY = v3(), stepZ = v3();
         const values = new Float32Array(buffer, p, nx * ny * nz).slice();
 
         await this.clearHotspotVolume();
+        // Color anchors at the cut (cutFrac); opacity onset is the user's knee, which starts
+        // at the cut and moves independently (see setHotspotOpacity).
+        this.hotspotCutFrac = cutFrac;
+        this.hotspotKnee = cutFrac;
+        this.hotspotSteps = Math.max(1, Math.min(10, Math.round(stepsPerCell)));  // Mol* caps at 10
+        // Voxel size in A, from the step vector — used to size the empty-space jump so it
+        // skips about one cell at a time (see hotspotReprParams).
+        this.hotspotCellDim = Math.max(1e-3, Vec3.magnitude(stepX));
+
         const build = this.plugin.state.data.build();
         const vol = build.toRoot().apply(HotspotVolume, { nx, ny, nz, values, origin, stepX, stepY, stepZ });
-
-        // Color: green (clean) -> yellow at the cut -> orange -> red, with the cut at cutFrac
-        // of the [0, 1] range. Placing yellow exactly at the cut makes the threshold legible.
-        const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
-        const colorList: [Color, number][] = [
-            [ColorNames.green, 0.0],
-            [ColorNames.yellow, clamp01(cutFrac)],
-            [ColorNames.orange, clamp01(cutFrac * 1.5)],
-            [ColorNames.red, clamp01(cutFrac * 2.5)],
-        ];
-        // Opacity: invisible below the cut, then ramping up. The knee sits just under the cut
-        // so an at-cut voxel is faintly visible rather than exactly on the zero edge.
-        const controlPoints = [
-            Vec2.create(0.0, 0.0),
-            Vec2.create(clamp01(cutFrac * 0.92), 0.0),
-            Vec2.create(clamp01(cutFrac), 0.12),
-            Vec2.create(clamp01(cutFrac * 2.0), 0.35),
-            Vec2.create(1.0, 0.6),
-        ];
-        vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
-            type: 'direct-volume',
-            typeParams: { controlPoints },
-            color: 'volume-value',
-            colorParams: { domain: { name: 'custom', params: [0, 1] }, colorList: { kind: 'interpolate', colors: colorList } },
-        }));
+        const repr = vol.apply(VolumeRepresentation3D, this.hotspotReprParams());
         await build.commit();
         this.hotspotVolume = vol.selector;
+        this.hotspotRepr = repr.selector;
+    }
+
+    /** Representation params for the severity cloud at the current cut and knee. */
+    private hotspotReprParams() {
+        const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
+        const cut = clamp01(this.hotspotCutFrac);
+        const knee = clamp01(this.hotspotKnee);
+        // Color: green (clean) -> yellow at the cut -> orange -> red, anchored at the cut so
+        // the threshold is legible whatever this structure's worst severity happens to be.
+        const colorList: [Color, number][] = [
+            [ColorNames.green, 0.0],
+            [ColorNames.yellow, cut],
+            [ColorNames.orange, clamp01(cut * 1.5)],
+            [ColorNames.red, clamp01(cut * 2.5)],
+        ];
+        // Opacity: invisible below the knee, then ramping up. The knee is the user's slider —
+        // raise it to keep only the worst regions, lower it to let more of the protein haze in.
+        // Deliberately low values: the raymarch composites these front-to-back, so a big
+        // per-step opacity paints visible concentric shells instead of a diffuse haze. Keeping
+        // each step's contribution small is what makes it read as a cloud.
+        const controlPoints = [
+            Vec2.create(0.0, 0.0),
+            Vec2.create(clamp01(knee * 0.92), 0.0),
+            Vec2.create(knee, 0.12),
+            Vec2.create(clamp01(knee + (1 - knee) * 0.5), 0.35),
+            Vec2.create(1.0, 0.6),
+        ];
+        return createVolumeRepresentationParams(this.plugin, undefined, {
+            type: 'direct-volume',
+            // stepsPerCell is the quality dial's step count (from the payload). Higher means a
+            // smaller step, so the opacity accrues smoothly instead of in shells — coarse steps
+            // are exactly what caused the onion facets. jumpLength skips the empty space (most
+            // of the box is transparent below the cut), which is where the raymarch cost is,
+            // so more steps buy smoothness without paying for the void.
+            typeParams: { controlPoints, stepsPerCell: this.hotspotSteps, jumpLength: this.hotspotCellDim },
+            color: 'volume-value',
+            colorParams: { domain: { name: 'custom', params: [0, 1] }, colorList: { kind: 'interpolate', colors: colorList } },
+        });
+    }
+
+    /**
+     * Move the cloud's opacity knee — where the transfer function starts to become visible,
+     * in the same [0, 1] units as the grid (severity / cap). Updates the existing
+     * representation in place, so it is cheap enough to drive from a dragging slider without
+     * re-streaming the grid.
+     */
+    async setHotspotOpacity(knee: number) {
+        this.hotspotKnee = Math.max(0, Math.min(1, knee));
+        if (!this.hotspotRepr?.ref) return;
+        await this.plugin.state.data.build().to(this.hotspotRepr.ref).update(this.hotspotReprParams()).commit();
     }
 
     /** Remove the severity cloud (see `setHotspotVolume`). */
@@ -1205,6 +1308,91 @@ export class LiveViewer {
             await b.commit();
         }
         this.hotspotVolume = undefined;
+        this.hotspotRepr = undefined;
+    }
+
+    /**
+     * Colour the primary map's surface by a second, co-registered grid (a local-resolution
+     * map). Payload at `offset` is `[f32 isoLevel][f32 lo, hi][affine-grid A][affine-grid B]`
+     * (see pxviewer.volume_io.encode_localres): grid A is contoured at `isoLevel` to recover
+     * the surface the user already sees, grid B is sampled at every vertex and mapped through
+     * `[lo, hi]` onto the resolution ramp. Rebuilt, not updated — attaching a colouring map is
+     * a one-shot, like the severity cloud.
+     */
+    async setLocalresSurface(buffer: ArrayBuffer, offset: number) {
+        const dv = new DataView(buffer);
+        const isoLevel = dv.getFloat32(offset, true);
+        const lo = dv.getFloat32(offset + 4, true);
+        const hi = dv.getFloat32(offset + 8, true);
+        let p = offset + 12;
+        const readGrid = () => {
+            const nx = dv.getInt32(p, true), ny = dv.getInt32(p + 4, true), nz = dv.getInt32(p + 8, true);
+            p += 12;
+            const v3 = () => { const w = Vec3.create(dv.getFloat32(p, true), dv.getFloat32(p + 4, true), dv.getFloat32(p + 8, true)); p += 12; return w; };
+            const origin = v3(), stepX = v3(), stepY = v3(), stepZ = v3();
+            // Own the grid: Tensor.Data1 / sampling do not copy, and the socket buffer is transient.
+            const values = new Float32Array(buffer, p, nx * ny * nz).slice();
+            p += nx * ny * nz * 4;
+            return { nx, ny, nz, origin, stepX, stepY, stepZ, values };
+        };
+        const A = readGrid(), B = readGrid();
+
+        const shape = await this.buildLocalresShape(A, B, isoLevel, lo, hi);
+        await this.clearLocalresSurface();
+        const build = this.plugin.state.data.build();
+        const provider = build.toRoot().apply(LocalresSurface, { shape });
+        provider.apply(ShapeRepresentation3D);
+        await build.commit();
+        this.localresSurface = provider.selector;
+    }
+
+    /** Marching-cubes grid A at `isoLevel`, then colour each vertex by grid B (see
+     *  `setLocalresSurface`). Returns a ready-to-render Shape<Mesh>. */
+    private async buildLocalresShape(
+        A: { nx: number; ny: number; nz: number; origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array },
+        B: { nx: number; ny: number; nz: number; origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array },
+        isoLevel: number, lo: number, hi: number,
+    ): Promise<Shape<Mesh>> {
+        const space = Tensor.Space([A.nx, A.ny, A.nz], [0, 1, 2], Float32Array);
+        const scalarField = Tensor.create(space, Tensor.Data1(A.values));
+        const base = await this.plugin.runTask(computeMarchingCubesMesh({ isoLevel, scalarField }));
+        const vc = base.vertexCount;
+        const verts = base.vertexBuffer.ref.value;  // grid-A index coordinates (fractional)
+
+        // grid A (i,j,k) -> Cartesian is both the Shape's render transform (so the index-space
+        // mesh draws in the right place, normals carried by the renderer) and, composed with
+        // grid B's inverse affine, the map from a vertex to its fractional position in grid B.
+        const toCart = Mat4.mul(Mat4(), Mat4.fromTranslation(Mat4(), A.origin), Mat4.fromBasis(Mat4(), A.stepX, A.stepY, A.stepZ));
+        const bAffine = Mat4.mul(Mat4(), Mat4.fromTranslation(Mat4(), B.origin), Mat4.fromBasis(Mat4(), B.stepX, B.stepY, B.stepZ));
+        const aToB = Mat4.mul(Mat4(), Mat4.invert(Mat4(), bAffine), toCart);
+
+        // Per-vertex colour: give each vertex its own group id so the Shape's getColor can
+        // return a distinct colour per vertex (the renderer interpolates across triangles).
+        const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
+        const colors = new Array<Color>(vc);
+        const groups = new Float32Array(vc);
+        const q = Vec3();
+        for (let v = 0; v < vc; v++) {
+            Vec3.set(q, verts[3 * v], verts[3 * v + 1], verts[3 * v + 2]);
+            Vec3.transformMat4(q, q, aToB);
+            colors[v] = scale.color(sampleGridTrilinear(B.values, B.nx, B.ny, B.nz, q[0], q[1], q[2]));
+            groups[v] = v;
+        }
+        const mesh = Mesh.create(verts, base.indexBuffer.ref.value, base.normalBuffer.ref.value, groups, vc, base.triangleCount);
+        return Shape.create(
+            'localres-surface', {}, mesh,
+            (g) => colors[g] ?? Color(0x808080), () => 1, () => 'local resolution', [toCart], vc,
+        );
+    }
+
+    /** Remove the local-resolution surface (see `setLocalresSurface`). */
+    async clearLocalresSurface() {
+        if (this.localresSurface && this.localresSurface.ref) {
+            const b = this.plugin.state.data.build();
+            b.delete(this.localresSurface.ref);
+            await b.commit();
+        }
+        this.localresSurface = undefined;
     }
 
     /** Show or hide this model's whole structure in place — a render skip (no dispose, no
@@ -1783,6 +1971,7 @@ const TAG_DOTS = 3;
 const TAG_MAP = 4;
 const TAG_FRAME_DELTA = 5;  // only the atoms that moved; see LiveViewer.updateDelta
 const TAG_HOTSPOT_VOLUME = 6;  // a validation-severity cloud; see LiveViewer.setHotspotVolume
+const TAG_LOCALRES = 7;  // primary map surface coloured by a second grid; see LiveViewer.setLocalresSurface
 // Dot channels >= this are validation markers (drawn large); must match
 // pxviewer.validation.CHANNEL_BASE.
 const VALIDATION_CHANNEL_BASE = 10;
@@ -2518,12 +2707,22 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box', 'structure_visible',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box', 'localres', 'structure_visible',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
     let pendingMapBox: ArrayBuffer | null = null;  // a density window that beat the viewer build (latest only)
     let pendingHotspotVolume: ArrayBuffer | null = null;  // a severity cloud that beat the viewer build (latest only)
+    let pendingLocalres: ArrayBuffer | null = null;  // a local-resolution colouring that beat the viewer build (latest only)
+    // Topology parsing/building is asynchronous. The server deliberately sends its saved full
+    // coordinate frame immediately after topology on every reconnect, so dropping frames while
+    // `viewer` is absent restores the coordinates baked into the BCIF and makes a just-applied
+    // model shift visibly snap back after a page reload. Preserve coordinate messages in wire
+    // order and apply them as soon as the live trajectory exists.
+    const pendingCoordinates: Array<
+        { kind: 'full', coords: Float32Array } |
+        { kind: 'delta', indices: Uint32Array, xyz: Float32Array }
+    > = [];
 
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
@@ -2556,6 +2755,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearMapBox();
             } else if (msg.type === 'hotspot_volume' && viewer) {
                 if (msg.action === 'clear') await viewer.clearHotspotVolume();
+            } else if (msg.type === 'localres' && viewer) {
+                if (msg.action === 'clear') await viewer.clearLocalresSurface();
+            } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
+                await viewer.setHotspotOpacity(msg.knee);
             } else if (msg.type === 'structure_visible' && viewer && typeof msg.value === 'boolean') {
                 viewer.setStructureVisible(msg.value);   // hide/show this model in place
             } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.value === 'boolean') {
@@ -2577,6 +2780,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     error = String(e);
                 }
                 ws.send(JSON.stringify({ type: 'screenshot-result', reqId: msg.reqId, dataUri, error }));
+            } else if (msg.type === 'query-background') {
+                // The renderer's background lives here; report it so a caller can color
+                // "clean" atoms to match it and let the unremarkable protein fade away.
+                let color: string | undefined;
+                let error: string | undefined;
+                try {
+                    const bg = (plugin.canvas3d?.props?.renderer as any)?.backgroundColor;
+                    if (typeof bg === 'number') color = '#' + bg.toString(16).padStart(6, '0');
+                } catch (e) {
+                    error = String(e);
+                }
+                ws.send(JSON.stringify({ type: 'background-result', reqId: msg.reqId, color, error }));
             } else if (msg.type === 'clip') {
                 const slab: Slab = {
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,
@@ -2667,6 +2882,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
             viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));
             building = false;
+            for (const frame of pendingCoordinates.splice(0)) {
+                if (frame.kind === 'full') await viewer.update(frame.coords);
+                else await viewer.updateDelta(frame.indices, frame.xyz);
+            }
             ws.send(JSON.stringify({ type: 'ready' }));
             // Now that the viewer exists, apply anything that arrived while building.
             const queued = pendingControl.splice(0);
@@ -2674,13 +2893,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
             if (pendingHotspotVolume) { await viewer.setHotspotVolume(pendingHotspotVolume, 4); pendingHotspotVolume = null; }
-        } else if (tag === TAG_FRAME && viewer) {
+            if (pendingLocalres) { await viewer.setLocalresSurface(pendingLocalres, 4); pendingLocalres = null; }
+        } else if (tag === TAG_FRAME) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
             perf.frameReceived('full', coords.length / 3);
             quality.pingCoordinates();  // geometry is being rebuilt, not just redrawn
-            await viewer.update(coords);
-        } else if (tag === TAG_FRAME_DELTA && viewer) {
+            if (viewer) await viewer.update(coords);
+            else pendingCoordinates.push({ kind: 'full', coords });
+        } else if (tag === TAG_FRAME_DELTA) {
             // [u32 tag][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n] — only the atoms
             // that moved, at their absolute positions. See LiveViewer.updateDelta.
             const n = new DataView(buffer).getUint32(8, true);
@@ -2688,7 +2909,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const xyz = new Float32Array(buffer, 12 + n * 4, n * 3);
             perf.frameReceived('delta', n);
             quality.pingCoordinates();
-            await viewer.updateDelta(indices, xyz);
+            if (viewer) await viewer.updateDelta(indices, xyz);
+            else pendingCoordinates.push({ kind: 'delta', indices, xyz });
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching
@@ -2714,6 +2936,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // only the most recent matters while the viewer is still building.
             if (viewer) await viewer.setHotspotVolume(buffer, 4);
             else pendingHotspotVolume = buffer;
+        } else if (tag === TAG_LOCALRES) {
+            // The primary map surface coloured by a second grid (see viewer.setLocalresSurface).
+            // Like the other volumes, only the most recent matters while the viewer is building.
+            if (viewer) await viewer.setLocalresSurface(buffer, 4);
+            else pendingLocalres = buffer;
         }
     };
 

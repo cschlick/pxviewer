@@ -49,6 +49,8 @@ _HOTSPOT_COLOR = "hotspot"
 # Colors that are computed per-atom arrays rather than Mol* theme names. They travel on
 # entry["attribute"] and are applied by _apply_model_rep's attribute branch.
 _ATTRIBUTE_COLORS = frozenset({_QSCORE_COLOR, _HOTSPOT_COLOR})
+# Default opacity knee for the severity cloud, in severity units: the outlier cut.
+_HOTSPOT_KNEE_DEFAULT = 1.0
 
 # Contour level, in sigma. Mol* does the sigma scaling, so a level means the same thing
 # for any map and one fixed slider range serves all of them. The slider covers the range
@@ -475,7 +477,9 @@ def _make_bridge():
         run_on_main = Signal(object)        # call a thunk on the GUI thread
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
+        validation_stale_changed = Signal(bool)  # active model moved since it was last validated
         hotspots_ready = Signal(object)     # hotspots finished: (model id, Hotspots, columns, rows)
+        busy_changed = Signal(object)       # (running: bool, label: str) — drives the busy bar
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
         ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
         volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
@@ -1173,6 +1177,7 @@ class ControlsWindow:
         from PySide6.QtWidgets import (
             QHBoxLayout,
             QLabel,
+            QProgressBar,
             QPushButton,
             QTabWidget,
             QVBoxLayout,
@@ -1218,6 +1223,9 @@ class ControlsWindow:
         self._console_started = False
         self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
         self._focused: tuple = (None, None)  # (kind, id) currently shown in Appearance
+        # Buttons to grey out while the operation they start is running, keyed by its label
+        # (see _register_busy_button). Set up before the tabs, which register into it.
+        self._busy_buttons: dict = {}
 
         from PySide6.QtCore import Qt, QSize
 
@@ -1279,6 +1287,17 @@ class ControlsWindow:
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
         # It doubles as the tab labeller on hover, so remember the real status underneath.
+        # A busy bar directly above the status line. Some operations run for tens of seconds
+        # (probe2, reduce2, a hotspot score), and the status text alone is easy to miss — this
+        # is motion, so it reads as "working" at a glance. Indeterminate: none of these report
+        # progress, and a fake percentage would be a lie.
+        self._busy_bar = QProgressBar()
+        self._busy_bar.setRange(0, 0)
+        self._busy_bar.setTextVisible(False)
+        self._busy_bar.setFixedHeight(6)  # thin, but enough that the motion is unmissable
+        self._busy_bar.setVisible(False)
+        layout.addWidget(self._busy_bar)
+
         status_row = QHBoxLayout()
         self._real_status = "Ready"
         self._tab_hover = False
@@ -1317,7 +1336,9 @@ class ControlsWindow:
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
+        desktop.bridge.validation_stale_changed.connect(self._set_validation_stale)
         desktop.bridge.hotspots_ready.connect(self._on_hotspots_ready)
+        desktop.bridge.busy_changed.connect(self._on_busy_changed)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
         desktop.bridge.ligand_placed.connect(self._on_ligand_placed)
         desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
@@ -1393,6 +1414,11 @@ class ControlsWindow:
             "folder-open", "Open",
             "Open a structure or map — models via cctbx, maps as .mrc/.map/.ccp4",
             self._on_open_file)
+        self._fetch_btn = _icon_button(
+            "download", "Fetch",
+            "Fetch an entry from the PDB/EMDB — model, reflections, map and half-maps — into "
+            "the working directory, and optionally compute local resolution from the half-maps",
+            self._on_fetch)
         demos_btn = _icon_button(
             "blocks", "Demos", "Load a bundled example, or start a guided tutorial")
         demos_btn.setMenu(self._build_demos_menu())
@@ -1402,9 +1428,14 @@ class ControlsWindow:
             self._on_write_object)
         self._pair_btn = _icon_button(
             "combine", "Pair",
-            "Pair a model with a map so they work together — cctbx moves them into a common "
-            "frame (a map+model group already has one from loading)",
+            "Pair an unpaired model with a map, or check an existing pair for a missing "
+            "density-supported origin shift",
             self._on_pair)
+        self._localres_btn = _icon_button(
+            "palette", "Local res",
+            "Colour a map by local resolution computed from its two half-maps — pick local "
+            "files or fetch from the PDB/EMDB; then toggle the colouring in the map's controls",
+            self._on_localres_wizard)
         self._remove_model_btn = _icon_button(
             "trash-2", "Remove", "Remove the highlighted object", self._on_remove_selected)
         reset_btn = _icon_button(
@@ -1417,7 +1448,8 @@ class ControlsWindow:
 
         actions = QHBoxLayout()
         actions.setSpacing(4)
-        for button in (self._open_btn, demos_btn, self._write_btn, self._pair_btn):
+        for button in (self._open_btn, self._fetch_btn, demos_btn, self._write_btn,
+                       self._pair_btn, self._localres_btn):
             actions.addWidget(button)
         actions.addSpacing(14)  # separate "data in / out" from "act on it"
         for button in (self._remove_model_btn, reset_btn, picture_btn):
@@ -1816,6 +1848,7 @@ class ControlsWindow:
             "Build the ligand (from the monomer library, or the SMILES string), center it "
             "on the ligand marker, and add it as a new object.")
         self._lig_fit_btn.clicked.connect(lambda: self._safe(self._on_fit_ligand))
+        self._register_busy_button(self._lig_fit_btn, "Building ligand")
         lg.addWidget(self._lig_fit_btn)
 
         self._lig_last_target = None
@@ -2061,18 +2094,21 @@ class ControlsWindow:
             "Add hydrogens with reduce2 as a new object (hiding the original), then run "
             "probe2 for MolProbity contacts and clashes")
         analyze.clicked.connect(self._on_analyze)
+        self._register_busy_button(analyze, "Adding hydrogens and running probe")
         self._contacts_toggle = self._make_icon_button(
             "fold-horizontal", "Contacts", "Show/hide the full probe2 contact-dot surface",
             checkable=True)
         self._contacts_toggle.setEnabled(False)
         self._contacts_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
+        self._contacts_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
         self._clashes_toggle = self._make_icon_button(
             "triangle-alert", "Clashes", "Show/hide the bad-overlap (clash) spikes",
             checkable=True)
         self._clashes_toggle.setEnabled(False)
         self._clashes_toggle.toggled.connect(
             lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
+        self._clashes_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
 
         # One row: add-H (the prerequisite) then the two result toggles.
         prow = QHBoxLayout()
@@ -2090,7 +2126,9 @@ class ControlsWindow:
         becomes a sub-tab. The all-atom contacts analysis (probe2) is a peer sub-tab —
         'Clashes & contacts' — always present as the first tab, so both kinds of check live
         in the same results area rather than in separate panels."""
-        from PySide6.QtWidgets import QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+        )
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
@@ -2101,12 +2139,42 @@ class ControlsWindow:
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
+        # Per-validator Markers checkboxes, rebuilt with the sub-tabs on every run. The probe
+        # overlay toggles are separate because they live on the always-present Clashes page and
+        # outlive a re-run; both are markup, so the "all" button drives them together.
+        self._marker_checks: list = []
+
+        run_row = QHBoxLayout()
         run_btn = QPushButton("Run validation")
         run_btn.setToolTip("Run every MolProbity per-residue validator on the active model "
                            "(background thread); each becomes a sub-tab below.")
         run_btn.clicked.connect(self._on_run_validation)
         self._validate_btn = run_btn  # a tutorial highlight target
-        layout.addWidget(run_btn)
+        self._register_busy_button(run_btn, "Running validation")
+        run_row.addWidget(run_btn, stretch=1)
+
+        # Every validator draws on its own channel, so without this the only way to clear the
+        # viewport is to visit each sub-tab and untick it. The label says what the click will
+        # do, and tracks the individual boxes.
+        self._all_markup_btn = QPushButton("Hide all markers")
+        self._all_markup_btn.setToolTip(
+            "Show or hide every validation overlay at once — the per-validator markup and the "
+            "probe contact/clash dots — without visiting each sub-tab.")
+        self._all_markup_btn.clicked.connect(self._on_toggle_all_markup)
+        run_row.addWidget(self._all_markup_btn)
+        layout.addLayout(run_row)
+
+        # Shown when the atoms move after a run: the tables and markup still on screen
+        # describe where the model *was*, so they can no longer be trusted. Hidden until
+        # then, and cleared again by the next run. Driven by validation_stale_changed.
+        self._stale_warning = QLabel(
+            "⚠  The model has moved since this validation was computed — the results below "
+            "no longer match the structure. Re-run validation to refresh them.")
+        self._stale_warning.setWordWrap(True)
+        self._stale_warning.setStyleSheet(
+            "background: #B2182B; color: white; padding: 6px 9px; border-radius: 4px;")
+        self._stale_warning.setVisible(False)
+        layout.addWidget(self._stale_warning)
 
         # One results area: the always-present Clashes & contacts tab, then a tab per
         # validator, (re)built as runs complete.
@@ -2115,9 +2183,42 @@ class ControlsWindow:
         self._clashes_page = self._build_clashes_page()
         self._validation_subtabs.addTab(self._clashes_page, "Clashes && contacts")
         layout.addWidget(self._validation_subtabs, stretch=1)
+        self._sync_all_markup_button()  # nothing drawn yet, so it starts disabled
         return tab
 
-    def _build_validation_section(self, mid, result):
+    def _markup_toggles(self) -> list:
+        """Every widget that shows/hides validation markup, across the sub-tabs: the
+        per-validator Markers checkboxes and the two probe overlay toggles."""
+        toggles = list(self._marker_checks)
+        for name in ("_contacts_toggle", "_clashes_toggle"):
+            toggle = getattr(self, name, None)
+            if toggle is not None:
+                toggles.append(toggle)
+        return toggles
+
+    def _on_toggle_all_markup(self) -> None:
+        """Show everything if nothing is showing, otherwise hide everything.
+
+        Setting each widget (rather than calling the desktop directly) means the individual
+        boxes stay truthful about what is drawn, and their own handlers do the drawing.
+        """
+        live = [t for t in self._markup_toggles() if t.isEnabled()]
+        show = not any(t.isChecked() for t in live)
+        for toggle in live:
+            toggle.setChecked(show)
+        self._sync_all_markup_button()
+
+    def _sync_all_markup_button(self) -> None:
+        """Keep the label describing the action, and grey it out when there is no markup."""
+        button = getattr(self, "_all_markup_btn", None)
+        if button is None:  # pragma: no cover - during tab construction
+            return
+        live = [t for t in self._markup_toggles() if t.isEnabled()]
+        button.setEnabled(bool(live))
+        button.setText("Hide all markers" if any(t.isChecked() for t in live)
+                       else "Show all markers")
+
+    def _build_validation_section(self, mid, result, draw_markers=True):
         """One validator's sub-tab: summary, a Markers checkbox (on by default), and a
         whole-row-selectable table that selects+focuses the residue in the viewport."""
         from PySide6.QtWidgets import (
@@ -2145,7 +2246,11 @@ class ControlsWindow:
         markers.setEnabled(bool(result.markup))
         markers.toggled.connect(
             lambda on, k=result.key: self._desktop.set_validation_markers(k, on))
-        markers.setChecked(bool(result.markup))
+        markers.toggled.connect(lambda _on: self._sync_all_markup_button())
+        # On by default when the user ran validation; off when the tab is filled as a side
+        # effect of a hotspot run, so the markup does not land on top of the hotspot coloring.
+        markers.setChecked(draw_markers and bool(result.markup))
+        self._marker_checks.append(markers)
         v.addWidget(markers)
 
         table = QTableWidget(len(result.rows), len(result.columns))
@@ -2186,22 +2291,38 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
+    def _set_validation_stale(self, stale: bool) -> None:
+        """Show or hide the 'model has moved' warning on the Validation tab. Driven by the
+        desktop's ``validation_stale_changed`` signal (emitted on every move and re-run)."""
+        label = getattr(self, "_stale_warning", None)
+        if label is not None:
+            label.setVisible(bool(stale))
+
     def _on_validation_ready(self, payload) -> None:
         """Validation finished (GUI thread): rebuild a sub-tab per result, keeping the
-        always-present Clashes & contacts tab (index 0) in place."""
-        mid, results = payload
+        always-present Clashes & contacts tab (index 0) in place.
+
+        ``draw_markers`` (default True for an explicit Run validation) is False when the tab is
+        being populated as a side effect of a hotspot run — the tables fill in, but the markup
+        is left off so it does not pile on top of the hotspot coloring the user is looking at.
+        """
+        mid, results, draw_markers = (*payload, True)[:3]
         tabs = self._validation_subtabs
         current = tabs.tabText(tabs.currentIndex())  # preserve the selected validator
         while tabs.count() > 1:  # drop the previous run's validator tabs; keep Clashes (0)
             page = tabs.widget(1)
             tabs.removeTab(1)
             page.deleteLater()
+        # Those checkboxes went with the pages; drop them before the new ones register, or the
+        # "all" button would be reasoning about deleted widgets.
+        self._marker_checks.clear()
         for result in results:
-            tabs.addTab(self._build_validation_section(mid, result), result.title)
+            tabs.addTab(self._build_validation_section(mid, result, draw_markers), result.title)
         for i in range(tabs.count()):  # keep the user on the same validator across re-runs
             if tabs.tabText(i) == current:
                 tabs.setCurrentIndex(i)
                 break
+        self._sync_all_markup_button()
 
     def _build_hotspots_tab(self):
         """Validation hotspots: several metrics aggregated into one per-atom severity field.
@@ -2210,9 +2331,10 @@ class ControlsWindow:
         rank, and the per-component columns are what say what is actually wrong. See
         HOTSPOTS.md for why that separation is load-bearing rather than a nicety.
         """
+        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QAbstractItemView, QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton,
-            QTableWidget, QVBoxLayout, QWidget,
+            QSlider, QTableWidget, QVBoxLayout, QWidget,
         )
 
         tab = QWidget()
@@ -2237,14 +2359,45 @@ class ControlsWindow:
             "Local map-model CC: correlation in a 2 A sphere (faster).\n"
             "None: geometry only — also what you get with no map loaded. Severities keep the "
             "same absolute meaning either way; the map term is dropped, not rescaled.")
+        # Mirror the choice onto the app: a validation run scores hotspots too (so the other
+        # tab is already populated), and it needs to know which map term the user picked.
+        self._hotspot_fit.currentIndexChanged.connect(
+            lambda _i: setattr(self._desktop, "_hotspot_fit", self._hotspot_fit.currentData()))
+        self._desktop._hotspot_fit = self._hotspot_fit.currentData()
         row.addWidget(self._hotspot_fit, stretch=1)
         layout.addLayout(row)
 
+        # Off by default: adding hydrogens (reduce2) and probing three times as many atoms is
+        # by far the slowest thing here, and the score is still useful without it — only the
+        # clash component changes. On is what MolProbity's clashscore actually means.
+        hydrogens = QCheckBox("Use hydrogens for clashes (accurate, much slower)")
+        hydrogens.setToolTip(
+            "Clashes are mostly hydrogen-mediated, so adding them (reduce2) finds far more of "
+            "them — this is the MolProbity clashscore path.\n"
+            "It costs reduce2 plus a probe over three times the atoms, so it is off by default; "
+            "the fast pass finds only heavy-atom overlaps.\n"
+            "Shared with the Clashes & contacts tab, which always uses hydrogens.")
+        hydrogens.toggled.connect(self._on_hotspot_hydrogens)
+        self._hotspot_hydrogens = hydrogens
+        self._desktop._hotspot_hydrogens = False
+        layout.addWidget(hydrogens)
+
+        action_row = QHBoxLayout()
         find = QPushButton("Find hotspots")
         find.setToolTip("Score the active model and color it by severity (background thread).")
         find.clicked.connect(self._on_find_hotspots)
         self._hotspot_btn = find
-        layout.addWidget(find)
+        self._register_busy_button(find, "Finding hotspots")
+        action_row.addWidget(find)
+        open_volume = QPushButton("Open volume…")
+        open_volume.setToolTip(
+            "Open a precomputed hotspot-severity map and display it without running any "
+            "validation or map-model calculations. Voxel values must already be in hotspot "
+            "severity units: 1.0 is the outlier threshold.")
+        open_volume.clicked.connect(self._on_open_hotspot_volume)
+        self._hotspot_open_btn = open_volume
+        action_row.addWidget(open_volume)
+        layout.addLayout(action_row)
 
         field_row = QHBoxLayout()
         show3d = QCheckBox("Show in 3-D")
@@ -2269,7 +2422,45 @@ class ControlsWindow:
         style.currentIndexChanged.connect(self._on_hotspot_field_changed)
         self._hotspot_style = style
         field_row.addWidget(style, stretch=1)
+
+        quality = QComboBox()
+        for label, key in (("Low", "low"), ("Medium", "medium"), ("High", "high")):
+            quality.addItem(label, key)
+        quality.setCurrentIndex(0)  # low: interactive on a light laptop, the floor we target
+        quality.setToolTip(
+            "Cloud smoothness vs. frame rate.\n"
+            "Low: fast — for interacting; some onion-shell facets.\n"
+            "High: a clean diffuse render for a still figure — sacrifices interactivity.\n"
+            "Bump it up on stronger hardware, or briefly to make a figure.")
+        quality.setEnabled(False)
+        quality.currentIndexChanged.connect(self._on_hotspot_quality)
+        self._hotspot_quality_combo = quality
+        field_row.addWidget(quality)
         layout.addLayout(field_row)
+
+        # Opacity knee: where the cloud starts to become visible, in severity units. The
+        # slider is int (10x), so 0.0..2.0 severity maps to 0..20; the cut (1.0) is the
+        # default. Cloud only — a shell has a fixed level, so it is hidden for the contour.
+        knee_row = QHBoxLayout()
+        knee_label = QLabel("Cloud opacity from severity:")
+        knee_row.addWidget(knee_label)
+        knee = QSlider(Qt.Orientation.Horizontal)
+        knee.setRange(0, 20)
+        knee.setValue(int(round(_HOTSPOT_KNEE_DEFAULT * 10)))
+        knee.setToolTip(
+            "Where the cloud starts to become visible, in severity.\n"
+            "Raise it to keep only the worst regions; lower it to let more of the protein "
+            "haze in. 1.0 is the outlier threshold.")
+        knee.valueChanged.connect(self._on_hotspot_knee)
+        self._hotspot_knee_slider = knee
+        knee_row.addWidget(knee, stretch=1)
+        self._hotspot_knee_value = QLabel(f"{_HOTSPOT_KNEE_DEFAULT:.1f}")
+        self._hotspot_knee_value.setMinimumWidth(28)
+        knee_row.addWidget(self._hotspot_knee_value)
+        self._hotspot_knee_widgets = (knee_label, knee, self._hotspot_knee_value)
+        for w in self._hotspot_knee_widgets:
+            w.setVisible(False)  # shown only while a cloud is up
+        layout.addLayout(knee_row)
 
         self._hotspot_summary = QLabel("Not computed yet.")
         self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
@@ -2292,12 +2483,73 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
+    def _on_open_hotspot_volume(self) -> None:
+        """Choose an already-computed severity grid; no model analysis runs."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        if self._desktop._active_model_id is None:
+            self._set_status("load a model first")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Open hotspot volume", "",
+            "Volume maps (*.map *.mrc *.ccp4 *.map.gz *.mrc.gz);;All files (*)")
+        if not path:
+            return
+        try:
+            self._desktop.open_hotspot_volume(
+                path, style=self._hotspot_style.currentData())
+            self._hotspot_summary.setText(
+                f"Precomputed severity volume: {Path(path).name}. "
+                "No hotspot calculations were run.")
+            self._hotspot_show3d.setEnabled(True)
+            self._hotspot_show3d.blockSignals(True)
+            self._hotspot_show3d.setChecked(True)
+            self._hotspot_show3d.blockSignals(False)
+            self._hotspot_style.setEnabled(True)
+            is_cloud = self._hotspot_style.currentData() == "cloud"
+            self._hotspot_quality_combo.setEnabled(is_cloud)
+            for widget in self._hotspot_knee_widgets:
+                widget.setVisible(is_cloud)
+            self._hotspot_table.clearContents()
+            self._hotspot_table.setRowCount(0)
+            self._hotspot_table.setColumnCount(0)
+            self._hotspot_columns = []
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Open hotspot volume failed", str(exc))
+
     def _on_hotspot_field_changed(self, *_args) -> None:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
         on = self._hotspot_show3d.isChecked()
         self._hotspot_style.setEnabled(on)
+        # The knee and quality only make sense for the cloud (a shell has one fixed level).
+        is_cloud = on and self._hotspot_style.currentData() == "cloud"
+        self._hotspot_quality_combo.setEnabled(is_cloud)
+        for w in self._hotspot_knee_widgets:
+            w.setVisible(is_cloud)
         try:
             self._desktop.show_hotspot_field(on=on, style=self._hotspot_style.currentData())
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_hotspot_hydrogens(self, on: bool) -> None:
+        """The hydrogens option changed. It changes what a clash *is*, so a cached score no
+        longer describes the chosen setting — drop it, and say so rather than leaving a stale
+        table that silently disagrees with the checkbox."""
+        self._desktop.set_hotspot_hydrogens(bool(on))
+
+    def _on_hotspot_quality(self, *_args) -> None:
+        """The cloud quality preset changed: redraw at the new smoothness/speed."""
+        try:
+            self._desktop.set_cloud_quality(self._hotspot_quality_combo.currentData())
+        except Exception as exc:
+            self._set_status(str(exc))
+
+    def _on_hotspot_knee(self, value: int) -> None:
+        """The opacity-knee slider moved (int is severity x10)."""
+        severity = value / 10.0
+        self._hotspot_knee_value.setText(f"{severity:.1f}")
+        try:
+            self._desktop.set_hotspot_opacity(None, severity)
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2647,6 +2899,20 @@ class ControlsWindow:
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
             self._add_color_row(live.get("color"), _set_color, title="Map color")
+
+            # Colour-by-resolution: a plain on/off, present only once a resolution map has
+            # been computed and pinned under this map (via the Local resolution wizard).
+            if it.get("resolution_map"):
+                res_check = QCheckBox("Colour by local resolution")
+                res_check.setToolTip(
+                    "Colour this map's surface by the local resolution computed from its "
+                    "half-maps (blue = high resolution, red = low).")
+                res_check.setChecked(bool(it.get("color_by_resolution")))
+                res_check.toggled.connect(
+                    lambda on, it=it: (
+                        it.__setitem__("color_by_resolution", bool(on)),
+                        self._safe(lambda: self._desktop.set_color_by_resolution(vid, bool(on)))))
+                self._appearance_layout.addWidget(res_check)
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -3388,6 +3654,40 @@ class ControlsWindow:
         if not self._tab_hover:  # don't stomp a tab label the pointer is showing
             self._status_label.setText(text)
 
+    def _register_busy_button(self, button, label: str) -> None:
+        """Disable ``button`` while the operation it starts is running.
+
+        These take tens of seconds, so without this a second click just queues a duplicate of
+        work already in flight. Keyed by operation rather than disabling everything, so an
+        unrelated action stays available while one runs.
+
+        Only for buttons with no other enabled/disabled logic — re-enabling on completion would
+        otherwise stomp it. (Minimize is excluded for exactly that reason: it drives its own
+        state from ``minimizing_changed``.)
+        """
+        self._busy_buttons.setdefault(label, []).append(button)
+
+    def _on_busy_changed(self, payload) -> None:
+        """Show or hide the busy bar, and disable the buttons whose operations are running.
+
+        The label is put in the status line only as a fallback: the workers set their own,
+        more specific text ("finding hotspots in 1tec…") and that should win. Here it just
+        guarantees *something* names the wait if a worker never got round to saying anything.
+        """
+        running, label, active = payload
+        self._busy_bar.setVisible(bool(running))
+        for key, buttons in self._busy_buttons.items():
+            for button in buttons:
+                try:
+                    button.setEnabled(key not in active)
+                except RuntimeError:  # pragma: no cover - widget torn down under us
+                    pass
+        if running and label and self._real_status in ("Ready", ""):
+            self._set_status(f"{label}…")
+        elif not running and self._real_status.endswith("…"):
+            # Nothing said anything more specific; do not leave a dangling "working" message.
+            self._set_status("Ready")
+
     def _flash_status(self, text: str) -> None:
         """Show a status message with a brief amber highlight, so a refused action is
         noticed rather than reading as a silent nothing-happened."""
@@ -3429,6 +3729,206 @@ class ControlsWindow:
         label = Path(paths[0]).name if len(paths) == 1 else f"{len(paths)} files"
         self._file_label.setText(f"{label}  ({kind})")
 
+    def _on_fetch(self) -> None:
+        """Fetch a model, reflections and/or map from the PDB/EMDB into the working
+        directory and load them. (Half-maps and local resolution have their own wizard.)"""
+        from PySide6.QtWidgets import (
+            QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout,
+            QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout)
+
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Fetch from the PDB / EMDB")
+        outer = QVBoxLayout(dialog)
+        form = QFormLayout()
+        pdb_edit = QLineEdit()
+        pdb_edit.setPlaceholderText("e.g. 6nt5")
+        form.addRow("PDB id:", pdb_edit)
+        emdb_edit = QLineEdit()
+        emdb_edit.setPlaceholderText("optional — looked up from the PDB id for the map")
+        form.addRow("EMDB number:", emdb_edit)
+        outer.addLayout(form)
+
+        checks = {
+            "model": QCheckBox("Model"),
+            "reflections": QCheckBox("Reflections (structure factors)"),
+            "map": QCheckBox("Map"),
+        }
+        checks["model"].setChecked(True)
+        checks["map"].setChecked(True)
+        outer.addWidget(QLabel("Fetch:"))
+        for cb in checks.values():
+            outer.addWidget(cb)
+
+        dir_row = QHBoxLayout()
+        dir_label = QLabel(str(self._desktop.work_dir()))
+        dir_label.setStyleSheet("color: palette(placeholder-text);")
+        browse = QPushButton("Change…")
+
+        def _browse_dir():
+            chosen = QFileDialog.getExistingDirectory(
+                dialog, "Working directory", str(self._desktop.work_dir()))
+            if chosen:
+                self._desktop.set_work_dir(chosen)
+                dir_label.setText(chosen)
+        browse.clicked.connect(_browse_dir)
+        dir_row.addWidget(QLabel("Save to:"))
+        dir_row.addWidget(dir_label, 1)
+        dir_row.addWidget(browse)
+        outer.addLayout(dir_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        outer.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+        pdb_id = pdb_edit.text().strip() or None
+        emdb_number = emdb_edit.text().strip() or None
+        entities = [key for key, cb in checks.items() if cb.isChecked()]
+        if not entities:
+            QMessageBox.information(self._window, "Nothing selected",
+                                    "Tick at least one thing to fetch.")
+            return
+        try:
+            self._desktop.fetch_and_load(
+                pdb_id=pdb_id, emdb_number=emdb_number, entities=entities)
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not fetch", str(exc))
+
+    def _on_localres_wizard(self) -> None:
+        """Colour a map by local resolution computed from its two half-maps.
+
+        The half-maps are read in cctbx only (never shown); the resulting resolution map is
+        pinned, hidden, under the full map, and the map is coloured by it — a toggle that
+        then lives in the map's own appearance controls. Inputs are either local files or
+        fetched from the PDB/EMDB (the same computation either way)."""
+        from PySide6.QtWidgets import (
+            QButtonGroup, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+            QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QRadioButton,
+            QVBoxLayout, QWidget)
+
+        maps_filter = "Maps (*.mrc *.map *.ccp4);;All files (*)"
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Colour by local resolution")
+        outer = QVBoxLayout(dialog)
+        intro = QLabel("Compute local resolution from two half-maps and colour a map by it.")
+        intro.setWordWrap(True)
+        outer.addWidget(intro)
+
+        local_radio = QRadioButton("From local files")
+        fetch_radio = QRadioButton("Fetch from the PDB / EMDB")
+        local_radio.setChecked(True)
+        group = QButtonGroup(dialog)
+        group.addButton(local_radio)
+        group.addButton(fetch_radio)
+
+        # -- local files --
+        outer.addWidget(local_radio)
+        local_panel = QWidget()
+        lp = QFormLayout(local_panel)
+        full_combo = QComboBox()
+        vols = self._desktop.colorable_volumes()
+        for v_id, name in vols:
+            full_combo.addItem(name, v_id)
+        full_combo.addItem("Browse to a map file…", "__browse__")
+        lp.addRow("Full map:", full_combo)
+
+        def _file_row(placeholder):
+            row = QHBoxLayout()
+            edit = QLineEdit()
+            edit.setPlaceholderText(placeholder)
+            pick = QPushButton("Browse…")
+
+            def _pick():
+                p, _ = QFileDialog.getOpenFileName(
+                    dialog, "Half-map", str(self._desktop.work_dir()), maps_filter)
+                if p:
+                    edit.setText(p)
+            pick.clicked.connect(_pick)
+            row.addWidget(edit, 1)
+            row.addWidget(pick)
+            holder = QWidget()
+            holder.setLayout(row)
+            return holder, edit
+
+        half1_w, half1_edit = _file_row("half map 1 (.mrc/.map)")
+        half2_w, half2_edit = _file_row("half map 2 (.mrc/.map)")
+        lp.addRow("Half map 1:", half1_w)
+        lp.addRow("Half map 2:", half2_w)
+        outer.addWidget(local_panel)
+
+        # -- fetch --
+        outer.addWidget(fetch_radio)
+        fetch_panel = QWidget()
+        fp = QFormLayout(fetch_panel)
+        pdb_edit = QLineEdit()
+        pdb_edit.setPlaceholderText("e.g. 6nt5")
+        emdb_edit = QLineEdit()
+        emdb_edit.setPlaceholderText("optional — looked up from the PDB id")
+        fp.addRow("PDB id:", pdb_edit)
+        fp.addRow("EMDB number:", emdb_edit)
+        outer.addWidget(fetch_panel)
+
+        def _sync_mode():
+            local_panel.setEnabled(local_radio.isChecked())
+            fetch_panel.setEnabled(fetch_radio.isChecked())
+        local_radio.toggled.connect(_sync_mode)
+        _sync_mode()
+
+        dir_row = QHBoxLayout()
+        dir_label = QLabel(str(self._desktop.work_dir()))
+        dir_label.setStyleSheet("color: palette(placeholder-text);")
+        change = QPushButton("Change…")
+
+        def _browse_dir():
+            chosen = QFileDialog.getExistingDirectory(
+                dialog, "Working directory", str(self._desktop.work_dir()))
+            if chosen:
+                self._desktop.set_work_dir(chosen)
+                dir_label.setText(chosen)
+        change.clicked.connect(_browse_dir)
+        dir_row.addWidget(QLabel("Save to:"))
+        dir_row.addWidget(dir_label, 1)
+        dir_row.addWidget(change)
+        outer.addLayout(dir_row)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        outer.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+        try:
+            if fetch_radio.isChecked():
+                pdb_id = pdb_edit.text().strip() or None
+                emdb_number = emdb_edit.text().strip() or None
+                if not (pdb_id or emdb_number):
+                    QMessageBox.information(self._window, "Fetch",
+                                            "Enter a PDB id or an EMDB number.")
+                    return
+                self._desktop.fetch_and_compute_resolution(
+                    pdb_id=pdb_id, emdb_number=emdb_number)
+            else:
+                h1, h2 = half1_edit.text().strip(), half2_edit.text().strip()
+                if not (h1 and h2):
+                    QMessageBox.information(self._window, "Half-maps",
+                                            "Choose both half-maps.")
+                    return
+                full_vid = full_combo.currentData()
+                if full_vid == "__browse__":
+                    p, _ = QFileDialog.getOpenFileName(
+                        dialog, "Full map", str(self._desktop.work_dir()), maps_filter)
+                    if not p:
+                        return
+                    full_vid = self._desktop.add_map_file(p)
+                self._desktop.compute_resolution_map(full_vid, h1, h2)
+        except Exception as exc:
+            QMessageBox.warning(
+                self._window, "Could not compute local resolution", str(exc))
+            return
+
     def _on_save_picture(self) -> None:
         """Ask where to put it first, then photograph: the capture is a round trip to
         the viewer, and a file dialog in the middle of it would be a strange pause."""
@@ -3462,25 +3962,36 @@ class ControlsWindow:
     def _on_pair(self) -> None:
         """Pair an unpaired model with an unpaired map, chosen explicitly."""
         from PySide6.QtWidgets import (
-            QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel, QMessageBox,
+            QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFormLayout, QLabel,
+            QMessageBox,
         )
 
         models, volumes = self._desktop.pairable()
-        if not models or not volumes:
+        existing = self._desktop.alignable()
+        can_create = bool(models) and bool(volumes)
+        if not can_create and not existing:
             QMessageBox.information(
                 self._window, "Nothing to pair",
-                "Pairing needs a model and a map that are not already paired with "
-                "something.\n\nLoading a model and a map together pairs them for you.")
+                "Pairing needs an unpaired model and map, or an existing map/model pair "
+                "that can be checked for a missing shift.")
             return
 
         dialog = QDialog(self._window)
-        dialog.setWindowTitle("Pair model with map")
+        dialog.setWindowTitle("Pair or align model with map")
         form = QFormLayout(dialog)
         note = QLabel(
             "cctbx will move these into a common frame, so the model may shift.\n"
             "That is what makes them usable together — minimizing into density, say.")
         note.setStyleSheet("color: palette(placeholder-text);")
         form.addRow(note)
+        operation = QComboBox()
+        if can_create:
+            operation.addItem("Pair an unpaired model and map", ("pair", None, None))
+        for m, v in existing:
+            operation.addItem(
+                f"Align {m['name']} with {v['name']}", ("align", m["id"], v["id"]))
+        if existing:
+            form.addRow("Action:", operation)
         model_combo = QComboBox()
         for m in models:
             model_combo.addItem(m["name"], m["id"])
@@ -3489,6 +4000,27 @@ class ControlsWindow:
             volume_combo.addItem(v["name"], v["id"])
         form.addRow("Model:", model_combo)
         form.addRow("Map:", volume_combo)
+        detect_shift = QCheckBox("Detect a missing shift from the map density")
+        detect_shift.setChecked(False)
+        detect_shift.setToolTip(
+            "Search for a translation that puts the model into the density, then apply it "
+            "with cctbx's shift-aware model API so it is recorded in shift_cart and is not "
+            "baked into the model's original coordinates. Off by default: files with correct "
+            "origin metadata need only normal pairing.")
+        form.addRow(detect_shift)
+        def sync_operation() -> None:
+            mode, _mid, _vid = operation.currentData()
+            creating = mode == "pair"
+            model_combo.setEnabled(creating)
+            volume_combo.setEnabled(creating)
+            note.setText(
+                "cctbx will move these into a common frame, so the model may shift.\n"
+                "That is what makes them usable together — minimizing into density, say."
+                if creating else
+                "Check this existing pair for a missing Cartesian origin shift.\n"
+                "The current map_model_manager is retained; no second pair is created.")
+        operation.currentIndexChanged.connect(lambda _i: sync_operation())
+        sync_operation()
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -3498,15 +4030,22 @@ class ControlsWindow:
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
-            self._desktop.pair_model_with_map(
-                model_combo.currentData(), volume_combo.currentData())
+            mode, mid, vid = operation.currentData()
+            if mode == "align":
+                self._desktop.align_paired_model_with_map(
+                    mid, vid, detect_shift=detect_shift.isChecked())
+            else:
+                self._desktop.pair_model_with_map(
+                    model_combo.currentData(), volume_combo.currentData(),
+                    detect_shift=detect_shift.isChecked())
         except Exception as exc:
-            QMessageBox.warning(self._window, "Could not pair", str(exc))
+            QMessageBox.warning(self._window, "Could not pair or align", str(exc))
 
     def _update_pair_button(self) -> None:
-        """Pairing needs something unpaired on both sides."""
+        """Enable for either a new pair or alignment of an existing one."""
         models, volumes = self._desktop.pairable()
-        self._pair_btn.setEnabled(bool(models) and bool(volumes))
+        self._pair_btn.setEnabled(
+            (bool(models) and bool(volumes)) or bool(self._desktop.alignable()))
 
     def _on_write_object(self) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -3894,6 +4433,7 @@ class ControlsWindow:
             toggle.blockSignals(True)
             toggle.setChecked(True)
             toggle.blockSignals(False)
+        self._sync_all_markup_button()  # these are markup too, and now there is some
 
     def _on_scene_selection_changed(self, scene) -> None:
         """A model's picks changed. Refresh the aggregate label + the atoms table."""
@@ -4059,10 +4599,21 @@ class ControlsWindow:
                     node.setFont(0, font)
                     node.setExpanded(True)
                     group_nodes[gid] = node
+            vol_nodes: dict = {}  # vid -> node, so a pinned map can nest under its full map
             for it in items:
-                parent = group_nodes.get(it["group"], self._loaded_tree)
+                # A resolution map pinned to a full map nests under that map's node (the
+                # full map precedes it in the list, so its node already exists); everything
+                # else sits under its group header, or at the root.
+                pin = it.get("pinned_to")
+                parent = vol_nodes.get(pin) if pin else None
+                if parent is None:
+                    parent = group_nodes.get(it["group"], self._loaded_tree)
+                elif isinstance(parent, QTreeWidgetItem):
+                    parent.setExpanded(True)
                 # [visible check] col 0, [active radio] col 1, [name] col 2 (elides).
                 node = QTreeWidgetItem(parent)
+                if it["kind"] == "volume":
+                    vol_nodes[it["id"]] = node
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 if it["visible"] is None:
                     # Reflections: nothing drawable, so nothing to show or hide.
@@ -4098,7 +4649,7 @@ class ControlsWindow:
                 # you actually read — sits at the same x whether the object is in a group or
                 # standing alone, which made every object look like a group member. Indent
                 # the name to match, and an object at the root reads as standing alone.
-                indent = _GROUP_MEMBER_INDENT if it["group"] else ""
+                indent = _GROUP_MEMBER_INDENT if (it["group"] or it.get("pinned_to")) else ""
                 node.setText(2, indent + it["name"] + suffix.get(it["kind"], ""))
                 node.setToolTip(2, it["name"])  # full name on hover when elided
                 if it.get("active"):
@@ -4360,6 +4911,15 @@ class DesktopApp:
         # is authoritative from cctbx — we never infer it.
         self._groups: dict = {}
         self._group_counter = 0
+        # Where fetched files (models, maps, half-maps, reflections) are downloaded.
+        # Persisted across runs via QSettings so a chosen directory sticks; the app has no
+        # other settings today, so this is the whole of it. Defaults to ~/pxviewer-data.
+        from PySide6.QtCore import QSettings
+        from . import fetch as _fetch
+
+        self._settings = QSettings("pxviewer", "pxviewer")
+        self._work_dir = Path(
+            self._settings.value("work_dir", str(_fetch.default_work_dir())))
         self._scene_counter = 0  # cache-buster for the composed volume MVSJ
         self._dummy: Optional[Any] = None  # persistent control ws when no model is visible
         self._batching = False  # defer viewport reload / signals during a group load
@@ -4373,6 +4933,11 @@ class DesktopApp:
         # drag can start on the tug worker, and both would otherwise process the same
         # model at once. Held only around the build, which is rare and per-model.
         self._restraints_lock = threading.Lock()
+        # Labels of the long operations currently running, newest last — drives the busy
+        # indicator (see run_background). A list, not a flag, so overlapping operations keep
+        # it up until the last one finishes.
+        self._busy_labels: list = []
+        self._busy_lock = threading.Lock()
         # Restraint-notation primitives currently drawn for the selected geometry rows.
         self._restraint_prim_ids: list = []
         self._restraint_prim_session = None
@@ -4665,6 +5230,120 @@ class DesktopApp:
     def _model_entry(self, mid):
         return next((m for m in self._models if m["id"] == mid), None)
 
+    def run_background(self, work, *, name: str, label: str) -> None:
+        """Run ``work`` on a daemon thread with the busy indicator up for its duration.
+
+        Every long operation goes through here so the indicator is genuinely unified: one place
+        decides that something is running, and the ``finally`` means no worker can leave the
+        indicator spinning by returning early or raising. ``label`` is what the user is told is
+        happening ("Finding hotspots"), shown while it runs.
+
+        Not for the silent background work (restraint warm-up) or the continuous interactive
+        loops (tug), which the user did not ask for and should not see a spinner for.
+        """
+        def wrapped() -> None:
+            try:
+                work()
+            finally:
+                self._end_busy(label)
+
+        self._begin_busy(label)
+        threading.Thread(target=wrapped, name=name, daemon=True).start()
+
+    # Both of these emit *while holding the lock*, deliberately. Emitting after releasing it
+    # lets two workers finishing at once interleave — the last one to update the list can be
+    # the first to emit, so a stale "still running" arrives after the "all done" and the
+    # indicator spins forever with nothing behind it. Holding the lock keeps the emission order
+    # identical to the state order. Safe because the slot only touches widgets and never calls
+    # back in here.
+    def _begin_busy(self, label: str) -> None:
+        with self._busy_lock:
+            self._busy_labels.append(label)
+            self._emit_busy()
+
+    def _end_busy(self, label: str) -> None:
+        with self._busy_lock:
+            if label in self._busy_labels:
+                self._busy_labels.remove(label)
+            self._emit_busy()
+
+    def _emit_busy(self) -> None:
+        """Announce the busy state. Call with ``_busy_lock`` held (see the note above).
+
+        Carries every running label, not just the newest: the controls disable the button that
+        started each operation, so they need to know exactly which are in flight rather than
+        only that *something* is.
+        """
+        # Several may overlap (a map rephasing while hotspots run); the indicator stays up
+        # until the last finishes, and names whichever is still going.
+        running = bool(self._busy_labels)
+        current = self._busy_labels[-1] if running else ""
+        self.bridge.busy_changed.emit((running, current, tuple(self._busy_labels)))
+
+    def _model_analysis(self, entry):
+        """The per-model analysis cache (ramalyze/rotalyze/probe) shared by the Validation tab
+        and the Hotspots score, so whichever runs first pays for them and the other reuses it.
+        Rebuilt if the model object changed; dropped outright when the atoms move (see
+        :meth:`_invalidate_model_state`), so it never serves a stale geometry."""
+        from .analysis import ModelAnalysis
+
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return None
+        cached = entry.get("analysis")
+        if cached is None or cached.model is not model:
+            cached = ModelAnalysis(model)
+            entry["analysis"] = cached
+        return cached
+
+    def _invalidate_model_state(self, entry) -> None:
+        """Drop the caches that describe the model's geometry. After the atoms move, the shared
+        analysis, the validation results and the hotspot field all describe where the atoms
+        *were* — recompute on the next request rather than show a stale fit."""
+        for key in ("analysis", "validation", "hotspots"):
+            entry.pop(key, None)
+
+    @staticmethod
+    def _sites_fingerprint(model):
+        """A cheap, exact fingerprint of a model's atomic coordinates.
+
+        Hashing the sites_cart bytes is a few microseconds for a typical model and needs
+        no tolerance: any atom that moves at all changes the digest. Used only to tell
+        whether the atoms have moved since the model was last validated — not for identity
+        or ordering, so a plain hash is enough.
+        """
+        import hashlib
+
+        try:
+            sites = model.get_sites_cart().as_numpy_array()
+        except Exception:  # pragma: no cover - defensive: no coordinates to fingerprint
+            return None
+        return hashlib.blake2b(
+            np.ascontiguousarray(sites, dtype="<f8").tobytes(), digest_size=16).digest()
+
+    def _mark_validated(self, entry) -> None:
+        """Record the coordinates the just-finished validation describes, so a later move
+        can be detected (see :meth:`_refresh_validation_staleness`). Call wherever the
+        cached ``validation`` results are (re)written."""
+        model = getattr(entry.get("session"), "model", None)
+        if model is not None:
+            entry["validated_fingerprint"] = self._sites_fingerprint(model)
+
+    def _refresh_validation_staleness(self) -> None:
+        """Tell the Validation tab whether the active model has moved since it was last
+        validated. Compares the current coordinates against the fingerprint taken at
+        validation time; cheap enough to call on every coordinate change and model switch.
+        Emits ``False`` when the model was never validated, so the warning stays hidden."""
+        entry = self._model_entry(self._active_model_id)
+        stale = False
+        if entry is not None:
+            fingerprint = entry.get("validated_fingerprint")
+            if fingerprint is not None:
+                model = getattr(entry.get("session"), "model", None)
+                if model is not None:
+                    stale = self._sites_fingerprint(model) != fingerprint
+        self.bridge.validation_stale_changed.emit(stale)
+
     def _volume_entry(self, vid):
         return next((v for v in self._volumes if v["id"] == vid), None)
 
@@ -4748,7 +5427,62 @@ class DesktopApp:
         volumes = [v for v in self._volumes if not self._is_paired(v)]
         return models, volumes
 
-    def pair_model_with_map(self, mid: str, vid: str) -> str:
+    def alignable(self) -> list:
+        """Existing ``(model, volume)`` pairs that can be density-aligned in place."""
+        pairs = []
+        for model in self._models:
+            gid = model.get("group")
+            mmm = self.group_mmm(gid)
+            if mmm is None or mmm.model() is None:
+                continue
+            for volume in self._volumes:
+                if volume.get("group") != gid:
+                    continue
+                try:
+                    mm = mmm.get_map_manager_by_id(volume["data"].map_id)
+                except Exception:
+                    mm = None
+                if mm is not None:
+                    pairs.append((model, volume))
+        return pairs
+
+    @staticmethod
+    def _detect_map_model_shift(model: Any, map_data: Any,
+                                initial_shift: Any = None) -> tuple:
+        """Find a density-supported translation on a copy, leaving ``model`` untouched.
+
+        cctbx's ``translation_search`` changes its input sites. Running successive coarse and
+        fine passes lets the equal-step grid search accumulate a general XYZ translation; the
+        displacement of the copy is the one result we retain.
+        """
+        from mmtbx.refinement.real_space.rigid_body import translation_search
+
+        probe = model.deep_copy()
+        before = probe.get_sites_cart().deep_copy()
+        if initial_shift is not None and max(abs(float(v)) for v in initial_shift) > 1e-6:
+            # An MRC external_origin can be meaningful but off the voxel grid, in which case
+            # map_manager refuses to turn it into origin_shift_grid_units. It is still an exact
+            # Cartesian starting hypothesis. Apply it to the disposable search model, then let
+            # density determine only the residual.
+            probe.shift_model_and_set_crystal_symmetry(
+                shift_cart=tuple(float(v) for v in initial_shift),
+                crystal_symmetry=model.crystal_symmetry())
+        # A broad first pass catches the common missing boxed-map origin; two finer passes
+        # settle between its 0.5 A samples. Each pass starts from the previous best position.
+        for shifts in (
+            [i * 0.5 for i in range(0, 41)],
+            [i * 0.1 for i in range(0, 11)],
+            [i * 0.02 for i in range(0, 11)],
+        ):
+            translation_search(model=probe, map_data=map_data, shifts=shifts)
+        delta = probe.get_sites_cart() - before
+        if not delta.size():
+            return (0.0, 0.0, 0.0)
+        mean = delta.mean()
+        return tuple(float(v) for v in mean)
+
+    def pair_model_with_map(self, mid: str, vid: str, *,
+                            detect_shift: bool = False) -> str:
         """Pair a model and a map by building the cctbx manager that joins them.
 
         This is the explicit answer to the question :meth:`map_for_model` refuses to
@@ -4770,9 +5504,40 @@ class DesktopApp:
         if model is None:
             raise ValueError("that object has no cctbx model to pair")
 
+        # Preserve a non-grid MRC external origin before map_model_manager calls shift_origin:
+        # cctbx otherwise warns, ignores it, and then clears it. It cannot be represented as
+        # integer origin_shift_grid_units, but it remains a valid Cartesian shift hypothesis.
+        source_map = ventry["data"].map_manager
+        external = tuple(
+            getattr(source_map, "_pxviewer_external_origin",
+                    getattr(source_map, "external_origin", (0, 0, 0))) or (0, 0, 0))
+        ventry["external_origin_hint"] = external
+        external_hint = None
+        if detect_shift and any(abs(float(v)) > 1e-6 for v in external):
+            if not source_map.external_origin_is_compatible_with_gridding():
+                external_hint = tuple(-float(v) for v in external)
+                source_map.external_origin = (0, 0, 0)
+
         mmm = map_model_manager(
-            model=model, map_manager=ventry["data"].map_manager,
+            model=model, map_manager=source_map,
             ignore_symmetry_conflicts=True)
+
+        detected = None
+        if detect_shift:
+            detected = self._detect_map_model_shift(
+                mmm.model(), mmm.map_manager().map_data(),
+                initial_shift=external_hint)
+            if max(abs(v) for v in detected) > 1e-6:
+                # This is deliberately not set_sites_cart: the exact Cartesian translation
+                # may be sub-voxel and therefore cannot honestly be stored as the map's integer
+                # origin_shift_grid_units. Record it on the model with cctbx's shift-aware API;
+                # normal model output can undo it and recover the source coordinates.
+                mmm.model().shift_model_and_set_crystal_symmetry(
+                    shift_cart=detected,
+                    crystal_symmetry=mmm.map_manager().crystal_symmetry())
+                self._invalidate_model_state(mentry)
+            mentry["detected_shift_cart"] = detected
+            ventry["external_origin_hint_used"] = True
 
         # Reuse whichever group these two are already shown in (a model grouped with its
         # reflections, say), so pairing fills that group in rather than starting a second
@@ -4789,8 +5554,66 @@ class DesktopApp:
         self._write_display_map(vid, ventry["data"])
         self._reload_viewport()
         self._emit_loaded_changed()
-        self._status(f"Paired {mentry['name']} with {ventry['name']}")
+        suffix = ""
+        if detected is not None:
+            suffix = " — detected shift_cart (%+.2f, %+.2f, %+.2f) Å" % detected
+        self._status(f"Paired {mentry['name']} with {ventry['name']}{suffix}")
         return gid
+
+    def align_paired_model_with_map(self, mid: str, vid: str, *,
+                                    detect_shift: bool = False) -> tuple:
+        """Recheck an existing pair for a missing Cartesian origin shift.
+
+        The existing map_model_manager is retained. A preserved non-grid MRC ORIGIN is used
+        once as the initial hypothesis; subsequent runs start from the current conformation
+        and search only for a residual, so pressing Align twice cannot blindly accumulate it.
+        """
+        mentry = self._model_entry(mid)
+        ventry = self._volume_entry(vid)
+        if mentry is None or ventry is None:
+            raise ValueError("pick a paired model and map")
+        if mentry.get("group") != ventry.get("group"):
+            raise ValueError("that model and map are not in the same pair")
+        mmm = self.group_mmm(mentry.get("group"))
+        if mmm is None or mmm.model() is None:
+            raise ValueError("that group has no cctbx map_model_manager")
+        try:
+            mm = mmm.get_map_manager_by_id(ventry["data"].map_id)
+        except Exception:
+            mm = None
+        if mm is None:
+            raise ValueError("that map is not part of the model's cctbx manager")
+
+        if not detect_shift:
+            # Still reassert the manager's current conformation; useful after a viewport
+            # rebuild, and makes unchecked Align harmless rather than applying hidden work.
+            mentry["session"].push(mmm.model().get_sites_cart().as_numpy_array())
+            self._status(f"{mentry['name']} + {ventry['name']}: alignment unchanged")
+            return (0.0, 0.0, 0.0)
+
+        external_hint = None
+        if not ventry.get("external_origin_hint_used"):
+            external = tuple(
+                ventry.get("external_origin_hint",
+                           getattr(mm, "_pxviewer_external_origin", (0, 0, 0)))
+                or (0, 0, 0))
+            if any(abs(float(v)) > 1e-6 for v in external):
+                external_hint = tuple(-float(v) for v in external)
+
+        detected = self._detect_map_model_shift(
+            mmm.model(), mm.map_data(), initial_shift=external_hint)
+        if max(abs(v) for v in detected) > 1e-6:
+            mmm.model().shift_model_and_set_crystal_symmetry(
+                shift_cart=detected, crystal_symmetry=mm.crystal_symmetry())
+            self._invalidate_model_state(mentry)
+        ventry["external_origin_hint_used"] = True
+        mentry["detected_shift_cart"] = detected
+        mentry["session"].push(mmm.model().get_sites_cart().as_numpy_array())
+        self._emit_loaded_changed()
+        self._status(
+            f"Aligned {mentry['name']} with {ventry['name']} — "
+            "detected shift_cart (%+.2f, %+.2f, %+.2f) Å" % detected)
+        return detected
 
     # -- viewport composition --
 
@@ -5192,7 +6015,7 @@ class DesktopApp:
 
             self.bridge.run_on_main.emit(apply_on_main)
 
-        threading.Thread(target=work, name="pxviewer-qscore", daemon=True).start()
+        self.run_background(work, name="pxviewer-qscore", label="Computing Q-score")
 
     # -- validation hotspots ---------------------------------------------
 
@@ -5223,29 +6046,40 @@ class DesktopApp:
         mmm = self.group_mmm(entry.get("group"))
         if mmm is None and fit != "none":
             self._status(f"no map paired with {name} — scoring geometry only")
+        analysis = self._model_analysis(entry)  # shared with, and populates, the Validation tab
 
         def work() -> None:
             from . import hotspots
 
             try:
                 self._status(f"finding hotspots in {name}…")
-                result = hotspots.score(model, mmm=mmm, fit=fit)
+                result = hotspots.score(
+                    model, mmm=mmm, fit=fit, analysis=analysis,
+                    use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
                 columns = hotspots.residue_columns(result)
                 rows = hotspots.residue_rows(model, result)
             except Exception as exc:  # pragma: no cover - validator/runtime errors
                 self._status(f"hotspots failed: {exc}")
                 return
+            # Ask the browser its background so clean atoms can be colored to match and fade
+            # into it. Off the GUI thread (it blocks on a round-trip); None -> a light default.
+            palette = hotspots.hotspot_palette(entry["session"].background_color())
+            residue_values = hotspots.residue_broadcast(model, result.values)
 
             def apply_on_main() -> None:
                 current = self._model_entry(mid)
                 if current is None:  # unloaded while we worked
                     return
+                # A newly computed score supersedes any externally opened severity grid.
+                current.pop("hotspot_field_data", None)
+                current.pop("hotspot_field_source", None)
                 current["hotspots"] = result
+                current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
                 current["color"] = _HOTSPOT_COLOR
                 current["attribute"] = {
                     "name": _HOTSPOT_COLOR, "values": result.values,
-                    "residue_values": hotspots.residue_broadcast(model, result.values),
-                    "domain": hotspots.DOMAIN, "palette": hotspots.PALETTE,
+                    "residue_values": residue_values,
+                    "domain": hotspots.DOMAIN, "palette": palette,
                 }
                 self._apply_model_rep(current)
                 self._emit_loaded_changed()
@@ -5253,8 +6087,70 @@ class DesktopApp:
                 self.bridge.hotspots_ready.emit((mid, result, columns, rows))
 
             self.bridge.run_on_main.emit(apply_on_main)
+            # Finding hotspots already ran Ramachandran and rotamers; spend the little extra to
+            # run the remaining validators (reusing that shared analysis) so the Validation tab
+            # is populated too — the user asked for one, they get both.
+            self._populate_validation_from_analysis(mid, model, analysis)
 
-        threading.Thread(target=work, name="pxviewer-hotspots", daemon=True).start()
+        self.run_background(work, name="pxviewer-hotspots", label="Finding hotspots")
+
+    def _populate_validation_from_analysis(self, mid: str, model, analysis) -> None:
+        """Fill the Validation tab from a just-finished hotspot run, reusing its shared analysis
+        so the Ramachandran and rotamer runs are not repeated — only the validators hotspots
+        did not need (cablam, C-beta, omega, Rama-Z) still run.
+
+        Skips when validation is already cached: it is dropped whenever the atoms move, so a
+        present cache is current, and re-running would waste those extra validators. Runs on the
+        caller's (worker) thread and emits ``validation_ready`` for the GUI to pick up.
+        """
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("validation"):
+            return
+        from . import validation
+
+        try:
+            results = validation.run_all(model, analysis)
+        except Exception:  # pragma: no cover - validator/runtime errors
+            return
+        ventry = self._model_entry(mid)
+        if ventry is None:
+            return
+        ventry["validation"] = {r.key: r for r in results}
+        self._mark_validated(ventry)  # fingerprint the coordinates these describe
+        # draw_markers=False: fill the tab, but do not draw the markup over the hotspot coloring.
+        self.bridge.validation_ready.emit((mid, results, False))
+        self._refresh_validation_staleness()  # fresh results: clear any stale warning
+
+    def _populate_hotspots_from_analysis(self, mid: str, model, mmm, fit: str, analysis) -> None:
+        """Fill the Hotspots tab from a just-finished validation run, reusing its analysis.
+
+        The counterpart of :meth:`_populate_validation_from_analysis`, so whichever button the
+        user pressed, both tabs end up populated and the *other* one is then instant — which
+        matters because the two share reduce2 and probe, by far the most expensive steps.
+
+        Deliberately does **not** recolor the model: the user asked for validation, and silently
+        repainting the structure by hotspot severity would be a bigger change than they asked
+        for. The table fills; choosing the hotspot coloring stays their call. Skips when a score
+        is already cached (it is dropped whenever the atoms move, so a present one is current).
+        """
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("hotspots") is not None:
+            return
+        from . import hotspots
+
+        try:
+            result = hotspots.score(
+                model, mmm=mmm, fit=fit, analysis=analysis,
+                use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
+            columns = hotspots.residue_columns(result)
+            rows = hotspots.residue_rows(model, result)
+        except Exception:  # pragma: no cover - validator/runtime errors
+            return
+        hentry = self._model_entry(mid)
+        if hentry is None:
+            return
+        hentry["hotspots"] = result
+        self.bridge.hotspots_ready.emit((mid, result, columns, rows))
 
     def color_model_by_hotspots(self, mid: str) -> None:
         """Color a model by a hotspot field already computed for it.
@@ -5276,13 +6172,72 @@ class DesktopApp:
             self._emit_loaded_changed()
             return
         model = getattr(entry["session"], "model", None)
+        # Reuse the background-matched palette from when it was computed; fall back to the
+        # default only if this model was scored before that was recorded.
+        palette = entry.get("hotspot_palette") or hotspots.PALETTE
         entry["attribute"] = {
             "name": _HOTSPOT_COLOR, "values": result.values,
             "residue_values": (hotspots.residue_broadcast(model, result.values)
                                if model is not None else None),
-            "domain": hotspots.DOMAIN, "palette": hotspots.PALETTE,
+            "domain": hotspots.DOMAIN, "palette": palette,
         }
         self._apply_model_rep(entry)
+
+    def set_hotspot_hydrogens(self, on: bool) -> None:
+        """Choose whether the clash component uses hydrogens (MolProbity's definition) or the
+        fast heavy-atom-only pass.
+
+        Any cached score describes the *other* setting, so it is dropped — leaving it would show
+        a table that quietly disagrees with the checkbox. The shared analysis is kept: it caches
+        each probe pass under its own key, and the Ramachandran/rotamer runs are unaffected.
+        """
+        self._hotspot_hydrogens = bool(on)
+        for entry in self._models:
+            entry.pop("hotspots", None)
+        self._status("clashes will use hydrogens (slower, MolProbity's definition)" if on
+                     else "clashes will use the fast heavy-atom pass — re-run Find hotspots")
+
+    def set_cloud_quality(self, quality: str) -> None:
+        """Set the cloud quality preset (low/medium/high) and redraw a showing cloud.
+
+        Low stays interactive on a light laptop; high is a clean still-figure render. Only the
+        cloud is affected — the contour is a single cheap isosurface.
+        """
+        from . import hotspots
+
+        if quality not in hotspots.CLOUD_QUALITY:
+            return
+        self._cloud_quality = quality
+        entry = self._model_entry(self._active_model_id)
+        if entry is not None and entry.get("hotspot_cloud"):
+            self.show_hotspot_field(entry["id"], on=True, style="cloud")
+
+    def open_hotspot_volume(self, path: Any, mid: Optional[str] = None, *,
+                            style: str = "cloud") -> None:
+        """Load and show a precomputed hotspot-severity map without analyzing the model.
+
+        The file is read through cctbx like every other map. Its voxel values are expected to
+        use the hotspot severity scale directly (1.0 is the calibrated outlier threshold).
+        The loaded grid is retained on the model entry so Cloud/Contour and quality changes
+        redraw from the file rather than invoking :func:`hotspots.score`.
+        """
+        from .volume_io import VolumeData
+
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        data = VolumeData.from_map_file(path)
+        field = np.asarray(data.array, dtype=np.float32)
+        if field.ndim != 3 or not field.size:
+            raise ValueError("hotspot volume must be a non-empty 3-D map")
+        if not np.isfinite(field).all():
+            raise ValueError("hotspot volume contains non-finite voxel values")
+
+        self._clear_hotspot_field(entry)
+        entry["hotspot_field_data"] = data
+        entry["hotspot_field_source"] = str(path)
+        self.show_hotspot_field(entry["id"], on=True, style=style)
+        self._status(f"opened precomputed hotspot volume {Path(path).name} — no analysis run")
 
     def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True,
                            style: str = "cloud") -> None:
@@ -5307,13 +6262,25 @@ class DesktopApp:
         from . import hotspots
 
         result = entry.get("hotspots")
-        if result is None:
+        loaded = entry.get("hotspot_field_data")
+        if result is None and loaded is None:
             self._status("no hotspots computed yet — use Find hotspots first")
             return
-        model = getattr(entry["session"], "model", None)
-        if model is None:  # pragma: no cover - defensive
-            return
-        field, spacing, origin = hotspots.severity_field(model, result.values)
+        # The cloud's grid is set by the quality preset (it is raymarched, so grid size and
+        # step count drive frame rate); the contour keeps the fine grid.
+        quality = getattr(self, "_cloud_quality", hotspots.CLOUD_QUALITY_DEFAULT)
+        cloud_spacing, cloud_steps = hotspots.CLOUD_QUALITY[quality]
+        if loaded is not None:
+            field = np.asarray(loaded.array, dtype=np.float32)
+            spacing = tuple(float(v) for v in loaded.pixel_sizes)
+            origin = tuple(int(v) for v in loaded.origin)
+        else:
+            model = getattr(entry["session"], "model", None)
+            if model is None:  # pragma: no cover - defensive
+                return
+            grid_spacing = cloud_spacing if style == "cloud" else hotspots.FIELD_SPACING
+            field, spacing, origin = hotspots.severity_field(
+                model, result.values, spacing=grid_spacing)
         if not (field >= hotspots.FIELD_ISO).any():
             self._status("nothing reaches the outlier threshold — nothing to draw in 3-D")
             return
@@ -5321,16 +6288,22 @@ class DesktopApp:
         if style == "cloud":
             # A value-colored raymarched cloud, streamed to the model's own viewer as a
             # direct-volume (MVS has no such node, so it cannot go through the shared scene).
-            payload = hotspots.encode_severity_box(field, spacing, origin)
+            payload = hotspots.encode_severity_box(field, spacing, origin,
+                                                   steps_per_cell=cloud_steps)
             entry["session"].show_hotspot_volume(payload)
             entry["hotspot_cloud"] = True
+            # A fresh cloud defaults its knee to the cut; reapply the user's setting if any, so
+            # redrawing (a recompute, a style toggle) does not silently reset the slider.
+            knee = getattr(self, "_hotspot_knee", None)
+            if knee is not None:
+                self.set_hotspot_opacity(entry["id"], knee)
             self._status(f"severity cloud for {entry['name']} (transparent clean → red severe)")
             return
 
         from .volume_io import VolumeData
 
-        data = VolumeData.from_numpy(field, spacing=spacing, origin=origin,
-                                     name=f"{entry['name']} hotspots")
+        data = loaded or VolumeData.from_numpy(
+            field, spacing=spacing, origin=origin, name=f"{entry['name']} hotspots")
         vid = self._add_volume(data, f"{entry['name']} hotspots", group=entry.get("group"),
                                color=hotspots.FIELD_COLOR, iso=hotspots.FIELD_ISO,
                                iso_kind="absolute")
@@ -5339,6 +6312,20 @@ class DesktopApp:
         self.set_volume_opacity(vid, 0.45)
         entry["hotspot_volume"] = vid
         self._status(f"severity contour at {hotspots.FIELD_ISO:.1f} for {entry['name']}")
+
+    def set_hotspot_opacity(self, mid: Optional[str], knee_severity: float) -> None:
+        """Move the severity cloud's opacity knee, given in severity units (so 1.0 is the
+        outlier cut). Below the knee the cloud is invisible; above it, it hazes in.
+
+        Only affects the cloud style; a no-op if the contour is showing or nothing is drawn.
+        """
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None or not entry.get("hotspot_cloud"):
+            return
+        from . import hotspots
+
+        self._hotspot_knee = float(knee_severity)
+        entry["session"].set_hotspot_opacity(float(knee_severity) / hotspots.SEVERITY_CAP)
 
     def _clear_hotspot_field(self, entry) -> None:
         """Tear down whichever 3-D severity field a model is showing (cloud or contour)."""
@@ -5407,18 +6394,21 @@ class DesktopApp:
         if model is None:
             raise ValueError("the active object has no cctbx model")
         name, src_mid = entry["name"], entry["id"]
+        # reduce2 and probe are the two expensive steps in the whole validation stack, and the
+        # hotspot score needs the same two. Go through the shared analysis so whichever feature
+        # runs first pays and the other is nearly free.
+        analysis = self._model_analysis(entry)
 
         def work():
-            from .hydrogens import add_hydrogens, hydrogens_available
+            from .hydrogens import hydrogens_available
             from .live import LiveSession, PROBE_CLASHES, PROBE_CONTACTS
-            from .probe import probe_dots_split
 
             if not hydrogens_available():
                 self._status("reduce2 needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
                 return
             try:
                 self._status(f"adding hydrogens to {name} (reduce2)…")
-                hmodel = add_hydrogens(model)
+                hmodel = analysis.hydrogenated()
             except Exception as exc:  # pragma: no cover - reduce2/runtime errors
                 self._status(f"reduce2 failed: {exc}")
                 return
@@ -5441,7 +6431,7 @@ class DesktopApp:
 
             try:
                 self._status("running probe2 on the hydrogenated model…")
-                contacts, clashes = probe_dots_split(hmodel)
+                contacts, clashes = analysis.probe_dots_split()  # cached; free after a hotspot run
             except Exception as exc:  # pragma: no cover - probe/runtime errors
                 self._status(f"probe failed: {exc}")
                 return
@@ -5454,7 +6444,7 @@ class DesktopApp:
             self._status(f"{name} + H: {len(clashes)} clashes, {len(contacts)} contact dots")
             self.bridge.analysis_ready.emit(hmid)
 
-        threading.Thread(target=work, name="pxviewer-reduce2", daemon=True).start()
+        self.run_background(work, name="pxviewer-reduce2", label="Adding hydrogens and running probe")
         self._status("adding hydrogens with reduce2…")
 
     def set_probe_channel(self, channel: int, visible: bool) -> None:
@@ -5483,24 +6473,34 @@ class DesktopApp:
         if model is None:
             raise ValueError("the active object has no cctbx model")
         mid, name = entry["id"], entry["name"]
+        analysis = self._model_analysis(entry)  # reused by a later hotspot score
 
         def work():
             from . import validation
 
             try:
                 self._status(f"validating {name}…")
-                results = validation.run_all(model)
+                results = validation.run_all(model, analysis)
             except Exception as exc:  # pragma: no cover - validator/runtime errors
                 self._status(f"validation failed: {exc}")
                 return
             ventry = self._model_entry(mid)
             if ventry is not None:  # cache so marker toggles redraw without re-running
                 ventry["validation"] = {r.key: r for r in results}
+                self._mark_validated(ventry)  # fingerprint the coordinates these describe
             total = sum(len(r.markup) for r in results)
             self._status(f"{name}: {len(results)} validators, {total} markers")
             self.bridge.validation_ready.emit((mid, results))
+            self._refresh_validation_staleness()  # fresh results: clear any stale warning
+            # Fill the Hotspots tab too, on the same shared analysis. Both features need
+            # reduce2 and probe — the expensive part — so doing it here means the user pays
+            # once whichever button they pressed, instead of again on the next tab.
+            self._status(f"{name}: scoring hotspots from the same analysis…")
+            self._populate_hotspots_from_analysis(
+                mid, model, self.group_mmm(ventry.get("group") if ventry else None),
+                getattr(self, "_hotspot_fit", "none"), analysis)
 
-        threading.Thread(target=work, name="pxviewer-validation", daemon=True).start()
+        self.run_background(work, name="pxviewer-validation", label="Running validation")
         self._status("validating…")
 
     def set_validation_markers(self, key: str, visible: bool) -> None:
@@ -5858,7 +6858,7 @@ class DesktopApp:
 
             self.bridge.run_on_main.emit(add_on_main)
 
-        threading.Thread(target=work, name="pxviewer-ligand", daemon=True).start()
+        self.run_background(work, name="pxviewer-ligand", label="Building ligand")
 
     def _on_tug(self, mid: str, action: str, atom: int, target) -> None:
         """A drag in the viewport: queued, never served here.
@@ -5996,7 +6996,8 @@ class DesktopApp:
             self._settle_tug()   # let go, and watch it come to rest
             self._clear_live_diff()  # remove the live window (while the session is still known)
             self._end_tug()
-            entry.pop("validation", None)  # stale: the atoms just moved
+            self._invalidate_model_state(entry)  # stale: the atoms just moved
+            self._refresh_validation_staleness()  # warn if this outran a validation run
 
     def _tug_relax(self) -> None:
         """One free-running step, for continuous mode. On the worker's thread.
@@ -6216,7 +7217,8 @@ class DesktopApp:
                     f"angle rmsd {first['angles_before']:.2f} -> {last['angles_after']:.2f} "
                     f"({shown} steps shown)"
                     + (f", map weight {last['weight']:.1f}" if last["weight"] else ""))
-            entry.pop("validation", None)  # stale: the coordinates just moved
+            self._invalidate_model_state(entry)  # stale: the coordinates just moved
+            self._refresh_validation_staleness()  # warn: results now describe a past geometry
             # So is the density, if this model was phased: it describes where the atoms
             # were. Once per run, never per step — each update is two transforms.
             reflections = self.reflections_for_model(entry["id"])
@@ -6225,7 +7227,7 @@ class DesktopApp:
                     lambda rid=reflections["id"]: self._update_maps_if_live(rid))
 
         self.bridge.minimizing_changed.emit(True)
-        threading.Thread(target=work, name="pxviewer-minimize", daemon=True).start()
+        self.run_background(work, name="pxviewer-minimize", label="Minimizing")
 
     def stop_minimization(self) -> None:
         """Halt a running minimization at its next step.
@@ -6495,6 +7497,9 @@ class DesktopApp:
         if entry is None or entry.get("iso") == value:
             return
         entry["iso"] = value
+        if entry.get("color_by_resolution"):
+            self._push_localres(entry)  # re-contour the coloured surface at the new level
+            return
         if not entry["visible"]:
             return
         control = self._control_session()
@@ -6558,7 +7563,7 @@ class DesktopApp:
                 return
             self._status(f"Saved {name} ({len(png) // 1024} kB)")
 
-        threading.Thread(target=work, name="pxviewer-screenshot", daemon=True).start()
+        self.run_background(work, name="pxviewer-screenshot", label="Saving image")
         self._status("taking a picture…")
 
     def volume_appearance(self, vid: str) -> dict:
@@ -6705,6 +7710,7 @@ class DesktopApp:
             return
         self._active_model_id = mid
         self._wire_active(entry["session"])  # no viewport reload: visibility is unchanged
+        self._refresh_validation_staleness()  # the warning tracks the now-active model
         self._emit_loaded_changed()
 
     def set_model_visible(self, mid: str, visible: bool) -> None:
@@ -6808,6 +7814,8 @@ class DesktopApp:
         entry["mask_radius"] = radius
         self._write_display_map(vid, self._display_map_data(entry))
         self._reload_viewport()
+        if entry.get("color_by_resolution"):
+            self._push_localres(entry)  # re-extract the coloured surface from the masked grid
         self._status(
             f"{entry['name']}: masked {radius:g} A around the model" if radius
             else f"{entry['name']}: mask off")
@@ -6875,10 +7883,273 @@ class DesktopApp:
         entry = self._volume_entry(vid)
         if entry is None:
             return
+        if entry.get("color_by_resolution"):
+            self.set_color_by_resolution(vid, False)  # tear down the streamed surface first
+        res_vid = entry.get("resolution_map")
+        if res_vid is not None:
+            self._remove_resolution_map(res_vid)  # the pinned resolution map goes with it
+        if entry.get("is_resolution") and entry.get("pinned_to"):
+            parent = self._volume_entry(entry["pinned_to"])
+            if parent is not None:
+                if parent.get("color_by_resolution"):
+                    self.set_color_by_resolution(parent["id"], False)
+                parent.pop("resolution_map", None)
         self._volumes.remove(entry)
         self._prune_group(entry["group"])
         self._reload_viewport()
         self._emit_loaded_changed()
+
+    # -- local-resolution surface colouring ------------------------------------
+
+    def colorable_volumes(self) -> list:
+        """Maps whose surface local resolution could colour — the real maps, not the hidden
+        resolution maps pinned under them. ``(vid, name)`` pairs for a picker."""
+        return [(v["id"], v["name"]) for v in self._volumes if not v.get("is_resolution")]
+
+    def resolution_map_for(self, full_vid: str) -> Optional[str]:
+        """The vid of the resolution map pinned to a full map, if one has been computed."""
+        entry = self._volume_entry(full_vid)
+        return entry.get("resolution_map") if entry else None
+
+    def is_colored_by_resolution(self, full_vid: str) -> bool:
+        """Whether a full map is currently drawn coloured by its resolution map."""
+        entry = self._volume_entry(full_vid)
+        return bool(entry and entry.get("color_by_resolution"))
+
+    def add_map_file(self, path) -> str:
+        """Load a map file as a volume and return its id — for the Local resolution wizard,
+        which may point at a full map that is not loaded yet."""
+        from .volume_io import VolumeData
+
+        return self._add_volume(VolumeData.from_map_file(str(path)), Path(path).name)
+
+    def compute_resolution_map(self, full_vid: str, half1_path, half2_path,
+                               *, color: bool = True) -> None:
+        """Compute a local-resolution map from two half-maps and pin it (hidden) under a
+        loaded full map, then optionally colour the full map by it.
+
+        The half-maps (``half1_path``/``half2_path``) are opened in cctbx only and never
+        shown — they are inputs to the FSC, not surfaces. The computation runs on a
+        background thread; the map is pinned and coloured back on the GUI thread.
+        """
+        full = self._volume_entry(full_vid)
+        if full is None:
+            raise ValueError("pick a map to colour")
+        half1_path, half2_path = str(half1_path), str(half2_path)
+        for p in (half1_path, half2_path):
+            if not Path(p).is_file():
+                raise ValueError(f"half-map not found: {p}")
+
+        def work():
+            from .volume_io import VolumeData, local_resolution_from_half_maps
+
+            self._status("computing local resolution from half-maps…")
+            h1 = VolumeData.from_map_file(half1_path)  # cctbx only — never reaches the viewer
+            h2 = VolumeData.from_map_file(half2_path)
+            res = local_resolution_from_half_maps(h1, h2, full["data"])
+
+            def apply_on_main():
+                self._pin_resolution_map(full_vid, res, color=color)
+
+            self.bridge.run_on_main.emit(apply_on_main)
+
+        self.run_background(work, name="pxviewer-localres", label="Local resolution")
+
+    def fetch_and_compute_resolution(self, *, pdb_id=None, emdb_number=None,
+                                     color: bool = True, work_dir=None) -> None:
+        """Download a map and its two half-maps, then compute local resolution and pin it
+        under the (loaded) full map — the fetch counterpart of :meth:`compute_resolution_map`,
+        sharing the same computation and the same result. Everything but the loading runs on
+        a background thread.
+        """
+        from . import fetch as fetchmod
+
+        target = Path(work_dir) if work_dir else self._work_dir
+
+        def work():
+            from .volume_io import VolumeData, local_resolution_from_half_maps
+
+            label = pdb_id or (f"EMD-{emdb_number}" if emdb_number else "")
+            self._status(f"fetching maps for {label}…".strip())
+            paths = fetchmod.fetch_entry(
+                entities=["map", "half_map_1", "half_map_2"], work_dir=target,
+                pdb_id=pdb_id, emdb_number=emdb_number)
+            full_map = VolumeData.from_map_file(str(paths["map"]))
+            self._status("computing local resolution from half-maps…")
+            res = local_resolution_from_half_maps(
+                VolumeData.from_map_file(str(paths["half_map_1"])),
+                VolumeData.from_map_file(str(paths["half_map_2"])),
+                full_map)
+
+            def add_on_main():
+                with self._batch_load():
+                    full_vid = self._add_volume(full_map, paths["map"].name)
+                self._pin_resolution_map(full_vid, res, color=color)
+
+            self.bridge.run_on_main.emit(add_on_main)
+
+        self.run_background(work, name="pxviewer-localres-fetch", label="Local resolution")
+
+    def _pin_resolution_map(self, full_vid: str, res_data, *, color: bool = True) -> None:
+        """Add a computed resolution map as a hidden volume pinned under ``full_vid``
+        (replacing any previous one), then optionally turn on colour-by-resolution."""
+        full = self._volume_entry(full_vid)
+        if full is None:
+            return
+        old = full.get("resolution_map")
+        if old is not None:
+            self.set_color_by_resolution(full_vid, False)
+            self._remove_resolution_map(old)
+        midpoint = sum(self._localres_domain(res_data)) / 2.0
+        with self._batch_load():
+            res_vid = self._add_volume(
+                res_data, f"{full['name']} · local resolution",
+                iso=midpoint, iso_kind="absolute")
+            res_entry = self._volume_entry(res_vid)
+            res_entry["is_resolution"] = True
+            res_entry["pinned_to"] = full_vid  # nests under the full map, hidden
+            # Start hidden regardless of the render-skip capability: it is a colour source,
+            # never a surface. Set the state directly (not via set_volume_visible, which is a
+            # no-op on software WebGL) so the batch-exit reload's _reassert_hidden_volumes
+            # keeps it out of the scene and the tree shows it unchecked.
+            res_entry["visible"] = False
+        full["resolution_map"] = res_vid
+        self._status(f"{full['name']}: local resolution ready")
+        if color:
+            self.set_color_by_resolution(full_vid, True)
+        self._emit_loaded_changed()
+
+    def _remove_resolution_map(self, res_vid: str) -> None:
+        """Drop a pinned resolution map (used when replacing one, or removing its full map)."""
+        entry = self._volume_entry(res_vid)
+        if entry is None:
+            return
+        self._volumes.remove(entry)
+        self._prune_group(entry.get("group"))
+
+    def set_color_by_resolution(self, full_vid: str, on: bool) -> None:
+        """Toggle colouring a full map by its pinned resolution map. A plain appearance
+        option — on streams the value-coloured surface (and hides the uniform isosurface it
+        stands in for); off restores the ordinary contour."""
+        full = self._volume_entry(full_vid)
+        if full is None:
+            return
+        if on:
+            if not full.get("resolution_map"):
+                raise ValueError("no resolution map computed for this map yet")
+            full["color_by_resolution"] = True
+            self._push_localres(full)
+        else:
+            full["color_by_resolution"] = False
+            session = self._control_session()
+            if session is not None:
+                session.clear_localres_grid()
+            if full.pop("_localres_shown", False):
+                self.set_volume_visible(full["id"], True)
+        self._emit_loaded_changed()
+
+    @staticmethod
+    def _localres_domain(color_map) -> tuple:
+        """A colour-scale range for a local-resolution map: the 2nd–98th percentile of its
+        non-zero voxels (zeros are the mask/solvent, and would swamp the scale)."""
+        a = color_map.array
+        finite = a[np.isfinite(a)]
+        inside = finite[finite != 0.0]
+        sample = inside if inside.size else finite
+        if sample.size == 0:
+            return (0.0, 1.0)
+        lo, hi = float(np.percentile(sample, 2)), float(np.percentile(sample, 98))
+        if hi <= lo:
+            hi = lo + 1.0
+        return (lo, hi)
+
+    def _absolute_iso(self, entry, surface) -> float:
+        """The primary map's display contour as an absolute value on its own scale — what
+        marching cubes needs. A relative (sigma) level is resolved against the grid's stats
+        the same way Mol*'s ``relative_isovalue`` is (mean + level·sigma)."""
+        if entry.get("iso_kind") == "absolute":
+            return float(entry["iso"])
+        st = surface.stats()
+        return float(st["mean"] + float(entry["iso"]) * st["std"])
+
+    def _push_localres(self, full) -> None:
+        """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
+
+        Sourced from the resolution map pinned under the full map. Cheap to re-run whenever
+        the surface the browser draws changes (a new contour level, a mask), so the streamed
+        surface and its stored replay stay current.
+        """
+        if not full.get("color_by_resolution"):
+            return
+        res = self._volume_entry(full.get("resolution_map"))
+        if res is None:
+            return
+        from .volume_io import encode_localres
+
+        surface = self._display_map_data(full)  # the same (masked) grid the browser draws
+        payload = encode_localres(
+            surface.map_manager, res["data"].map_manager,
+            iso_level=self._absolute_iso(full, surface),
+            domain=self._localres_domain(res["data"]))
+        session = self._control_session()
+        if session is not None:
+            session.show_localres_grid(payload)
+        self.set_volume_visible(full["id"], False)  # our surface stands in for the plain one
+        full["_localres_shown"] = True
+
+    # -- fetch from the PDB / EMDB ---------------------------------------------
+
+    def work_dir(self):
+        """The directory fetched files are downloaded into (persisted across runs)."""
+        return self._work_dir
+
+    def set_work_dir(self, path) -> None:
+        """Set (and persist) the download directory."""
+        self._work_dir = Path(path)
+        self._settings.setValue("work_dir", str(self._work_dir))
+        self._status(f"working directory: {self._work_dir}")
+
+    def fetch_and_load(self, *, pdb_id=None, emdb_number=None, entities, work_dir=None) -> None:
+        """Download an entry's model, reflections and/or map into the working directory and
+        load them as objects. Runs on a background thread.
+
+        Half-maps are deliberately not a general fetch target — nobody wants two half-maps
+        sitting in the viewer; they are inputs to local resolution, which the Local
+        resolution wizard fetches and consumes in cctbx without ever showing them.
+        """
+        from . import fetch as fetchmod
+
+        entities = [e for e in entities if e in ("model", "reflections", "map")]
+        target = Path(work_dir) if work_dir else self._work_dir
+
+        def work():
+            from .volume_io import VolumeData
+
+            label = pdb_id or (f"EMD-{emdb_number}" if emdb_number else "")
+            self._status(f"fetching {label}…".strip())
+            paths = fetchmod.fetch_entry(entities=entities, work_dir=target,
+                                         pdb_id=pdb_id, emdb_number=emdb_number)
+            full_map = (VolumeData.from_map_file(str(paths["map"]))
+                        if "map" in paths else None)
+
+            def add_on_main():
+                names = []
+                with self._batch_load():
+                    if full_map is not None:
+                        self._add_volume(full_map, paths["map"].name)
+                        names.append(paths["map"].name)
+                    if "model" in paths:
+                        self._load_model_file(str(paths["model"]))
+                        names.append(paths["model"].name)
+                    if "reflections" in paths:
+                        self._load_reflection_file(str(paths["reflections"]))
+                        names.append(paths["reflections"].name)
+                self._status(f"fetched {', '.join(names)} into {target}")
+                self._emit_loaded_changed()
+
+            self.bridge.run_on_main.emit(add_on_main)
+
+        self.run_background(work, name="pxviewer-fetch", label="Fetching")
 
     def remove_reflections(self, rid: str) -> None:
         """Unload a reflection file. Nothing is drawn from it, so nothing to reload."""
@@ -6993,7 +8264,10 @@ class DesktopApp:
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
              "active": False, "group": v["group"], "style": v.get("style"),
-             "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso")}
+             "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso"),
+             "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),
+             "resolution_map": v.get("resolution_map"),
+             "color_by_resolution": bool(v.get("color_by_resolution"))}
             for v in self._volumes
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.
@@ -7153,7 +8427,7 @@ class DesktopApp:
 
             self.bridge.run_on_main.emit(add_on_main)
 
-        threading.Thread(target=work, name="pxviewer-phasing", daemon=True).start()
+        self.run_background(work, name="pxviewer-phasing", label="Computing maps")
 
     def reflections_for_model(self, mid: Optional[str] = None) -> Optional[dict]:
         """The reflections this model was phased against, if it was."""
@@ -7219,7 +8493,7 @@ class DesktopApp:
 
             self.bridge.run_on_main.emit(swap)
 
-        threading.Thread(target=work, name="pxviewer-rephasing", daemon=True).start()
+        self.run_background(work, name="pxviewer-rephasing", label="Updating maps")
 
     def _update_maps_if_live(self, rid: str) -> None:
         """Re-phase from the post-minimization auto-chain, but only if it still applies.

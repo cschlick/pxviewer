@@ -38,6 +38,24 @@ def _residue_max(model, values):
     return out
 
 
+@pytest.fixture(scope="module")
+def shared_1tec():
+    """The test model plus one shared analysis, so reduce2 and probe — the two expensive steps —
+    run once for the whole module instead of once per test. This is the same sharing the app
+    relies on, so using it here also exercises it."""
+    from pxviewer import analysis
+
+    model = _model()
+    return model, analysis.ModelAnalysis(model)
+
+
+@pytest.fixture(scope="module")
+def geometry_score(shared_1tec):
+    """A geometry-only hotspot score of the test model, computed once for the module."""
+    model, shared = shared_1tec
+    return model, hotspots.score(model, fit="none", analysis=shared)
+
+
 # -- calibration -------------------------------------------------------------------
 
 
@@ -83,6 +101,18 @@ def test_a_zero_percentage_stays_finite():
     field with an inf that no clamp downstream could undo."""
     value = hotspots._surprisal_severity(np.array([0.0]), hotspots.RAMA_OUTLIER_PCT)[0]
     assert np.isfinite(value) and value > 1.0
+
+
+def test_the_palette_fades_clean_atoms_into_the_background():
+    """The clean end of the model palette is the viewport background, so unremarkable protein
+    disappears into it and only the hotspots read — a green clean end dominates and stops the
+    picture looking like hotspots at all."""
+    palette = hotspots.hotspot_palette("#101014")
+    assert palette[0] == "#101014" and palette[1] == "#101014"   # 0..cut = background
+    assert palette[2:] == hotspots.WARM                          # cut..severe = warm
+    # A bad or missing background falls back to a light default, not a crash.
+    assert hotspots.hotspot_palette(None)[0] == hotspots.hotspot_palette("green")[0]
+    assert hotspots.hotspot_palette(None)[0].startswith("#")
 
 
 # -- Rule 2: topological assignment ------------------------------------------------
@@ -140,19 +170,20 @@ def test_hydrogen_parents_are_the_nearest_heavy_atom_in_the_same_residue():
         assert np.linalg.norm(xyz[h] - xyz[parent]) < 1.5   # a bond length, not across the box
 
 
-def test_a_heavy_atom_inherits_its_hydrogens_clash_severity():
+def test_a_heavy_atom_inherits_its_hydrogens_clash_severity(shared_1tec):
     """Rule 5. Without this the clash signal disappears the moment hydrogens are hidden,
     which is the default in ribbon and heavy-atom views."""
     pytest.importorskip("mmtbx.hydrogens")
-    from pxviewer.hydrogens import add_hydrogens, hydrogens_available
+    from pxviewer.hydrogens import hydrogens_available
 
     if not hydrogens_available():
         pytest.skip("hydrogen placement needs the monomer library")
-    # A real structure with hydrogens added: zn_site is too small and too clean to overlap
-    # anywhere, so it could not tell inheritance from doing nothing.
-    model = add_hydrogens(_model())
+    # Score the *hydrogenated* model directly, so hydrogens are present in the returned array
+    # and inheritance is observable; the shared analysis means reduce2/probe are not repeated.
+    _model_obj, shared = shared_1tec
+    model = shared.hydrogenated()
     hierarchy = model.get_hierarchy()
-    values = hotspots.clash_severity(model, model.get_number_of_atoms())
+    values = hotspots.clash_severity(model, model.get_number_of_atoms(), analysis=shared)
     parents = hotspots._hydrogen_parents(hierarchy)
     assert values.max() > 0, "the test model should have some overlap to inherit"
     assert any(values[h] > 0 for h in parents), "no clash landed on a hydrogen to inherit"
@@ -190,11 +221,10 @@ def test_combining_needs_no_denominator_so_ragged_coverage_stays_comparable():
     assert hotspots.combine(two)[0] == pytest.approx(hotspots.combine(four)[0])
 
 
-def test_residue_rollup_takes_the_max_not_the_sum():
+def test_residue_rollup_takes_the_max_not_the_sum(geometry_score):
     """Rule 6. Ramachandran is assigned to four backbone atoms, so a sum would count one
     phi/psi four times — and would rank a TRP over a GLY for nothing but being larger."""
-    model = _model()
-    result = hotspots.score(model, fit="none")
+    model, result = geometry_score
     rows = hotspots.residue_rows(model, result)
     by_residue = _residue_max(model, result.values)
 
@@ -208,11 +238,10 @@ def test_residue_rollup_takes_the_max_not_the_sum():
     assert severities == sorted(severities, reverse=True)
 
 
-def test_residue_broadcast_raises_the_whole_residue_to_its_worst_atom():
+def test_residue_broadcast_raises_the_whole_residue_to_its_worst_atom(geometry_score):
     """Display-only (a ribbon draws no side chains, so per-atom rotamer severity would be
     invisible on one). It must not change the ranking, only where the colour is carried."""
-    model = _model()
-    result = hotspots.score(model, fit="none")
+    model, result = geometry_score
     spread = hotspots.residue_broadcast(model, result.values)
 
     assert (spread >= result.values).all()          # never loses signal
@@ -235,8 +264,12 @@ def test_geometry_only_keeps_the_same_absolute_scale_as_with_a_map():
     mmm.generate_map(d_min=2.5)
     model = mmm.model()
 
-    geometry_only = hotspots.score(model, fit="none")
-    with_map = hotspots.score(model, mmm=mmm, fit="cc")
+    # One shared analysis across both scores: same geometry, so reduce2/probe run once and the
+    # comparison isolates the map term (which is the point of the test).
+    from pxviewer import analysis as analysis_mod
+    shared = analysis_mod.ModelAnalysis(model)
+    geometry_only = hotspots.score(model, fit="none", analysis=shared)
+    with_map = hotspots.score(model, mmm=mmm, fit="cc", analysis=shared)
 
     clean = with_map.components["fit"] == 0
     assert clean.any()
@@ -261,8 +294,10 @@ def test_a_bad_fit_raises_severity_under_either_map_term():
         sites[i] = (sites[i][0] + 2.0, sites[i][1], sites[i][2])
     model.set_sites_cart(sites)
 
+    from pxviewer import analysis as analysis_mod
+    shared = analysis_mod.ModelAnalysis(model)
     for kind in ("cc", "qscore"):
-        fit = hotspots.score(model, mmm=mmm, fit=kind).components["fit"]
+        fit = hotspots.score(model, mmm=mmm, fit=kind, analysis=shared).components["fit"]
         assert fit[:5].max() > fit[5:].max(), f"{kind} did not notice the displaced atoms"
 
 
@@ -285,11 +320,10 @@ def test_an_unknown_fit_term_is_rejected():
 # -- the spatial field ----------------------------------------------------------------
 
 
-def test_the_field_lands_on_the_models_own_coordinates():
+def test_the_field_lands_on_the_models_own_coordinates(geometry_score):
     """The grid box has to sit where the model is, or the shell draws somewhere else
     entirely. Grid index i maps to Cartesian (i + origin) * spacing."""
-    model = _model()
-    result = hotspots.score(model, fit="none")
+    model, result = geometry_score
     field, spacing, origin = hotspots.severity_field(model, result.values)
     xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
 
@@ -305,10 +339,9 @@ def test_the_field_lands_on_the_models_own_coordinates():
     assert field[voxel] >= result.values[worst] - 1e-9
 
 
-def test_the_contour_encloses_every_outlier_atom():
+def test_the_contour_encloses_every_outlier_atom(geometry_score):
     """A shell at 1.0 must not miss an atom the table lists as past the cut."""
-    model = _model()
-    result = hotspots.score(model, fit="none")
+    model, result = geometry_score
     field, spacing, origin = hotspots.severity_field(model, result.values)
     xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
 
@@ -338,32 +371,51 @@ def test_an_all_clean_model_produces_an_empty_field():
     assert field.max() == 0.0
 
 
+def test_the_quality_presets_trade_grid_for_speed():
+    """The quality dial moves both knobs that drive cloud cost and smoothness: a coarser grid
+    (fewer voxels) and fewer raymarch steps. Low must be a much smaller grid than high, and
+    every preset must stay within Mol*'s 10-steps-per-cell cap."""
+    q = hotspots.CLOUD_QUALITY
+    assert hotspots.CLOUD_QUALITY_DEFAULT == "low"          # the floor hardware is interactive
+    assert q["low"][0] > q["medium"][0] > q["high"][0]      # low = coarsest grid = fastest
+    assert q["low"][1] < q["medium"][1] < q["high"][1]      # high = most steps = smoothest
+    assert all(1 <= steps <= 10 for _sp, steps in q.values())
+
+    model = _model()
+    values = np.zeros(model.get_number_of_atoms())
+    values[0] = 2.0  # one hotspot, so both grids cover the same box
+    low, _s, _o = hotspots.severity_field(model, values, spacing=q["low"][0])
+    high, _s, _o = hotspots.severity_field(model, values, spacing=q["high"][0])
+    assert low.size < high.size / 4            # ~2x coarser per axis -> ~8x fewer voxels
+    assert low.max() > 0                        # ... and it still resolves the hotspot
+
+
 # -- the cloud wire format ------------------------------------------------------------
 
 
-def test_the_severity_box_normalizes_to_zero_one_with_the_cut_marked():
+def test_the_severity_box_normalizes_to_zero_one_with_the_cut_marked(geometry_score):
     """Mol*'s direct-volume shader feeds the raw voxel value straight into the opacity
     transfer function as a 0..1 coordinate, so the grid has to arrive normalized or the ramp
     lands in the wrong place. cutFrac tells the frontend where the outlier threshold sits on
     that scale without it having to know the cap."""
     import struct
 
-    model = _model()
-    result = hotspots.score(model, fit="none")
+    model, result = geometry_score
     field, spacing, origin = hotspots.severity_field(model, result.values)
-    payload = hotspots.encode_severity_box(field, spacing, origin)
+    payload = hotspots.encode_severity_box(field, spacing, origin, steps_per_cell=6.0)
 
-    cut, nx, ny, nz = struct.unpack_from("<fiii", payload, 0)
+    cut, steps_per_cell, nx, ny, nz = struct.unpack_from("<ffiii", payload, 0)
     assert (nx, ny, nz) == field.shape
     assert cut == pytest.approx(hotspots.FIELD_ISO / hotspots.SEVERITY_CAP)  # 1.0 / 4.0
+    assert steps_per_cell == pytest.approx(6.0)   # the quality dial travels with the grid
 
     # Geometry: origin in Cartesian, axis-aligned steps of one voxel.
-    ox, oy, oz = struct.unpack_from("<fff", payload, 16)
+    ox, oy, oz = struct.unpack_from("<fff", payload, 20)
     assert (ox, oy, oz) == pytest.approx(tuple(o * spacing for o in origin))
-    steps = struct.unpack_from("<fffffffff", payload, 28)
+    steps = struct.unpack_from("<fffffffff", payload, 32)
     assert steps == pytest.approx((spacing, 0, 0, 0, spacing, 0, 0, 0, spacing))
 
-    data = np.frombuffer(payload, dtype="<f4", offset=64)
+    data = np.frombuffer(payload, dtype="<f4", offset=68)
     assert data.size == nx * ny * nz
     assert 0.0 <= data.min() and data.max() <= 1.0
     # The worst voxel should be severity/cap, not clamped away.
@@ -383,6 +435,92 @@ def test_streaming_a_severity_cloud_sets_the_replay_payload(qapp):
     assert session._last_hotspot_volume[4:] == b"\x00\x01\x02\x03"
     session.clear_hotspot_volume()
     assert session._last_hotspot_volume is None
+
+
+def test_precomputed_hotspot_volume_opens_without_running_analysis(qapp, monkeypatch):
+    """An external severity map goes straight to the cloud wire path; it neither needs nor
+    creates a Hotspots analysis result."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.volume_io import VolumeData
+
+    volume = VolumeData.from_numpy(
+        np.full((3, 4, 5), 1.25, dtype=np.float32),
+        spacing=(1.0, 1.5, 2.0), origin=(2, 3, 4), name="precomputed")
+
+    opened = []
+    monkeypatch.setattr(
+        VolumeData, "from_map_file",
+        classmethod(lambda cls, path, **kwargs: opened.append(str(path)) or volume))
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        entry = app._model_entry(mid)
+        assert entry.get("hotspots") is None
+
+        app.open_hotspot_volume("precomputed.map", mid)
+
+        assert opened == ["precomputed.map"]
+        assert entry.get("hotspots") is None
+        assert entry["hotspot_field_source"] == "precomputed.map"
+        assert entry["hotspot_cloud"] is True
+        assert entry["session"]._last_hotspot_volume is not None
+
+        # Switching looks redraws from the retained file data, still without analysis.
+        app.show_hotspot_field(mid, on=True, style="contour")
+        assert entry.get("hotspots") is None
+        assert entry.get("hotspot_cloud") is None
+        assert entry.get("hotspot_volume") is not None
+    finally:
+        app.stop()
+
+
+def test_the_opacity_knee_is_remembered_for_late_viewers(qapp):
+    """The knee is a lightweight control message (no grid re-stream), so it is remembered and
+    re-sent on connect — a reload keeps the slider where the user left it."""
+    pytest.importorskip("websockets")
+    from pxviewer.live import LiveSession
+
+    session = LiveSession.from_model_file(_MODEL)
+    session.show_hotspot_volume(b"\x00")
+    assert session._hotspot_knee is None            # a fresh cloud is at its default knee
+    session.set_hotspot_opacity(0.6)
+    assert session._hotspot_knee == pytest.approx(0.6)
+    # A new cloud resets the knee; clearing drops it.
+    session.show_hotspot_volume(b"\x01")
+    assert session._hotspot_knee is None
+    session.set_hotspot_opacity(0.4)
+    session.clear_hotspot_volume()
+    assert session._hotspot_knee is None
+
+
+def test_the_desktop_knee_is_given_in_severity_and_sent_normalized(qapp):
+    """The slider is in severity units (1.0 = the cut); the wire speaks the grid's [0,1]
+    scale, so the desktop divides by the cap. A no-op unless a cloud is actually showing."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        entry = app._model_entry(mid)
+
+        # No cloud showing -> the knee is ignored, session untouched.
+        app.set_hotspot_opacity(mid, 1.5)
+        assert entry["session"]._hotspot_knee is None
+
+        entry["hotspot_cloud"] = True   # pretend a cloud is up (avoids a full score here)
+        app.set_hotspot_opacity(mid, 1.5)
+        assert entry["session"]._hotspot_knee == pytest.approx(1.5 / hotspots.SEVERITY_CAP)
+    finally:
+        app.stop()
 
 
 # -- the desktop wiring ---------------------------------------------------------------
@@ -414,7 +552,22 @@ def test_the_cloud_and_contour_are_mutually_exclusive(qapp):
         assert entry.get("hotspot_cloud") is True
         assert entry.get("hotspot_volume") is None       # no MVS contour
         assert not app._volumes
-        assert entry["session"]._last_hotspot_volume is not None
+        payload = entry["session"]._last_hotspot_volume
+        assert payload is not None
+        # The cloud streams the quality preset's grid: its step vector (offset 36 past the tag
+        # — after tag, cutFrac, stepsPerCell, dims, origin) is the voxel size, and the default
+        # quality is low.
+        import struct
+        low_spacing = hotspots.CLOUD_QUALITY["low"][0]
+        assert struct.unpack_from("<f", payload, 36)[0] == pytest.approx(low_spacing)
+
+        # Bumping quality restreams a finer grid at more steps — same cloud, cleaner render.
+        app.set_cloud_quality("high")
+        payload = entry["session"]._last_hotspot_volume
+        hi_spacing, hi_steps = hotspots.CLOUD_QUALITY["high"]
+        assert struct.unpack_from("<f", payload, 36)[0] == pytest.approx(hi_spacing)  # stepX.x
+        assert struct.unpack_from("<f", payload, 8)[0] == pytest.approx(hi_steps)     # stepsPerCell
+        assert struct.unpack_from("<f", payload, 36)[0] < low_spacing
 
         app.show_hotspot_field(mid, on=True, style="contour")
         assert entry.get("hotspot_cloud") is None         # the cloud was torn down
@@ -519,5 +672,73 @@ def test_computing_hotspots_colours_the_model_through_the_attribute_path(qapp):
         assert spec["color"] == "attribute"
         assert spec["attribute"]["name"] == _HOTSPOT_COLOR
         assert list(spec["attribute"]["domain"]) == list(hotspots.DOMAIN)
+    finally:
+        app.stop()
+
+
+def test_choosing_hydrogens_drops_a_stale_score(qapp):
+    """Turning hydrogens on or off changes what a clash *is*, so a score computed under the old
+    setting no longer describes the checkbox — it is dropped rather than left silently
+    disagreeing. (No recompute here; that is the user's next click.)"""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        entry = app._model_entry(mid)
+        entry["hotspots"] = object()          # stand in for a finished score
+        assert app._hotspot_hydrogens is False  # fast pass by default
+
+        app.set_hotspot_hydrogens(True)
+        assert app._hotspot_hydrogens is True
+        assert entry.get("hotspots") is None    # the stale score was dropped
+    finally:
+        app.stop()
+
+
+def test_validation_staleness_tracks_model_movement(qapp):
+    """The building block for a stale-results warning: once a model is validated, moving any
+    atom must flip it to 'stale', and re-validating at the new coordinates must clear it. The
+    signal carries a plain bool the Validation tab uses to show/hide its warning banner."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        entry = app._model_entry(mid)
+
+        seen: list = []
+        app.bridge.validation_stale_changed.connect(seen.append)
+
+        # Never validated: nothing to be stale against, so no warning.
+        app._refresh_validation_staleness()
+        assert seen[-1] is False
+
+        # Validate (fingerprint the current coordinates): still fresh.
+        app._mark_validated(entry)
+        app._refresh_validation_staleness()
+        assert seen[-1] is False
+
+        # Move an atom: the cached results now describe a past geometry.
+        model = entry["session"].model
+        sites = model.get_sites_cart()
+        moved = sites.deep_copy()
+        moved[0] = (moved[0][0] + 0.5, moved[0][1], moved[0][2])
+        model.set_sites_cart(moved)
+        app._refresh_validation_staleness()
+        assert seen[-1] is True
+
+        # Re-validate at the moved coordinates: fresh again.
+        app._mark_validated(entry)
+        app._refresh_validation_staleness()
+        assert seen[-1] is False
     finally:
         app.stop()

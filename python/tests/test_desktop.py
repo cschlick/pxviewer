@@ -386,11 +386,145 @@ def test_unpaired_objects_can_be_paired_explicitly(qapp, tmp_path):
         assert app._models[0]["session"].model is mmm.model()
         # Paired objects are no longer on offer for pairing.
         assert app.pairable() == ([], [])
-        assert not app._controls._pair_btn.isEnabled()
+        # Pair remains available as the place to re-check this existing pair's alignment.
+        assert app._controls._pair_btn.isEnabled()
+        assert len(app.alignable()) == 1
         with pytest.raises(ValueError, match="already paired"):
             app.pair_model_with_map(app._models[0]["id"], app._volumes[0]["id"])
         # ... and the map they are paired with is now offered for minimization.
         assert app._controls._minimize_map_check.isEnabled()
+    finally:
+        app.stop()
+
+
+def test_a_pair_loaded_together_can_be_aligned_after_the_fact(qapp, tmp_path, monkeypatch):
+    """Opening model+map together pairs immediately, but Pair remains the contextual entry
+    point for density alignment and reuses that manager rather than nesting a new pair."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    model_path, map_path = _model_and_map_files(tmp_path)
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(model_path), str(map_path)])
+        mid, vid = app._models[0]["id"], app._volumes[0]["id"]
+        gid = app._models[0]["group"]
+        manager = app.group_mmm(gid)
+        monkeypatch.setattr(
+            DesktopApp, "_detect_map_model_shift",
+            staticmethod(lambda model, map_data, initial_shift=None: (1.0, -2.0, 3.0)))
+
+        applied = app.align_paired_model_with_map(mid, vid, detect_shift=True)
+
+        assert applied == (1.0, -2.0, 3.0)
+        assert app.group_mmm(gid) is manager
+        assert len(app._models) == 1 and len(app._volumes) == 1
+        assert app._model_entry(mid)["group"] == app._volume_entry(vid)["group"] == gid
+        assert app._model_entry(mid)["session"]._last_frame is not None
+        assert app._controls._pair_btn.isEnabled()
+    finally:
+        app.stop()
+
+
+def test_pairing_can_detect_and_record_a_missing_shift_cart(qapp, tmp_path, monkeypatch):
+    """The opt-in density alignment corrects frame metadata and uses cctbx's shift-aware
+    model operation; map and model remain compatible members of one manager."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from pxviewer.desktop import DesktopApp
+
+    model_path, map_path = _model_and_map_files(tmp_path)
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(model_path)])
+        app.load_files([str(map_path)])
+        mid, vid = app._models[0]["id"], app._volumes[0]["id"]
+        before = app._models[0]["session"].model.get_sites_cart().deep_copy()
+        monkeypatch.setattr(
+            DesktopApp, "_detect_map_model_shift",
+            staticmethod(lambda model, map_data, initial_shift=None: (3.0, 0.0, 0.0)))
+
+        gid = app.pair_model_with_map(mid, vid, detect_shift=True)
+        mmm = app.group_mmm(gid)
+        entry = app._model_entry(mid)
+        applied = entry["detected_shift_cart"]
+
+        assert applied[0] == pytest.approx(3.0)
+        assert applied[1:] == pytest.approx((0.0, 0.0), abs=1e-6)
+        moved = mmm.model().get_sites_cart() - before
+        assert tuple(moved.mean()) == pytest.approx(applied)
+        # The exact Cartesian value belongs to the model's shift history. It is intentionally
+        # not rounded into the map's integer-grid origin metadata.
+        assert tuple(mmm.model().shift_cart()) == pytest.approx(applied)
+    finally:
+        app.stop()
+
+
+def test_density_translation_search_finds_a_shift_without_touching_its_model():
+    """The search works on a deep copy and returns the frame translation only."""
+    pytest.importorskip("iotbx.map_model_manager")
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.desktop import DesktopApp
+
+    source = map_model_manager()
+    source.generate_map()
+    model = source.model().deep_copy()
+    model.shift_model_and_set_crystal_symmetry(
+        shift_cart=(3.0, -2.0, 1.0),
+        crystal_symmetry=source.map_manager().crystal_symmetry())
+    before = model.get_sites_cart().deep_copy()
+
+    found = DesktopApp._detect_map_model_shift(model, source.map_manager().map_data())
+
+    assert found == pytest.approx((-3.0, 2.0, -1.0), abs=0.15)
+    assert model.get_sites_cart().rms_difference(before) == pytest.approx(0.0)
+
+
+def test_non_grid_mrc_external_origin_seeds_density_alignment(qapp, tmp_path, capsys):
+    """A real-world MRC ORIGIN may be sub-voxel. cctbx normally warns and discards it;
+    opt-in pairing keeps its exact Cartesian value as the search's starting shift."""
+    pytest.importorskip("iotbx.map_model_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from scitbx.array_family import flex
+    from iotbx.map_model_manager import map_model_manager
+
+    from pxviewer.desktop import DesktopApp
+
+    source = map_model_manager()
+    source.generate_map()
+    external = (3.13, -2.27, 1.19)  # deliberately not integer voxel coordinates
+    mm = source.map_manager().deep_copy()
+    mm.set_output_external_origin(external)
+    map_path = tmp_path / "external-origin.mrc"
+    mm.write_map(str(map_path))
+
+    shifted = source.model().deep_copy()
+    shifted.set_sites_cart(
+        shifted.get_sites_cart() + flex.vec3_double(shifted.get_sites_cart().size(), external))
+    model_path = tmp_path / "external-frame.pdb"
+    model_path.write_text(shifted.model_as_pdb())
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        app.load_files([str(model_path)])
+        app.load_files([str(map_path)])
+        gid = app.pair_model_with_map(
+            app._models[0]["id"], app._volumes[0]["id"], detect_shift=True)
+        applied = app._model_entry(app._models[0]["id"])["detected_shift_cart"]
+
+        assert applied == pytest.approx(tuple(-v for v in external), abs=0.15)
+        assert "External origin is not on a grid point" not in capsys.readouterr().out
+        assert app.group_mmm(gid).model().shift_cart() == pytest.approx(applied)
     finally:
         app.stop()
 
@@ -3110,3 +3244,156 @@ def test_committing_a_custom_color_does_not_reopen_the_dialog(qapp):
     combo.setCurrentIndex(combo.count() - 2)
     combo.blockSignals(False)
     assert fired == []
+
+
+# The failure case below raises on purpose (run_background reports errors rather than
+# swallowing them); the warning about it is noise here.
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_long_operation_raises_the_busy_indicator(qapp):
+    """Some operations run for tens of seconds (reduce2, probe2, a hotspot score) and the text
+    status alone is easy to miss, so a busy bar goes up for the duration.
+
+    Driven from one place (``run_background``) so no operation can forget it — including one
+    that fails, which is exactly the case that would otherwise leave it spinning forever.
+    """
+    import threading
+    import time
+
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    bar = app._controls._busy_bar
+    try:
+        def settle(seconds=1.0):
+            """Pump the event loop; the indicator is driven by queued cross-thread signals."""
+            end = time.time() + seconds
+            while time.time() < end:
+                qapp.processEvents()
+                time.sleep(0.01)
+
+        assert bar.isHidden()  # nothing running
+
+        # Two overlapping operations: the bar stays up until the *last* one finishes, so a
+        # background rephasing does not switch it off while a score is still going.
+        gate = threading.Event()
+        app.run_background(lambda: gate.wait(10), name="t-a", label="A")
+        app.run_background(lambda: gate.wait(10), name="t-b", label="B")
+        settle()
+        assert app._busy_labels == ["A", "B"]
+        assert not bar.isHidden()
+
+        gate.set()
+        settle()
+        assert app._busy_labels == []
+        assert bar.isHidden()
+
+        # A worker that raises must still put it down.
+        def boom():
+            raise RuntimeError("worker failed")
+
+        app.run_background(boom, name="t-boom", label="Failing")
+        settle()
+        assert app._busy_labels == []
+        assert bar.isHidden()
+    finally:
+        app.stop()
+
+
+@pytest.mark.filterwarnings("ignore::pytest.PytestUnhandledThreadExceptionWarning")
+def test_a_running_operation_disables_only_its_own_button(qapp):
+    """These operations take tens of seconds, so a second click would just queue a duplicate of
+    work already in flight — the button that started one is disabled until it finishes.
+
+    Only that button: an unrelated action stays available while one runs. And it comes back
+    even if the worker fails, or the button would be dead for the rest of the session.
+    """
+    import time
+
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    controls = app._controls
+    find, validate = controls._hotspot_btn, controls._validate_btn
+    try:
+        def settle(seconds=1.0):
+            end = time.time() + seconds
+            while time.time() < end:
+                qapp.processEvents()
+                time.sleep(0.01)
+
+        assert find.isEnabled() and validate.isEnabled()
+
+        import threading
+        gate = threading.Event()
+        app.run_background(lambda: gate.wait(10), name="t-hs", label="Finding hotspots")
+        settle()
+        assert not find.isEnabled()      # cannot queue a second one
+        assert validate.isEnabled()      # ... but an unrelated action is still offered
+
+        gate.set()
+        settle()
+        assert find.isEnabled()
+
+        # A worker that raises must still hand the button back.
+        def boom():
+            raise RuntimeError("worker failed")
+
+        app.run_background(boom, name="t-boom", label="Finding hotspots")
+        settle()
+        assert find.isEnabled()
+    finally:
+        app.stop()
+
+
+def test_one_button_shows_and_hides_every_validation_overlay(qapp):
+    """Each validator draws on its own channel, so clearing the viewport otherwise means
+    visiting every sub-tab and unticking it. One button drives them all, and its label says
+    what the next click will do — tracking the individual boxes so it never lies."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.validation import ValidationResult
+
+    def result(key):
+        return ValidationResult(key=key, title=key.title(), columns=["chain", "resid"],
+                                rows=[["A", "1"]], markup=[{"kind": "dots"}], summary="s")
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    controls = app._controls
+    button = controls._all_markup_btn
+    try:
+        assert not button.isEnabled()  # nothing drawn yet, so nothing to toggle
+
+        # Fill the sub-tabs as a finished run would (markers on, as an explicit run does).
+        controls._on_validation_ready(("m1", [result("ramachandran"), result("rotamers")], True))
+        live = [c for c in controls._marker_checks if c.isEnabled()]
+        assert len(live) == 2 and all(c.isChecked() for c in live)
+        assert button.isEnabled() and button.text() == "Hide all markers"
+
+        button.click()
+        assert not any(c.isChecked() for c in live)      # one click clears the viewport
+        assert button.text() == "Show all markers"
+
+        button.click()
+        assert all(c.isChecked() for c in live)          # and one click brings it all back
+        assert button.text() == "Hide all markers"
+
+        # The label follows the individual boxes: still something to hide until the last goes.
+        live[0].setChecked(False)
+        assert button.text() == "Hide all markers"
+        live[1].setChecked(False)
+        assert button.text() == "Show all markers"
+
+        # A re-run replaces the checkboxes; the button must reason about the new ones only.
+        controls._on_validation_ready(("m1", [result("cablam")], True))
+        assert len(controls._marker_checks) == 1
+        assert button.text() == "Hide all markers"
+    finally:
+        app.stop()
