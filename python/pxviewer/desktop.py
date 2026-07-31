@@ -15,6 +15,7 @@ external browser is needed.
 from __future__ import annotations
 
 import signal
+import json
 import os
 import sys
 import threading
@@ -146,8 +147,7 @@ _MODEL_COLOR_OPTIONS = [
     # Not a Mol* theme: computed against the map by cctbx and sent as per-atom values.
     # See DesktopApp.color_model_by_qscore.
     ("By Q-score (fit to map)", _QSCORE_COLOR),
-    # Likewise computed, but only re-applies a field the Hotspots tab already produced —
-    # the score depends on which map-fit term was chosen, so it is not guessed here.
+    # Likewise computed, but only re-applies a field the Hotspots tab already produced.
     ("By hotspot severity", _HOTSPOT_COLOR),
 ]
 
@@ -381,18 +381,36 @@ def _tab_hover_filter(tabbar, on_hover):
 
 def _palette_watch_filter(widget, on_change):
     """A QObject filter, parented to ``widget``, that calls ``on_change()`` when the palette
-    changes — a light/dark switch, or the real theme landing once the window is shown. Lets
-    baked-pixmap icons re-tint (palette() stylesheets already re-color themselves)."""
-    from PySide6.QtCore import QEvent, QObject
+    changes — a light/dark switch, or the real theme landing once the window is shown.
+
+    Defer the callback by one event-loop turn. On macOS ``ApplicationPaletteChange`` can be
+    delivered while QApplication still exposes parts of the old palette; repainting in the
+    event itself creates the half-light/half-dark state this watcher exists to prevent."""
+    from PySide6.QtCore import QEvent, QObject, QTimer
+    from PySide6.QtWidgets import QApplication
 
     class _PaletteFilter(QObject):
+        pending = False
+
+        def refresh(self):
+            self.pending = False
+            on_change()
+
         def eventFilter(self, obj, event):
             if event.type() in (QEvent.Type.ApplicationPaletteChange, QEvent.Type.PaletteChange):
-                on_change()
+                if not self.pending:
+                    self.pending = True
+                    QTimer.singleShot(0, self.refresh)
             return False
 
     watcher = _PaletteFilter(widget)
     widget.installEventFilter(watcher)
+    # Once _refresh_theme gives the window an explicit palette, a later application
+    # palette change need not propagate an event to that window. Observe QApplication too
+    # so every subsequent system transition is still seen.
+    app = QApplication.instance()
+    if app is not None:
+        app.installEventFilter(watcher)
     return watcher
 
 
@@ -1165,7 +1183,7 @@ class ViewportWindow:
 
 
 class ControlsWindow:
-    """Controls for the viewport: open a file, or run a demo from the Demos tab."""
+    """Controls for the viewport: open supplied files or get remote/bundled content."""
 
     # Set here as well as in __init__ so a signal arriving mid-construction cannot find it
     # missing; _UNSET means "no pane built yet", so the first update always builds one.
@@ -1204,6 +1222,7 @@ class ControlsWindow:
         # window is shown (the tint read here can be the pre-show default).
         self._icon_registry: list = []   # (apply_icon(QIcon), name, size)
         self._tab_icon_names: list = []  # (tab index, name)
+        self._theme_signature = None
 
         layout = QVBoxLayout(self._window)
         layout.setSpacing(12)
@@ -1282,8 +1301,8 @@ class ControlsWindow:
         # case where the palette is already right by the time the loop starts.
         from PySide6.QtCore import QTimer
 
-        self._palette_watcher = _palette_watch_filter(self._window, self._retint_icons)
-        QTimer.singleShot(0, self._retint_icons)
+        self._palette_watcher = _palette_watch_filter(self._window, self._refresh_theme)
+        QTimer.singleShot(0, lambda: self._refresh_theme(force=True))
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
         # It doubles as the tab labeller on hover, so remember the real status underneath.
@@ -1305,6 +1324,15 @@ class ControlsWindow:
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: palette(placeholder-text);")
         status_row.addWidget(self._status_label, stretch=1)
+        self._reset_view_btn = self._make_icon_button(
+            "fullscreen", "Reset view",
+            "Reset the view — reframe the camera to fit the whole scene")
+        self._reset_view_btn.clicked.connect(lambda: self._desktop.reset_view())
+        status_row.addWidget(self._reset_view_btn)
+        self._picture_btn = self._make_icon_button(
+            "camera", "Picture", "Save a picture of the viewport as a PNG")
+        self._picture_btn.clicked.connect(self._on_save_picture)
+        status_row.addWidget(self._picture_btn)
         # Always-visible dock/detach control: the painted header's button is hidden while
         # the panel floats (it uses the native window frame then), so this is the reliable
         # way back — and the way out, from either state.
@@ -1353,6 +1381,7 @@ class ControlsWindow:
 
     def _build_scene_tab(self):
         """Home: open files, the object list, appearance of the focused object, selection."""
+        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QButtonGroup,
             QGridLayout,
@@ -1414,15 +1443,10 @@ class ControlsWindow:
             "folder-open", "Open",
             "Open a structure or map — models via cctbx, maps as .mrc/.map/.ccp4",
             self._on_open_file)
-        self._fetch_btn = _icon_button(
-            "download", "Fetch",
-            "Fetch an entry from the PDB/EMDB — model, reflections, map and half-maps — into "
-            "the working directory, and optionally compute local resolution from the half-maps",
-            self._on_fetch)
-        demos_btn = _icon_button(
-            "blocks", "Demos", "Load a bundled example, or start a guided tutorial")
-        demos_btn.setMenu(self._build_demos_menu())
-        self._demos_btn = demos_btn  # a tutorial highlight target
+        self._get_btn = _icon_button(
+            "blocks", "Get",
+            "Get data from PDB or EMDB, open a bundled example, or start a tutorial")
+        self._get_btn.setMenu(self._build_get_menu())
         self._write_btn = _icon_button(
             "save", "Save", "Save the focused object to disk — model coordinates, or a map",
             self._on_write_object)
@@ -1431,29 +1455,16 @@ class ControlsWindow:
             "Pair an unpaired model with a map, or check an existing pair for a missing "
             "density-supported origin shift",
             self._on_pair)
-        self._localres_btn = _icon_button(
-            "palette", "Local res",
-            "Colour a map by local resolution computed from its two half-maps — pick local "
-            "files or fetch from the PDB/EMDB; then toggle the colouring in the map's controls",
-            self._on_localres_wizard)
         self._remove_model_btn = _icon_button(
             "trash-2", "Remove", "Remove the highlighted object", self._on_remove_selected)
-        reset_btn = _icon_button(
-            "fullscreen", "Reset view",
-            "Reset the view — reframe the camera to fit the whole scene",
-            lambda: self._desktop.reset_view())
-        picture_btn = _icon_button(
-            "camera", "Picture", "Save a picture of the viewport as a PNG",
-            self._on_save_picture)
 
         actions = QHBoxLayout()
         actions.setSpacing(4)
-        for button in (self._open_btn, self._fetch_btn, demos_btn, self._write_btn,
-                       self._pair_btn, self._localres_btn):
+        for button in (self._open_btn, self._get_btn, self._write_btn,
+                       self._pair_btn):
             actions.addWidget(button)
         actions.addSpacing(14)  # separate "data in / out" from "act on it"
-        for button in (self._remove_model_btn, reset_btn, picture_btn):
-            actions.addWidget(button)
+        actions.addWidget(self._remove_model_btn)
         actions.addStretch(1)  # keep them a compact, left-packed toolbar
         ol.addLayout(actions)
 
@@ -1484,7 +1495,7 @@ class ControlsWindow:
         self._pick_btn = self._make_icon_button(
             "mouse-pointer-click", "Pick",
             "Pick atoms in the 3D view — each click adds to the selection; click empty space "
-            "to clear (Shift-drag still drags an atom to minimize)", checkable=True)
+            "to clear; Shift-click extends the selection", checkable=True)
         self._pick_btn.toggled.connect(self._on_toggle_select)
         sel_row.addWidget(self._pick_btn)
 
@@ -1504,24 +1515,14 @@ class ControlsWindow:
         sel_row.addWidget(self._clear_btn)
         sl.addLayout(sel_row)
 
-        from PySide6.QtWidgets import QSizePolicy
-
-        sl.addWidget(QLabel("Quick select:"))
-        chips = QGridLayout()
-        chips.setSpacing(4)
-        self._sel_chips = []  # (button, expr); checkable, highlighted when active
-        self._chip_selecting = False
-        specs = [("Protein", "protein"), ("Ligands", "hetero and not water"),
-                 ("Water", "water"), ("Backbone", "protein and name CA")]
-        for i, (label, expr) in enumerate(specs):
-            chip = QPushButton(label)
-            chip.setCheckable(True)  # native checked state (accent tint), no stylesheet
-            chip.setToolTip(expr)
-            chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
-            chip.clicked.connect(lambda _c=False, b=chip, e=expr: self._on_chip(b, e))
-            chips.addWidget(chip, i // 2, i % 2)  # two columns
-            self._sel_chips.append((chip, expr))
-        sl.addLayout(chips)
+        sl.addWidget(QLabel("Selected:"))
+        self._selection_label = QLabel("None")
+        self._selection_label.setWordWrap(True)
+        self._selection_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._selection_label.setMinimumHeight(52)
+        self._selection_label.setStyleSheet("color: palette(placeholder-text);")
+        sl.addWidget(self._selection_label)
 
         # Hide / show the selected atoms (a partial representation, like the type toggles).
         vis_row = QHBoxLayout()
@@ -1538,10 +1539,6 @@ class ControlsWindow:
         self._show_sel_btn.setEnabled(False)
         sl.addLayout(vis_row)
 
-        self._selection_label = QLabel("none selected")
-        self._selection_label.setWordWrap(True)
-        self._selection_label.setStyleSheet("color: palette(placeholder-text);")
-        sl.addWidget(self._selection_label)
         layout.addWidget(sel_box)
 
         # The mouse/key reference used to live here, but it ate the room the object list
@@ -1554,15 +1551,17 @@ class ControlsWindow:
         ol.addWidget(scroll, stretch=1)
         return outer
 
-    def _build_demos_menu(self):
-        """Bundled examples to load, and guided tutorials to run — two labelled sections."""
+    def _build_get_menu(self):
+        """Everything pxviewer obtains for the user: remote data, examples and tutorials."""
         from PySide6.QtWidgets import QMenu
 
         from . import tutorial
 
         menu = QMenu(self._window)
-        menu.setObjectName("demosMenu")
-        self._add_menu_heading(menu, "Samples", first=True)
+        menu.setObjectName("getMenu")
+        self._add_menu_heading(menu, "Online", first=True)
+        menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
+        self._add_menu_heading(menu, "Examples")
         menu.addAction("Ubiquitin (1UBQ)",
                        lambda: self._on_load_sample("1ubq.pdb"))
         menu.addAction("Ubiquitin — with density (map + model)",
@@ -1657,6 +1656,20 @@ class ControlsWindow:
         mg.addLayout(mrow)
         layout.addWidget(measure)
 
+        map_tools = QGroupBox("Map tools")
+        map_layout = QVBoxLayout(map_tools)
+        map_layout.addWidget(QLabel(
+            "Calculate local resolution from two half-maps, then colour the map by it:"))
+        self._localres_btn = self._make_icon_button(
+            "palette", "Local res",
+            "Calculate local resolution from two half-maps and colour the map by it")
+        self._localres_btn.clicked.connect(self._on_localres_wizard)
+        map_row = QHBoxLayout()
+        map_row.addWidget(self._localres_btn)
+        map_row.addStretch(1)
+        map_layout.addLayout(map_row)
+        layout.addWidget(map_tools)
+
         layout.addWidget(self._build_edits_group())
 
         layout.addWidget(self._build_ligand_placement_group())
@@ -1664,6 +1677,13 @@ class ControlsWindow:
         minimization = QGroupBox("Minimization")
         ming = QVBoxLayout(minimization)
         ming.addWidget(QLabel("Relax the model onto ideal geometry:"))
+        self._refine_drag_btn = self._make_icon_button(
+            "hand", "Refine drag",
+            "Explicitly enable coordinate-changing atom drags. While active, drag an atom "
+            "to pull it and locally minimize the model. Mutually exclusive with Pick.",
+            checkable=True)
+        self._refine_drag_btn.toggled.connect(self._on_toggle_refine_drag)
+        ming.addWidget(self._refine_drag_btn)
         self._minimize_map_check = QCheckBox("Use map")
         self._minimize_map_check.setToolTip(
             "Also pull the model into the density. Needs a map loaded together with "
@@ -1709,7 +1729,9 @@ class ControlsWindow:
 
         dragging = QGroupBox("Drag atoms")
         dg = QVBoxLayout(dragging)
-        hint = QLabel("Shift-drag any atom or bond to pull it; the model bends to follow.")
+        hint = QLabel(
+            "Enable Refine drag on the Tools tab, then drag any atom or bond to pull it; "
+            "the model bends to follow.")
         hint.setWordWrap(True)
         dg.addWidget(hint)
 
@@ -1776,7 +1798,7 @@ class ControlsWindow:
         dg.addWidget(self._tug_density_check)
         self._tug_continuous_check = QCheckBox("Keep minimizing while dragging")
         self._tug_continuous_check.setToolTip(
-            "Hold Shift and the model keeps relaxing the whole time — a gentle living "
+            "While dragging, the model keeps relaxing the whole time — a gentle living "
             "settle that stays in motion even when the pointer is still, rather than "
             "nudging once per move and stopping.")
         self._tug_continuous_check.setChecked(True)  # on by default; connect after, no fire
@@ -2342,30 +2364,11 @@ class ControlsWindow:
         layout.setSpacing(10)
 
         intro = QLabel(
-            "Aggregates Ramachandran, rotamer, clash and map-fit severity into one score per "
+            "Aggregates Ramachandran, rotamer and clash severity into one score per "
             "atom, and colors the model by it — green clean, yellow at the outlier "
             "threshold, red past it. Work down the table; the columns show what fired.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
-
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Map fit term:"))
-        self._hotspot_fit = QComboBox()
-        for label, key in self._desktop.hotspot_fit_choices():
-            self._hotspot_fit.addItem(label, key)
-        self._hotspot_fit.setToolTip(
-            "Which measure of agreement with the map to fold in.\n"
-            "Q-score: per-atom radial fit (slower, the cryo-EM standard).\n"
-            "Local map-model CC: correlation in a 2 A sphere (faster).\n"
-            "None: geometry only — also what you get with no map loaded. Severities keep the "
-            "same absolute meaning either way; the map term is dropped, not rescaled.")
-        # Mirror the choice onto the app: a validation run scores hotspots too (so the other
-        # tab is already populated), and it needs to know which map term the user picked.
-        self._hotspot_fit.currentIndexChanged.connect(
-            lambda _i: setattr(self._desktop, "_hotspot_fit", self._hotspot_fit.currentData()))
-        self._desktop._hotspot_fit = self._hotspot_fit.currentData()
-        row.addWidget(self._hotspot_fit, stretch=1)
-        layout.addLayout(row)
 
         # Off by default: adding hydrogens (reduce2) and probing three times as many atoms is
         # by far the slowest thing here, and the score is still useful without it — only the
@@ -2416,8 +2419,8 @@ class ControlsWindow:
         style.setToolTip(
             "Cloud: every voxel colored by value, transparent where clean through yellow to "
             "red — the local-resolution-map look.\n"
-            "Contour: a single translucent shell at the outlier cut — cheaper, and "
-            "unambiguous as a surface.")
+            "Contour: a translucent shell at the selected severity, colored yellow through "
+            "red by that absolute level.")
         style.setEnabled(False)
         style.currentIndexChanged.connect(self._on_hotspot_field_changed)
         self._hotspot_style = style
@@ -2438,19 +2441,17 @@ class ControlsWindow:
         field_row.addWidget(quality)
         layout.addLayout(field_row)
 
-        # Opacity knee: where the cloud starts to become visible, in severity units. The
-        # slider is int (10x), so 0.0..2.0 severity maps to 0..20; the cut (1.0) is the
-        # default. Cloud only — a shell has a fixed level, so it is hidden for the contour.
+        # One absolute threshold controls both looks: the cloud's opacity knee or the
+        # contour's isosurface level. The slider is int (10x), up to the display cap.
         knee_row = QHBoxLayout()
-        knee_label = QLabel("Cloud opacity from severity:")
+        knee_label = QLabel("Severity threshold:")
         knee_row.addWidget(knee_label)
         knee = QSlider(Qt.Orientation.Horizontal)
-        knee.setRange(0, 20)
+        knee.setRange(0, 40)
         knee.setValue(int(round(_HOTSPOT_KNEE_DEFAULT * 10)))
         knee.setToolTip(
-            "Where the cloud starts to become visible, in severity.\n"
-            "Raise it to keep only the worst regions; lower it to let more of the protein "
-            "haze in. 1.0 is the outlier threshold.")
+            "Cloud: where opacity starts. Contour: the shell's absolute level.\n"
+            "Raise it to keep only worse regions; 1.0 is the outlier threshold.")
         knee.valueChanged.connect(self._on_hotspot_knee)
         self._hotspot_knee_slider = knee
         knee_row.addWidget(knee, stretch=1)
@@ -2459,7 +2460,7 @@ class ControlsWindow:
         knee_row.addWidget(self._hotspot_knee_value)
         self._hotspot_knee_widgets = (knee_label, knee, self._hotspot_knee_value)
         for w in self._hotspot_knee_widgets:
-            w.setVisible(False)  # shown only while a cloud is up
+            w.setVisible(False)  # shown while either 3-D hotspot style is up
         layout.addLayout(knee_row)
 
         self._hotspot_summary = QLabel("Not computed yet.")
@@ -2479,7 +2480,7 @@ class ControlsWindow:
 
     def _on_find_hotspots(self) -> None:
         try:
-            self._desktop.compute_hotspots(fit=self._hotspot_fit.currentData())
+            self._desktop.compute_hotspots()
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2500,7 +2501,7 @@ class ControlsWindow:
                 path, style=self._hotspot_style.currentData())
             self._hotspot_summary.setText(
                 f"Precomputed severity volume: {Path(path).name}. "
-                "No hotspot calculations were run.")
+                "Values are absolute severity units; no hotspot calculations were run.")
             self._hotspot_show3d.setEnabled(True)
             self._hotspot_show3d.blockSignals(True)
             self._hotspot_show3d.setChecked(True)
@@ -2509,7 +2510,7 @@ class ControlsWindow:
             is_cloud = self._hotspot_style.currentData() == "cloud"
             self._hotspot_quality_combo.setEnabled(is_cloud)
             for widget in self._hotspot_knee_widgets:
-                widget.setVisible(is_cloud)
+                widget.setVisible(True)
             self._hotspot_table.clearContents()
             self._hotspot_table.setRowCount(0)
             self._hotspot_table.setColumnCount(0)
@@ -2521,11 +2522,11 @@ class ControlsWindow:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
         on = self._hotspot_show3d.isChecked()
         self._hotspot_style.setEnabled(on)
-        # The knee and quality only make sense for the cloud (a shell has one fixed level).
+        # Quality is cloud-only; the absolute threshold controls both cloud and contour.
         is_cloud = on and self._hotspot_style.currentData() == "cloud"
         self._hotspot_quality_combo.setEnabled(is_cloud)
         for w in self._hotspot_knee_widgets:
-            w.setVisible(is_cloud)
+            w.setVisible(on)
         try:
             self._desktop.show_hotspot_field(on=on, style=self._hotspot_style.currentData())
         except Exception as exc:
@@ -2549,7 +2550,7 @@ class ControlsWindow:
         severity = value / 10.0
         self._hotspot_knee_value.setText(f"{severity:.1f}")
         try:
-            self._desktop.set_hotspot_opacity(None, severity)
+            self._desktop.set_hotspot_threshold(None, severity)
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2591,7 +2592,8 @@ class ControlsWindow:
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
         from PySide6.QtWidgets import (
-            QCheckBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+            QCheckBox, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+            QVBoxLayout, QWidget,
         )
 
         tab = QWidget()
@@ -2619,7 +2621,56 @@ class ControlsWindow:
         radius_row.addWidget(radius_spin)
         radius_row.addStretch()
         vg.addLayout(radius_row)
+
+        focus_surroundings = QCheckBox("Show Mol* focus neighborhood on click")
+        focus_surroundings.setChecked(self._desktop._focus_surroundings)
+        focus_surroundings.setToolTip(
+            "Restore Mol*'s native click-focus display: show the focused residue and its "
+            "5 Å surroundings as ball-and-stick. Interactions remain governed separately by "
+            "the model's Show → Mol* interactions checkbox. This preference is saved "
+            "automatically; camera focusing itself is unchanged.")
+        focus_surroundings.toggled.connect(self._desktop.set_focus_surroundings)
+        vg.addWidget(focus_surroundings)
+        self._focus_surroundings_check = focus_surroundings
         layout.addWidget(viewer)
+
+        defaults = QGroupBox("New model defaults")
+        defaults_layout = QVBoxLayout(defaults)
+        defaults_layout.addWidget(QLabel("Representations:"))
+        rep_grid = QGridLayout()
+        rep_checks = {}
+        for i, (label, rep) in enumerate(_MODEL_REP_OPTIONS):
+            check = QCheckBox(label)
+            check.setChecked(rep in self._desktop._default_model_reps)
+            rep_grid.addWidget(check, i // 2, i % 2)
+            rep_checks[rep] = check
+
+            def rep_changed(on, value=rep, box=check):
+                if not self._desktop.set_default_model_representation(value, on):
+                    box.blockSignals(True)
+                    box.setChecked(True)  # at least one representation must remain
+                    box.blockSignals(False)
+
+            check.toggled.connect(rep_changed)
+        defaults_layout.addLayout(rep_grid)
+        self._default_rep_checks = rep_checks
+
+        defaults_layout.addWidget(QLabel("Show:"))
+        show_grid = QGridLayout()
+        show_checks = {}
+        for i, label in enumerate(_STRUCTURE_TYPE_ORDER + ["Mol* interactions"]):
+            check = QCheckBox(label)
+            shown = (self._desktop._default_model_interactions
+                     if label == "Mol* interactions"
+                     else label in self._desktop._default_shown_types)
+            check.setChecked(shown)
+            check.toggled.connect(
+                lambda on, value=label: self._desktop.set_default_model_show(value, on))
+            show_grid.addWidget(check, i // 2, i % 2)
+            show_checks[label] = check
+        defaults_layout.addLayout(show_grid)
+        self._default_show_checks = show_checks
+        layout.addWidget(defaults)
 
         layout.addWidget(self._build_drag_group())
         layout.addWidget(self._build_perf_group())
@@ -2851,18 +2902,14 @@ class ControlsWindow:
             self._add_color_row(it.get("color"), _set_color,
                                 themes=_MODEL_COLOR_OPTIONS, title="Model color")
             types = it.get("types") or []
-            if len(types) > 1:
-                r = QHBoxLayout()
-                lab = QLabel("Show")
-                lab.setMinimumWidth(80)
-                r.addWidget(lab)
-                r.addWidget(self._make_type_combo(mid, types, set(it.get("hidden_types") or [])), stretch=1)
-                self._appearance_layout.addLayout(r)
-            inter = QCheckBox("Computed interactions")
-            inter.setToolTip("Overlay Mol*-computed non-covalent contacts (H-bonds, salt bridges, …).")
-            inter.setChecked(bool(it.get("interactions")))
-            inter.toggled.connect(lambda on, d=mid: self._desktop.set_model_interactions(d, on))
-            self._appearance_layout.addWidget(inter)
+            r = QHBoxLayout()
+            lab = QLabel("Show")
+            lab.setMinimumWidth(80)
+            r.addWidget(lab)
+            r.addWidget(self._make_type_combo(
+                mid, types, set(it.get("hidden_types") or []),
+                interactions=bool(it.get("interactions"))), stretch=1)
+            self._appearance_layout.addLayout(r)
 
             def _set_clip(front, back, it=it):
                 it["clip"] = (front, back)
@@ -3248,7 +3295,7 @@ class ControlsWindow:
             ("right-drag", "Zoom"),
             ("Ctrl + scroll", "Zoom"),
             ("scroll", "Contour level"),
-            ("Shift + drag", "Pull an atom"),
+            ("Refine drag mode", "Pull and minimize an atom"),
         ]
         for r, (gesture, action) in enumerate(bindings):
             chip = self._gesture_chip(gesture)
@@ -4089,20 +4136,6 @@ class ControlsWindow:
         except Exception as exc:
             QMessageBox.warning(self._window, "Export failed", str(exc))
 
-    def _on_chip(self, button, expr: str) -> None:
-        for other, _ in self._sel_chips:
-            if other is not button:
-                other.setChecked(False)
-        self._chip_selecting = True  # so the resulting change doesn't clear this chip
-        try:
-            if button.isChecked():
-                self._run_selection(expr)
-            else:  # clicking the active chip again clears the selection
-                self._desktop.clear_selection()
-                self._selection_label.setText("none selected")
-        finally:
-            self._chip_selecting = False
-
     def _on_select_expression(self) -> None:
         self._run_selection(self._select_expr.text())
 
@@ -4153,9 +4186,15 @@ class ControlsWindow:
 
     def _on_toggle_select(self, checked: bool) -> None:
         if checked:
+            self._refine_drag_btn.setChecked(False)
             self._desktop.enable_mouse_selection()
         else:
             self._desktop.disable_mouse_selection()
+
+    def _on_toggle_refine_drag(self, checked: bool) -> None:
+        if checked:
+            self._pick_btn.setChecked(False)
+        self._desktop.set_tug_enabled(checked)
 
     def _on_clear_selection(self) -> None:
         self._desktop.clear_selection()
@@ -4203,6 +4242,43 @@ class ControlsWindow:
         # when active), so repaint it for the current run state rather than a flat re-tint.
         self._on_minimizing_changed(not self._desktop._minimize_idle.is_set())
 
+    def _refresh_theme(self, *, force: bool = False) -> None:
+        """Apply one settled application palette to the complete controls subtree.
+
+        Qt normally propagates a system appearance change. On macOS, a window left open
+        across a light/dark transition can instead leave child palettes and resolved
+        ``palette(...)`` QSS values behind while native widgets adopt the new appearance.
+        Explicitly propagate the current QApplication palette and repolish styled widgets,
+        then rebuild the pixmap-backed icons and semantic accent buttons.
+        """
+        from PySide6.QtGui import QPalette
+        from PySide6.QtWidgets import QApplication, QWidget
+
+        palette = QApplication.palette()
+        roles = (
+            QPalette.ColorRole.Window, QPalette.ColorRole.WindowText,
+            QPalette.ColorRole.Base, QPalette.ColorRole.Text,
+            QPalette.ColorRole.Button, QPalette.ColorRole.ButtonText,
+            QPalette.ColorRole.Highlight,
+        )
+        signature = tuple(palette.color(role).rgba() for role in roles)
+        if not force and signature == self._theme_signature:
+            return
+        self._theme_signature = signature
+
+        widgets = [self._window, *self._window.findChildren(QWidget)]
+        for widget in widgets:
+            widget.setPalette(palette)
+        # Qt resolves palette() references when a stylesheet is polished. Reassigning the
+        # same string is optimized away, so clear it first before restoring it.
+        for widget in widgets:
+            qss = widget.styleSheet()
+            if qss:
+                widget.setStyleSheet("")
+                widget.setStyleSheet(qss)
+            widget.update()
+        self._retint_icons()
+
     def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False,
                           icon_size=18, square=False):
         """An icon-only button (tinted SVG), falling back to text if the asset is gone.
@@ -4229,9 +4305,8 @@ class ControlsWindow:
         return b
 
     def _on_help(self) -> None:
-        # Placeholder until the documentation is linked. Guided tutorials live under the
-        # Demos button (Examples / Tutorials), not here.
-        self._set_status("Documentation coming soon. Tutorials are under the Demos button.")
+        # Placeholder until the documentation is linked. Guided tutorials live under Get.
+        self._set_status("Documentation coming soon. Guided tutorials are under Get.")
 
     def _on_mouse_help(self) -> None:
         """Pop up the mouse/keyboard reference above the mouse button (built once, reused).
@@ -4437,21 +4512,12 @@ class ControlsWindow:
 
     def _on_scene_selection_changed(self, scene) -> None:
         """A model's picks changed. Refresh the aggregate label + the atoms table."""
-        # A selection from anywhere but a chip click no longer matches a preset.
-        if not self._chip_selecting:
-            for chip, _ in getattr(self, "_sel_chips", []):
-                chip.setChecked(False)
         self._scene_selection = scene or {}
         total = sum(len(v) for v in self._scene_selection.values())
-        n_models = len(self._scene_selection)
         # Hide/show-selected only make sense with a selection.
         self._hide_sel_btn.setEnabled(total > 0)
         self._show_sel_btn.setEnabled(total > 0)
-        if total:
-            across = f" across {n_models} models" if n_models > 1 else ""
-            self._selection_label.setText(f"{total} atom(s) selected{across}")
-        else:
-            self._selection_label.setText("none selected")
+        self._selection_label.setText(self._desktop.selection_description(self._scene_selection))
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
@@ -4695,19 +4761,24 @@ class ControlsWindow:
             # (see _on_tree_item_changed). Defer past the signal.
             QTimer.singleShot(0, lambda: self._desktop.set_active_model(ident))
 
-    def _make_type_combo(self, mid, types, hidden):
-        """A checkable dropdown of structure types (checked = shown)."""
+    def _make_type_combo(self, mid, types, hidden, *, interactions=False):
+        """The model's authoritative Show menu: structure types plus Mol* interactions."""
         combo = _make_checkable_combo()
-        combo.setToolTip("Show or hide structure types (protein, water, …) in this model.")
+        combo.setToolTip(
+            "Show or hide structure types and Mol*-computed interactions in this model.")
         for label in types:
             combo.add_checkable(label, label not in hidden, label)  # before on_change
+        combo.add_checkable("Mol* interactions", interactions, "Mol* interactions")
         combo.on_change = lambda label, shown, d=mid: self._on_type_toggle(d, label, shown)
         return combo
 
     def _on_type_toggle(self, mid: str, label: str, shown: bool) -> None:
         if self._suppress_model_events:
             return
-        self._desktop.set_model_type_hidden(mid, label, not shown)  # checked = shown
+        if label == "Mol* interactions":
+            self._desktop.set_model_interactions(mid, shown)
+        else:
+            self._desktop.set_model_type_hidden(mid, label, not shown)  # checked = shown
 
     def _sync_table_model_combo(self, model_items) -> None:
         """Rebuild the table's model dropdown, following the active model unless pinned."""
@@ -4920,6 +4991,27 @@ class DesktopApp:
         self._settings = QSettings("pxviewer", "pxviewer")
         self._work_dir = Path(
             self._settings.value("work_dir", str(_fetch.default_work_dir())))
+        try:
+            saved_reps = json.loads(
+                str(self._settings.value("defaults/model_representations", '["cartoon"]')))
+        except (TypeError, ValueError):
+            saved_reps = ["cartoon"]
+        valid_reps = {value for _label, value in _MODEL_REP_OPTIONS}
+        self._default_model_reps = [
+            rep for rep in saved_reps if rep in valid_reps] or ["cartoon"]
+        try:
+            saved_show = json.loads(str(self._settings.value(
+                "defaults/shown_structure_types", json.dumps(_STRUCTURE_TYPE_ORDER))))
+        except (TypeError, ValueError):
+            saved_show = list(_STRUCTURE_TYPE_ORDER)
+        self._default_shown_types = {
+            label for label in saved_show if label in _STRUCTURE_TYPE_ORDER}
+        self._default_model_interactions = (
+            str(self._settings.value("defaults/molstar_interactions", "false")).lower()
+            in ("1", "true", "yes"))
+        self._focus_surroundings = (
+            str(self._settings.value("defaults/focus_surroundings", "true")).lower()
+            in ("1", "true", "yes"))
         self._scene_counter = 0  # cache-buster for the composed volume MVSJ
         self._dummy: Optional[Any] = None  # persistent control ws when no model is visible
         self._batching = False  # defer viewport reload / signals during a group load
@@ -4946,6 +5038,7 @@ class DesktopApp:
         self._player: Optional[Player] = None
         self._demo_thread: Optional[threading.Thread] = None
         self._selection_enabled = False
+        self._tug_enabled = False
         self._computed_interactions_visible = False
         self._load_counter = 0
 
@@ -4960,7 +5053,7 @@ class DesktopApp:
         self._minimize_idle = threading.Event()
         self._minimize_idle.set()
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
-        # Dragging atoms: Shift-drag, one drag at a time (there is one pointer). Continuous
+        # Dragging atoms: explicitly armed, one drag at a time (there is one pointer). Continuous
         # relaxation is on by default — a drag settles as a living motion, which reads better
         # than a nudge-and-stop; the checkbox in Settings mirrors this.
         self._tug_into_density = False
@@ -5741,7 +5834,9 @@ class DesktopApp:
         return np.nonzero(mask)[0].tolist()
 
     def _apply_model_rep(self, entry) -> None:
-        session, rep = entry["session"], entry["rep"]
+        session = entry["session"]
+        reps = list(entry.get("reps") or [entry["rep"]])
+        rep = reps[0]
         on = self._shown_indices(entry)  # restrict to shown structure types
         attribute = entry.get("attribute")
         if attribute is not None and entry.get("color") == attribute["name"]:
@@ -5761,11 +5856,21 @@ class DesktopApp:
             session.set_attribute(attribute["name"], values)
             session.color_by(attribute["name"], type=rep, palette=attribute["palette"],
                              domain=attribute["domain"], on=on)
+            # The attribute API replaces the representation list. Additional default layers
+            # remain visible with their ordinary coloring; the primary layer carries the
+            # computed scalar coloring.
+            for extra in reps[1:]:
+                kwargs = self._model_color_kwargs(entry, extra)
+                if on is not None:
+                    kwargs["on"] = on
+                session.add_representation(extra, **kwargs)
             return
-        kwargs = self._model_color_kwargs(entry, rep)
-        if on is not None:
-            kwargs["on"] = on
-        session.set_representation(rep, **kwargs)
+        for i, layer in enumerate(reps):
+            kwargs = self._model_color_kwargs(entry, layer)
+            if on is not None:
+                kwargs["on"] = on
+            method = session.set_representation if i == 0 else session.add_representation
+            method(layer, **kwargs)
 
     def _model_color_kwargs(self, entry, rep: str) -> dict:
         """How to color a model's representation: an explicit user color wins; else the
@@ -5799,17 +5904,35 @@ class DesktopApp:
         session.start(host=self._host, port=0)
         self._model_counter += 1
         mid = f"model-{self._model_counter}"
-        rep = rep or self._default_model_rep(session)
+        if rep is not None:
+            reps = [rep]
+        else:
+            reps = list(self._default_model_reps)
+            # Cartoon has nothing useful to draw for an isolated ligand/small molecule.
+            # Preserve the historical atomistic fallback unless another atom layer was
+            # explicitly selected alongside it.
+            from . import cctbx_io
+            model = getattr(session, "model", None)
+            if (model is None or not cctbx_io.model_is_polymer(model)) \
+                    and not any(_rep_shows_atoms(value) for value in reps):
+                reps = ["ball-and-stick"]
+        rep = reps[0]
+        type_groups = _structure_type_groups(session)
+        hidden_types = {
+            label for label in type_groups if label not in self._default_shown_types}
         entry = {"id": mid, "name": name, "session": session, "visible": True, "group": group,
-                 "rep": rep, "color": None, "hidden_types": set(), "hidden_atoms": set(),
-                 "type_groups": None, "clip": (0.0, 1.0),
-                 "interactions": False, "edits": [],
+                 "rep": rep, "reps": reps, "color": None,
+                 "hidden_types": hidden_types, "hidden_atoms": set(),
+                 "type_groups": type_groups, "clip": (0.0, 1.0),
+                 "interactions": self._default_model_interactions, "edits": [],
                  # Opening color: a random pick from the session's current palette group
                  # (see palettes.PaletteCycler). Overridden the moment the user sets one by
                  # hand. Read by _model_color_kwargs.
                  "color_default": self._palettes.next_color()}
         self._models.append(entry)
         self._apply_model_rep(entry)
+        if entry["interactions"]:
+            session.set_computed_interactions(True)
         self._active_model_id = mid
         # Register this model's pick handler once (tagged with its id); the click
         # mode is what actually turns picking on/off. Registering here means a
@@ -5825,6 +5948,10 @@ class DesktopApp:
         session.on_marker_move(lambda mid_, pos, final: self._on_marker_move(mid_, pos, final))
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
+        if self._tug_enabled:
+            session.set_tug_mode(True)
+        if self._focus_surroundings and not self._selection_enabled:
+            session.set_focus_surroundings(True)
         self._wire_active(session)
         self._warm_restraints(mid)  # so the first drag does not pay for pdb_interpretation
         self._reload_viewport()
@@ -5882,9 +6009,10 @@ class DesktopApp:
     def set_model_representation(self, mid: str, rep: str) -> None:
         """Change a model's representation type (from the inline dropdown)."""
         entry = self._model_entry(mid)
-        if entry is None or entry.get("rep") == rep:
+        if entry is None or entry.get("reps") == [rep]:
             return
         entry["rep"] = rep
+        entry["reps"] = [rep]
         self._apply_model_rep(entry)
 
     def ensure_atoms_shown(self, mid: Optional[str] = None) -> None:
@@ -5897,6 +6025,7 @@ class DesktopApp:
         if entry is None or entry.get("rep") != "cartoon":
             return
         entry["rep"] = "ball-and-stick"
+        entry["reps"] = ["ball-and-stick"]
         self._apply_model_rep(entry)
         self._emit_loaded_changed()  # reflect the switch in the appearance pane and tree
 
@@ -6019,22 +6148,11 @@ class DesktopApp:
 
     # -- validation hotspots ---------------------------------------------
 
-    def hotspot_fit_choices(self) -> list:
-        """The selectable map-fit terms as ``(label, key)``, for the Hotspots tab."""
-        from . import hotspots
-
-        return [(hotspots.FIT_TITLES[key], key) for key in hotspots.FIT_CHOICES]
-
-    def compute_hotspots(self, mid: Optional[str] = None, *, fit: str = "qscore") -> None:
+    def compute_hotspots(self, mid: Optional[str] = None) -> None:
         """Aggregate the validation metrics into one per-atom severity field, and color by it.
 
-        ``fit`` picks the map term: Q-score, local map-model CC, or none. Unlike Q-score
-        coloring — where a missing map means the metric itself is undefined — this degrades
-        rather than refuses: the map term is dropped and the geometry metrics still score.
-        That is safe because the p-norm has no denominator, so the remaining severities keep
-        their absolute meaning (1.0 is still the outlier cut) instead of being rescaled.
-
-        Runs on a thread: probe2 plus two mmtbx validators plus a map metric is seconds.
+        Hotspots are geometry-only: Ramachandran, rotamer, and clash severity. Runs on a
+        thread because probe2 plus the two mmtbx validators takes seconds.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
@@ -6043,9 +6161,6 @@ class DesktopApp:
         if model is None:
             raise ValueError("the active object has no cctbx model")
         mid, name = entry["id"], entry["name"]
-        mmm = self.group_mmm(entry.get("group"))
-        if mmm is None and fit != "none":
-            self._status(f"no map paired with {name} — scoring geometry only")
         analysis = self._model_analysis(entry)  # shared with, and populates, the Validation tab
 
         def work() -> None:
@@ -6054,7 +6169,7 @@ class DesktopApp:
             try:
                 self._status(f"finding hotspots in {name}…")
                 result = hotspots.score(
-                    model, mmm=mmm, fit=fit, analysis=analysis,
+                    model, fit="none", analysis=analysis,
                     use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
                 columns = hotspots.residue_columns(result)
                 rows = hotspots.residue_rows(model, result)
@@ -6121,7 +6236,7 @@ class DesktopApp:
         self.bridge.validation_ready.emit((mid, results, False))
         self._refresh_validation_staleness()  # fresh results: clear any stale warning
 
-    def _populate_hotspots_from_analysis(self, mid: str, model, mmm, fit: str, analysis) -> None:
+    def _populate_hotspots_from_analysis(self, mid: str, model, analysis) -> None:
         """Fill the Hotspots tab from a just-finished validation run, reusing its analysis.
 
         The counterpart of :meth:`_populate_validation_from_analysis`, so whichever button the
@@ -6140,7 +6255,7 @@ class DesktopApp:
 
         try:
             result = hotspots.score(
-                model, mmm=mmm, fit=fit, analysis=analysis,
+                model, fit="none", analysis=analysis,
                 use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
             columns = hotspots.residue_columns(result)
             rows = hotspots.residue_rows(model, result)
@@ -6156,8 +6271,8 @@ class DesktopApp:
         """Color a model by a hotspot field already computed for it.
 
         Nothing is recomputed here — if there is no cached field the choice is refused and
-        reverted, because the score depends on which map term the user picked and guessing
-        one silently would put a number on screen they never asked for.
+        reverted, because computing a new score here would put a number on screen the user
+        never asked for.
         """
         entry = self._model_entry(mid)
         if entry is None:
@@ -6232,12 +6347,28 @@ class DesktopApp:
             raise ValueError("hotspot volume must be a non-empty 3-D map")
         if not np.isfinite(field).all():
             raise ValueError("hotspot volume contains non-finite voxel values")
+        source_max = float(field.max())
+        if source_max <= 0:
+            raise ValueError("hotspot volume contains no positive values to display")
+
+        # External hotspot maps obey the same absolute contract as generated fields: 0 is
+        # clean, 1.0 is the outlier threshold, and coincidence peaks may exceed the display
+        # cap. Never sigma-scale, percentile-normalize or stretch to this file's min/max —
+        # that would make the same severity mean something different in every structure.
+        from . import hotspots
+
+        display_field = np.ascontiguousarray(
+            np.clip(field, 0.0, hotspots.SEVERITY_CAP), dtype=np.float32)
 
         self._clear_hotspot_field(entry)
         entry["hotspot_field_data"] = data
+        entry["hotspot_field_values"] = display_field
+        entry["hotspot_field_source_max"] = source_max
         entry["hotspot_field_source"] = str(path)
         self.show_hotspot_field(entry["id"], on=True, style=style)
-        self._status(f"opened precomputed hotspot volume {Path(path).name} — no analysis run")
+        self._status(
+            f"opened precomputed hotspot volume {Path(path).name} "
+            f"(absolute severity, max {source_max:.2f}) — no analysis run")
 
     def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True,
                            style: str = "cloud") -> None:
@@ -6271,7 +6402,8 @@ class DesktopApp:
         quality = getattr(self, "_cloud_quality", hotspots.CLOUD_QUALITY_DEFAULT)
         cloud_spacing, cloud_steps = hotspots.CLOUD_QUALITY[quality]
         if loaded is not None:
-            field = np.asarray(loaded.array, dtype=np.float32)
+            field = np.asarray(
+                entry.get("hotspot_field_values", loaded.array), dtype=np.float32)
             spacing = tuple(float(v) for v in loaded.pixel_sizes)
             origin = tuple(int(v) for v in loaded.origin)
         else:
@@ -6281,8 +6413,9 @@ class DesktopApp:
             grid_spacing = cloud_spacing if style == "cloud" else hotspots.FIELD_SPACING
             field, spacing, origin = hotspots.severity_field(
                 model, result.values, spacing=grid_spacing)
-        if not (field >= hotspots.FIELD_ISO).any():
-            self._status("nothing reaches the outlier threshold — nothing to draw in 3-D")
+        threshold = float(getattr(self, "_hotspot_knee", hotspots.FIELD_ISO))
+        if not (field >= threshold).any():
+            self._status(f"nothing reaches severity {threshold:.1f} — nothing to draw in 3-D")
             return
 
         if style == "cloud":
@@ -6302,30 +6435,38 @@ class DesktopApp:
 
         from .volume_io import VolumeData
 
-        data = loaded or VolumeData.from_numpy(
+        # Imported values are clamped to the fixed severity display cap before contouring.
+        data = VolumeData.from_numpy(
             field, spacing=spacing, origin=origin, name=f"{entry['name']} hotspots")
         vid = self._add_volume(data, f"{entry['name']} hotspots", group=entry.get("group"),
-                               color=hotspots.FIELD_COLOR, iso=hotspots.FIELD_ISO,
+                               color=hotspots.severity_color(threshold), iso=threshold,
                                iso_kind="absolute")
         # Translucent, so the model stays readable through it — the shell is a pointer, not
         # the thing you are looking at.
         self.set_volume_opacity(vid, 0.45)
         entry["hotspot_volume"] = vid
-        self._status(f"severity contour at {hotspots.FIELD_ISO:.1f} for {entry['name']}")
+        self._status(f"severity contour at {threshold:.1f} for {entry['name']}")
 
-    def set_hotspot_opacity(self, mid: Optional[str], knee_severity: float) -> None:
-        """Move the severity cloud's opacity knee, given in severity units (so 1.0 is the
-        outlier cut). Below the knee the cloud is invisible; above it, it hazes in.
-
-        Only affects the cloud style; a no-op if the contour is showing or nothing is drawn.
-        """
+    def set_hotspot_threshold(self, mid: Optional[str], severity: float) -> None:
+        """Set the shared absolute threshold for either hotspot display style."""
         entry = self._model_entry(mid or self._active_model_id)
-        if entry is None or not entry.get("hotspot_cloud"):
+        if entry is None:
             return
         from . import hotspots
 
-        self._hotspot_knee = float(knee_severity)
-        entry["session"].set_hotspot_opacity(float(knee_severity) / hotspots.SEVERITY_CAP)
+        severity = min(hotspots.SEVERITY_CAP, max(0.0, float(severity)))
+        self._hotspot_knee = severity
+        if entry.get("hotspot_cloud"):
+            entry["session"].set_hotspot_opacity(severity / hotspots.SEVERITY_CAP)
+            return
+        vid = entry.get("hotspot_volume")
+        if vid is not None:
+            self.set_volume_iso(vid, severity)
+            self.set_volume_color(vid, hotspots.severity_color(severity))
+
+    def set_hotspot_opacity(self, mid: Optional[str], knee_severity: float) -> None:
+        """Backward-compatible name for setting the shared hotspot threshold."""
+        self.set_hotspot_threshold(mid, knee_severity)
 
     def _clear_hotspot_field(self, entry) -> None:
         """Tear down whichever 3-D severity field a model is showing (cloud or contour)."""
@@ -6496,9 +6637,7 @@ class DesktopApp:
             # reduce2 and probe — the expensive part — so doing it here means the user pays
             # once whichever button they pressed, instead of again on the next tab.
             self._status(f"{name}: scoring hotspots from the same analysis…")
-            self._populate_hotspots_from_analysis(
-                mid, model, self.group_mmm(ventry.get("group") if ventry else None),
-                getattr(self, "_hotspot_fit", "none"), analysis)
+            self._populate_hotspots_from_analysis(mid, model, analysis)
 
         self.run_background(work, name="pxviewer-validation", label="Running validation")
         self._status("validating…")
@@ -6869,7 +7008,7 @@ class DesktopApp:
         viewer goes deaf and blind exactly as the drag begins.
         """
         if action == "arm":
-            # Shift pressed: a drag is imminent. Do exactly what the Pause button does —
+            # Refine drag enabled: a drag is imminent. Do exactly what Pause does —
             # stop any running minimization (same call, same message) — so by the time the
             # pointer grabs an atom the model is free. Non-blocking (this is the socket
             # thread); the drag's begin waits for the run to actually finish.
@@ -7158,7 +7297,7 @@ class DesktopApp:
             try:
                 self._status(
                     f"refining {name}{' into the map' if map_data else ''}… "
-                    "(press Stop, or Shift-drag an atom, to finish)")
+                    "(press Stop, or enable Refine drag, to finish)")
                 # Pace the frame stream, exactly as a drag does (see _push_tug): cctbx emits
                 # states far faster than the viewer can draw them, and pushing every one
                 # floods the render so the frames back up and the model keeps *moving after
@@ -7201,7 +7340,7 @@ class DesktopApp:
                     if settled:
                         self._status(
                             f"{name} refined (bond rmsd {stats['bonds_after']:.3f}) — holding; "
-                            "press Stop or Shift-drag to finish")
+                            "press Stop or enable Refine drag to finish")
                         while not self._minimize_stop.is_set():
                             time.sleep(0.1)
                         break
@@ -7596,6 +7735,40 @@ class DesktopApp:
         user may have set, and reaching in to change it would be presumptuous.
         """
         self.view_radius_default = float(radius)
+
+    def set_default_model_representation(self, rep: str, shown: bool) -> bool:
+        """Persist whether newly opened models include a representation layer."""
+        reps = list(self._default_model_reps)
+        if shown and rep not in reps:
+            reps.append(rep)
+        elif not shown and rep in reps:
+            if len(reps) == 1:
+                return False
+            reps.remove(rep)
+        self._default_model_reps = reps
+        self._settings.setValue("defaults/model_representations", json.dumps(reps))
+        self._settings.sync()
+        return True
+
+    def set_default_model_show(self, label: str, shown: bool) -> None:
+        """Persist a structure-type or Mol* interaction default for new models."""
+        if label == "Mol* interactions":
+            self._default_model_interactions = bool(shown)
+            self._settings.setValue(
+                "defaults/molstar_interactions", "true" if shown else "false")
+            self._settings.sync()
+            return
+        if label not in _STRUCTURE_TYPE_ORDER:
+            return
+        if shown:
+            self._default_shown_types.add(label)
+        else:
+            self._default_shown_types.discard(label)
+        ordered = [
+            value for value in _STRUCTURE_TYPE_ORDER
+            if value in self._default_shown_types]
+        self._settings.setValue("defaults/shown_structure_types", json.dumps(ordered))
+        self._settings.sync()
 
     def set_volume_radius(self, vid: str, radius: Optional[float]) -> None:
         """Draw only density within ``radius`` A of the view center (None = all of it).
@@ -8236,6 +8409,106 @@ class DesktopApp:
             else:
                 self._scene_selection.pop(mid, None)
         self._emit_scene_selection()
+
+    def selection_description(self, scene: Optional[dict] = None, *, limit: int = 6) -> str:
+        """Describe a selection at its semantic level: complete residues or individual atoms."""
+        if scene is None:
+            with self._scene_lock:
+                scene = {mid: list(indices) for mid, indices in self._scene_selection.items()}
+        total = sum(len(indices) for indices in scene.values())
+        if not total:
+            return "None"
+
+        selected = []
+        residue_groups = {}
+        residue_order = []
+        for mid, indices in scene.items():
+            entry = self._model_entry(mid)
+            model = getattr(entry["session"], "model", None) if entry else None
+            if model is None:
+                continue
+            atoms = model.get_hierarchy().atoms()
+            for index in indices:
+                if index < 0 or index >= len(atoms):
+                    continue
+                atom = atoms[index]
+                atom_group = atom.parent()
+                residue_group = atom_group.parent()
+                chain = residue_group.parent()
+                key = (mid, chain.id, residue_group.resseq, residue_group.icode)
+                if key not in residue_groups:
+                    residue_groups[key] = {
+                        "entry": entry, "chain": chain.id.strip() or "—",
+                        "resname": atom_group.resname.strip(),
+                        "resseq": residue_group.resseq.strip(),
+                        "icode": residue_group.icode.strip(),
+                        "atoms": [], "size": len(residue_group.atoms()),
+                    }
+                    residue_order.append(key)
+                residue_groups[key]["atoms"].append(atom)
+                selected.append((entry, atom, atom_group, residue_group, chain))
+
+        # Ribbon picks arrive as every atom in each residue. Present the chemistry the user
+        # selected, not the atom-array representation used to transmit it.
+        complete = bool(residue_order) and all(
+            len(residue_groups[key]["atoms"]) == residue_groups[key]["size"]
+            for key in residue_order)
+        if complete:
+            n_residues = len(residue_order)
+            lines = [
+                f"{n_residues} residue{'s' if n_residues != 1 else ''} selected"
+                f" · {len(selected)} atoms"
+            ]
+            by_chain = {}
+            chain_order = []
+            for key in residue_order:
+                residue = residue_groups[key]
+                chain_key = (residue["entry"]["name"], residue["chain"])
+                if chain_key not in by_chain:
+                    by_chain[chain_key] = []
+                    chain_order.append(chain_key)
+                resid = residue["resseq"] + residue["icode"]
+                by_chain[chain_key].append(f"{residue['resname']} {resid}")
+            for model_name, chain_id in chain_order:
+                residues = by_chain[(model_name, chain_id)]
+                shown = ", ".join(residues[:limit])
+                if len(residues) > limit:
+                    shown += f", … +{len(residues) - limit}"
+                lines.append(f"{model_name} · chain {chain_id}: {shown}")
+
+            atoms = [record[1] for record in selected]
+            xs, ys, zs = zip(*(atom.xyz for atom in atoms))
+            bs = [float(atom.b) for atom in atoms]
+            occs = [float(atom.occ) for atom in atoms]
+            lines.append(
+                f"Center {sum(xs) / len(xs):.2f}, {sum(ys) / len(ys):.2f}, "
+                f"{sum(zs) / len(zs):.2f} Å")
+            occupancy = (f"{occs[0]:.2f}" if max(occs) - min(occs) < 0.005
+                         else f"{min(occs):.2f}–{max(occs):.2f}")
+            lines.append(
+                f"B-factor mean {sum(bs) / len(bs):.2f} "
+                f"({min(bs):.2f}–{max(bs):.2f}) · occupancy {occupancy}")
+            return "\n".join(lines)
+
+        lines = [f"{len(selected)} atom{'s' if len(selected) != 1 else ''} selected"]
+        shown = 0
+        for entry, atom, atom_group, residue_group, chain in selected:
+            if shown >= limit:
+                break
+            residue = f"{atom_group.resname.strip()} {residue_group.resseq.strip()}"
+            if residue_group.icode.strip():
+                residue += residue_group.icode.strip()
+            altloc = f" alt {atom_group.altloc.strip()}" if atom_group.altloc.strip() else ""
+            lines.append(
+                f"{entry['name']} · chain {chain.id.strip() or '—'} · {residue} · "
+                f"{atom.name.strip()}{altloc} ({atom.element.strip() or '—'})")
+            x, y, z = atom.xyz
+            lines.append(
+                f"  xyz {x:.3f}, {y:.3f}, {z:.3f} · occ {atom.occ:.2f} · B {atom.b:.2f}")
+            shown += 1
+        if len(selected) > shown:
+            lines.append(f"…and {len(selected) - shown} more")
+        return "\n".join(lines)
 
     def _emit_scene_selection(self) -> None:
         with self._scene_lock:
@@ -8896,6 +9169,19 @@ class DesktopApp:
         if self._session is not None:
             self._session.set_computed_interactions(self._computed_interactions_visible)
 
+    def set_focus_surroundings(self, enabled: bool) -> None:
+        """Toggle Mol*'s native click-focus ball-and-stick neighborhood scene-wide."""
+        self._focus_surroundings = bool(enabled)
+        self._settings.setValue(
+            "defaults/focus_surroundings", "true" if enabled else "false")
+        self._settings.sync()
+        effective = self._focus_surroundings and not self._selection_enabled
+        for model in self._models:
+            try:
+                model["session"].set_focus_surroundings(effective)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     def _reset_interactions(self) -> None:
         """Drop the overlay on load — a freshly loaded structure starts clean."""
         if not self._computed_interactions_visible:
@@ -8910,8 +9196,13 @@ class DesktopApp:
     def enable_mouse_selection(self) -> None:
         # Selection is scene-wide: arm click mode on every loaded model, so picks
         # can be made in any of them (each already has its pick handler registered).
+        # Temporarily suppress click-focus: its neighborhood overlay and camera movement
+        # get in the way when Shift-clicking several ribbon residues. This does not alter
+        # the saved preference; leaving Pick mode restores it.
+        self.set_tug_enabled(False)
         self._selection_enabled = True
         for m in self._models:
+            m["session"].set_focus_surroundings(False)
             m["session"].enable_mouse_selection()
 
     def disable_mouse_selection(self) -> None:
@@ -8919,8 +9210,22 @@ class DesktopApp:
         for m in self._models:
             try:
                 m["session"].disable_mouse_selection()
+                m["session"].set_focus_surroundings(self._focus_surroundings)
             except Exception:  # pragma: no cover - defensive
                 pass
+
+    def set_tug_enabled(self, enabled: bool) -> None:
+        """Explicitly arm or disarm coordinate-changing atom drags scene-wide."""
+        self._tug_enabled = bool(enabled)
+        if enabled:
+            self.disable_mouse_selection()
+        for model in self._models:
+            try:
+                model["session"].set_tug_mode(self._tug_enabled)
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self._status("Refine drag enabled — drag an atom to pull and minimize"
+                     if enabled else "Refine drag disabled")
 
     def clear_selection(self) -> None:
         for m in self._models:

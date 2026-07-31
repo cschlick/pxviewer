@@ -30,6 +30,7 @@ Server -> client (UTF-8 JSON text control messages):
   - {"type": "primitive", "action": "clear"}                   remove all primitives
   - {"type": "representations", "reprs": [{...}, ...]}          declarative repr list
   - {"type": "click-mode", "mode": str}                        'select'|measure|'off'
+  - {"type": "focus-surroundings", "enabled": bool}            native Mol* click focus view
 
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
@@ -37,8 +38,9 @@ Client -> server (UTF-8 JSON text):
   - {"type": "mouse-selection", "indices": [int]} click-built selection ('select')
   - {"type": "measure", "kind": str, "atoms": [int]} click-built measurement
   - {"type": "volume-iso-changed", "ref": str, "value": float}  wheel contouring
-  - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  Shift-drag of an atom
-      (action "arm" — Shift pressed, drag imminent — carries no atom/target)
+  - {"type": "tug-mode", "enabled": bool}                    explicitly arm atom dragging
+  - {"type": "tug", "action": str, "atom": int, "target": [x,y,z]}  drag of an atom
+      (action "arm" — mode enabled, drag imminent — carries no atom/target)
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
   - {"type": "background-result", "reqId": int, "color": str}   viewport background #rrggbb
 
@@ -513,6 +515,8 @@ class LiveSession:
         # | 'label'. In 'select' the user builds a selection streamed back here; in a
         # measure mode they click N atoms and the primitive is drawn.
         self._click_mode = "off"
+        self._tug_mode = False
+        self._focus_surroundings = False
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
         self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
@@ -1089,11 +1093,21 @@ class LiveSession:
         """Register a callback for atom drags: ``(action, atom, target)``.
 
         ``action`` is 'begin', 'move' or 'end'; ``target`` is the pointer in space for
-        'move' and None otherwise. Dragging is Shift + left-drag in the viewport, gated
-        by the modifier rather than a mode — the browser says which atom and where the
-        pointer is, and what the model does about it is cctbx's business.
+        'move' and None otherwise. Dragging must first be explicitly armed with
+        :meth:`set_tug_mode`.
         """
         self._tug_handlers.append(handler)
+
+    def set_tug_mode(self, enabled: bool) -> None:
+        """Enable or disable coordinate-changing atom drags in the viewport."""
+        self._tug_mode = bool(enabled)
+        self._send_control({"type": "tug-mode", "enabled": self._tug_mode})
+
+    def set_focus_surroundings(self, enabled: bool) -> None:
+        """Show or hide Mol*'s native click-focus ball-and-stick neighborhood."""
+        self._focus_surroundings = bool(enabled)
+        self._send_control({
+            "type": "focus-surroundings", "enabled": self._focus_surroundings})
 
     def on_marker(self, handler: Callable[[list, Optional[int]], None]) -> None:
         """Register a callback for a marker placed in the viewport: ``handler(position,
@@ -1940,6 +1954,12 @@ class LiveSession:
                         {"type": "hotspot_opacity", "knee": self._hotspot_knee}))
             if self._click_mode != "off":
                 await self._locked_send(websocket, json.dumps({"type": "click-mode", "mode": self._click_mode}))
+            if self._tug_mode:
+                await self._locked_send(
+                    websocket, json.dumps({"type": "tug-mode", "enabled": True}))
+            if self._focus_surroundings:
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "focus-surroundings", "enabled": True}))
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -1981,8 +2001,8 @@ class LiveSession:
         elif etype == "tug":
             action, atom = event.get("action"), event.get("atom")
             if action == "arm":
-                # Shift pressed — a drag is imminent, no atom yet. Passed through so the
-                # app can clear the way (e.g. stop a running minimization) before the grab.
+                # Refine-drag mode enabled — no atom yet. Passed through so the app can clear
+                # the way (e.g. stop a running minimization) before the first grab.
                 for handler in self._tug_handlers:
                     try:
                         handler("arm", -1, None)

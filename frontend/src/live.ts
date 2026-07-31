@@ -29,9 +29,12 @@ import { arrayMin, arrayMax, arrayMean, arrayRms } from 'molstar/lib/mol-util/ar
 import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
+import { MolScriptBuilder as MS } from 'molstar/lib/mol-script/language/builder';
 import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
 import { CustomInteractions, InteractionsShape } from 'molstar/lib/extensions/interactions/transforms';
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
+import { StructureFocusRepresentation } from 'molstar/lib/mol-plugin/behavior/dynamic/selection/structure-focus-representation';
+import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
 import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
 import { decodeColor } from 'molstar/lib/mol-util/color/utils';
@@ -379,7 +382,7 @@ interface MarkupPrimitive {
 
 function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
     const state = MeshBuilder.createState(512, 256);
-    const colors: number[] = [];
+    const colors: Color[] = [];
     primitives.forEach((prim, i) => {
         state.currentGroup = i;
         colors[i] = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
@@ -416,7 +419,7 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
 /** Lines shape for the hairline vectors, each segment sized by its kinemage width. */
 function buildMarkupLines(primitives: MarkupPrimitive[]): Shape<Lines> {
     const starts: number[][] = [], ends: number[][] = [];
-    const colors: number[] = [], widths: number[] = [];
+    const colors: Color[] = [], widths: number[] = [];
     for (const prim of primitives) {
         if (!isHairline(prim) || !prim.segments) continue;
         const color = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
@@ -574,7 +577,13 @@ export class LiveViewer {
     private highlightLoci: StructureElement.Loci | undefined;
     private primitives = new Map<string, StateObjectSelector>();
     private reprNodes: StateObjectSelector[] = [];
+    private cartoonReprNodes: StateObjectSelector[] = [];
+    private focusRibbonMaskNodes: StateObjectSelector[] = [];
+    private focusRibbonMaskEnabled = false;
+    private focusRibbonMaskTask: Promise<void> = Promise.resolve();
+    private focusSub: { unsubscribe(): void } | null = null;
     private slab: Slab = { ...SLAB_OPEN };
+    private slabVersion = 0;
     private interactionsNode: StateObjectSelector | undefined;
     private clashesNode: StateObjectSelector | undefined;
     private probeChannels: Map<number, StateObjectSelector[]> = new Map();
@@ -590,6 +599,7 @@ export class LiveViewer {
     private hotspotSteps = 8;        // raymarch steps per cell (the quality dial)
     private clickMode = 'off';
     private mouseSelectionSet = new Set<number>();
+    private selectByResidue = false;
     private measurePending: number[] = [];
     private pickHandler?: (info: AtomInfo | null) => void;
     /** Set by the connection to report a click-built selection back to Python. */
@@ -606,6 +616,7 @@ export class LiveViewer {
     ): Promise<LiveViewer> {
         const viewer = new LiveViewer(plugin);
         await viewer.build(topologyBcif);
+        viewer.subscribeFocus();
         viewer.subscribeClick(onPick);
         return viewer;
     }
@@ -677,8 +688,14 @@ export class LiveViewer {
             for (const node of this.reprNodes) if (node.ref) b.delete(node.ref);
             await b.commit();
             this.reprNodes = [];
+            this.cartoonReprNodes = [];
+            this.focusRibbonMaskNodes = [];
         }
         const list = specs && specs.length ? specs : [{ type: 'ball-and-stick', color: 'element-symbol' }];
+        // Cartoon/ribbon geometry represents residues, not individual atoms. Although Mol*
+        // is kept at element granularity for measurements and atomistic representations,
+        // selection clicks in a ribbon view must expand back to the residue they represent.
+        this.selectByResidue = list.some((spec: any) => spec.type === 'cartoon');
         for (const spec of list) {
             let target: StateObjectSelector = this.structure;
             if (spec.on) {
@@ -722,20 +739,109 @@ export class LiveViewer {
             if (Object.keys(typeParams).length) params.typeParams = typeParams;
             const repr = await this.plugin.builders.structure.representation.addRepresentation(target, params);
             this.reprNodes.push(repr);
+            if (spec.type === 'cartoon') this.cartoonReprNodes.push(repr);
         }
+        await this.queueFocusRibbonMaskRefresh();
+    }
+
+    /**
+     * Match Mol*'s focus presentation: the focused residue is shown as sticks instead
+     * of being drawn simultaneously as sticks and ribbon. The focus behavior owns the
+     * stick overlay; this transparent layer only masks the same whole residue in our
+     * independently managed cartoon representations.
+     */
+    setFocusRibbonMask(enabled: boolean) {
+        this.focusRibbonMaskEnabled = enabled;
+        return this.queueFocusRibbonMaskRefresh();
+    }
+
+    private subscribeFocus() {
+        this.focusSub = this.plugin.managers.structure.focus.behaviors.current.subscribe(() => {
+            void this.queueFocusRibbonMaskRefresh();
+        });
+    }
+
+    private queueFocusRibbonMaskRefresh() {
+        const refresh = () => this.refreshFocusRibbonMask();
+        this.focusRibbonMaskTask = this.focusRibbonMaskTask.then(refresh, refresh);
+        return this.focusRibbonMaskTask;
+    }
+
+    private async refreshFocusRibbonMask() {
+        const state = this.plugin.state.data;
+
+        if (this.focusRibbonMaskNodes.length) {
+            const clear = state.build();
+            for (const node of this.focusRibbonMaskNodes) if (node.ref) clear.delete(node.ref);
+            await clear.commit({ doNotUpdateCurrent: true });
+            this.focusRibbonMaskNodes = [];
+        }
+
+        const current = this.plugin.managers.structure.focus.current;
+        const structure = this.currentStructure();
+        if (!this.focusRibbonMaskEnabled || !current || !structure || !this.cartoonReprNodes.length) return;
+        if (!Structure.areRootsEquivalent(current.loci.structure, structure)) return;
+
+        const remapped = StructureElement.Loci.remap(current.loci, structure);
+        const targetResidues = StructureElement.Loci.extendToWholeResidues(remapped);
+        if (StructureElement.Loci.isEmpty(targetResidues)) return;
+        // Mirror StructureFocusRepresentation's surroundings query exactly: its
+        // ball-and-stick overlay includes every whole residue within 5 Å of the
+        // target, so the ribbon mask must cover that same complete set of residues.
+        const target = StructureElement.Bundle.toExpression(
+            StructureElement.Bundle.fromLoci(targetResidues),
+        );
+        const surroundings = MS.struct.modifier.includeSurroundings({
+            0: target,
+            radius: 5,
+            'as-whole-residues': true,
+        });
+        const selection = Script.getStructureSelection(surroundings, structure);
+        const residues = StructureSelection.toLociWithSourceUnits(selection);
+        const layer = {
+            bundle: StructureElement.Bundle.fromLoci(residues),
+            value: 1,
+        };
+        const apply = state.build();
+        const selectors: StateObjectSelector[] = [];
+        for (const repr of this.cartoonReprNodes) {
+            if (!repr.ref) continue;
+            const transform = apply.to(repr.ref).apply(
+                StateTransforms.Representation.TransparencyStructureRepresentation3DFromBundle,
+                { layers: [layer] },
+                { tags: 'pxviewer-focus-ribbon-mask' },
+            );
+            selectors.push(transform.selector);
+        }
+        if (!selectors.length) return;
+        await apply.commit({ doNotUpdateCurrent: true });
+        this.focusRibbonMaskNodes = selectors;
+    }
+
+    dispose() {
+        this.focusSub?.unsubscribe();
+        this.focusSub = null;
     }
 
     /** Clip this model's representations to a front/rear slab. */
     async setSlab(slab: Slab) {
         this.slab = { ...slab };
-        await this.reaimSlab();
+        const version = ++this.slabVersion;
+        await this.reaimSlab(version);
     }
 
     /** Re-aim the slab down the current view direction (called as the camera moves). */
-    async reaimSlab() {
+    async reaimSlab(version = this.slabVersion) {
         if (!this.reprNodes.length) return;
+        const slab = { ...this.slab };
         for (const node of this.reprNodes) {
-            if (node.ref) await applySlabTo(this.plugin, node.ref, this.slab);
+            if (node.ref) await applySlabTo(this.plugin, node.ref, slab);
+        }
+        // A camera-triggered re-aim can overlap a slider update. If it committed an older
+        // slab after the newer one, immediately reapply the current state so stale planes
+        // can never survive an open (0, 1) setting.
+        if (version !== this.slabVersion) {
+            await this.reaimSlab(this.slabVersion);
         }
     }
 
@@ -1510,17 +1616,41 @@ export class LiveViewer {
         });
     }
 
-    // In Select mode each click on an atom *accumulates* — it toggles that atom in or out
-    // of the set — so you build a multi-atom selection by just clicking, no modifier. A
-    // click on empty space clears. (No shift needed, which leaves Shift free for the drag-
-    // minimize; the `shift` arg is unused now that shift+drag is claimed by the tug.)
-    private handleSelectionClick(location: StructureElement.Location | undefined, _shift: boolean) {
+    /** Atom indices represented by this click. A ribbon has residue-level precision. */
+    private selectionElements(location: StructureElement.Location): number[] {
+        const clicked = location.element as unknown as number;
+        if (!this.selectByResidue || !Unit.isAtomic(location.unit)) return [clicked];
+        const residue = StructureProperties.residue.key(location);
+        const probe = StructureElement.Location.clone(location);
+        const elements: number[] = [];
+        for (let i = 0; i < location.unit.elements.length; i++) {
+            const element = location.unit.elements[i];
+            probe.element = element;
+            if (StructureProperties.residue.key(probe) === residue) {
+                elements.push(element as unknown as number);
+            }
+        }
+        return elements.length ? elements : [clicked];
+    }
+
+    // Conventional selection: a plain click replaces the selection, while Shift-click
+    // adds/removes the clicked atom—or the complete residue represented by a ribbon.
+    // Empty space clears on a plain click and leaves an extended selection alone with Shift.
+    private handleSelectionClick(location: StructureElement.Location | undefined, shift: boolean) {
         if (!location) {
-            this.mouseSelectionSet.clear();
+            if (!shift) this.mouseSelectionSet.clear();
         } else {
-            const el = location.element as unknown as number;
-            if (this.mouseSelectionSet.has(el)) this.mouseSelectionSet.delete(el);
-            else this.mouseSelectionSet.add(el);
+            const elements = this.selectionElements(location);
+            if (shift) {
+                const remove = elements.every((element) => this.mouseSelectionSet.has(element));
+                for (const element of elements) {
+                    if (remove) this.mouseSelectionSet.delete(element);
+                    else this.mouseSelectionSet.add(element);
+                }
+            } else {
+                this.mouseSelectionSet.clear();
+                for (const element of elements) this.mouseSelectionSet.add(element);
+            }
         }
         const indices = Array.from(this.mouseSelectionSet).sort((a, b) => a - b);
         this.setHighlight(indices);
@@ -1980,34 +2110,30 @@ const INTERACTIONS_TAG = 'pxviewer-interactions';
 const CLASH_COLOR = 0xee2222; // red — reads as "bad contact"
 
 /**
- * Show or hide the *computed* "Non-covalent Interactions" representation on every
- * structure in the scene — whether it was loaded from an MVSJ scene/file or is
- * streaming live. Mol* infers the contacts. We tag the representations we add so
- * we can find and remove exactly those, and skip structures that already have one
- * (so a repeated toggle is a no-op). Hanging the representation off each structure
- * means it recomputes per frame. For explicit, Python-supplied contacts instead,
- * see `LiveViewer.setInteractions`.
+ * Show or hide computed interactions for this live model only. Each model connection
+ * owns its own visibility state even though all connections share one Mol* plugin.
  */
-async function setComputedInteractions(plugin: PluginContext, visible: boolean) {
-    const structures = plugin.state.data.selectQ((q: any) => q.rootsOfType(SO.Molecule.Structure));
+async function setComputedInteractions(
+    plugin: PluginContext, viewer: LiveViewer, visible: boolean,
+) {
+    const structure = viewer.structureForPicking();
+    if (!structure) return;
+    const parent = plugin.helpers.substructureParent.get(structure);
+    if (!parent) return;
+    const ref = parent.transform.ref;
+    const existing = plugin.state.data.selectQ(
+        (q: any) => q.byRef(ref).subtree().withTag(INTERACTIONS_TAG));
     if (visible) {
-        for (const cell of structures) {
-            const ref = cell.transform.ref;
-            const existing = plugin.state.data.selectQ((q: any) => q.byRef(ref).subtree().withTag(INTERACTIONS_TAG));
-            if (existing.length) continue;
-            // 'interactions' is a computed/extension type, so it's outside the
-            // built-in props union; the registered provider resolves it at runtime.
-            await plugin.builders.structure.representation.addRepresentation(
-                ref,
-                { type: 'interactions' } as any,
-                { tag: INTERACTIONS_TAG },
-            );
-        }
+        if (existing.length) return;
+        await plugin.builders.structure.representation.addRepresentation(
+            ref,
+            { type: 'interactions' } as any,
+            { tag: INTERACTIONS_TAG },
+        );
     } else {
-        const reprs = plugin.state.data.selectQ((q: any) => q.root.subtree().withTag(INTERACTIONS_TAG));
-        if (!reprs.length) return;
+        if (!existing.length) return;
         const b = plugin.state.data.build();
-        for (const cell of reprs) b.delete(cell.transform.ref);
+        for (const cell of existing) b.delete(cell.transform.ref);
         await b.commit();
     }
 }
@@ -2315,10 +2441,8 @@ function findVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
 // Drag an atom and let the model give way. The browser's whole job is to say which atom
 // and where the pointer is in space; cctbx decides what the model does about it.
 //
-// No new mouse binding: a left-drag on an *atom* tugs, a left-drag on the background
-// still rotates, which is how Coot does it and needs nothing the hand does not already
-// know. It has to be armed first, because a stray drag silently deforming a model is
-// not something to leave lying around.
+// The Tools tab explicitly arms this mode. Then a left-drag on an atom tugs while a
+// left-drag on the background still rotates. When disarmed, Mol* owns every drag.
 
 /** Where the pointer is, in space, on the plane through `anchor` facing the camera.
  *
@@ -2493,9 +2617,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         void reaimSlabs();   // (quality.ping is a no-op now — see InteractiveQuality's note)
     });
 
-    // Tugging: Shift + left-drag on any of the model's surface pulls the atom there;
-    // a plain drag still rotates. No mode and no arming — you cannot hold Shift by
-    // accident, which is the safety a checkbox was standing in for.
+    // Tugging is coordinate-changing and therefore off until the Tools-tab mode explicitly
+    // arms it. While armed, a left-drag on the model pulls; otherwise Mol* owns the drag.
+    let tugMode = false;
     let tugging: { atom: number; anchor: Vec3 } | null = null;
     let tugPending: Vec3 | null = null;
     let tugSending = false;
@@ -2552,18 +2676,21 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             ws.send(JSON.stringify({ type: 'marker', position: [pos[0], pos[1], pos[2]], atom: atom ?? null }));
             return;
         }
-        if (!ev.shiftKey || ev.button !== 0 || !plugin.canvas3d) return;
+        if (ev.button !== 0 || !plugin.canvas3d) return;
         const point = canvasPoint(ev);
         // A marker under the cursor wins over the molecule: Shift-drag moves the marker,
         // and must not start a tug (see the marker-dragging note). Any session may own the
         // drag — stopImmediatePropagation keeps the other sessions' handlers off this event.
-        const marker = markerHitTest(plugin, point.fx, point.fy);
-        if (marker) {
-            if (!markerDrag) markerDrag = { id: marker.id, anchor: marker.position, last: marker.position, ws };
-            ev.preventDefault();
-            ev.stopImmediatePropagation();
-            return;
+        if (ev.shiftKey) {
+            const marker = markerHitTest(plugin, point.fx, point.fy);
+            if (marker) {
+                if (!markerDrag) markerDrag = { id: marker.id, anchor: marker.position, last: marker.position, ws };
+                ev.preventDefault();
+                ev.stopImmediatePropagation();
+                return;
+            }
         }
+        if (!tugMode) return;
         if (!viewer) return;
         const atom = atomAt(plugin, viewer, point.x, point.y);
         if (atom === undefined) return;  // background: let Mol* rotate, as Coot does
@@ -2627,31 +2754,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         endTug();
     };
 
-    // Pressing Shift is the first sign a drag is coming — before any atom is grabbed. Tell
-    // the server now, once per hold, so it can clear the way (a running minimization has to
-    // stop and hand the model over first): by the time the pointer grabs, the model is free
-    // and the drag feels instant rather than dead-until-the-run-ends. Auto-repeat keydowns
-    // are ignored via shiftHeld.
-    let shiftHeld = false;
-    const onKeyDown = (ev: KeyboardEvent) => {
-        if (ev.key === 'Shift' && !shiftHeld) {
-            shiftHeld = true;
-            ws.send(JSON.stringify({ type: 'tug', action: 'arm' }));
-        }
-    };
-    // The drag lives only while Shift is held: let go of Shift and it stops at once, so
-    // the minimizer never keeps running under a hand that has moved on. Same for losing
-    // the window — an alt-tab mid-drag must not strand it running.
-    const onKeyUp = (ev: KeyboardEvent) => {
-        if (ev.key === 'Shift') { shiftHeld = false; endTug(); endMarkerDrag(); }
-    };
-    const onBlur = () => { shiftHeld = false; endTug(); endMarkerDrag(); };
+    const onBlur = () => { endTug(); endMarkerDrag(); };
 
     window.addEventListener('mousedown', onMouseDown, { capture: true });
     window.addEventListener('mousemove', onMouseMove, { capture: true });
     window.addEventListener('mouseup', onMouseUp, { capture: true });
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
 
     let isoScrollTarget: string | null = null;
@@ -2707,7 +2814,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // arrive while the viewer is still building asynchronously — so these are
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
-        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations', 'click-mode', 'primitive', 'select', 'dots', 'markup', 'map_box', 'localres', 'structure_visible',
+        'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations',
+        'click-mode', 'tug-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
+        'localres', 'structure_visible', 'focus-surroundings',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
@@ -2727,6 +2836,16 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
                 plugin.managers.camera.reset();  // reframe the whole scene, default orientation
+            } else if (msg.type === 'focus-surroundings') {
+                const enabled = !!msg.enabled;
+                await plugin.state.updateBehavior(StructureFocusRepresentation, (params: any) => ({
+                    ...params,
+                    // Interactions have their own per-structure Show authority. Never let
+                    // the focus behavior silently create another interaction overlay.
+                    components: enabled ? ['target', 'surroundings'] : [],
+                }));
+                await viewer?.setFocusRibbonMask(enabled);
+                if (!enabled) plugin.managers.structure.focus.clear();
             } else if (msg.type === 'perf_prefs') {
                 // Debug render overrides from the Settings "Performance (debug)" group.
                 if (typeof msg.overlay === 'boolean') perf.setVisible(msg.overlay);
@@ -2741,8 +2860,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (typeof msg.radius === 'number') markerRadius = msg.radius;
             } else if (msg.type === 'marker-mode') {
                 markerArmed = !!msg.on;  // arm/disarm the next-click place-marker (see onMouseDown)
-            } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean') {
-                await setComputedInteractions(plugin, msg.visible);
+            } else if (msg.type === 'computed-interactions' && typeof msg.visible === 'boolean' && viewer) {
+                await setComputedInteractions(plugin, viewer, msg.visible);
             } else if (msg.type === 'interactions' && viewer) {
                 if (msg.action === 'clear') await viewer.clearInteractions();
                 else await viewer.setInteractions(msg.contacts ?? []);
@@ -2828,6 +2947,13 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                         : r
                 );
                 await viewer.setRepresentations(reprs);
+            } else if (msg.type === 'tug-mode') {
+                tugMode = !!msg.enabled;
+                if (!tugMode) endTug();
+                const canvas: HTMLCanvasElement | undefined =
+                    (plugin.canvas3d as any)?.webgl?.gl?.canvas;
+                if (canvas) canvas.style.cursor = tugMode ? 'grab' : '';
+                if (tugMode) ws.send(JSON.stringify({ type: 'tug', action: 'arm' }));
             } else if (msg.type === 'click-mode' && viewer) {
                 viewer.setClickMode(String(msg.mode ?? 'off'));
             } else if (msg.type === 'primitive' && viewer) {
@@ -2950,10 +3076,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             window.removeEventListener('mousedown', onMouseDown, { capture: true });
             window.removeEventListener('mousemove', onMouseMove, { capture: true });
             window.removeEventListener('mouseup', onMouseUp, { capture: true });
-            window.removeEventListener('keydown', onKeyDown);
-            window.removeEventListener('keyup', onKeyUp);
             window.removeEventListener('blur', onBlur);
             cameraSub?.unsubscribe();
+            viewer?.dispose();
             ws.close();
         },
     };

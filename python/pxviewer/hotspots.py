@@ -76,6 +76,20 @@ DOMAIN = (0.0, 2.0)
 #: for a badness scale.
 WARM = ["#FFD400", "#F46D43", "#B2182B"]
 
+
+def severity_color(value: float) -> str:
+    """Return the fixed-scale color for a constant-valued severity contour."""
+    value = min(2.0, max(1.0, float(value)))
+    position = (value - 1.0) * 2.0
+    index = min(1, int(position))
+    fraction = position - index
+    low, high = WARM[index], WARM[index + 1]
+    channels = []
+    for offset in (1, 3, 5):
+        a, b = int(low[offset:offset + 2], 16), int(high[offset:offset + 2], 16)
+        channels.append(round(a + (b - a) * fraction))
+    return "#" + "".join(f"{channel:02X}" for channel in channels)
+
 #: Fallback for the clean end when the viewport background cannot be queried. White, because
 #: the default renderer background is a near-white and a light clean-end reads as "faded".
 _DEFAULT_CLEAN = "#FFFFFF"
@@ -509,9 +523,8 @@ FIELD_FLOOR = 0.05
 #: rather than being a tuned opacity ramp. Raise the level to 2.0 for severe-only.
 FIELD_ISO = 1.0
 
-#: Fixed, and deliberately unlike any map color, so a severity shell is never misread as
-#: density sitting in the same scene.
-FIELD_COLOR = "#FF2D95"
+#: Default shell color: yellow is the calibrated outlier threshold.
+FIELD_COLOR = severity_color(FIELD_ISO)
 
 
 def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPACING,

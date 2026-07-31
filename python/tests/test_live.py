@@ -789,6 +789,48 @@ def test_click_mode_replayed_to_late_client(session):
     asyncio.run(scenario())
 
 
+def test_refine_drag_mode_reaches_and_is_replayed_to_clients(session):
+    async def live_change():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_tug_mode(True)
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert message == {"type": "tug-mode", "enabled": True}
+
+    asyncio.run(live_change())
+
+    async def late_client():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            replay = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert replay == {"type": "tug-mode", "enabled": True}
+
+    asyncio.run(late_client())
+
+
+def test_focus_surroundings_option_reaches_and_is_replayed_to_clients(session):
+    async def live_change():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            session.set_focus_surroundings(True)
+            message = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert message == {"type": "focus-surroundings", "enabled": True}
+
+    asyncio.run(live_change())
+
+    async def late_client():
+        url = f"ws://{session.host}:{session.port}"
+        async with websockets.connect(url) as ws:
+            await ws.recv()  # topology
+            replay = json.loads(await asyncio.wait_for(ws.recv(), timeout=5))
+            assert replay == {"type": "focus-surroundings", "enabled": True}
+
+    asyncio.run(late_client())
+
+
 def test_enable_measure_mode_message(session):
     async def scenario():
         url = f"ws://{session.host}:{session.port}"

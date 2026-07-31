@@ -449,6 +449,7 @@ def test_precomputed_hotspot_volume_opens_without_running_analysis(qapp, monkeyp
     volume = VolumeData.from_numpy(
         np.full((3, 4, 5), 1.25, dtype=np.float32),
         spacing=(1.0, 1.5, 2.0), origin=(2, 3, 4), name="precomputed")
+    volume.array[0, 0, 0] = 5.81  # coincidence peak above the fixed display cap
 
     opened = []
     monkeypatch.setattr(
@@ -467,6 +468,10 @@ def test_precomputed_hotspot_volume_opens_without_running_analysis(qapp, monkeyp
         assert opened == ["precomputed.map"]
         assert entry.get("hotspots") is None
         assert entry["hotspot_field_source"] == "precomputed.map"
+        assert entry["hotspot_field_source_max"] == pytest.approx(5.81)
+        # Absolute identity scale, with only the documented display clamp.
+        assert entry["hotspot_field_values"][1, 1, 1] == pytest.approx(1.25)
+        assert entry["hotspot_field_values"][0, 0, 0] == hotspots.SEVERITY_CAP
         assert entry["hotspot_cloud"] is True
         assert entry["session"]._last_hotspot_volume is not None
 
@@ -523,6 +528,25 @@ def test_the_desktop_knee_is_given_in_severity_and_sent_normalized(qapp):
         app.stop()
 
 
+def test_the_shared_threshold_updates_a_contour_level_and_color(qapp, monkeypatch):
+    """Contour uses the same absolute slider as cloud and follows the hotspot palette."""
+    pytest.importorskip("PySide6")
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    entry = {"id": "model-1", "hotspot_volume": "volume-1"}
+    monkeypatch.setattr(app, "_model_entry", lambda _mid: entry)
+    levels, colors = [], []
+    monkeypatch.setattr(app, "set_volume_iso", lambda vid, value: levels.append((vid, value)))
+    monkeypatch.setattr(app, "set_volume_color", lambda vid, value: colors.append((vid, value)))
+
+    app.set_hotspot_threshold("model-1", 1.5)
+
+    assert levels == [("volume-1", 1.5)]
+    assert colors == [("volume-1", hotspots.severity_color(1.5))]
+    assert colors[0][1] == hotspots.WARM[1]
+
+
 # -- the desktop wiring ---------------------------------------------------------------
 
 
@@ -540,7 +564,7 @@ def test_the_cloud_and_contour_are_mutually_exclusive(qapp):
         got = []
         app.bridge.hotspots_ready.connect(got.append)
         mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
-        app.compute_hotspots(mid, fit="none")
+        app.compute_hotspots(mid)
         deadline = time.time() + 300
         while time.time() < deadline and not got:
             qapp.processEvents()
@@ -620,7 +644,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
         app.show_hotspot_field(mid, on=True, style="contour")
         assert not app._volumes and any("no hotspots computed" in s for s in said)
 
-        app.compute_hotspots(mid, fit="none")
+        app.compute_hotspots(mid)
         deadline = time.time() + 300
         while time.time() < deadline and not got:
             qapp.processEvents()
@@ -632,7 +656,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
         volume = app._volumes[0]
         assert volume["iso_kind"] == "absolute"      # calibrated level, not sigma
         assert volume["iso"] == hotspots.FIELD_ISO
-        assert volume["color"] == hotspots.FIELD_COLOR
+        assert volume["color"] == hotspots.severity_color(hotspots.FIELD_ISO)
         assert volume["opacity"] < 1.0               # the model stays readable through it
 
         app.show_hotspot_field(mid, on=True, style="contour")  # re-show replaces
@@ -658,7 +682,7 @@ def test_computing_hotspots_colours_the_model_through_the_attribute_path(qapp):
         got = []
         app.bridge.hotspots_ready.connect(got.append)
         mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
-        app.compute_hotspots(mid, fit="none")
+        app.compute_hotspots(mid)
 
         deadline = time.time() + 300
         while time.time() < deadline and not got:

@@ -554,8 +554,139 @@ def test_minimize_buttons_show_which_state_is_live(qapp):
         app.stop()
 
 
-def test_shift_arm_is_exactly_pause(qapp):
-    """Shift is pressed (a drag is imminent): the 'arm' message does exactly what the Pause
+def test_pick_and_refine_drag_modes_are_mutually_exclusive(qapp):
+    """Coordinate-changing drag requires its Tools button and cannot overlap selection."""
+    from pxviewer.desktop import DesktopApp
+
+    app = DesktopApp(port=0)
+    try:
+        controls = app._controls
+        assert not controls._pick_btn.isChecked()
+        assert not controls._refine_drag_btn.isChecked()
+        assert not app._selection_enabled and not app._tug_enabled
+
+        controls._refine_drag_btn.click()
+        assert controls._refine_drag_btn.isChecked()
+        assert not controls._pick_btn.isChecked()
+        assert app._tug_enabled and not app._selection_enabled
+
+        controls._pick_btn.click()
+        assert controls._pick_btn.isChecked()
+        assert not controls._refine_drag_btn.isChecked()
+        assert app._selection_enabled and not app._tug_enabled
+    finally:
+        app.stop()
+
+
+def test_molstar_focus_surroundings_defaults_on_and_persists(qapp):
+    from unittest.mock import MagicMock
+
+    from PySide6.QtCore import QSettings
+    from pxviewer.desktop import DesktopApp
+
+    settings = QSettings("pxviewer", "pxviewer")
+    key = "defaults/focus_surroundings"
+    old = (settings.contains(key), settings.value(key))
+    first = second = None
+    try:
+        settings.remove(key)
+        settings.sync()
+        first = DesktopApp(port=0)
+        controls = first._controls
+        assert first._focus_surroundings
+        assert controls._focus_surroundings_check.isChecked()
+
+        # Pick mode suppresses focus without changing the preference, then restores it.
+        session = MagicMock()
+        first._models.append({"session": session})
+        controls._pick_btn.click()
+        session.set_focus_surroundings.assert_called_with(False)
+        assert first._focus_surroundings
+        controls._pick_btn.click()
+        session.set_focus_surroundings.assert_called_with(True)
+        first._models.remove({"session": session})
+
+        controls._focus_surroundings_check.click()
+        assert not first._focus_surroundings
+        first.stop()
+        first = None
+
+        second = DesktopApp(port=0)
+        assert not second._focus_surroundings
+        assert not second._controls._focus_surroundings_check.isChecked()
+    finally:
+        if first is not None:
+            first.stop()
+        if second is not None:
+            second.stop()
+        if old[0]:
+            settings.setValue(key, old[1])
+        else:
+            settings.remove(key)
+        settings.sync()
+
+
+def test_new_model_show_and_representation_defaults_persist(qapp):
+    """New-model layers and Show choices survive app restarts through QSettings."""
+    pytest.importorskip("iotbx.data_manager")
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtCore import QSettings
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.loader import sample_structure_path
+
+    settings = QSettings("pxviewer", "pxviewer")
+    keys = [
+        "defaults/model_representations",
+        "defaults/shown_structure_types",
+        "defaults/molstar_interactions",
+    ]
+    old = {key: (settings.contains(key), settings.value(key)) for key in keys}
+    first = second = None
+    try:
+        settings.setValue("defaults/model_representations", '["cartoon"]')
+        settings.setValue(
+            "defaults/shown_structure_types",
+            '["Protein", "Nucleic acid", "Sugar", "Ion", "Water", "Ligand / other"]')
+        settings.setValue("defaults/molstar_interactions", "false")
+        settings.sync()
+        first = DesktopApp(port=0)
+        first.set_default_model_representation("ball-and-stick", True)
+        first.set_default_model_show("Water", False)
+        first.set_default_model_show("Mol* interactions", True)
+        first.stop()
+        first = None
+
+        second = DesktopApp(port=0)
+        assert second._default_model_reps == ["cartoon", "ball-and-stick"]
+        assert "Water" not in second._default_shown_types
+        assert second._default_model_interactions
+        mid = second._add_model(
+            LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
+        entry = second._model_entry(mid)
+        assert entry["reps"] == ["cartoon", "ball-and-stick"]
+        assert len(entry["session"]._representations) == 2
+        assert entry["hidden_types"] == {"Water"}
+        assert entry["interactions"]
+        assert entry["session"]._computed_interactions_visible
+    finally:
+        if first is not None:
+            first.stop()
+        if second is not None:
+            second.stop()
+        for key, (existed, value) in old.items():
+            if existed:
+                settings.setValue(key, value)
+            else:
+                settings.remove(key)
+        settings.sync()
+
+
+def test_refine_drag_arm_is_exactly_pause(qapp):
+    """Refine drag is enabled (a drag is imminent): the 'arm' message does exactly what Pause
     button does — stop a running minimization, same signal, same status. With nothing
     running it is a no-op, just as Pause is disabled when nothing is running."""
     from pxviewer.desktop import DesktopApp
@@ -622,7 +753,7 @@ def test_minimization_runs_continuously_until_stopped(qapp):
         # Held means still running: the model has not been released to a drag yet.
         assert not app._minimize_idle.is_set()
 
-        # Stop (as Pause / a Shift-drag would): the run ends and the model is freed.
+        # Stop (as Pause / enabling Refine drag would): the run ends and the model is freed.
         app.stop_minimization()
         deadline = time.time() + 5
         while time.time() < deadline and not app._minimize_idle.is_set():
@@ -718,7 +849,7 @@ def test_tutorial_coach_advances_when_steps_are_done(qapp):
         # Step 1 targets a control, so "Show me where" is offered — and only points, never
         # acts (no model is loaded by clicking it).
         assert not coach.coach_show.isHidden()
-        cw._on_coach_show_me()  # flashes the Demos button; must not raise or load anything
+        cw._on_coach_show_me()  # flashes the Get button; must not raise or load anything
         assert not app._models
 
         # The user loads a structure themselves; the predicate then advances.
@@ -848,7 +979,7 @@ def test_xray_tutorial_advances_through_the_refinement_loop(qapp):
         assert coach.coach_progress.text() == "Step 4 / 6"
 
         # Step 4 waits for a live difference window to actually reach the viewport. Driving a
-        # real Shift-drag needs the viewer, so stand in for the drag by counting one — the
+        # a real refine drag needs the viewer, so stand in for the drag by counting one — the
         # point here is that the step keys off _diff_boxes, which only _diff_worker bumps and
         # nothing ever resets.
         assert app._diff_boxes == 0
@@ -896,8 +1027,8 @@ def test_ligand_fitting_demo_makes_maps_and_fits_atp(qapp):
         qapp.processEvents()
         assert len(app._models) == 1 and len(app._reflections) == 1
         assert app.map_for_model() is None  # not phased yet
-        # the Demos menu offers it
-        labels = [a.text() for a in app._controls._build_demos_menu().actions()]
+        # the Get menu offers it
+        labels = [a.text() for a in app._controls._build_get_menu().actions()]
         assert any("Ligand fitting" in l for l in labels)
 
         mid, rid = app._models[0]["id"], app._reflections[0]["id"]
@@ -1929,9 +2060,7 @@ def test_object_list_fits_its_contents(qapp):
 
 
 def test_scene_actions_are_icon_buttons(qapp):
-    """The seven object actions are a compact icon-only toolbar (labels moved to tooltips),
-    and none forces a height — a QPushButton only gets its native macOS chrome at the height
-    the style asks for."""
+    """Object, map-tool and bottom utility actions remain compact icon-only buttons."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
@@ -1944,17 +2073,68 @@ def test_scene_actions_are_icon_buttons(qapp):
     try:
         ctl = app._controls
         # The action buttons are icon-only now; find them by their tooltips.
-        tips = ("Open a structure", "Load a bundled", "Save the focused", "Pair a model",
-                "Remove the highlighted", "Reset the view", "Save a picture")
+        tips = ("Open a structure", "Get data from", "Save the focused",
+                "Pair an unpaired", "Remove the highlighted",
+                "Reset the view", "Save a picture")
         buttons = [b for b in ctl.widget().findChildren(QPushButton)
                    if b.toolTip().startswith(tips)]
         assert len(buttons) == 7
         assert all(not b.icon().isNull() and b.text() == "" for b in buttons)
+        assert ctl._tabs.widget(1).isAncestorOf(ctl._localres_btn)  # Tools
+        assert ctl._localres_btn.text() == "Local res"
+        assert not ctl._tabs.isAncestorOf(ctl._reset_view_btn)     # bottom utility row
+        assert not ctl._tabs.isAncestorOf(ctl._picture_btn)
 
         # No forced geometry anywhere: that is what broke Open's chrome.
         for button in buttons:
             assert button.minimumHeight() == 0, f"{button.toolTip()[:20]} forces a height"
     finally:
+        app.stop()
+
+
+def test_controls_repalette_completely_across_live_theme_changes(qapp):
+    """A live macOS light/dark transition must not leave styled child panes behind."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+
+    from PySide6.QtGui import QColor, QPalette
+
+    from pxviewer.desktop import DesktopApp
+
+    original = QPalette(qapp.palette())
+    app = DesktopApp(port=0)
+    try:
+        ctl = app._controls
+
+        def themed(window, text, base, button):
+            palette = QPalette(original)
+            palette.setColor(QPalette.ColorRole.Window, QColor(window))
+            palette.setColor(QPalette.ColorRole.WindowText, QColor(text))
+            palette.setColor(QPalette.ColorRole.Base, QColor(base))
+            palette.setColor(QPalette.ColorRole.Text, QColor(text))
+            palette.setColor(QPalette.ColorRole.Button, QColor(button))
+            palette.setColor(QPalette.ColorRole.ButtonText, QColor(text))
+            return palette
+
+        dark = themed("#202124", "#f1f3f4", "#18191b", "#303134")
+        qapp.setPalette(dark)
+        qapp.processEvents()
+        qapp.processEvents()  # watcher deliberately waits one event-loop turn
+        assert ctl._appearance_box.palette().color(QPalette.ColorRole.Window) == QColor("#202124")
+        dark_icon = ctl._reset_view_btn.icon().cacheKey()
+
+        light = themed("#f5f5f5", "#202124", "#ffffff", "#eeeeee")
+        qapp.setPalette(light)
+        qapp.processEvents()
+        qapp.processEvents()
+        expected = QColor("#f5f5f5")
+        assert ctl.widget().palette().color(QPalette.ColorRole.Window) == expected
+        assert ctl._appearance_box.palette().color(QPalette.ColorRole.Window) == expected
+        assert ctl._tabs.tabBar().palette().color(QPalette.ColorRole.Window) == expected
+        assert ctl._reset_view_btn.icon().cacheKey() != dark_icon
+    finally:
+        qapp.setPalette(original)
+        qapp.processEvents()
         app.stop()
 
 
@@ -2438,8 +2618,10 @@ def test_write_object(qapp, tmp_path):
         app.stop()
 
 
-def test_selection_chip_highlight(qapp):
-    """A quick-select chip highlights while active and clears when selection changes."""
+def test_selection_pane_describes_picked_atoms(qapp):
+    """The selection pane reports hierarchy identity, coordinates, occupancy, and B factor."""
+    from types import SimpleNamespace
+
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2453,21 +2635,32 @@ def test_selection_chip_highlight(qapp):
     try:
         mid = app._add_model(LiveSession.from_model_file(str(sample_structure_path())), "1ubq")
         controls = app._controls
-        protein = {b.text(): b for b, _ in controls._sel_chips}["Protein"]
+        app._on_model_selection(mid, SimpleNamespace(indices=[0]))
+        qapp.processEvents()
 
-        protein.click()  # toggles on + runs the preset
-        assert protein.isChecked()
-        assert len(app._scene_selection[mid]) == 602  # protein atoms
+        text = controls._selection_label.text()
+        assert "1 atom selected" in text
+        assert "1ubq · chain A · MET 1 · N (N)" in text
+        assert "xyz 27.340, 24.430, 2.614" in text
+        assert "occ 1.00 · B 9.67" in text
 
-        # A selection from elsewhere no longer matches the preset -> chip clears.
-        controls._run_selection("water")
-        assert not protein.isChecked()
+        # A ribbon pick is transported as all atoms in its residue; present the residue,
+        # not a verbose dump of those implementation-level atoms.
+        model = app._model_entry(mid)["session"].model
+        first_residue = model.get_hierarchy().only_model().chains()[0].residue_groups()[0]
+        app._on_model_selection(
+            mid, SimpleNamespace(indices=list(range(len(first_residue.atoms())))))
+        qapp.processEvents()
+        text = controls._selection_label.text()
+        assert text.startswith(f"1 residue selected · {len(first_residue.atoms())} atoms")
+        assert "1ubq · chain A: MET 1" in text
+        assert "Center " in text
+        assert "B-factor mean " in text
+        assert "· N (N)" not in text
 
-        # Clicking the active chip again clears the selection.
-        protein.click()
-        assert protein.isChecked()
-        protein.click()
-        assert not protein.isChecked() and mid not in app._scene_selection
+        app.clear_selection()
+        qapp.processEvents()
+        assert controls._selection_label.text() == "None"
     finally:
         app.stop()
 
@@ -2670,9 +2863,8 @@ def test_new_model_focuses_appearance(qapp):
         app.stop()
 
 
-def test_help_and_demos_menu(qapp):
-    """Help is a docs placeholder now; guided tutorials live in the Demos menu, in a
-    labelled Tutorials section below the Examples."""
+def test_help_and_get_menu(qapp):
+    """Help is a placeholder; remote data, examples and tutorials share the Get menu."""
     pytest.importorskip("iotbx.data_manager")
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
@@ -2688,16 +2880,16 @@ def test_help_and_demos_menu(qapp):
 
         from PySide6.QtWidgets import QLabel, QWidgetAction
 
-        menu = controls._build_demos_menu()
+        menu = controls._build_get_menu()
         actions = menu.actions()
         labels = [a.text() for a in actions]
+        assert any("PDB / EMDB" in t for t in labels)          # remote data
         assert any("ubiquitin" in t.lower() for t in labels)   # a sample
         assert any("restraint" in t.lower() for t in labels)   # a tutorial
-        # Both headings are present, drawn (a QLabel, not addSection's dropped text), and in
-        # order: Samples above Tutorials.
+        # Headings are present and drawn (a QLabel, not addSection's dropped text).
         headings = [a.defaultWidget().text() for a in actions
                     if isinstance(a, QWidgetAction) and isinstance(a.defaultWidget(), QLabel)]
-        assert headings == ["Samples", "Tutorials"]
+        assert headings == ["Online", "Examples", "Tutorials"]
     finally:
         app.stop()
 
@@ -2929,7 +3121,7 @@ def test_hide_structure_types(qapp):
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
 
-    from PySide6.QtWidgets import QComboBox
+    from PySide6.QtWidgets import QCheckBox, QComboBox
 
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
@@ -2987,6 +3179,13 @@ def test_hide_structure_types(qapp):
             if c.model().rowCount() and c.model().item(0).isCheckable()
         ]
         assert checkables, "expected a checkable structure-type combo in Appearance"
+        show_labels = [
+            checkables[0].model().item(i).text()
+            for i in range(checkables[0].model().rowCount())]
+        assert "Mol* interactions" in show_labels
+        assert not any(
+            box.text() == "Computed interactions"
+            for box in controls._appearance_box.findChildren(QCheckBox))
 
         # Tree row layout: [visible check] col 0, [active radio] col 1, [name] col 2.
         from PySide6.QtCore import Qt
@@ -3036,9 +3235,8 @@ def test_multi_model_registry(qapp):
         app.stop()
 
 
-def test_demos_menu_has_the_curated_examples(qapp):
-    """The Demos button is the one preload entry point: bundled **Samples** to open, then
-    guided **Tutorials**, under headings that are actually drawn.
+def test_get_menu_has_online_examples_and_tutorials(qapp):
+    """Get combines online retrieval, bundled examples and guided tutorials.
 
     The headings are asserted through their rendered widget, not through QAction.text().
     They used to be QMenu.addSection, whose text macOS silently drops — so the menu showed
@@ -3055,7 +3253,7 @@ def test_demos_menu_has_the_curated_examples(qapp):
     app._webapp.start()
     try:
         ctl = app._controls
-        actions = ctl._build_demos_menu().actions()
+        actions = ctl._build_get_menu().actions()
 
         def heading(action):
             """The visible text of a section heading, or None if it isn't one."""
@@ -3065,10 +3263,13 @@ def test_demos_menu_has_the_curated_examples(qapp):
             return widget.text() if isinstance(widget, QLabel) else None
 
         headings = [(i, heading(a)) for i, a in enumerate(actions) if heading(a)]
-        assert [text for _i, text in headings] == ["Samples", "Tutorials"]
-        ex_i, tut_i = headings[0][0], headings[1][0]
+        assert [text for _i, text in headings] == ["Online", "Examples", "Tutorials"]
+        online_i, ex_i, tut_i = (item[0] for item in headings)
         # Drawn, not merely set: an unparented label with no text would render as nothing.
         assert all(heading(actions[i]).strip() for i, _t in headings)
+        online = [a.text() for a in actions[online_i + 1:ex_i]
+                  if not a.isSeparator() and a.text().strip()]
+        assert online == ["Fetch from PDB / EMDB…"]
 
         # The samples sit between the two headings.
         examples = [a.text() for a in actions[ex_i + 1:tut_i]
@@ -3091,11 +3292,11 @@ def test_demos_menu_has_the_curated_examples(qapp):
              "x-ray: refine with a live difference map",
              "load restraint edits", "custom restraint edits"]
 
-        # The demos button is an icon-only menu button (was the text "Sample", then "Demos").
+        # Get is the single icon-only menu button for content not supplied by the user.
         buttons = ctl.widget().findChildren(QPushButton)
-        assert not any("Sample" in b.text() or "Sample" in b.toolTip() for b in buttons)
-        demos = [b for b in buttons if b.toolTip().startswith("Load a bundled")]
-        assert len(demos) == 1 and demos[0].menu() is not None
+        get_buttons = [b for b in buttons if b.toolTip().startswith("Get data from")]
+        assert len(get_buttons) == 1 and get_buttons[0].menu() is not None
+        assert not any(b.toolTip().startswith("Fetch an entry") for b in buttons)
 
         tabs = ctl.widget().findChild(QTabWidget)
         # Tabs are icon-only; the label lives in the tooltip.
@@ -3164,7 +3365,7 @@ def test_mouse_bindings_are_shown_in_the_gui(qapp):
         assert "Zoom" in texts
         assert "right-drag" in texts and "Ctrl + scroll" in texts   # both ways to zoom
         assert "scroll" in texts and "Contour level" in texts
-        assert "Shift + drag" in texts and "Pull an atom" in texts
+        assert "Refine drag mode" in texts and "Pull and minimize an atom" in texts
 
         # The scroll-to-contour gesture is named once, in this legend — not repeated as a
         # chip beside the Level slider on every map (it only ate space there).

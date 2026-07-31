@@ -62,7 +62,7 @@ def validation_tutorial() -> Tutorial:
             "cis-peptides. Let's run it on a structure built to trip every check.\n\nOpen it: "
             "click **Demos** and pick **Thermitase-eglin (1TEC)**.",
             done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "Open the **Validation** tab and click **Run validation**. It runs every "
@@ -89,7 +89,7 @@ def ligand_fitting_tutorial() -> Tutorial:
             "pick **Ligand fitting** — a ligand-free model plus reflections that secretly "
             "contain an ATP.",
             done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "Compute the maps: in the **Scene** list select the **reflections** object and "
@@ -136,7 +136,7 @@ def cryo_em_refinement_tutorial() -> Tutorial:
             "— real-space refine a model into density**. It loads a model that sits slightly "
             "*off* its own density, waiting to be pushed back in.",
             done=lambda cw: cw._desktop.map_for_model() is not None,
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "Real-space refine it: on the **Tools** tab, in **Minimize**, tick **Use map** "
@@ -173,7 +173,7 @@ def xray_refinement_tutorial() -> Tutorial:
             "amplitudes computed from that same model, so the two start in exact agreement — "
             "which gives us a flat difference map to break on purpose.",
             done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "Phase the data: in the **Objects** list select the **reflections**, then click "
@@ -195,7 +195,8 @@ def xray_refinement_tutorial() -> Tutorial:
             target=lambda cw: cw._tug_livemap_check,
         ),
         Step(
-            "Break the fit: **Shift-drag** an atom in the viewport and pull it out of its "
+            "Break the fit: enable **Refine drag** on the Tools tab, then drag an atom in "
+            "the viewport and pull it out of its "
             "density.\n\nWatch the box that follows your pointer. **Red** blooms where you "
             "have just parked atoms the data does not support, and **green** stays behind in "
             "the density they left — the difference map recomputing as fast as you can drag. "
@@ -230,7 +231,7 @@ def load_edits_tutorial() -> Tutorial:
             "be shared as a phenix PHIL file. Let's load one onto a metal site.\n\nOpen the "
             "example: click **Demos** and pick **Metal site — Zn coordination**.",
             done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "On the **Tools** tab, in the **Restraint edits** panel (below Measure), click "
@@ -257,7 +258,7 @@ def restraint_edits_tutorial() -> Tutorial:
             "cctbx guesses the Zn–His bonds, but not the water in the fourth site.\n\nOpen "
             "the example: click **Demos** and pick **Metal site — Zn coordination**.",
             done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._demos_btn,
+            target=lambda cw: cw._get_btn,
         ),
         Step(
             "Turn on atom picking with the **Pick** button, then click the **zinc** and the "
