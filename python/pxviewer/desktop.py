@@ -387,7 +387,6 @@ def _palette_watch_filter(widget, on_change):
     delivered while QApplication still exposes parts of the old palette; repainting in the
     event itself creates the half-light/half-dark state this watcher exists to prevent."""
     from PySide6.QtCore import QEvent, QObject, QTimer
-    from PySide6.QtWidgets import QApplication
 
     class _PaletteFilter(QObject):
         pending = False
@@ -405,12 +404,6 @@ def _palette_watch_filter(widget, on_change):
 
     watcher = _PaletteFilter(widget)
     widget.installEventFilter(watcher)
-    # Once _refresh_theme gives the window an explicit palette, a later application
-    # palette change need not propagate an event to that window. Observe QApplication too
-    # so every subsequent system transition is still seen.
-    app = QApplication.instance()
-    if app is not None:
-        app.installEventFilter(watcher)
     return watcher
 
 
@@ -1302,7 +1295,10 @@ class ControlsWindow:
         from PySide6.QtCore import QTimer
 
         self._palette_watcher = _palette_watch_filter(self._window, self._refresh_theme)
-        QTimer.singleShot(0, lambda: self._refresh_theme(force=True))
+        # Startup only needs icon tinting. Rebuilding every stylesheet while native macOS
+        # controls are still being mapped is unsafe; full repolishing is reserved for an
+        # actual palette-change event after the window is running.
+        QTimer.singleShot(0, self._retint_icons)
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
         # It doubles as the tab labeller on hover, so remember the real status underneath.
@@ -4246,10 +4242,11 @@ class ControlsWindow:
         """Apply one settled application palette to the complete controls subtree.
 
         Qt normally propagates a system appearance change. On macOS, a window left open
-        across a light/dark transition can instead leave child palettes and resolved
-        ``palette(...)`` QSS values behind while native widgets adopt the new appearance.
-        Explicitly propagate the current QApplication palette and repolish styled widgets,
-        then rebuild the pixmap-backed icons and semantic accent buttons.
+        across a light/dark transition can instead leave resolved ``palette(...)`` QSS
+        values behind while native widgets adopt the new appearance. Repolish only styled
+        widgets, then rebuild the pixmap-backed icons and semantic accent buttons. Native
+        widget palettes remain Qt's responsibility: forcing them recursively can crash
+        PySide while WebEngine windows are being mapped.
         """
         from PySide6.QtGui import QPalette
         from PySide6.QtWidgets import QApplication, QWidget
@@ -4267,16 +4264,15 @@ class ControlsWindow:
         self._theme_signature = signature
 
         widgets = [self._window, *self._window.findChildren(QWidget)]
-        for widget in widgets:
-            widget.setPalette(palette)
         # Qt resolves palette() references when a stylesheet is polished. Reassigning the
-        # same string is optimized away, so clear it first before restoring it.
+        # same string is optimized away, so clear it first before restoring it. Do not call
+        # setPalette on every descendant: during native macOS window mapping that recursively
+        # invalidates controls and can crash Qt. Unstyled widgets already follow QApplication.
         for widget in widgets:
             qss = widget.styleSheet()
             if qss:
                 widget.setStyleSheet("")
                 widget.setStyleSheet(qss)
-            widget.update()
         self._retint_icons()
 
     def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False,
