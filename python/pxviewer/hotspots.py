@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
+from . import validation_events
+
 #: Exponent for the p-norm that combines metrics. ``p -> inf`` is a max (pure severity,
 #: no credit for corroboration); ``p = 1`` is a sum (triple-counts one error seen by three
 #: metrics). 4 behaves like a max while giving a modest bonus when several metrics fire on
@@ -113,10 +115,15 @@ def hotspot_palette(background: Optional[str] = None) -> List[str]:
 #: Backwards-compatible default palette (green->red) is gone; call :func:`hotspot_palette`.
 PALETTE = hotspot_palette()
 
-#: Backbone atoms of the residue whose phi/psi produced a Ramachandran score.
-_RAMA_ATOMS = frozenset({"N", "CA", "C", "O"})
-#: Excluded from the side chain, so a rotamer outlier does not implicate its own backbone.
-_MAINCHAIN = frozenset({"N", "CA", "C", "O", "OXT"})
+# Which atoms a validation result implicates, and how results are extracted, live in
+# pxviewer.validation_events — a standalone module the sibling hotspots generator carries a
+# copy of, so the two projects localize validation identically. Only the *calibration* below
+# is pxviewer's own: severity is unbounded surprisal on [0, SEVERITY_CAP] where 1.0 is the
+# community cut, while the generator maps the same events to bounded concern in [0, 1]. The
+# names are re-exported so the rules keep their HOTSPOTS.md spelling at the point of use.
+_RAMA_ATOMS = validation_events.RAMA_ATOMS
+_MAINCHAIN = validation_events.MAINCHAIN
+_hydrogen_parents = validation_events.hydrogen_parents
 
 _HYDROGEN = frozenset({"H", "D"})
 
@@ -189,59 +196,6 @@ def _deficit_severity(value: np.ndarray, good: float, outlier: float) -> np.ndar
     return np.clip(severity, 0.0, SEVERITY_CAP)
 
 
-def _residue_atoms(hierarchy: Any) -> Dict[tuple, Dict[str, List[int]]]:
-    """``(chain, resid) -> {altloc: [atom index]}``, in the hierarchy's own atom order.
-
-    The per-residue validators report a residue by chain/resid/altloc, so this is the join
-    that turns "residue 42 of chain A is a rotamer outlier" into atom indices to paint.
-    """
-    index: Dict[tuple, Dict[str, List[int]]] = {}
-    for i, atom in enumerate(hierarchy.atoms_with_labels()):
-        key = (atom.chain_id.strip(), atom.resid().strip())
-        index.setdefault(key, {}).setdefault(atom.altloc.strip(), []).append(i)
-    return index
-
-
-def _atoms_for(index: Dict[tuple, Dict[str, List[int]]], chain: str, resid: str,
-               altloc: str = "") -> List[int]:
-    """Atom indices of one residue. A validator's altloc selects that conformer plus the
-    atoms shared by all of them (blank altloc); no altloc takes the whole residue."""
-    by_alt = index.get((chain.strip(), resid.strip()))
-    if not by_alt:
-        return []
-    altloc = (altloc or "").strip()
-    if not altloc:
-        return [i for group in by_alt.values() for i in group]
-    return sorted(by_alt.get("", []) + by_alt.get(altloc, []))
-
-
-def _atom_names(hierarchy: Any) -> List[str]:
-    return [n.strip() for n in hierarchy.atoms().extract_name()]
-
-
-def _hydrogen_parents(hierarchy: Any) -> Dict[int, int]:
-    """Each hydrogen's parent heavy atom — the nearest one in its own atom group.
-
-    Needed because Probe finds clashes *through* hydrogens, but hydrogens carry no Q-score and
-    are not drawn in ribbon or heavy-atom views. Without this the clash signal would vanish
-    exactly when hydrogens are hidden, which is the default. See HOTSPOTS.md "Rule 5".
-    """
-    parents: Dict[int, int] = {}
-    atoms = hierarchy.atoms()
-    xyz = atoms.extract_xyz().as_numpy_array()
-    elements = [e.strip().upper() for e in atoms.extract_element()]
-    for atom_group in hierarchy.atom_groups():
-        indices = [a.i_seq for a in atom_group.atoms()]
-        heavy = [i for i in indices if elements[i] not in _HYDROGEN]
-        if not heavy:
-            continue
-        heavy_xyz = xyz[heavy]
-        for i in indices:
-            if elements[i] in _HYDROGEN:
-                parents[i] = heavy[int(np.argmin(((heavy_xyz - xyz[i]) ** 2).sum(axis=1)))]
-    return parents
-
-
 def ramachandran_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.ndarray:
     """Per-atom Ramachandran severity, on the backbone N/CA/C/O of the scored residue.
 
@@ -253,21 +207,11 @@ def ramachandran_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.
     """
     from .analysis import for_model
 
-    values = np.zeros(n_atoms, dtype=float)
-    hierarchy = model.get_hierarchy()
-    index = _residue_atoms(hierarchy)
-    names = _atom_names(hierarchy)
-    result = for_model(model, analysis).ramalyze()
-    for res in result.results:
-        if res.score is None:
-            continue
-        severity = float(_surprisal_severity(np.array([res.score]), RAMA_OUTLIER_PCT)[0])
-        if severity <= 0:
-            continue
-        for i in _atoms_for(index, res.chain_id, res.resid, getattr(res, "altloc", "")):
-            if names[i] in _RAMA_ATOMS:
-                values[i] = max(values[i], severity)
-    return values
+    events = validation_events.extract_ramachandran(
+        model.get_hierarchy(), ramalyze_result=for_model(model, analysis).ramalyze())
+    return validation_events.per_atom(
+        events, n_atoms, metric="rama",
+        transform=lambda e: _surprisal_severity(np.array([e.value]), RAMA_OUTLIER_PCT)[0])
 
 
 def rotamer_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.ndarray:
@@ -279,21 +223,11 @@ def rotamer_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.ndarr
     """
     from .analysis import for_model
 
-    values = np.zeros(n_atoms, dtype=float)
-    hierarchy = model.get_hierarchy()
-    index = _residue_atoms(hierarchy)
-    names = _atom_names(hierarchy)
-    result = for_model(model, analysis).rotalyze()
-    for res in result.results:
-        if res.score is None:
-            continue
-        severity = float(_surprisal_severity(np.array([res.score]), ROTA_OUTLIER_PCT)[0])
-        if severity <= 0:
-            continue
-        for i in _atoms_for(index, res.chain_id, res.resid, getattr(res, "altloc", "")):
-            if names[i] not in _MAINCHAIN:
-                values[i] = max(values[i], severity)
-    return values
+    events = validation_events.extract_rotamer(
+        model.get_hierarchy(), rotalyze_result=for_model(model, analysis).rotalyze())
+    return validation_events.per_atom(
+        events, n_atoms, metric="rota",
+        transform=lambda e: _surprisal_severity(np.array([e.value]), ROTA_OUTLIER_PCT)[0])
 
 
 def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None,
@@ -312,44 +246,27 @@ def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None,
     # mostly hydrogen-mediated), but it costs reduce2 plus a probe over three times the atoms.
     # Either way the probed model may have atoms ``model`` does not, so severity is accumulated
     # in *its* indexing and mapped back onto ``model`` at the end.
-    probe_hierarchy = shared.probe_model(use_hydrogens).get_hierarchy()
-    probe_atoms = list(probe_hierarchy.atoms_with_labels())
-    probe_values = np.zeros(len(probe_atoms), dtype=float)
+    probe_model = shared.probe_model(use_hydrogens)
+    probe_hierarchy = probe_model.get_hierarchy()
+
+    # Severity is anchored so MolProbity's 0.4 A "serious clash" is exactly 1.0. Rule 5 (a
+    # heavy atom inheriting its hydrogens' clashes) is applied by the extractor, which puts
+    # the parent in each event's atom set — so the max below gives a heavy atom the worst of
+    # its own and its hydrogens' contacts, and the signal survives a heavy-atom view.
+    events = validation_events.extract_clashes(
+        probe_model, dots=shared.probe_dots(use_hydrogens))
+    probe_values = validation_events.per_atom(
+        events, probe_hierarchy.atoms_size(), metric="clash",
+        transform=lambda e: min(e.value / CLASH_OUTLIER_A, SEVERITY_CAP))
 
     def _key(atom) -> tuple:
         return (atom.chain_id.strip(), atom.resid().strip(),
                 atom.name.strip(), atom.altloc.strip())
 
-    by_key: Dict[tuple, int] = {_key(a): i for i, a in enumerate(probe_atoms)}
-
-    def lookup(side: dict) -> Optional[int]:
-        resid = f"{side.get('resID', '')}{side.get('iCode', '') or ''}".strip()
-        return by_key.get((str(side.get("chainID", "")).strip(), resid,
-                           str(side.get("atomName", "")).strip(),
-                           str(side.get("alt", "")).strip()))
-
-    for row in shared.probe_dots(use_hydrogens):
-        # Probe reports a signed gap; an overlap is negative. Severity is anchored so that
-        # MolProbity's 0.4 A "serious clash" is exactly 1.0.
-        overlap = -float(row.get("gap", 0.0))
-        if overlap <= 0:
-            continue
-        severity = min(overlap / CLASH_OUTLIER_A, SEVERITY_CAP)
-        for side in (row.get("src"), row.get("target")):
-            if side is None:
-                continue
-            i = lookup(side)
-            if i is not None:
-                probe_values[i] = max(probe_values[i], severity)
-
-    # Rule 5: a heavy atom inherits the worst of its hydrogens, so the signal survives views
-    # that do not draw them (and survives the map back to a model with no hydrogens at all).
-    # Max, not sum, or an atom with several clashing H is inflated.
-    for h, parent in _hydrogen_parents(probe_hierarchy).items():
-        probe_values[parent] = max(probe_values[parent], probe_values[h])
-
     # Map onto the scored model's atom order. Heavy atoms match by chain/resid/name/altloc;
     # any hydrogen that only exists in the probe model has already handed its severity up.
+    by_key: Dict[tuple, int] = {
+        _key(a): i for i, a in enumerate(probe_hierarchy.atoms_with_labels())}
     values = np.zeros(n_atoms, dtype=float)
     for i, atom in enumerate(model.get_hierarchy().atoms_with_labels()):
         j = by_key.get(_key(atom))

@@ -951,6 +951,70 @@ a `map_model_manager` working frame is recorded in `shift_cart`. Considering onl
 put standalone NXSTART-placed maps at Cartesian zero. For a boxed map the first term is zero,
 so the older behaviour is recovered exactly.
 
+### One shared definition of what is wrong and where
+
+`python/pxviewer/validation_events.py` is **standalone and meant to be copied** into the
+generator. It imports nothing from pxviewer and uses no relative imports, so the same file
+lives in both repos and the two then localize validation identically. Copy it whole; do not
+fork the localization rules.
+
+It carries **native values, never calibrated ones** — a Ramachandran result travels as its
+probability percentage, a clash as its overlap in angstroms, plus the validator's own
+`outlier` boolean. Scoring is the caller's business, and the callers deliberately disagree
+(surprisal severity here, bounded concern there). What must not differ is which residue a
+result belongs to, which atoms it implicates, and whether the validator flagged it.
+
+pxviewer's `ramachandran_severity`, `rotamer_severity` and `clash_severity` are now thin
+calibrations over this module, and `_RAMA_ATOMS` / `_MAINCHAIN` / `_hydrogen_parents` are
+re-exports of it, so the sharing is enforced rather than hoped for.
+`test_validation_events.py` pins that the atoms severity scores are exactly the atoms the
+extractor picks.
+
+Two things worth knowing if you copy it:
+
+- **Clash uses probe2, not `mmtbx.validation.clashscore`.** clashscore shells out to the
+  classic Duke `probe` binary, which is absent from the pxviewer environment; probe2 ships
+  with cctbx and is the same contact analysis. This is what makes a clash channel possible
+  here at all — see the sample note above.
+- **Clash events are one per contact, not one per probe dot.** probe2 emits a row per surface
+  dot, so a single contact arrives dozens of times; the extractor collapses to one event per
+  atom pair keeping its worst overlap. A generator that deposits one kernel per event and
+  sums within a metric would otherwise weight a contact by how thoroughly it happened to be
+  dotted, and saturate.
+
+### Checking a field against the validation it came from
+
+`check_field_agreement` is the sanity check a generator should run on its own output: sample
+the field back at every atom, and confirm the hot places are the places validation
+complained about. It asks two deliberately asymmetric questions.
+
+**Recall** — does every atom the validator called an *outlier* reach the threshold? This is
+the guarantee such a field owes, and it always keys off the outlier boolean.
+
+**Explained** — is every hot atom near something that could have put signal there? This side
+takes a distance tolerance, because the splat is wider than the ~3.8 Å between adjacent Cα
+atoms, so a residue beside a bad one genuinely sits in its density; demanding identity would
+measure the kernel rather than the field. It also takes a `concerning` predicate, and **for a
+continuous field you must widen it** — pass `worse_than_percent(2.0)`, the generator's own
+"good" boundary. Judging against outliers alone reports correct behaviour as failure: the
+concern curve starts rising well before the outlier cut, so the field legitimately marks
+residues MolProbity never flags. Running the check the strict way on the 1TEC sample reported
+atoms 12–21 Å from any outlier as unexplained, which is far beyond a 2 Å splat and looked
+alarming; widening the predicate resolved all of them.
+
+Measured on the samples above, with `worse_than_percent(2.0)` and a 4 Å tolerance:
+
+| field | threshold | recall | explained |
+| --- | --- | --- | --- |
+| rama 1.0 Å | 0.5 | 1.000 (20/20) | 1.000 (50/50) |
+| rota 1.0 Å | 0.5 | 1.000 (95/95) | 1.000 (165/165) |
+| rama 2.0 Å | 0.5 | 1.000 (20/20) | 1.000 (34/34) |
+| rota 2.0 Å | 0.5 | 0.989 (94/95) | 1.000 (143/143) |
+
+The single 2.0 Å rota miss is one atom sampling 0.492 against a 0.5 threshold — the
+coarse-grid smoothing again, and it resolves at 1.0 Å. A shuffled field scores recall 0.000
+with 20 missed, so the check has teeth.
+
 ### Rebuild the frontend, and do not mistake a typecheck for one
 
 `npm run typecheck` is `tsc --noEmit`: it proves the TypeScript is well-typed and builds

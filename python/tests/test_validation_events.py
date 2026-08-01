@@ -1,0 +1,190 @@
+"""The shared validation-extraction layer.
+
+`pxviewer/validation_events.py` is copied verbatim into the sibling hotspots generator so
+both projects localize validation identically. These tests pin the two things that copy is
+supposed to guarantee: the same atoms get implicated as pxviewer's own scoring uses, and the
+field-agreement check actually discriminates a correct field from a wrong one.
+"""
+
+import numpy as np
+import pytest
+
+pytest.importorskip("mmtbx")
+
+from pxviewer import hotspots, validation_events as ve  # noqa: E402
+
+_MODEL = "python/pxviewer/data/1tec.pdb"
+
+
+@pytest.fixture(scope="module")
+def model():
+    from pxviewer.cctbx_io import read_model
+
+    return read_model(_MODEL)
+
+
+# -- the shared layer really is what pxviewer scores from ---------------------
+
+
+def test_severity_implicates_exactly_the_atoms_the_shared_extractor_picks(model):
+    """pxviewer's severity and the generator's concern must disagree about the *scale* and
+    agree about the *place*. Both read atoms from this module, so a rule change cannot land
+    in one project and not the other — this pins that they are in fact wired to it."""
+    n = model.get_number_of_atoms()
+    hierarchy = model.get_hierarchy()
+    names = [s.strip() for s in hierarchy.atoms().extract_name()]
+
+    for metric, severity_fn, allowed, forbidden in (
+        ("rama", hotspots.ramachandran_severity, ve.RAMA_ATOMS, None),
+        ("rota", hotspots.rotamer_severity, None, ve.MAINCHAIN),
+    ):
+        events = (ve.extract_ramachandran(hierarchy) if metric == "rama"
+                  else ve.extract_rotamer(hierarchy))
+        # Atoms the extractor implicates for results bad enough to score above zero.
+        cut = hotspots.RAMA_OUTLIER_PCT if metric == "rama" else hotspots.ROTA_OUTLIER_PCT
+        from_events = set()
+        for e in events:
+            if hotspots._surprisal_severity(np.array([e.value]), cut)[0] > 0:
+                from_events.update(e.atom_indices)
+
+        from_severity = set(np.flatnonzero(severity_fn(model, n) > 0).tolist())
+        assert from_severity == from_events, f"{metric}: severity and extractor disagree"
+
+        # And the localization rule itself still holds on the shared side.
+        for i in from_events:
+            if allowed is not None:
+                assert names[i] in allowed
+            if forbidden is not None:
+                assert names[i] not in forbidden
+
+
+def test_clash_events_are_one_per_contact_not_one_per_probe_dot(model):
+    """probe2 emits a row per surface dot, so a single contact arrives dozens of times.
+
+    A consumer that deposits one Gaussian per event would otherwise weight a contact by how
+    thoroughly it happens to be dotted — and the generator sums within a metric before
+    clipping, so that is the difference between a faithful field and a saturated one.
+    """
+    events = ve.extract_clashes(model)
+    assert events, "1TEC should have heavy-atom clashes"
+
+    pairs = [tuple(e.detail["pair"]) for e in events]
+    assert len(pairs) == len(set(pairs)), "each atom pair must appear exactly once"
+    # Far fewer events than dots, but the same atoms implicated as the per-dot roll-up.
+    assert len(events) < 2000
+    assert all(e.units == "angstrom" and e.value > 0 for e in events)
+    # The outlier flag is MolProbity's reporting boundary, not a re-derivation.
+    assert all(e.outlier == (e.value >= ve.CLASH_OUTLIER_A) for e in events)
+
+
+def test_native_values_are_never_calibrated(model):
+    """Percentages stay percentages. If this module ever started emitting a score, the two
+    projects would silently inherit one calibration and the split would be pointless."""
+    rama = ve.extract_ramachandran(model.get_hierarchy())
+    assert all(e.units == "percent" for e in rama)
+    assert max(e.value for e in rama) > 1.0        # a percent, not a probability
+    assert any(e.outlier for e in rama)
+    # The outlier flag is the validator's own, so it is recoverable exactly.
+    assert all(e.outlier == (e.value <= 0.05) or not e.outlier for e in rama)
+
+
+# -- the sanity check ---------------------------------------------------------
+
+
+def _synthetic():
+    """Ten atoms in a line 10 A apart; atoms 0-1 are the only outlier."""
+    sites = np.zeros((10, 3))
+    sites[:, 0] = np.arange(10) * 10.0
+    events = [
+        ve.ValidationEvent(metric="rama", value=0.01, units="percent", outlier=True,
+                           atom_indices=(0, 1)),
+        ve.ValidationEvent(metric="rama", value=1.0, units="percent", outlier=False,
+                           atom_indices=(4,)),
+        ve.ValidationEvent(metric="rama", value=50.0, units="percent", outlier=False,
+                           atom_indices=(8,)),
+    ]
+    return sites, events
+
+
+def test_agreement_fails_a_field_that_misses_a_real_outlier():
+    """Recall is the guarantee such a field owes: never lose a flagged outlier."""
+    sites, events = _synthetic()
+    sampled = np.zeros(10)
+    sampled[0] = 0.9          # only half the outlier is marked
+    report = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                      hot_threshold=0.5)
+    assert report.n_outlier_atoms == 2 and report.n_covered == 1
+    assert report.recall == pytest.approx(0.5)
+    assert [m["atom"] for m in report.missed] == [1]
+    assert not report.ok
+
+
+def test_agreement_accepts_spillover_but_not_signal_from_nowhere():
+    """A hot atom beside a bad one is expected — the splat is wider than a residue. A hot
+    atom with nothing bad anywhere near it is the real defect."""
+    sites, events = _synthetic()
+    sampled = np.zeros(10)
+    sampled[[0, 1]] = 1.0
+    sampled[2] = 0.8          # 10 A away: outside the tolerance below
+    report = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                      hot_threshold=0.5, tolerance_a=12.0)
+    assert report.recall == 1.0 and report.explained == 1.0 and report.ok
+
+    tight = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                     hot_threshold=0.5, tolerance_a=4.0)
+    assert tight.recall == 1.0                      # still marks every outlier
+    assert [u["atom"] for u in tight.unexplained] == [2]
+    assert tight.unexplained[0]["nearest_outlier_a"] == pytest.approx(10.0)
+
+
+def test_explanation_can_be_widened_past_the_outlier_cut():
+    """A continuous field is built from every result, not just flagged ones, so judging it
+    against outliers alone reports correct behaviour as failure."""
+    sites, events = _synthetic()
+    sampled = np.zeros(10)
+    sampled[[0, 1]] = 1.0
+    sampled[4] = 0.7          # an allowed-but-unusual residue the concern curve still marks
+
+    strict = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                      hot_threshold=0.5, tolerance_a=4.0)
+    assert [u["atom"] for u in strict.unexplained] == [4]
+
+    widened = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                       hot_threshold=0.5, tolerance_a=4.0,
+                                       concerning=ve.worse_than_percent(2.0))
+    assert widened.ok and widened.explained == 1.0
+    # Recall still keys off the outlier flag, not the widened predicate.
+    assert widened.n_outlier_atoms == 2
+
+
+def test_agreement_rejects_a_shuffled_field():
+    """The negative control: if a wrong field passes, the check is worthless."""
+    sites, events = _synthetic()
+    sampled = np.zeros(10)
+    sampled[[8, 9]] = 1.0     # hot at the far end, nowhere near the outlier
+    report = ve.check_field_agreement(events, sampled, sites, metric="rama",
+                                      hot_threshold=0.5, tolerance_a=4.0,
+                                      concerning=ve.worse_than_percent(2.0))
+    assert report.recall == 0.0
+    assert len(report.missed) == 2
+    assert not report.ok
+
+
+def test_per_atom_rolls_up_with_max_never_sum():
+    """One mistake seen several times is still one mistake — and a sum would rank a large
+    residue above a small one for no reason but atom count."""
+    events = [
+        ve.ValidationEvent(metric="clash", value=0.5, units="angstrom", outlier=True,
+                           atom_indices=(0, 1)),
+        ve.ValidationEvent(metric="clash", value=0.8, units="angstrom", outlier=True,
+                           atom_indices=(1, 2)),
+        ve.ValidationEvent(metric="rama", value=99.0, units="percent", outlier=False,
+                           atom_indices=(0,)),
+    ]
+    values = ve.per_atom(events, 4, metric="clash")
+    assert values.tolist() == [0.5, 0.8, 0.8, 0.0]   # atom 1 keeps its worst, not 1.3
+    assert ve.per_atom(events, 4, metric="clash", outliers_only=True).tolist() == \
+        [0.5, 0.8, 0.8, 0.0]
+    # A transform is how each project applies its own calibration to shared events.
+    doubled = ve.per_atom(events, 4, metric="clash", transform=lambda e: e.value * 2)
+    assert doubled.tolist() == [1.0, 1.6, 1.6, 0.0]
