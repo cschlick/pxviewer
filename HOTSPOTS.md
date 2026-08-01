@@ -953,11 +953,24 @@ so the older behaviour is recovered exactly.
 
 ### Verification
 
-- 1TEC sample: `debug/hotspots-sample/1tec_hotspots.json`, 38 × 30 × 35 at 2.0 Å, combined +
-  rama + rota. It contains **no clash field** — the manifest says so explicitly in
-  `molprobity.partial_generation`, because Probe is unavailable in the local cctbx
-  environment, and the importer surfaces that disclosure rather than silently showing a
-  short field list.
+- 1TEC samples, both combined + rama + rota (`debug/` is gitignored — regenerate rather than
+  expect them in a fresh clone):
+  - `debug/hotspots-sample/1tec_hotspots.json` — 38 × 30 × 35 at **2.0 Å**, ~157 KB per map.
+    The fast-viewing default.
+  - `debug/hotspots-sample-1A/1tec_hotspots.json` — 73 × 58 × 68 at **1.0 Å**, ~1.1 MB per
+    map. Use when the sampled numbers matter: at 2.0 Å the splat peak falls between voxels,
+    so E38 reads 0.483 against a deposited 0.699 and E185 0.201 against 0.273; at 1.0 Å the
+    same residues read 0.663 and 0.260. Same calibration either way — only sampling density
+    changes, which is why `--sigma` must not be touched to compensate.
+- Both contain **no clash field**. `mmtbx.validation.clashscore` shells out to the classic
+  Duke `probe` binary, which is not installed here; `mmtbx.probe2` *is* present (pxviewer's
+  own Clashes tab uses it) but clashscore has no probe2 path, so
+  `make_concern_maps.py` cannot complete in this environment with or without
+  `--heavy-atom-clashes`. The samples were made by driving the generator's own
+  `extract_ramachandran`/`extract_rotamer`, `build_concern_fields`, `empirical_percentile_field`
+  and `write_ccp4` and skipping only the clash step — no generator code was modified. The
+  manifest records the omission in `molprobity.partial_generation`, and the importer surfaces
+  that disclosure rather than silently showing a short field list.
 - Targeted tests only: `test_hotspots.py`, `test_volume_io.py`, `test_live_maps.py`. **Do not
   run the whole suite casually** — a previous full run consumed ~10 GB and locked the machine.
 - `test_desktop.py` needs `cd python` (it resolves a relative data path);
