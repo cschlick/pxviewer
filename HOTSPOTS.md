@@ -13,6 +13,10 @@
 > 3.84% is severity 0.43 and concern 0.000. See
 > [The second generation: imported concern fields](#the-second-generation-imported-concern-fields)
 > at the end for the current contract, what is implemented, and what is open.
+>
+> [HOTSPOTS_NOTES.md](HOTSPOTS_NOTES.md) is the handoff *to* that generator — what the viewer
+> reads from its manifest, the shared extraction module to copy, the field/validation sanity
+> check, and the open asks. Its counterpart coming the other way is `hotspots/VIEWER_NOTES.md`.
 
 Status: **implemented** — `python/pxviewer/hotspots.py`, the Hotspots tab (flame icon), and
 `python/tests/test_hotspots.py`. This records the reasoning behind the per-atom "hotspot"
