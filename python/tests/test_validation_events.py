@@ -88,6 +88,69 @@ def test_native_values_are_never_calibrated(model):
     assert all(e.outlier == (e.value <= 0.05) or not e.outlier for e in rama)
 
 
+# -- the covalent channel -----------------------------------------------------
+
+
+def test_bond_and_angle_events_carry_native_deviations(model):
+    """Deviations travel in their own units with the Z in detail, like every other channel."""
+    bonds = ve.extract_bonds(model)
+    angles = ve.extract_angles(model)
+    assert bonds and angles
+
+    assert all(e.units == "angstrom" and len(e.atom_indices) == 2 for e in bonds)
+    assert all(e.units == "degree" and len(e.atom_indices) == 3 for e in angles)
+    for events in (bonds, angles):
+        e = events[0]
+        # value is |delta| and delta is ideal - model, both recorded.
+        assert e.value == pytest.approx(abs(e.detail["delta"]))
+        assert e.detail["ideal"] - e.detail["model"] == pytest.approx(e.detail["delta"])
+        # Z is the deviation in sigmas, and the outlier flag is the 4-sigma cut.
+        assert e.detail["z"] == pytest.approx(abs(e.detail["delta"]) / e.detail["sigma"])
+        assert all(x.outlier == (x.detail["z"] >= 4.0) for x in events)
+
+    # 1TEC is a real refined structure: deviations are small but not all zero.
+    assert 0.0 < np.sqrt(np.mean([e.value ** 2 for e in bonds])) < 0.1
+
+
+def test_extract_bonds_takes_an_injected_geometry_so_a_host_keeps_its_edits():
+    """Building restraints inside the extractor would discard a host's custom restraints.
+
+    pxviewer folds user bond/angle edits in through ``edits.build_restraints`` (one build
+    path, one lock). A plain ``model.process(make_restraints=True)`` ignores those edits, and
+    since an existing restraints manager is reused rather than rebuilt, the edit-less manager
+    would then be inherited by minimize and drag — silently dropping the user's restraint.
+    Passing ``geometry=`` is how a host stays in control of its own build.
+    """
+    pytest.importorskip("rdkit")
+    pytest.importorskip("mmtbx.monomer_library.pdb_interpretation")
+    from pxviewer import edits, ligands
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        pytest.skip("no monomer library")
+
+    ligand = ligands.build_ligand_from_smiles("CCO", "EOH", (0, 0, 0))
+    plain = ligand.get_restraints_manager().geometry.pair_proxies().bond_proxies.simple.size()
+    ligand.unset_restraints_manager()
+
+    names = [a.name.strip() for a in ligand.get_hierarchy().atoms()]
+    sels = [edits.selection_for_atom(ligand, names.index("C1")),
+            edits.selection_for_atom(ligand, names.index("O1"))]
+    edits.set_edits(ligand, [{"kind": "bond", "selections": sels,
+                              "ideal": 2.4, "sigma": 0.02}])
+    edits.build_restraints(ligand, force=True)
+
+    events = ve.extract_bonds(
+        ligand, geometry=ligand.get_restraints_manager().geometry)
+    assert len(events) == plain + 1
+    assert any(e.detail["ideal"] == pytest.approx(2.4) for e in events)
+
+    # And the host's manager is untouched, so a later build still has the edit.
+    edits.build_restraints(ligand)
+    assert ligand.get_restraints_manager().geometry.pair_proxies(
+        ).bond_proxies.simple.size() == plain + 1
+
+
 # -- the sanity check ---------------------------------------------------------
 
 

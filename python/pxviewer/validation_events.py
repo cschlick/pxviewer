@@ -6,6 +6,27 @@ sibling ``hotspots/`` generator, and both then localize validation identically. 
 it, copy it whole and do not fork the localization rules — the point of the file is that a
 disagreement between the two projects becomes impossible rather than merely unlikely.
 
+**Consumers (three now).** Alongside pxviewer and ``hotspots/``, the cryo-EM per-atom RSR
+project (map-model) uses this file. Two families of revision, both additive and backward-
+compatible (existing ``extract_all`` callers see identical results):
+
+* GEOMETRY: bond/angle deviation events (:func:`extract_bonds` / :func:`extract_angles` —
+  the covalent channel, opt-in, not in the default ``metrics``), and region roll-ups
+  (:func:`restrict`, :func:`summarize`) that turn events over an atom subset into the
+  standard MolProbity aggregates (clashscore, rota/rama %, bond/angle RMSD).
+* MAP-FIT (:func:`extract_fit` and friends): how well the model fits the *map*, as colorable
+  per-atom/residue fields — ``cc_mapmodel`` / ``cc_half`` / ``cc_star`` / ``cc_gap`` (the
+  local CC* ceiling & gap), ``qscore``, ``local_resolution``, ``rsr`` (real-space R-value).
+  These are the fields the visualization consumer colors a surface by. They need a boxed
+  ``map_model_manager`` (maps) and heavier deps — a separate dependency tier, documented at
+  the MAP-FIT section header, with all imports function-local so a geometry-only consumer
+  never touches them.
+
+The invariant is unchanged and now spans both families: this file carries **native values
+and one localization** (which residue, which atoms, and — for a validator — its outlier
+boolean); turning a value into a score or a color is the caller's business. That is why a
+disagreement between the three projects becomes impossible rather than merely unlikely.
+
 **It carries native values, not calibrated ones.** A Ramachandran result travels as its
 probability *percentage*, a rotamer result as its percentage, a clash as its *overlap in
 angstroms* — plus the validator's own ``outlier`` boolean. Turning those into a score is the
@@ -62,6 +83,16 @@ _HYDROGEN = frozenset({"H", "D"})
 #: is defined in this file.
 CLASH_OUTLIER_A = 0.40
 
+#: probe2 dot types that are hydrogen bonds, not steric clashes. They sit well inside the
+#: vdW sum by construction, so they carry a negative gap and would be counted as clashes.
+_HBOND_DOT_TYPES = frozenset({"hb"})
+
+#: MolProbity flags a covalent bond or angle as an outlier at |Z| >= 4 sigma from its
+#: restraint ideal. Recorded as provenance for the ``outlier`` flag only; the native
+#: deviation (angstrom / degree) travels as the event ``value``, the Z in ``detail``.
+BOND_OUTLIER_SIGMA = 4.0
+ANGLE_OUTLIER_SIGMA = 4.0
+
 Xyz = Tuple[float, float, float]
 
 
@@ -92,7 +123,9 @@ class ValidationEvent:
     would report, whatever its own scoring does.
     """
 
-    metric: str                       # 'rama' | 'rota' | 'clash'
+    metric: str                       # geometry: 'rama'|'rota'|'clash'|'bond'|'angle'
+                                      # map-fit:  'cc_mapmodel'|'cc_half'|'cc_star'|
+                                      #           'cc_gap'|'qscore'|'local_resolution'|'rsr'
     value: float                      # native: percent for rama/rota, A overlap for clash
     units: str                        # 'percent' | 'angstrom'
     outlier: bool                     # the validator's own call
@@ -316,15 +349,23 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
     # otherwise weight a contact by how much of it happens to be dotted.
     worst: Dict[Tuple[int, int], float] = {}
     for row in dots:
+        # A hydrogen bond has the donor and acceptor well inside the vdW sum, so it shows a
+        # negative gap and would otherwise be counted as a steric clash. MolProbity subtracts
+        # H-bonded pairs before computing clashscore, and probe2 labels them, so drop them
+        # here rather than let every consumer rediscover the inflation.
+        if str(row.get("type", "")).strip() in _HBOND_DOT_TYPES:
+            continue
         # probe2 reports a signed gap; an overlap is negative, so flip it.
         overlap = -float(row.get("gap", 0.0))
         if overlap <= 0:
             continue
         a = side_index(row.get("src") or {})
         b = side_index(row.get("target") or {})
-        pair = tuple(sorted(i for i in (a, b) if i is not None))
-        if not pair:
+        # Both ends must resolve. A row where only one side maps is not a pair, and admitting
+        # it as a one-element "pair" invents a contact and inflates the clash count.
+        if a is None or b is None or a == b:
             continue
+        pair = (a, b) if a < b else (b, a)
         if overlap > worst.get(pair, 0.0):
             worst[pair] = overlap
 
@@ -348,14 +389,156 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
     return events
 
 
+# -- bond / angle geometry (the covalent channel) -----------------------------
+#
+# Bond and angle deviations complete the geometry set: rama/rota cover torsions,
+# clash the steric channel, these the covalent one. Unlike rama/rota (hierarchy)
+# and clash (probe2), they read the RESTRAINTS. The event value is the native
+# deviation (angstrom for a bond, degree for an angle); the outlier boolean is
+# |Z| >= the sigma cut, with Z and sigma in ``detail`` -- same split as everywhere
+# else.
+#
+# PASS ``geometry=`` IF YOUR PROJECT OWNS A RESTRAINT BUILD. The fallback below calls
+# ``model.process(make_restraints=True)`` on the caller's model. That is a mutation, and it
+# is not a quiet one -- measured on 1TEC, asking for the covalent channel changes the
+# *rotamer* answer (26 outliers -> 27, same 2737 atoms), because process() sorts the
+# hierarchy's atoms in place and resets their serials. Three consequences a host will care
+# about:
+#
+#   * validation results move, as above;
+#   * every atom index recorded before the build points at a different atom (``extract_all``
+#     defends against this by building first, but a caller holding its own earlier indices
+#     cannot be);
+#   * the build is not serialised, and a plain ``process()`` ignores any custom bond/angle
+#     edits the host carries on the model. Since an existing restraints manager is reused
+#     rather than rebuilt, that edit-less manager is then inherited by whatever runs next --
+#     in pxviewer, silently dropping a user's custom restraints from minimize and drag, which
+#     is why ``edits.build_restraints`` exists (one build path, one lock).
+#
+# Injecting geometry is the same "pass what you already have" contract as ``dots=`` and
+# ``ramalyze_result=`` elsewhere in this file, and it avoids all three.
+
+
+def covalent_origin_ids() -> frozenset:
+    """Restraint origins that count as covalent geometry for the bond/angle channels.
+
+    A restraints manager can also carry secondary-structure **hydrogen-bond** distance and
+    angle restraints in the very same proxy arrays; counting those as covalent geometry
+    inflates ``bond_rmsd`` / ``angle_rmsd`` against any phenix or MolProbity number.
+
+    cctbx's own ``get_covalent_bond_proxies`` keeps origin ``'covalent geometry'`` alone,
+    which is too narrow here: a restraint the user **declared** (origin ``'edits'`` — a custom
+    bond or angle a host application let them add) is a real covalent restraint they expect to
+    see, and silently dropping it makes the channel disagree with the model being refined.
+    So both are kept and everything else is excluded.
+    """
+    from cctbx.geometry_restraints.linking_class import linking_class
+
+    lc = linking_class()
+    allowed = set()
+    for name in ("covalent geometry", "edits"):
+        try:
+            allowed.add(lc.get_origin_id(name))
+        except Exception:  # pragma: no cover - origin missing in this cctbx
+            pass
+    return frozenset(allowed or {0})
+
+
+def _restraints_geometry(model: Any):
+    """Fallback restraint build for a standalone consumer. See the section note above:
+    hosts with their own build path should pass ``geometry=`` instead of relying on this."""
+    if getattr(model, "restraints_manager", None) is None:
+        model.add_crystal_symmetry_if_necessary()
+        model.process(make_restraints=True)
+    return model.get_restraints_manager().geometry
+
+
+def _covalent_events(model, metric, proxies, restraint_ctor, ideal_attr, model_attr,
+                     value_units, sigma_outlier):
+    from cctbx import geometry_restraints as gr  # noqa: F401  (restraint_ctor lives here)
+    hierarchy = model.get_hierarchy()
+    sites = model.get_sites_cart()
+    xyz = _xyz(hierarchy)
+    atoms = list(hierarchy.atoms_with_labels())
+    events: List[ValidationEvent] = []
+    for proxy in proxies:
+        r = restraint_ctor(sites_cart=sites, proxy=proxy)
+        sigma = (1.0 / proxy.weight ** 0.5) if proxy.weight > 0 else float("nan")
+        z = abs(r.delta) / sigma if (sigma == sigma and sigma > 0) else 0.0
+        iseqs = tuple(int(i) for i in proxy.i_seqs)
+        first = atoms[iseqs[0]]
+        events.append(ValidationEvent(
+            metric=metric, value=abs(float(r.delta)), units=value_units,
+            outlier=bool(z >= sigma_outlier),
+            residue=ResidueKey(first.chain_id.strip(), int(first.resseq_as_int()),
+                               first.icode.strip()),
+            atom_indices=iseqs,
+            atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in iseqs),
+            detail={"z": float(z), "sigma": float(sigma),
+                    "ideal": float(getattr(proxy, ideal_attr)),
+                    "model": float(getattr(r, model_attr)), "delta": float(r.delta)}))
+    return events
+
+
+def extract_bonds(model: Any, *, geometry=None, sigma_outlier: float = BOND_OUTLIER_SIGMA
+                  ) -> List[ValidationEvent]:
+    """Every covalent bond deviation, as its |delta| in angstroms, on its two atoms.
+
+    ``geometry`` is a ``geometry_restraints`` manager the caller already built — pass it if
+    your project owns a restraint-build path (see the section note above); omitted, restraints
+    are built on ``model`` as a fallback. ``outlier`` is |Z| >= 4 sigma.
+    """
+    from cctbx import geometry_restraints as gr
+    geo = _restraints_geometry(model) if geometry is None else geometry
+    sites = model.get_sites_cart()
+    # Covalent (and user-declared) only -- see covalent_origin_ids.
+    #
+    # NOTE: the asu half is excluded. Symmetry-related covalent bonds (a cross-symmetry
+    # disulfide, a metal link) are reported there with i_seq/j_seq rather than i_seqs and
+    # need the asu_mappings overload, so they are absent from these events and from
+    # bond_rmsd. Fine for a boxed/P1 model; state it if you rely on this for a crystal form.
+    allowed = covalent_origin_ids()
+    simple = [p for p in geo.pair_proxies(sites_cart=sites).bond_proxies.simple
+              if p.origin_id in allowed]
+    return _covalent_events(model, "bond", simple, gr.bond,
+                            "distance_ideal", "distance_model", "angstrom", sigma_outlier)
+
+
+def extract_angles(model: Any, *, geometry=None, sigma_outlier: float = ANGLE_OUTLIER_SIGMA
+                   ) -> List[ValidationEvent]:
+    """Every covalent bond-angle deviation, as its |delta| in degrees, on its three atoms.
+
+    ``geometry`` as in :func:`extract_bonds`. ``outlier`` is |Z| >= 4 sigma.
+    """
+    from cctbx import geometry_restraints as gr
+    geo = _restraints_geometry(model) if geometry is None else geometry
+    # Covalent (and user-declared) only, as in extract_bonds: secondary-structure restraints
+    # add H-bond angle proxies to the same array.
+    allowed = covalent_origin_ids()
+    proxies = [p for p in geo.angle_proxies if p.origin_id in allowed]
+    return _covalent_events(model, "angle", proxies, gr.angle,
+                            "angle_ideal", "angle_model", "degree", sigma_outlier)
+
+
 def extract_all(model: Any, *, dots=None, data_manager: Any = None,
-                ramalyze_result=None, rotalyze_result=None,
+                ramalyze_result=None, rotalyze_result=None, geometry=None,
                 metrics: Sequence[str] = ("rama", "rota", "clash")) -> List[ValidationEvent]:
     """Every event for ``metrics``. ``model`` is an mmtbx model manager.
 
-    Clash needs a model (probe2 runs on one); rama/rota need only its hierarchy. Pass any
-    result you already have so an expensive validator is not run twice.
+    Clash needs a model (probe2 runs on one); rama/rota need only its hierarchy;
+    bond/angle read the restraints. ``metrics`` defaults to the three original
+    channels -- pass ``metrics=("rama","rota","clash","bond","angle")`` for the full
+    covalent set. Pass any result you already have (``dots``, ``ramalyze_result``,
+    ``rotalyze_result``, ``geometry``) so an expensive step is not repeated -- and, for
+    ``geometry``, so this file does not build restraints behind your project's back.
     """
+    # Restraints FIRST when the covalent channels are wanted. Building them runs
+    # model.process(), which sorts the hierarchy's atoms in place and resets their serials —
+    # so every atom index recorded before that point would silently start pointing at a
+    # different atom. Doing it up front means one atom numbering for the whole call.
+    if geometry is None and ("bond" in metrics or "angle" in metrics):
+        geometry = _restraints_geometry(model)
+
     hierarchy = model.get_hierarchy()
     index = residue_atom_index(hierarchy)
     events: List[ValidationEvent] = []
@@ -366,6 +549,284 @@ def extract_all(model: Any, *, dots=None, data_manager: Any = None,
         events += extract_rotamer(hierarchy, index=index, rotalyze_result=rotalyze_result)
     if "clash" in metrics:
         events += extract_clashes(model, dots=dots, data_manager=data_manager)
+    if "bond" in metrics:
+        events += extract_bonds(model, geometry=geometry)
+    if "angle" in metrics:
+        events += extract_angles(model, geometry=geometry)
+    return events
+
+
+# =============================================================================
+# MAP-FIT channels -- how well the model fits the MAP, here, as colorable fields.
+#
+# These are not "what is wrong" (a validator's outlier) but "how good is the fit"
+# (a continuous per-atom/residue quantity): the visualization consumer colors a
+# surface by them, and a scorer thresholds them. Same ValidationEvent container,
+# same localization and roll-ups -- ``value`` stays native (a correlation, an
+# angstrom, an R-value) and ``outlier`` is used only where a metric has a real
+# outlier notion (the gap's overfit: cc_mapmodel > cc_star).
+#
+# DEPENDENCY TIER (heavier than the geometry channels). These need a boxed
+# ``map_model_manager`` carrying the full map (``map_manager``) and, for most,
+# both half maps (``map_manager_1`` / ``map_manager_2``) + a model -- plus the
+# ``local_cc_star`` cctbx branch (cc*/gap) and ``cctbx.maptbx.qscore``. All imports
+# are function-local, so a consumer that only wants geometry never touches them.
+# The convention (radius, fsc_cutoff, shells) is passed in, never imported, so the
+# file stays standalone; a caller supplies its own frozen convention.
+# =============================================================================
+
+#: Q-score radial shells (angstrom), 0.0..2.0 by 0.1 -- the standard shell set.
+#: Q-score probe geometry. These are cctbx's own defaults (``cctbx.programs.qscore``'s phil:
+#: 20 shells from 0.1 to 2.0 A, 32 probes, rtol 0.9), and matching them is what makes the
+#: result *the* Q-score ``phenix.qscore`` reports rather than a lookalike computed some other
+#: way. The shells and probe count are part of the metric's definition, not tuning knobs.
+#:
+#: A shell at radius 0.0 in particular is not a free choice: every probe collapses onto the
+#: atom centre, the rejection mask keeps them all, and the shell contributes N duplicate
+#: copies of the peak-anchored centre density — a systematic upward bias against phenix.
+QSCORE_SHELLS = tuple(float(r) for r in np.linspace(0.1, 2.0, 20))
+QSCORE_N_PROBES = 32
+QSCORE_RTOL = 0.9
+
+
+def _residue_key(chain, resseq, icode):
+    try:
+        return ResidueKey(str(chain).strip(), int(str(resseq).strip()),
+                          str(icode or "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_map_model_cc(mmm, d_min, *, radius=None, index=None,
+                         components=("cc_mapmodel", "cc_half", "cc_star", "cc_gap"),
+                         scattering="electron") -> List[ValidationEvent]:
+    """Per-residue local map-model CC, the half-map CC* ceiling, and the gap
+    (``mmtbx.maps.local_cc_star``). One event per residue per requested component,
+    so each is its own colorable field. ``mmm`` boxed with map_manager +
+    map_manager_1/2 + model; radius default ``max(2.5, d_min)``.
+    """
+    try:
+        from mmtbx.maps import local_cc_star as lcs
+    except ImportError as exc:   # pragma: no cover - depends on the cctbx build
+        raise ImportError(
+            "the cc_mapmodel / cc_half / cc_star / cc_gap channels need "
+            "mmtbx.maps.local_cc_star, which is not in every cctbx build (it is absent "
+            "from cctbx-base as installed here). Drop 'cc_gap' and the other cc_* entries "
+            "from extract_fit(metrics=...) to use the channels that are available, or "
+            "install a cctbx carrying that module.") from exc
+    radius = max(2.5, float(d_min)) if radius is None else float(radius)
+    model = mmm.model()
+    model.setup_scattering_dictionaries(scattering_table=scattering)
+    # scattering_table has to be given to generate_map too: it resolves its own from the
+    # manager, not from the model's dictionaries, so without this a cryo-EM model map can be
+    # computed with X-ray form factors while the call reads as if 'electron' were in force.
+    mmm.generate_map(model=model, d_min=float(d_min), map_id="model_map",
+                     scattering_table=scattering)
+    hierarchy = model.get_hierarchy()
+    index = residue_atom_index(hierarchy) if index is None else index
+    xyz = _xyz(hierarchy)
+    out = lcs.per_residue_local_cc_star(
+        map_data_full=mmm.map_manager().map_data(),
+        model_map_data=mmm.get_map_manager_by_id("model_map").map_data(),
+        unit_cell=mmm.map_manager().crystal_symmetry().unit_cell(), model=model,
+        map_data_half1=mmm.get_map_manager_by_id("map_manager_1").map_data(),
+        map_data_half2=mmm.get_map_manager_by_id("map_manager_2").map_data(),
+        radius=radius)
+    events: List[ValidationEvent] = []
+    for r in out.residues:
+        key = _residue_key(r.chain_id, r.resseq, r.icode)
+        picked = tuple(atoms_of(index, key)) if key is not None else ()
+        axyz = tuple(tuple(float(c) for c in xyz[i]) for i in picked)
+        vals = {"cc_mapmodel": r.cc_mapmodel, "cc_half": r.cc_half,
+                "cc_star": r.cc_star, "cc_gap": r.cc_gap}
+        overfit = (r.cc_star is not None and r.cc_mapmodel is not None
+                   and r.cc_mapmodel > r.cc_star)
+        for comp in components:
+            v = vals.get(comp)
+            if v is None:
+                continue
+            events.append(ValidationEvent(
+                metric=comp, value=float(v), units="correlation",
+                outlier=bool(comp == "cc_gap" and overfit),
+                residue=key, atom_indices=picked, atoms_xyz=axyz,
+                detail={"radius": radius}))
+    return events
+
+
+def extract_qscore(mmm, *, shells=None, n_probes=QSCORE_N_PROBES, rtol=QSCORE_RTOL,
+                   index=None) -> List[ValidationEvent]:
+    """Q-score per ATOM (``cctbx.maptbx.qscore``). Natively per-atom, one event per atom.
+
+    Three things here are not optional, and each was got wrong once:
+
+    * **Run against a copy.** ``calc_qscore`` strips hydrogens from the model it is handed and
+      calls ``set_model`` back onto the manager. Handed a live one, it swaps the model its
+      owner is using out from under it — in pxviewer, mid-session, while the viewer streams
+      from it.
+    * **Realign the result.** ``calc_qscore`` returns one value per **non-hydrogen** atom, not
+      one per atom. Zipping it against the full atom list assigns every score to the wrong
+      atom as soon as the model has hydrogens, silently — no exception, just wrong numbers on
+      the wrong atoms. Hydrogens get ``nan`` (unmeasured), and the count is checked.
+    * **Match the reference convention.** The shells and probe count *are* the definition; a
+      different set is a different number wearing the same name. The defaults here are
+      cctbx's own (see ``cctbx.programs.qscore``'s phil), so this is the value
+      ``phenix.qscore`` reports rather than a lookalike.
+    """
+    from cctbx.maptbx.qscore import calc_qscore
+
+    model = mmm.model()
+    hierarchy = model.get_hierarchy()
+    elements = [e.strip().upper() for e in hierarchy.atoms().extract_element()]
+    scored_atoms = np.array([e not in _HYDROGEN for e in elements], dtype=bool)
+
+    result = calc_qscore(mmm.deep_copy(),
+                         shells=list(QSCORE_SHELLS if shells is None else shells),
+                         n_probes=n_probes, rtol=rtol, nproc=1)
+    scored = np.asarray(result["qscore_per_atom"], dtype=float).reshape(-1)
+    expected = int(scored_atoms.sum())
+    if scored.size != expected:
+        raise ValueError(
+            f"q-score returned {scored.size} values for {expected} non-hydrogen atoms")
+    q = np.full(len(elements), np.nan, dtype=float)
+    q[scored_atoms] = scored
+
+    xyz = _xyz(hierarchy)
+    atoms = list(hierarchy.atoms_with_labels())
+    events: List[ValidationEvent] = []
+    for i in range(q.size):
+        if q[i] != q[i]:   # hydrogens: never scored, so absent rather than a bad fit
+            continue
+        a = atoms[i]
+        events.append(ValidationEvent(
+            metric="qscore", value=float(q[i]), units="correlation", outlier=False,
+            residue=ResidueKey(a.chain_id.strip(), int(a.resseq_as_int()), a.icode.strip()),
+            atom_indices=(int(i),), atoms_xyz=(tuple(float(c) for c in xyz[i]),), detail={}))
+    return events
+
+
+#: FSC threshold defining "resolved" for the local-resolution map. 0.143 is the convention
+#: cctbx defaults to and the one ``pxviewer.volume_io.local_resolution_from_half_maps``
+#: already uses. It matters that these agree: the value travels as plain angstroms under one
+#: metric name, so a field built at 0.5 is systematically worse-looking than one built at
+#: 0.143 and any palette or threshold calibrated on one misreads the other.
+LOCAL_RESOLUTION_FSC_CUTOFF = 0.143
+
+
+def extract_local_resolution(mmm, *, fsc_cutoff=LOCAL_RESOLUTION_FSC_CUTOFF, n_bins=20,
+                             smoothing_radius_ratio=1.0, index=None
+                             ) -> List[ValidationEvent]:
+    """Local resolution (angstrom) per ATOM, half-map FSC
+    (``map_model_manager.local_resolution_map``). Needs both half maps.
+
+    **Lower is better here** — the only channel in this file with that polarity. Carried
+    native so a colorer inverts as it likes, but note that :func:`per_atom` combines with a
+    max, which on an inverted field selects the *best*-resolved value rather than the worst.
+    Pass a negating ``transform=`` if you want worst-case behaviour from it.
+    """
+    from cctbx import maptbx
+    lr = mmm.local_resolution_map(
+        map_id_1="map_manager_1", map_id_2="map_manager_2",
+        fsc_cutoff=float(fsc_cutoff), n_bins=n_bins,
+        smoothing_radius_ratio=smoothing_radius_ratio).map_data()
+    model = mmm.model()
+    xrs = model.get_xray_structure()
+    sf = xrs.unit_cell().fractionalize(xrs.sites_cart())
+    hierarchy = model.get_hierarchy()
+    xyz = _xyz(hierarchy)
+    atoms = list(hierarchy.atoms_with_labels())
+    events: List[ValidationEvent] = []
+    for i in range(sf.size()):
+        v = maptbx.eight_point_interpolation(lr, sf[i])
+        if v != v:
+            continue
+        a = atoms[i]
+        events.append(ValidationEvent(
+            metric="local_resolution", value=float(v), units="angstrom", outlier=False,
+            # Carry the residue like every other channel: a roll-up or join keyed on
+            # .residue would otherwise drop this channel entirely and silently.
+            residue=ResidueKey(a.chain_id.strip(), int(a.resseq_as_int()), a.icode.strip()),
+            atom_indices=(int(i),),
+            atoms_xyz=(tuple(float(c) for c in xyz[i]),), detail={}))
+    return events
+
+
+def extract_rsr(mmm, d_min, *, radius=None, scattering="electron", index=None
+                ) -> List[ValidationEvent]:
+    """Real-space R-value per residue: R = sum|obs - calc| / sum|obs + calc| over a
+    radius-angstrom window, with calc LINEARLY SCALED to obs over the molecular
+    envelope (least squares) so the R-value is not dominated by a global scale
+    mismatch. obs = full map, calc = model map at ``d_min``.
+
+    NOTE: this is the pipeline's real-space R-value; it still owes a calibration vs
+    ``phenix.real_space_correlation`` / EDSTATS before its numbers are quoted
+    (map-model V2 Gate 0.3). The extractor is stable; the *validation* is the open item.
+    """
+    from cctbx import maptbx
+    from scitbx.array_family import flex
+    radius = max(2.5, float(d_min)) if radius is None else float(radius)
+    model = mmm.model()
+    model.setup_scattering_dictionaries(scattering_table=scattering)
+    mmm.generate_map(model=model, d_min=float(d_min), map_id="rsr_calc")
+    uc = mmm.map_manager().crystal_symmetry().unit_cell()
+    obs = mmm.map_manager().map_data()
+    calc = mmm.get_map_manager_by_id("rsr_calc").map_data()
+    n_real = obs.all()
+    xrs = model.get_xray_structure()
+    sites = xrs.sites_cart()
+    obs_np = obs.as_1d().as_numpy_array().astype(float)
+    calc_np = calc.as_1d().as_numpy_array().astype(float)
+    env = maptbx.grid_indices_around_sites(
+        uc, n_real, n_real, sites, flex.double(sites.size(), radius))
+    e = np.array(list(env), dtype=np.int64)
+    A = np.vstack([calc_np[e], np.ones(e.size)]).T
+    a, b = np.linalg.lstsq(A, obs_np[e], rcond=None)[0]
+    calc_s = a * calc_np + b
+    hierarchy = model.get_hierarchy()
+    index = residue_atom_index(hierarchy) if index is None else index
+    xyz = _xyz(hierarchy)
+    events: List[ValidationEvent] = []
+    for ch in hierarchy.only_model().chains():
+        for rg in ch.residue_groups():
+            atoms = rg.atoms()
+            sel = maptbx.grid_indices_around_sites(
+                uc, n_real, n_real, atoms.extract_xyz(), flex.double(atoms.size(), radius))
+            idx = np.array(list(sel), dtype=np.int64)
+            if idx.size < 10:
+                continue
+            oo, cc = obs_np[idx], calc_s[idx]
+            denom = float(np.abs(oo + cc).sum())
+            if denom <= 0:
+                continue
+            key = ResidueKey(ch.id.strip(), rg.resseq_as_int(), rg.icode.strip())
+            picked = tuple(atoms_of(index, key))
+            events.append(ValidationEvent(
+                metric="rsr", value=float(np.abs(oo - cc).sum() / denom), units="rvalue",
+                outlier=False, residue=key, atom_indices=picked,
+                atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in picked),
+                detail={"radius": radius, "scale_a": float(a), "scale_b": float(b)}))
+    return events
+
+
+def extract_fit(mmm, d_min, *,
+                metrics: Sequence[str] = ("cc_gap", "qscore", "local_resolution", "rsr"),
+                radius=None, index=None) -> List[ValidationEvent]:
+    """Map-fit events for ``metrics`` on a boxed ``map_model_manager`` -- the map-fit
+    counterpart to :func:`extract_all`. ``cc_mapmodel``/``cc_half``/``cc_star``/``cc_gap``
+    all come from one ``extract_map_model_cc`` call. A consumer wanting every colorable
+    field runs ``extract_all(mmm.model()) + extract_fit(mmm, d_min)``.
+    """
+    hierarchy = mmm.model().get_hierarchy()
+    index = residue_atom_index(hierarchy) if index is None else index
+    cc = tuple(m for m in metrics if m in ("cc_mapmodel", "cc_half", "cc_star", "cc_gap"))
+    events: List[ValidationEvent] = []
+    if cc:
+        events += extract_map_model_cc(mmm, d_min, radius=radius, index=index, components=cc)
+    if "qscore" in metrics:
+        events += extract_qscore(mmm, index=index)
+    if "local_resolution" in metrics:
+        events += extract_local_resolution(mmm, index=index)
+    if "rsr" in metrics:
+        events += extract_rsr(mmm, d_min, radius=radius, index=index)
     return events
 
 
@@ -373,7 +834,8 @@ def extract_all(model: Any, *, dots=None, data_manager: Any = None,
 
 
 def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optional[str] = None,
-             transform=None, outliers_only: bool = False) -> np.ndarray:
+             transform=None, outliers_only: bool = False, skip_nonpositive: bool = True,
+             fill: float = 0.0) -> np.ndarray:
     """Roll events onto atoms with a **max**, never a sum.
 
     Max because one physical mistake is routinely seen several times — a badly placed atom
@@ -383,19 +845,26 @@ def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optiona
 
     ``transform(event) -> float`` converts a native value to whatever scale the caller uses;
     the default records the native value itself.
+
+    Defaults suit a geometry SEVERITY field (non-negative, unmarked atoms = 0). For a
+    continuous MAP-FIT field (cc / Q-score / local resolution, which are one value per atom
+    and may be <= 0) pass ``skip_nonpositive=False`` to keep every value and ``fill=np.nan``
+    so unmodelled atoms read as absent rather than a real zero.
     """
-    out = np.zeros(int(n_atoms), dtype=float)
+    out = np.full(int(n_atoms), float(fill), dtype=float)
+    seen = np.zeros(int(n_atoms), dtype=bool)
     for event in events:
         if metric is not None and event.metric != metric:
             continue
         if outliers_only and not event.outlier:
             continue
         value = float(event.value) if transform is None else float(transform(event))
-        if value <= 0:
+        if skip_nonpositive and value <= 0:
             continue
         for i in event.atom_indices:
-            if 0 <= i < n_atoms and value > out[i]:
+            if 0 <= i < n_atoms and (not seen[i] or value > out[i]):
                 out[i] = value
+                seen[i] = True
     return out
 
 
@@ -427,6 +896,60 @@ def worse_than_percent(cut: float):
     ``concerning=`` to judge such a field against what actually fed it.
     """
     return lambda e: e.units == "percent" and float(e.value) <= float(cut)
+
+
+# -- region roll-up -----------------------------------------------------------
+
+
+def restrict(events: Iterable[ValidationEvent], atom_indices: Iterable[int]
+             ) -> List[ValidationEvent]:
+    """Events that TOUCH a region, given as a set of atom indices.
+
+    Membership is by atom, not residue, because a clash / bond / angle spans
+    several residues and the event carries all of them: a clash reaching into the
+    region is the region's problem even if its "first" atom sits outside. Every
+    event with at least one implicated atom in ``atom_indices`` is kept. (rama/rota
+    are single-residue, so this reduces to residue membership for them.)
+    """
+    region = set(int(i) for i in atom_indices)
+    return [e for e in events if region.intersection(e.atom_indices)]
+
+
+def summarize(events: Iterable[ValidationEvent], *, n_atoms: Optional[int] = None
+              ) -> Dict[str, float]:
+    """Standard MolProbity-style aggregates over a set of events -- whole model, or a
+    region from :func:`restrict`. Objective counts and the conventional derived
+    numbers only; no project-specific calibration (that stays with the caller).
+
+    Returns, for each metric present: ``n_<metric>`` and ``n_<metric>_outliers``, plus
+      ``rota_outlier_pct`` / ``rama_outlier_pct`` = 100 * outliers / evaluated residues,
+      ``clashscore``       = 1000 * clash outliers / ``n_atoms``  (needs ``n_atoms``;
+                             for an H-less model this normalises on heavy atoms -- state it),
+      ``bond_rmsd`` (A) / ``angle_rmsd`` (deg) = RMS of the native deviations.
+    """
+    by: Dict[str, List[ValidationEvent]] = {}
+    for e in events:
+        by.setdefault(e.metric, []).append(e)
+
+    def rms(vals):
+        vals = [v for v in vals if v == v]
+        return math.sqrt(sum(v * v for v in vals) / len(vals)) if vals else float("nan")
+
+    out: Dict[str, float] = {}
+    for metric, evs in by.items():
+        out["n_%s" % metric] = len(evs)
+        out["n_%s_outliers" % metric] = sum(1 for e in evs if e.outlier)
+    if "rota" in by:
+        out["rota_outlier_pct"] = 100.0 * out["n_rota_outliers"] / max(1, out["n_rota"])
+    if "rama" in by:
+        out["rama_outlier_pct"] = 100.0 * out["n_rama_outliers"] / max(1, out["n_rama"])
+    if "clash" in by and n_atoms:
+        out["clashscore"] = 1000.0 * out["n_clash_outliers"] / float(n_atoms)
+    if "bond" in by:
+        out["bond_rmsd"] = rms([e.value for e in by["bond"]])
+    if "angle" in by:
+        out["angle_rmsd"] = rms([e.value for e in by["angle"]])
+    return out
 
 
 # -- the sanity check ---------------------------------------------------------
@@ -537,12 +1060,19 @@ if __name__ == "__main__":  # pragma: no cover - manual self-test
     path = sys.argv[1]
     inp = iotbx.pdb.input(file_name=path)
     model = model_manager(model_input=inp, log=None)
-    events = extract_all(model)
+    events = extract_all(model, metrics=("rama", "rota", "clash", "bond", "angle"))
     n = model.get_number_of_atoms()
     print(f"{path}: {n} atoms, {len(events)} events")
-    for metric in ("rama", "rota", "clash"):
+    for metric in ("rama", "rota", "clash", "bond", "angle"):
         subset = [e for e in events if e.metric == metric]
         flagged = outlier_atoms(subset, metric=metric)
         print(f"  {metric:6s} {len(subset):5d} events, "
               f"{sum(1 for e in subset if e.outlier):4d} outliers, "
               f"{len(flagged):5d} atoms implicated")
+    print("  whole-model summary:", summarize(events, n_atoms=n))
+    # region roll-up demo: first ~15 residues by atom
+    index = residue_atom_index(model.get_hierarchy())
+    region_keys = sorted(index, key=lambda k: (k.chain, k.resseq, k.icode))[:15]
+    region_atoms = [i for k in region_keys for i in atoms_of(index, k)]
+    print(f"  region ({len(region_keys)} residues, {len(region_atoms)} atoms) summary:",
+          summarize(restrict(events, region_atoms), n_atoms=len(region_atoms)))
