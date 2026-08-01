@@ -490,6 +490,7 @@ def _make_bridge():
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
         validation_stale_changed = Signal(bool)  # active model moved since it was last validated
         hotspots_ready = Signal(object)     # hotspots finished: (model id, Hotspots, columns, rows)
+        concern_ready = Signal(object)      # concern fields imported: (model id, summary, columns, rows)
         busy_changed = Signal(object)       # (running: bool, label: str) — drives the busy bar
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
         ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
@@ -1362,6 +1363,7 @@ class ControlsWindow:
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
         desktop.bridge.validation_stale_changed.connect(self._set_validation_stale)
         desktop.bridge.hotspots_ready.connect(self._on_hotspots_ready)
+        desktop.bridge.concern_ready.connect(self._on_concern_ready)
         desktop.bridge.busy_changed.connect(self._on_busy_changed)
         desktop.bridge.minimizing_changed.connect(self._on_minimizing_changed)
         desktop.bridge.ligand_placed.connect(self._on_ligand_placed)
@@ -2360,9 +2362,12 @@ class ControlsWindow:
         layout.setSpacing(10)
 
         intro = QLabel(
-            "Aggregates Ramachandran, rotamer and clash severity into one score per "
-            "atom, and colors the model by it — green clean, yellow at the outlier "
-            "threshold, red past it. Work down the table; the columns show what fired.")
+            "Find hotspots scores this model itself, on the severity scale where 1.0 is the "
+            "outlier cut. Open volume… imports bounded concern fields from Hotspots, where "
+            "concern controls both hue and opacity on a fixed 0–1 scale. The combined field "
+            "means where to look, not model quality; component fields say which validation "
+            "source raised the concern. A model shows one or the other, never both — the two "
+            "scales are not interchangeable.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
 
@@ -2390,13 +2395,24 @@ class ControlsWindow:
         action_row.addWidget(find)
         open_volume = QPushButton("Open volume…")
         open_volume.setToolTip(
-            "Open a precomputed hotspot-severity map and display it without running any "
-            "validation or map-model calculations. Voxel values must already be in hotspot "
-            "severity units: 1.0 is the outlier threshold.")
+            "Open a Hotspots JSON manifest (recommended), or one bounded-concern CCP4 map "
+            "with its sibling percentile map. No validation or map-model calculation runs.")
         open_volume.clicked.connect(self._on_open_hotspot_volume)
         self._hotspot_open_btn = open_volume
         action_row.addWidget(open_volume)
         layout.addLayout(action_row)
+
+        metric_row = QHBoxLayout()
+        metric_row.addWidget(QLabel("Field:"))
+        metric = QComboBox()
+        metric.setEnabled(False)
+        metric.setToolTip(
+            "Choose an imported component field. Combined means where to look; component "
+            "fields retain why that region is highlighted.")
+        metric.currentIndexChanged.connect(self._on_hotspot_metric_changed)
+        self._hotspot_metric_combo = metric
+        metric_row.addWidget(metric, stretch=1)
+        layout.addLayout(metric_row)
 
         field_row = QHBoxLayout()
         show3d = QCheckBox("Show in 3-D")
@@ -2410,13 +2426,14 @@ class ControlsWindow:
         field_row.addWidget(show3d)
 
         style = QComboBox()
-        style.addItem("Cloud", "cloud")
+        style.addItem("Density", "cloud")
         style.addItem("Contour", "contour")
         style.setToolTip(
-            "Cloud: every voxel colored by value, transparent where clean through yellow to "
-            "red — the local-resolution-map look.\n"
-            "Contour: a translucent shell at the selected severity, colored yellow through "
-            "red by that absolute level.")
+            "Density: every voxel raymarched, colored and faded by its own absolute value — "
+            "transparent where clean, through yellow and orange to red.\n"
+            "Contour: a translucent shell at the current threshold, in the color the density "
+            "shows at that same level.\n"
+            "Both read one absolute scale, so a color means the same thing in every structure.")
         style.setEnabled(False)
         style.currentIndexChanged.connect(self._on_hotspot_field_changed)
         self._hotspot_style = style
@@ -2437,27 +2454,29 @@ class ControlsWindow:
         field_row.addWidget(quality)
         layout.addLayout(field_row)
 
-        # One absolute threshold controls both looks: the cloud's opacity knee or the
-        # contour's isosurface level. The slider is int (10x), up to the display cap.
+        # One absolute threshold controls both looks: the density's opacity knee or the
+        # contour's isosurface level. The slider is an integer, so it carries the scale it is
+        # currently expressing (see _set_threshold_scale) rather than a fixed 10x.
         knee_row = QHBoxLayout()
         knee_label = QLabel("Severity threshold:")
         knee_row.addWidget(knee_label)
         knee = QSlider(Qt.Orientation.Horizontal)
         knee.setRange(0, 40)
         knee.setValue(int(round(_HOTSPOT_KNEE_DEFAULT * 10)))
-        knee.setToolTip(
-            "Cloud: where opacity starts. Contour: the shell's absolute level.\n"
-            "Raise it to keep only worse regions; 1.0 is the outlier threshold.")
         knee.valueChanged.connect(self._on_hotspot_knee)
         self._hotspot_knee_slider = knee
+        self._hotspot_knee_label = knee_label
+        self._hotspot_knee_scale = 10.0     # slider units per 1.0 of the displayed field
+        self._hotspot_knee_digits = 1
         knee_row.addWidget(knee, stretch=1)
         self._hotspot_knee_value = QLabel(f"{_HOTSPOT_KNEE_DEFAULT:.1f}")
-        self._hotspot_knee_value.setMinimumWidth(28)
+        self._hotspot_knee_value.setMinimumWidth(36)
         knee_row.addWidget(self._hotspot_knee_value)
         self._hotspot_knee_widgets = (knee_label, knee, self._hotspot_knee_value)
         for w in self._hotspot_knee_widgets:
-            w.setVisible(False)  # shown while either 3-D hotspot style is up
+            w.setVisible(False)  # shown while either 3-D style is up
         layout.addLayout(knee_row)
+        self._set_threshold_scale(concern=False)
 
         self._hotspot_summary = QLabel("Not computed yet.")
         self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
@@ -2480,43 +2499,94 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
+    def _set_threshold_scale(self, *, concern: bool) -> None:
+        """Point the threshold slider at one field's units, and say which they are.
+
+        Concern is bounded to [0, 1] and its interesting range is narrow, so it gets 0.01
+        steps; severity runs to the display cap in 0.1 steps. The label carries the unit
+        because the same widget expresses both, and a slider reading 0.5 means very different
+        things on the two scales.
+        """
+        slider = self._hotspot_knee_slider
+        was = slider.value() / self._hotspot_knee_scale
+        slider.blockSignals(True)
+        if concern:
+            self._hotspot_knee_scale, self._hotspot_knee_digits = 100.0, 2
+            self._hotspot_knee_label.setText("Concern threshold:")
+            slider.setRange(0, 100)
+            slider.setToolTip(
+                "Density: where the field starts to become visible. Contour: the shell's "
+                "level.\nAbsolute bounded concern: 0.5 is yellow, 0.75 orange, 1.0 red, in "
+                "every structure and every metric.")
+        else:
+            self._hotspot_knee_scale, self._hotspot_knee_digits = 10.0, 1
+            self._hotspot_knee_label.setText("Severity threshold:")
+            slider.setRange(0, 40)
+            slider.setToolTip(
+                "Density: where opacity starts. Contour: the shell's absolute level.\n"
+                "Raise it to keep only worse regions; 1.0 is the outlier threshold.")
+        slider.setValue(int(round(was * self._hotspot_knee_scale)))
+        slider.blockSignals(False)
+        self._hotspot_knee_value.setText(
+            f"{slider.value() / self._hotspot_knee_scale:.{self._hotspot_knee_digits}f}")
+
     def _on_open_hotspot_volume(self) -> None:
-        """Choose an already-computed severity grid; no model analysis runs."""
+        """Import bounded concern fields from the Hotspots generator; nothing is computed."""
         from PySide6.QtWidgets import QFileDialog, QMessageBox
 
         if self._desktop._active_model_id is None:
             self._set_status("load a model first")
             return
         path, _ = QFileDialog.getOpenFileName(
-            self._window, "Open hotspot volume", "",
-            "Volume maps (*.map *.mrc *.ccp4 *.map.gz *.mrc.gz);;All files (*)")
+            self._window, "Open concern fields", "",
+            "Hotspot manifests and maps (*_hotspots.json *.json *.map *.mrc *.ccp4 "
+            "*.map.gz *.mrc.gz);;Volume maps (*.map *.mrc *.ccp4 *.map.gz *.mrc.gz);;"
+            "All files (*)")
         if not path:
             return
         try:
-            self._desktop.open_hotspot_volume(
-                path, style=self._hotspot_style.currentData())
-            self._hotspot_summary.setText(
-                f"Precomputed severity volume: {Path(path).name}. "
-                "Values are absolute severity units; no hotspot calculations were run.")
-            self._hotspot_show3d.setEnabled(True)
-            self._hotspot_show3d.blockSignals(True)
-            self._hotspot_show3d.setChecked(True)
-            self._hotspot_show3d.blockSignals(False)
-            self._hotspot_style.setEnabled(True)
-            is_cloud = self._hotspot_style.currentData() == "cloud"
-            self._hotspot_quality_combo.setEnabled(is_cloud)
-            for widget in self._hotspot_knee_widgets:
-                widget.setVisible(True)
-            self._hotspot_table.clearContents()
-            self._hotspot_table.setRowCount(0)
-            self._hotspot_table.setColumnCount(0)
-            self._hotspot_columns = []
+            self._desktop.open_hotspot_volume(path, style="cloud")
         except Exception as exc:
-            QMessageBox.warning(self._window, "Open hotspot volume failed", str(exc))
+            QMessageBox.warning(self._window, "Open concern fields failed", str(exc))
+            return
+
+        entry = self._desktop._model_entry(self._desktop._active_model_id)
+        imported = entry.get("concern") if entry else None
+        self._hotspot_show3d.setEnabled(True)
+        self._hotspot_show3d.blockSignals(True)
+        self._hotspot_show3d.setChecked(True)
+        self._hotspot_show3d.blockSignals(False)
+        self._hotspot_style.blockSignals(True)
+        self._hotspot_style.setCurrentIndex(self._hotspot_style.findData("cloud"))
+        self._hotspot_style.blockSignals(False)
+        self._hotspot_style.setEnabled(True)
+        self._hotspot_quality_combo.setEnabled(True)
+        # Match the slider to the imported contract before showing the value it now means.
+        self._set_threshold_scale(concern=True)
+        if imported is not None:
+            self._hotspot_knee_slider.blockSignals(True)
+            self._hotspot_knee_slider.setValue(
+                int(round(imported.anchors["yellow"] * self._hotspot_knee_scale)))
+            self._hotspot_knee_slider.blockSignals(False)
+            self._hotspot_knee_value.setText(
+                f"{imported.anchors['yellow']:.{self._hotspot_knee_digits}f}")
+        fields = list(imported.fields) if imported is not None else []
+        self._hotspot_metric_combo.blockSignals(True)
+        self._hotspot_metric_combo.clear()
+        for name in fields:
+            self._hotspot_metric_combo.addItem(name.replace("_", " ").title(), name)
+        selected = entry.get("concern_metric") if entry else None
+        self._hotspot_metric_combo.setCurrentIndex(
+            max(0, self._hotspot_metric_combo.findData(selected)))
+        self._hotspot_metric_combo.blockSignals(False)
+        self._hotspot_metric_combo.setEnabled(bool(fields))
+        for widget in self._hotspot_knee_widgets:
+            widget.setVisible(True)
 
     def _on_hotspot_field_changed(self, *_args) -> None:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
         on = self._hotspot_show3d.isChecked()
+        entry = self._desktop._model_entry(self._desktop._active_model_id)
         self._hotspot_style.setEnabled(on)
         # Quality is cloud-only; the absolute threshold controls both cloud and contour.
         is_cloud = on and self._hotspot_style.currentData() == "cloud"
@@ -2524,9 +2594,18 @@ class ControlsWindow:
         for w in self._hotspot_knee_widgets:
             w.setVisible(on)
         try:
-            self._desktop.show_hotspot_field(on=on, style=self._hotspot_style.currentData())
+            self._desktop.show_hotspot_field(
+                on=on, style=self._hotspot_style.currentData())
         except Exception as exc:
             self._set_status(str(exc))
+
+    def _on_hotspot_metric_changed(self, *_args) -> None:
+        metric = self._hotspot_metric_combo.currentData()
+        if metric:
+            try:
+                self._desktop.set_hotspot_field_metric(str(metric))
+            except Exception as exc:
+                self._set_status(str(exc))
 
     def _on_hotspot_hydrogens(self, on: bool) -> None:
         """The hydrogens option changed. It changes what a clash *is*, so a cached score no
@@ -2542,25 +2621,17 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _on_hotspot_knee(self, value: int) -> None:
-        """The opacity-knee slider moved (int is severity x10)."""
-        severity = value / 10.0
-        self._hotspot_knee_value.setText(f"{severity:.1f}")
+        """The threshold slider moved. Its units are whichever field is on screen."""
+        level = value / self._hotspot_knee_scale
+        self._hotspot_knee_value.setText(f"{level:.{self._hotspot_knee_digits}f}")
         try:
-            self._desktop.set_hotspot_threshold(None, severity)
+            self._desktop.set_hotspot_threshold(None, level)
         except Exception as exc:
             self._set_status(str(exc))
 
-    def _on_hotspots_ready(self, payload) -> None:
-        """Hotspots finished (GUI thread): fill the residue table, worst first."""
+    def _fill_hotspot_table(self, columns, rows) -> None:
         from PySide6.QtWidgets import QTableWidgetItem
 
-        _mid, result, columns, rows = payload
-        self._hotspot_summary.setText(result.summary)
-        self._hotspot_show3d.setEnabled(True)
-        if self._hotspot_show3d.isChecked():
-            # A field already up is showing the previous run's scores; redraw it from this one
-            # rather than leaving a stale surface next to a fresh table.
-            self._on_hotspot_field_changed()
         table = self._hotspot_table
         table.clearContents()
         table.setColumnCount(len(columns))
@@ -2571,6 +2642,34 @@ class ControlsWindow:
                 table.setItem(r, c, QTableWidgetItem(str(value)))
         table.resizeColumnsToContents()
         self._hotspot_columns = columns
+
+    def _on_hotspots_ready(self, payload) -> None:
+        """A computed score finished (GUI thread): fill the residue table, worst first."""
+        _mid, result, columns, rows = payload
+        # A computed score supersedes any import, so the slider goes back to severity units.
+        self._set_threshold_scale(concern=False)
+        self._hotspot_metric_combo.blockSignals(True)
+        self._hotspot_metric_combo.clear()
+        self._hotspot_metric_combo.blockSignals(False)
+        self._hotspot_metric_combo.setEnabled(False)
+        self._hotspot_summary.setText(result.summary)
+        self._hotspot_show3d.setEnabled(True)
+        if self._hotspot_show3d.isChecked():
+            # A field already up is showing the previous run's scores; redraw it from this one
+            # rather than leaving a stale surface next to a fresh table.
+            self._on_hotspot_field_changed()
+        self._fill_hotspot_table(columns, rows)
+
+    def _on_concern_ready(self, payload) -> None:
+        """Imported concern fields were read back per residue: fill the same table.
+
+        Every value here is bounded concern sampled from the maps on screen, so the table and
+        the viewport cannot disagree. Validation markers are a separate product with their own
+        controls on the Validation tab; they are not filtered by the field selected here.
+        """
+        _mid, summary, columns, rows = payload
+        self._hotspot_summary.setText(summary)
+        self._fill_hotspot_table(columns, rows)
 
     def _on_hotspot_row_selected(self) -> None:
         """Selecting a hotspot focuses that residue — the table is a worklist, so picking a
@@ -6181,9 +6280,11 @@ class DesktopApp:
                 current = self._model_entry(mid)
                 if current is None:  # unloaded while we worked
                     return
-                # A newly computed score supersedes any externally opened severity grid.
-                current.pop("hotspot_field_data", None)
-                current.pop("hotspot_field_source", None)
+                # A newly computed score supersedes any imported concern field — the mirror
+                # of open_hotspot_volume dropping a computed score. Severity and concern are
+                # different quantities (see pxviewer.concern); a model shows one or the other.
+                self._drop_imported_concern(current)
+                self._hotspot_knee = hotspots.FIELD_ISO
                 current["hotspots"] = result
                 current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
                 current["color"] = _HOTSPOT_COLOR
@@ -6325,59 +6426,118 @@ class DesktopApp:
 
     def open_hotspot_volume(self, path: Any, mid: Optional[str] = None, *,
                             style: str = "cloud") -> None:
-        """Load and show a precomputed hotspot-severity map without analyzing the model.
+        """Import bounded concern fields written by the Hotspots generator.
 
-        The file is read through cctbx like every other map. Its voxel values are expected to
-        use the hotspot severity scale directly (1.0 is the calibrated outlier threshold).
-        The loaded grid is retained on the model entry so Cloud/Contour and quality changes
-        redraw from the file rather than invoking :func:`hotspots.score`.
+        A ``*_hotspots.json`` manifest imports every metric it lists and shows ``combined``
+        first; a bare concern CCP4 imports on its own. Nothing is computed, and nothing is
+        rescaled — the generator's concern values are already the display coordinates, and
+        the manifest's own ``primary_display`` block says where yellow, orange and red fall.
+
+        An import **supersedes** any computed severity score on this model, exactly as a
+        computed score supersedes an import. The two are different quantities on different
+        scales (see :mod:`pxviewer.concern`), so a model shows one or the other and never a
+        table from one beside a map from the other.
         """
+        from . import concern
         from .volume_io import VolumeData
 
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
             raise ValueError("load a model first")
-        data = VolumeData.from_map_file(path)
-        field = np.asarray(data.array, dtype=np.float32)
-        if field.ndim != 3 or not field.size:
-            raise ValueError("hotspot volume must be a non-empty 3-D map")
-        if not np.isfinite(field).all():
-            raise ValueError("hotspot volume contains non-finite voxel values")
-        source_max = float(field.max())
-        if source_max <= 0:
-            raise ValueError("hotspot volume contains no positive values to display")
-
-        # External hotspot maps obey the same absolute contract as generated fields: 0 is
-        # clean, 1.0 is the outlier threshold, and coincidence peaks may exceed the display
-        # cap. Never sigma-scale, percentile-normalize or stretch to this file's min/max —
-        # that would make the same severity mean something different in every structure.
-        from . import hotspots
-
-        display_field = np.ascontiguousarray(
-            np.clip(field, 0.0, hotspots.SEVERITY_CAP), dtype=np.float32)
+        imported = concern.read_fields(path, VolumeData)
 
         self._clear_hotspot_field(entry)
-        entry["hotspot_field_data"] = data
-        entry["hotspot_field_values"] = display_field
-        entry["hotspot_field_source_max"] = source_max
-        entry["hotspot_field_source"] = str(path)
+        self._drop_computed_hotspots(entry)
+        entry["concern"] = imported
+        entry["concern_metric"] = imported.primary
+        # The contract's own knee: below the yellow anchor the field is transparent.
+        self._hotspot_knee = imported.anchors["yellow"]
         self.show_hotspot_field(entry["id"], on=True, style=style)
+        self._emit_concern_table(entry)
+
+        note = ""
+        if imported.omitted_metrics:
+            note = (f" — no {', '.join(imported.omitted_metrics)} field in this manifest"
+                    f"{': ' + imported.omission_reason if imported.omission_reason else ''}")
         self._status(
-            f"opened precomputed hotspot volume {Path(path).name} "
-            f"(absolute severity, max {source_max:.2f}) — no analysis run")
+            f"imported {len(imported.fields)} concern field"
+            f"{'s' if len(imported.fields) != 1 else ''} from {imported.source.name}; "
+            f"showing {imported.primary}{note}")
+
+    def _drop_computed_hotspots(self, entry) -> None:
+        """Forget a computed severity score, and stop colouring the model by it.
+
+        Severity and concern are not convertible, so an imported field must not leave a
+        severity table, a severity-coloured model, or a severity-scaled slider behind it —
+        that is exactly the mix that lets a table read 0.43 where the map correctly reads 0.
+        """
+        entry.pop("hotspots", None)
+        entry.pop("hotspot_palette", None)
+        if entry.get("color") == _HOTSPOT_COLOR:
+            entry["color"] = None
+            entry.pop("attribute", None)
+            self._apply_model_rep(entry)
+            self._emit_loaded_changed()
+
+    def _drop_imported_concern(self, entry) -> None:
+        """Forget an imported concern field — the mirror of :meth:`_drop_computed_hotspots`."""
+        entry.pop("concern", None)
+        entry.pop("concern_metric", None)
+
+    def _emit_concern_table(self, entry) -> None:
+        """Rebuild the Hotspots table from the imported maps at the current threshold.
+
+        The values are sampled out of the concern grids themselves, so the table lists what
+        the viewport is actually drawing; raising the threshold drops rows that have just
+        become invisible instead of leaving them on screen with no field beside them.
+        """
+        from . import concern
+
+        imported = entry.get("concern")
+        model = getattr(entry["session"], "model", None)
+        if imported is None or model is None:
+            return
+        metric = entry.get("concern_metric", imported.primary)
+        threshold = float(getattr(self, "_hotspot_knee", 0.0))
+        metrics = list(imported.fields)
+        try:
+            rows = concern.residue_rows(model, imported.fields, primary=metric,
+                                        threshold=threshold)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._status(f"could not read concern per residue: {exc}")
+            return
+        summary = (
+            f"{metric} concern from {imported.source.name}: "
+            f"{len(rows)} residue{'s' if len(rows) != 1 else ''} at or above {threshold:.2f}, "
+            f"ranked by the field on screen. Bounded concern in [0, 1], read from the maps "
+            f"themselves — no validation was run. {concern.TABLE_CAVEAT}")
+        self.bridge.concern_ready.emit(
+            (entry["id"], summary, concern.residue_columns(metrics), rows))
+
+    def set_hotspot_field_metric(self, metric: str, mid: Optional[str] = None) -> None:
+        """Switch among the imported fields without re-reading any file."""
+        entry = self._model_entry(mid or self._active_model_id)
+        imported = entry.get("concern") if entry else None
+        if imported is None or metric not in imported.fields:
+            raise ValueError(f"concern field is not available: {metric}")
+        entry["concern_metric"] = metric
+        style = "contour" if entry.get("hotspot_volume") is not None else "cloud"
+        self.show_hotspot_field(entry["id"], on=True, style=style)
+        self._emit_concern_table(entry)
 
     def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True,
                            style: str = "cloud") -> None:
-        """Show/hide a 3-D severity field for a scored model.
+        """Show/hide the 3-D field for a model — imported concern, or a computed score.
 
         Per-atom coloring only shows the surface, so a buried hotspot stays hidden until you
         rotate into it, and while it is on you have lost element/chain coloring. A 3-D field is
         visible through the structure and leaves that channel free.
 
         ``style`` is ``'cloud'`` — every voxel colored by value, transparent where clean
-        through yellow to red, the local-resolution-map look — or ``'contour'``, a single
-        translucent shell at the calibrated outlier cut (cheaper, unambiguous as a surface).
-        Whichever is showing is torn down before the other is drawn; only one at a time.
+        through yellow to red — or ``'contour'``, a single translucent shell at the current
+        threshold. Whichever is showing is torn down before the other is drawn; only one at a
+        time. Both styles read the *same* absolute field: hue and opacity follow the value, on
+        a fixed domain, so a colour means the same thing in every structure and metric.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
@@ -6386,22 +6546,26 @@ class DesktopApp:
         if not on:
             return
 
-        from . import hotspots
+        from . import concern, hotspots
 
         result = entry.get("hotspots")
-        loaded = entry.get("hotspot_field_data")
-        if result is None and loaded is None:
-            self._status("no hotspots computed yet — use Find hotspots first")
+        imported = entry.get("concern")
+        if result is None and imported is None:
+            self._status("no hotspots yet — use Find hotspots, or Open volume… to import")
             return
         # The cloud's grid is set by the quality preset (it is raymarched, so grid size and
         # step count drive frame rate); the contour keeps the fine grid.
         quality = getattr(self, "_cloud_quality", hotspots.CLOUD_QUALITY_DEFAULT)
         cloud_spacing, cloud_steps = hotspots.CLOUD_QUALITY[quality]
-        if loaded is not None:
-            field = np.asarray(
-                entry.get("hotspot_field_values", loaded.array), dtype=np.float32)
-            spacing = tuple(float(v) for v in loaded.pixel_sizes)
-            origin = tuple(int(v) for v in loaded.origin)
+
+        if imported is not None:
+            metric = entry.get("concern_metric", imported.primary)
+            selected = imported.fields[metric]
+            field = selected.values
+            spacing = tuple(float(v) for v in selected.concern.pixel_sizes)
+            origin = tuple(int(v) for v in selected.concern.origin)
+            threshold = float(getattr(self, "_hotspot_knee", imported.anchors["yellow"]))
+            units, label = "concern", f"{metric} concern"
         else:
             model = getattr(entry["session"], "model", None)
             if model is None:  # pragma: no cover - defensive
@@ -6409,16 +6573,29 @@ class DesktopApp:
             grid_spacing = cloud_spacing if style == "cloud" else hotspots.FIELD_SPACING
             field, spacing, origin = hotspots.severity_field(
                 model, result.values, spacing=grid_spacing)
-        threshold = float(getattr(self, "_hotspot_knee", hotspots.FIELD_ISO))
+            threshold = float(getattr(self, "_hotspot_knee", hotspots.FIELD_ISO))
+            units, label = "severity", "severity"
         if not (field >= threshold).any():
-            self._status(f"nothing reaches severity {threshold:.1f} — nothing to draw in 3-D")
+            self._status(f"nothing reaches {units} {threshold:.2f} — nothing to draw in 3-D")
             return
 
         if style == "cloud":
             # A value-colored raymarched cloud, streamed to the model's own viewer as a
             # direct-volume (MVS has no such node, so it cannot go through the shared scene).
-            payload = hotspots.encode_severity_box(field, spacing, origin,
-                                                   steps_per_cell=cloud_steps)
+            if imported is not None:
+                from .volume_io import encode_hotspot_concern
+
+                # Tell the viewer where the contract puts each colour, rather than letting it
+                # infer a ramp from the knee: the knee is a user control and moves, the
+                # anchors are the generator's fixed scale and must not move with it.
+                entry["session"].set_hotspot_anchors(imported.anchors)
+                payload = encode_hotspot_concern(
+                    selected.concern.map_manager, concern_knee=threshold,
+                    steps_per_cell=cloud_steps)
+            else:
+                entry["session"].set_hotspot_anchors(None)
+                payload = hotspots.encode_severity_box(
+                    field, spacing, origin, steps_per_cell=cloud_steps)
             entry["session"].show_hotspot_volume(payload)
             entry["hotspot_cloud"] = True
             # A fresh cloud defaults its knee to the cut; reapply the user's setting if any, so
@@ -6426,46 +6603,64 @@ class DesktopApp:
             knee = getattr(self, "_hotspot_knee", None)
             if knee is not None:
                 self.set_hotspot_opacity(entry["id"], knee)
-            self._status(f"severity cloud for {entry['name']} (transparent clean → red severe)")
+            self._status(f"{label} density for {entry['name']} (transparent clean → red)")
             return
 
         from .volume_io import VolumeData
 
-        # Imported values are clamped to the fixed severity display cap before contouring.
         data = VolumeData.from_numpy(
             field, spacing=spacing, origin=origin, name=f"{entry['name']} hotspots")
+        # The shell's colour is the colour the density shows at that same level — one scale,
+        # read two ways, so switching style does not restate the value differently.
+        color = (concern.concern_color(threshold, imported.anchors) if imported is not None
+                 else hotspots.severity_color(threshold))
         vid = self._add_volume(data, f"{entry['name']} hotspots", group=entry.get("group"),
-                               color=hotspots.severity_color(threshold), iso=threshold,
-                               iso_kind="absolute")
+                               color=color, iso=threshold, iso_kind="absolute")
         # Translucent, so the model stays readable through it — the shell is a pointer, not
         # the thing you are looking at.
         self.set_volume_opacity(vid, 0.45)
         entry["hotspot_volume"] = vid
-        self._status(f"severity contour at {threshold:.1f} for {entry['name']}")
+        self._status(f"{label} contour at {threshold:.2f} for {entry['name']}")
 
-    def set_hotspot_threshold(self, mid: Optional[str], severity: float) -> None:
-        """Set the shared absolute threshold for either hotspot display style."""
+    def set_hotspot_threshold(self, mid: Optional[str], level: float) -> None:
+        """Set the absolute threshold driving whichever field is on screen.
+
+        The number is in the units of the field being shown — bounded concern for an import,
+        severity for a computed score — and is never converted between them. Only the wire
+        format differs: the cloud's opacity knee is a fraction of the streamed grid, and the
+        legacy grid is streamed pre-divided by the severity cap.
+        """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
             return
-        from . import hotspots
+        from . import concern, hotspots
 
-        severity = min(hotspots.SEVERITY_CAP, max(0.0, float(severity)))
-        self._hotspot_knee = severity
+        imported = entry.get("concern")
+        if imported is not None:
+            level = min(1.0, max(0.0, float(level)))
+        else:
+            level = min(hotspots.SEVERITY_CAP, max(0.0, float(level)))
+        self._hotspot_knee = level
         if entry.get("hotspot_cloud"):
-            entry["session"].set_hotspot_opacity(severity / hotspots.SEVERITY_CAP)
-            return
-        vid = entry.get("hotspot_volume")
-        if vid is not None:
-            self.set_volume_iso(vid, severity)
-            self.set_volume_color(vid, hotspots.severity_color(severity))
+            entry["session"].set_hotspot_opacity(
+                level if imported is not None else level / hotspots.SEVERITY_CAP)
+        else:
+            vid = entry.get("hotspot_volume")
+            if vid is not None:
+                self.set_volume_iso(vid, level)
+                self.set_volume_color(
+                    vid, concern.concern_color(level, imported.anchors) if imported is not None
+                    else hotspots.severity_color(level))
+        if imported is not None:
+            # The table lists what is visible, so it follows the threshold that decides that.
+            self._emit_concern_table(entry)
 
     def set_hotspot_opacity(self, mid: Optional[str], knee_severity: float) -> None:
         """Backward-compatible name for setting the shared hotspot threshold."""
         self.set_hotspot_threshold(mid, knee_severity)
 
     def _clear_hotspot_field(self, entry) -> None:
-        """Tear down whichever 3-D severity field a model is showing (cloud or contour)."""
+        """Tear down whichever 3-D field a model is showing (cloud or contour)."""
         vid = entry.pop("hotspot_volume", None)
         if vid is not None:
             self.remove_volume(vid)          # the MVS-scene contour

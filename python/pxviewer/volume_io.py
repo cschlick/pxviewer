@@ -242,21 +242,19 @@ def encode_map_box(map_manager: Any, *, level: float = 3.0, is_difference: bool 
     return header + _encode_affine_grid(map_manager)
 
 
-def _encode_affine_grid(map_manager: Any) -> bytes:
-    """The affine + f32 grid common to every live map payload, without any per-payload
-    header: everything the browser needs to *place* a grid but nothing about how to draw it.
+def grid_affine(map_manager: Any) -> Tuple[np.ndarray, np.ndarray]:
+    """Where a map's grid sits in Cartesian space: ``(origin, steps)``.
 
-    Layout (little-endian): ``i32 nx, ny, nz; f32 origin[3]; f32 step0[3], step1[3],
-    step2[3]; f32 data[nx*ny*nz]`` — grid point ``(i, j, k)`` sits at Cartesian
-    ``origin + i*step0 + j*step1 + k*step2`` and is at ``data[(i*ny + j)*nz + k]``.
-    Two maps on the same physical grid encode to the same origin+steps, which is what lets
+    Grid point ``(i, j, k)`` is at ``origin + i*steps[:, 0] + j*steps[:, 1] + k*steps[:, 2]``.
+    This is the single definition of map placement — the wire encoders serialize it
+    (:func:`_encode_affine_grid`) and :func:`sample_at_sites` inverts it, so a value read out
+    of a map in Python lands at the same Cartesian point the browser draws it at.
+
+    Two maps on the same physical grid give the same ``(origin, steps)``, which is what lets
     one map's surface be coloured by another's values (see :func:`encode_localres`).
     """
-    import struct
-
     md = map_manager.map_data()
     nx, ny, nz = md.all()
-    data = np.ascontiguousarray(md.as_numpy_array(), dtype="<f4")
     ortho = np.array(
         map_manager.crystal_symmetry().unit_cell().orthogonalization_matrix(), dtype="float64"
     ).reshape(3, 3)
@@ -265,14 +263,98 @@ def _encode_affine_grid(map_manager: Any) -> bytes:
     # matrix divided by that axis's grid count. (unit_cell_grid still refers to the full cell,
     # so it must NOT be used here.)
     steps = ortho @ np.diag([1.0 / nx, 1.0 / ny, 1.0 / nz])
-    shift = map_manager.shift_cart()  # translation that moved the box to a zero origin
-    origin = (-shift[0], -shift[1], -shift[2])  # so grid (0,0,0) sits back at its Cartesian place
+    # Cartesian placement has two independent cctbx representations:
+    #
+    # * CCP4 NXSTART is retained as map_data().origin() (the new hotspot writer uses this);
+    # * a map_model_manager working frame is recorded in shift_cart.
+    #
+    # The first stored array element is at the NXSTART grid coordinate, then shifted back
+    # out of cctbx's working frame. Considering only shift_cart incorrectly put standalone
+    # NXSTART-placed maps at Cartesian zero.
+    grid_origin = np.asarray(md.origin(), dtype="float64")
+    shift = np.asarray(map_manager.shift_cart(), dtype="float64")
+    return steps @ grid_origin - shift, steps
+
+
+def sample_at_sites(map_manager: Any, sites_cart: Any, *, array: Any = None) -> np.ndarray:
+    """Read a map at arbitrary Cartesian points — the inverse of :func:`grid_affine`.
+
+    Trilinear, to match what the viewport shows: the browser raymarches these grids through an
+    interpolating sampler, so nearest-neighbour would report a value the renderer never draws
+    — and on a coarse output grid (the generator's 2 A setting) an atom can sit most of a
+    voxel away from the point whose value it was given. Points outside the box read 0.
+
+    ``array`` lets a caller pass a grid it has already materialised (and validated) rather
+    than paying for a second flex->numpy copy.
+    """
+    origin, steps = grid_affine(map_manager)
+    values = np.asarray(
+        map_manager.map_data().as_numpy_array() if array is None else array, dtype="float64")
+    dims = np.array(values.shape)
+
+    sites = np.asarray(sites_cart, dtype="float64").reshape(-1, 3)
+    # steps' columns are the grid axes, so inverting maps Cartesian offsets back to indices.
+    frac = np.linalg.solve(steps, (sites - origin).T)          # (3, n) fractional indices
+    base = np.floor(frac).astype(np.int64)
+    weight = frac - base
+
+    inside = np.all((frac >= 0) & (frac <= (dims - 1)[:, None]), axis=0)
+    out = np.zeros(sites.shape[0], dtype="float64")
+    if not inside.any():
+        return out
+
+    b = np.clip(base[:, inside], 0, (dims - 1)[:, None])
+    hi = np.minimum(b + 1, (dims - 1)[:, None])
+    w = weight[:, inside]
+    total = np.zeros(b.shape[1], dtype="float64")
+    for dx in (0, 1):
+        for dy in (0, 1):
+            for dz in (0, 1):
+                corner = (np.where(dx, hi[0], b[0]), np.where(dy, hi[1], b[1]),
+                          np.where(dz, hi[2], b[2]))
+                share = ((w[0] if dx else 1 - w[0])
+                         * (w[1] if dy else 1 - w[1])
+                         * (w[2] if dz else 1 - w[2]))
+                total += share * values[corner]
+    out[inside] = total
+    return out
+
+
+def _encode_affine_grid(map_manager: Any) -> bytes:
+    """The affine + f32 grid common to every live map payload, without any per-payload
+    header: everything the browser needs to *place* a grid but nothing about how to draw it.
+
+    Layout (little-endian): ``i32 nx, ny, nz; f32 origin[3]; f32 step0[3], step1[3],
+    step2[3]; f32 data[nx*ny*nz]`` — grid point ``(i, j, k)`` sits at Cartesian
+    ``origin + i*step0 + j*step1 + k*step2`` and is at ``data[(i*ny + j)*nz + k]``.
+    """
+    import struct
+
+    md = map_manager.map_data()
+    nx, ny, nz = md.all()
+    data = np.ascontiguousarray(md.as_numpy_array(), dtype="<f4")
+    origin, steps = grid_affine(map_manager)
 
     header = struct.pack("<iii", int(nx), int(ny), int(nz))
-    header += struct.pack("<fff", *origin)
+    header += struct.pack("<fff", *[float(v) for v in origin])
     for j in range(3):
         header += struct.pack("<fff", float(steps[0, j]), float(steps[1, j]), float(steps[2, j]))
     return header + data.tobytes()
+
+
+def encode_hotspot_concern(map_manager: Any, *, concern_knee: float = 0.5,
+                           steps_per_cell: float = 8.0) -> bytes:
+    """Serialize a bounded ``[0, 1]`` concern map for direct-volume rendering.
+
+    Unlike the legacy severity-field encoder, this performs no rescaling: the Hotspots
+    project's concern values are already the authoritative display coordinates.  Keeping the
+    map manager also preserves CCP4 NXSTART and ``shift_cart`` placement through the affine
+    grid payload.
+    """
+    import struct
+
+    knee = min(1.0, max(0.0, float(concern_knee)))
+    return struct.pack("<ff", knee, float(steps_per_cell)) + _encode_affine_grid(map_manager)
 
 
 def encode_localres(

@@ -460,6 +460,7 @@ class LiveSession:
         self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
         self._last_hotspot_volume: Optional[bytes] = None  # current severity cloud, replayed to late clients
         self._hotspot_knee: Optional[float] = None  # current cloud opacity knee, replayed to late clients
+        self._hotspot_anchors: Optional[dict] = None  # imported colour contract, replayed to late clients
         self._last_localres: Optional[bytes] = None  # current local-resolution colouring, replayed to late clients
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
@@ -898,10 +899,29 @@ class LiveSession:
                 self._broadcast_text,
                 json.dumps({"type": "hotspot_opacity", "knee": float(knee)}))
 
+    def set_hotspot_anchors(self, anchors: Optional[dict]) -> None:
+        """Pin where yellow, orange and red fall on the cloud's [0, 1] value scale.
+
+        This is the *display contract*, not a user control: an imported concern field carries
+        its anchors in its manifest, and the viewer paints those positions rather than
+        inferring a ramp from the opacity knee — which moves. Passing ``None`` restores the
+        knee-relative ramp the computed severity field uses.
+
+        Remembered and re-sent to late viewers, so a reload does not repaint the old scale.
+        Thread-safe.
+        """
+        self._hotspot_anchors = dict(anchors) if anchors else None
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(
+                self._broadcast_text,
+                json.dumps({"type": "hotspot_anchors", "anchors": self._hotspot_anchors}))
+
     def clear_hotspot_volume(self) -> None:
         """Remove the severity cloud (see :meth:`show_hotspot_volume`). Thread-safe."""
         self._last_hotspot_volume = None
         self._hotspot_knee = None
+        self._hotspot_anchors = None
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
@@ -1948,6 +1968,11 @@ class LiveSession:
             if self._last_localres is not None:
                 await self._locked_send(websocket, self._last_localres)
             if self._last_hotspot_volume is not None:
+                # Anchors first: they are the scale the grid is painted on, so sending them
+                # after the grid would show the wrong colours for a frame.
+                if self._hotspot_anchors is not None:
+                    await self._locked_send(websocket, json.dumps(
+                        {"type": "hotspot_anchors", "anchors": self._hotspot_anchors}))
                 await self._locked_send(websocket, self._last_hotspot_volume)
                 if self._hotspot_knee is not None:  # keep a slider-adjusted knee across reloads
                     await self._locked_send(websocket, json.dumps(

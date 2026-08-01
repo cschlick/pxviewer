@@ -595,6 +595,8 @@ export class LiveViewer {
     private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
+    // Declared colour positions for an imported concern field; undefined = derive from the cut.
+    private hotspotAnchors: { yellow: number; orange: number; red: number } | undefined;
     private hotspotCellDim = 1.0;    // voxel size in A, sizes the empty-space jump
     private hotspotSteps = 8;        // raymarch steps per cell (the quality dial)
     private clickMode = 'off';
@@ -1361,14 +1363,25 @@ export class LiveViewer {
         const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
         const cut = clamp01(this.hotspotCutFrac);
         const knee = clamp01(this.hotspotKnee);
-        // Color: green (clean) -> yellow at the cut -> orange -> red, anchored at the cut so
-        // the threshold is legible whatever this structure's worst severity happens to be.
-        const colorList: [Color, number][] = [
-            [ColorNames.green, 0.0],
-            [ColorNames.yellow, cut],
-            [ColorNames.orange, clamp01(cut * 1.5)],
-            [ColorNames.red, clamp01(cut * 2.5)],
-        ];
+        // Color. An imported concern field states where each colour falls (setHotspotAnchors),
+        // and those positions are fixed by its generator — so the same concern value is the
+        // same colour in every structure and metric, and the ramp does *not* follow the knee.
+        // Without a declared contract (the computed severity field) the anchors are derived
+        // from the cut instead, so the outlier threshold stays legible whatever this
+        // structure's worst severity happens to be.
+        const a = this.hotspotAnchors;
+        const colorList: [Color, number][] = a
+            ? [
+                [ColorNames.yellow, clamp01(a.yellow)],
+                [ColorNames.orange, clamp01(a.orange)],
+                [ColorNames.red, clamp01(a.red)],
+            ]
+            : [
+                [ColorNames.green, 0.0],
+                [ColorNames.yellow, cut],
+                [ColorNames.orange, clamp01(cut * 1.5)],
+                [ColorNames.red, clamp01(cut * 2.5)],
+            ];
         // Opacity: invisible below the knee, then ramping up. The knee is the user's slider —
         // raise it to keep only the worst regions, lower it to let more of the protein haze in.
         // Deliberately low values: the raymarch composites these front-to-back, so a big
@@ -1402,6 +1415,18 @@ export class LiveViewer {
      */
     async setHotspotOpacity(knee: number) {
         this.hotspotKnee = Math.max(0, Math.min(1, knee));
+        if (!this.hotspotRepr?.ref) return;
+        await this.plugin.state.data.build().to(this.hotspotRepr.ref).update(this.hotspotReprParams()).commit();
+    }
+
+    /**
+     * Pin where yellow, orange and red sit on the cloud's [0, 1] value scale — the display
+     * contract an imported concern field carries in its manifest. `undefined` restores the
+     * cut-relative ramp the computed severity field uses. Updates in place when a cloud is
+     * already up, so this can arrive before or after the grid.
+     */
+    async setHotspotAnchors(anchors: { yellow: number; orange: number; red: number } | undefined) {
+        this.hotspotAnchors = anchors;
         if (!this.hotspotRepr?.ref) return;
         await this.plugin.state.data.build().to(this.hotspotRepr.ref).update(this.hotspotReprParams()).commit();
     }
@@ -2817,6 +2842,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations',
         'click-mode', 'tug-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
         'localres', 'structure_visible', 'focus-surroundings',
+        // Queued so it lands before the cloud it describes: queued control messages are
+        // flushed ahead of pendingHotspotVolume, so the grid is built on the right scale
+        // rather than painted once on the default ramp and corrected afterwards.
+        'hotspot_anchors',
     ]);
     const pendingControl: any[] = [];
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
@@ -2878,6 +2907,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearLocalresSurface();
             } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
                 await viewer.setHotspotOpacity(msg.knee);
+            } else if (msg.type === 'hotspot_anchors' && viewer) {
+                const a = msg.anchors;
+                await viewer.setHotspotAnchors(
+                    a && typeof a.yellow === 'number' && typeof a.orange === 'number' && typeof a.red === 'number'
+                        ? { yellow: a.yellow, orange: a.orange, red: a.red }
+                        : undefined);
             } else if (msg.type === 'structure_visible' && viewer && typeof msg.value === 'boolean') {
                 viewer.setStructureVisible(msg.value);   // hide/show this model in place
             } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.value === 'boolean') {

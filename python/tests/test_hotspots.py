@@ -3,7 +3,9 @@
 The rules under test are stated in HOTSPOTS.md; each test names the rule it pins.
 """
 
+import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -437,24 +439,58 @@ def test_streaming_a_severity_cloud_sets_the_replay_payload(qapp):
     assert session._last_hotspot_volume is None
 
 
-def test_precomputed_hotspot_volume_opens_without_running_analysis(qapp, monkeypatch):
-    """An external severity map goes straight to the cloud wire path; it neither needs nor
-    creates a Hotspots analysis result."""
+def _write_manifest(tmp_path, metrics=("combined", "clash"), *, percentile=True,
+                    anchors=None):
+    """A manifest in the generator's shape, with map files that exist but are never read
+    (``VolumeData.from_map_file`` is monkeypatched in these tests)."""
+    outputs = {}
+    for metric in metrics:
+        concern_path = tmp_path / f"model_{metric}_hotspot.ccp4"
+        concern_path.touch()
+        entry = {"concern": concern_path.name}
+        if percentile:
+            percentile_path = tmp_path / f"model_{metric}_hotspot_percentile.ccp4"
+            percentile_path.touch()
+            entry["color_percentile"] = percentile_path.name
+        outputs[metric] = entry
+    payload = {"outputs": outputs, "color_scaling": {"combined": {"concern_gate": 0.05}}}
+    if anchors is not None:
+        payload["primary_display"] = {"color_anchors": anchors}
+    manifest = tmp_path / "model_hotspots.json"
+    manifest.write_text(json.dumps(payload))
+    return manifest
+
+
+def _patch_map_reads(monkeypatch, concern_value=0.6, percentile_value=0.96):
+    from pxviewer.volume_io import VolumeData
+
+    concern = VolumeData.from_numpy(
+        np.full((3, 4, 5), concern_value, dtype=np.float32),
+        spacing=(1.0, 1.5, 2.0), origin=(2, 3, 4), name="concern")
+    percentile = VolumeData.from_numpy(
+        np.full((3, 4, 5), percentile_value, dtype=np.float32),
+        spacing=(1.0, 1.5, 2.0), origin=(2, 3, 4), name="percentile")
+    opened = []
+    # Match on the file name, not the whole path: pytest's tmp_path is named after the test,
+    # so a test with "percentile" in its name would otherwise get the percentile grid back
+    # for every map it reads.
+    monkeypatch.setattr(
+        VolumeData, "from_map_file",
+        classmethod(lambda cls, path, **kwargs: opened.append(str(path)) or
+                    (percentile if "percentile" in Path(path).name else concern)))
+    return opened
+
+
+def test_hotspot_manifest_imports_absolute_concern_density_without_analysis(
+        qapp, monkeypatch, tmp_path):
+    """A manifest imports every field, shows combined, and streams concern unrescaled."""
     pytest.importorskip("websockets")
     pytest.importorskip("PySide6.QtWebEngineWidgets")
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
-    from pxviewer.volume_io import VolumeData
 
-    volume = VolumeData.from_numpy(
-        np.full((3, 4, 5), 1.25, dtype=np.float32),
-        spacing=(1.0, 1.5, 2.0), origin=(2, 3, 4), name="precomputed")
-    volume.array[0, 0, 0] = 5.81  # coincidence peak above the fixed display cap
-
-    opened = []
-    monkeypatch.setattr(
-        VolumeData, "from_map_file",
-        classmethod(lambda cls, path, **kwargs: opened.append(str(path)) or volume))
+    manifest = _write_manifest(tmp_path)
+    opened = _patch_map_reads(monkeypatch)
 
     app = DesktopApp(port=0)
     app._webapp.start()
@@ -463,25 +499,240 @@ def test_precomputed_hotspot_volume_opens_without_running_analysis(qapp, monkeyp
         entry = app._model_entry(mid)
         assert entry.get("hotspots") is None
 
-        app.open_hotspot_volume("precomputed.map", mid)
+        app.open_hotspot_volume(manifest, mid)
 
-        assert opened == ["precomputed.map"]
+        assert len(opened) == 4  # two metrics, concern + percentile each
         assert entry.get("hotspots") is None
-        assert entry["hotspot_field_source"] == "precomputed.map"
-        assert entry["hotspot_field_source_max"] == pytest.approx(5.81)
-        # Absolute identity scale, with only the documented display clamp.
-        assert entry["hotspot_field_values"][1, 1, 1] == pytest.approx(1.25)
-        assert entry["hotspot_field_values"][0, 0, 0] == hotspots.SEVERITY_CAP
+        imported = entry["concern"]
+        assert imported.source == manifest
+        assert entry["concern_metric"] == "combined"     # combined leads
+        assert set(imported.fields) == {"combined", "clash"}
+        assert imported.fields["combined"].values[1, 1, 1] == pytest.approx(0.6)
+        assert imported.fields["combined"].percentile_values[1, 1, 1] == pytest.approx(0.96)
         assert entry["hotspot_cloud"] is True
-        assert entry["session"]._last_hotspot_volume is not None
 
-        # Switching looks redraws from the retained file data, still without analysis.
-        app.show_hotspot_field(mid, on=True, style="contour")
-        assert entry.get("hotspots") is None
-        assert entry.get("hotspot_cloud") is None
-        assert entry.get("hotspot_volume") is not None
+        import struct
+        payload = entry["session"]._last_hotspot_volume
+        # Bounded concern goes out unrescaled: the knee is the contract's yellow anchor, and
+        # the values are NOT divided by the legacy severity cap.
+        assert struct.unpack_from("<f", payload, 4)[0] == pytest.approx(0.5)
+        # NXSTART/map_data origin (2,3,4) at anisotropic spacing lands in Cartesian space.
+        assert struct.unpack_from("<fff", payload, 24) == pytest.approx((2.0, 4.5, 8.0))
+        assert np.frombuffer(payload, dtype="<f4", offset=72).max() == pytest.approx(0.6)
+        # The viewer is told the contract rather than left to infer a ramp from the knee.
+        assert entry["session"]._hotspot_anchors == {
+            "yellow": 0.5, "orange": 0.75, "red": 1.0}
+
+        app.set_hotspot_field_metric("clash", mid)
+        assert entry["concern_metric"] == "clash"
+        assert entry["session"]._last_hotspot_volume is not None
     finally:
         app.stop()
+
+
+def test_importing_concern_drops_a_computed_severity_score(qapp, monkeypatch, tmp_path):
+    """The two scales must never be on screen together.
+
+    A computed score already clears an import; this pins the other direction, which is what
+    let a severity table (where a favored Ramachandran residue still scores ~0.4) sit beside
+    a concern map that correctly reads 0 at that residue.
+    """
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp, _HOTSPOT_COLOR
+    from pxviewer.live import LiveSession
+
+    manifest = _write_manifest(tmp_path, metrics=("combined",))
+    _patch_map_reads(monkeypatch)
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        entry = app._model_entry(mid)
+        # Stand in for a finished Find hotspots run: a score, and the model coloured by it.
+        entry["hotspots"] = object()
+        entry["hotspot_palette"] = ["#000000"]
+        entry["color"] = _HOTSPOT_COLOR
+        entry["attribute"] = {"name": _HOTSPOT_COLOR, "values": np.zeros(3)}
+
+        app.open_hotspot_volume(manifest, mid)
+
+        assert entry.get("hotspots") is None       # the severity score is gone
+        assert entry.get("hotspot_palette") is None
+        assert entry.get("attribute") is None      # and so is severity colouring
+        assert entry["color"] != _HOTSPOT_COLOR
+        assert entry["concern_metric"] == "combined"
+    finally:
+        app.stop()
+
+
+def test_percentile_maps_are_optional_and_never_gate_visibility(
+        qapp, monkeypatch, tmp_path):
+    """Percentile is optional relative contrast: a manifest without one imports and draws.
+
+    The generator states ``determines_visibility: false``; a viewer that required the
+    companion map, or masked concern by it, would make that contract untrue.
+    """
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    manifest = _write_manifest(tmp_path, metrics=("rama",), percentile=False)
+    opened = _patch_map_reads(monkeypatch)
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        app.open_hotspot_volume(manifest, mid)
+        entry = app._model_entry(mid)
+
+        assert len(opened) == 1  # only the concern map was read
+        assert entry["concern"].fields["rama"].percentile is None
+        assert entry["hotspot_cloud"] is True
+        # Every voxel of the concern grid reaches the wire, unmasked by any percentile.
+        payload = entry["session"]._last_hotspot_volume
+        assert np.frombuffer(payload, dtype="<f4", offset=72).min() == pytest.approx(0.6)
+    finally:
+        app.stop()
+
+
+def test_concern_anchors_come_from_the_manifest(tmp_path):
+    """The display contract travels with the data; the viewer follows it rather than
+    hardcoding a ramp that silently goes stale when the generator changes."""
+    from pxviewer import concern
+
+    assert concern.display_anchors({}) == concern.DEFAULT_ANCHORS
+    declared = concern.display_anchors({"primary_display": {"color_anchors": {
+        "0.0": "transparent", "0.4": "yellow", "0.6": "orange", "0.9": "red"}}})
+    assert declared == {"yellow": 0.4, "orange": 0.6, "red": 0.9}
+    # A contract whose colours do not ascend cannot make a coherent ramp; fall back rather
+    # than paint an incoherent one.
+    assert concern.display_anchors({"primary_display": {"color_anchors": {
+        "0.8": "yellow", "0.2": "red"}}}) == concern.DEFAULT_ANCHORS
+
+    # The contour colour is read off the same anchors the density is painted with, so the
+    # two styles cannot state the same level in different colours.
+    assert concern.concern_color(0.4, declared) == "#FFD400"   # exactly the yellow anchor
+    assert concern.concern_color(0.6, declared) == "#F46D43"   # exactly the orange anchor
+    assert concern.concern_color(0.9, declared) == "#B2182B"   # exactly the red anchor
+    assert concern.concern_color(0.5, declared) == "#FAA022"   # interpolated between them
+    assert concern.concern_color(0.1) == "#FFD400"             # below yellow, clamped
+
+
+def test_concern_table_reads_the_maps_not_a_second_scale(qapp, monkeypatch, tmp_path):
+    """Table values are sampled from the concern grids, so they are bounded to [0, 1] and
+    cannot disagree with what the viewport draws."""
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer import concern as concern_mod
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    manifest = _write_manifest(tmp_path, metrics=("combined", "rama"))
+    _patch_map_reads(monkeypatch, concern_value=0.6)
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        emitted = []
+        app.bridge.concern_ready.connect(lambda payload: emitted.append(payload))
+        app.open_hotspot_volume(manifest, mid)
+        entry = app._model_entry(mid)
+
+        assert emitted, "importing concern fields should publish a table"
+        _mid, summary, columns, rows = emitted[-1]
+        assert columns == ["chain", "resid", "res", "combined concern", "rama concern"]
+        assert "concern" in summary
+        # Only atoms inside the (tiny) test grid sample nonzero, but every value that does
+        # appear is bounded concern, never a severity above 1.
+        for row in rows:
+            for cell in row[3:]:
+                if cell:
+                    assert 0.0 <= float(cell) <= 1.0
+
+        # Raising the threshold past the field drops the rows that just became invisible,
+        # rather than leaving them listed with no density beside them.
+        app.set_hotspot_threshold(mid, 0.9)
+        assert emitted[-1][3] == []
+    finally:
+        app.stop()
+
+
+def test_concern_table_samples_the_field_and_says_so(qapp, monkeypatch, tmp_path):
+    """The table reads the field at each residue's atoms, and is labelled as such.
+
+    The generator splats each observation with a ~2 Å Gaussian, wider than the ~3.8 Å between
+    adjacent Ca atoms, so a residue beside a hotspot genuinely sits in its density. That is
+    not recoverable here — per-residue concern exists only upstream, before the splat — so the
+    table must present itself as a neighbourhood ranking rather than invent a de-blurring rule
+    and claim per-residue attribution.
+    """
+    pytest.importorskip("websockets")
+    pytest.importorskip("PySide6.QtWebEngineWidgets")
+    from pxviewer import concern as concern_mod
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+
+    manifest = _write_manifest(tmp_path, metrics=("combined",))
+    _patch_map_reads(monkeypatch)
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        mid = app._add_model(LiveSession.from_model_file(_MODEL), "1tec")
+        emitted = []
+        app.bridge.concern_ready.connect(emitted.append)
+        app.open_hotspot_volume(manifest, mid)
+        _mid, summary, _columns, _rows = emitted[-1]
+        assert concern_mod.TABLE_CAVEAT in summary
+        assert "rank neighborhoods, not residues" in summary
+    finally:
+        app.stop()
+
+
+def test_opening_a_bare_concern_map_finds_its_pair_and_names_the_metric(
+        qapp, monkeypatch, tmp_path):
+    """Opening either half of a pair works, and neither names the metric after the file."""
+    from pxviewer import concern
+    from pxviewer.volume_io import VolumeData
+
+    _patch_map_reads(monkeypatch)
+    for name in ("1tec_rama_hotspot.map.gz", "1tec_rama_hotspot_percentile.map.gz"):
+        (tmp_path / name).touch()
+
+    # Opening the concern map picks up the sibling; opening the percentile map works back to
+    # the concern map. Compound extensions survive, and "_hotspot"/"_percentile" are not
+    # mistaken for part of the metric name.
+    for opened in ("1tec_rama_hotspot.map.gz", "1tec_rama_hotspot_percentile.map.gz"):
+        imported = concern.read_fields(tmp_path / opened, VolumeData)
+        assert list(imported.fields) == ["1tec_rama"], opened
+        assert imported.fields["1tec_rama"].percentile is not None
+
+    # A concern map with no companion still imports: percentile is optional.
+    (tmp_path / "solo_hotspot.ccp4").touch()
+    solo = concern.read_fields(tmp_path / "solo_hotspot.ccp4", VolumeData)
+    assert list(solo.fields) == ["solo"] and solo.fields["solo"].percentile is None
+    # With no manifest there is no declared contract, so the documented default applies.
+    assert solo.anchors == concern.DEFAULT_ANCHORS
+
+
+def test_concern_rejects_a_map_that_is_not_bounded_concern(qapp, monkeypatch, tmp_path):
+    """An unbounded severity map opened as concern is refused, not silently rescaled."""
+    from pxviewer import concern
+    from pxviewer.volume_io import VolumeData
+
+    severity = VolumeData.from_numpy(
+        np.full((3, 4, 5), 2.5, dtype=np.float32), spacing=1.0, name="severity")
+    monkeypatch.setattr(VolumeData, "from_map_file",
+                        classmethod(lambda cls, path, **kwargs: severity))
+    path = tmp_path / "model_combined_hotspot.ccp4"
+    path.touch()
+    with pytest.raises(ValueError, match="bounded to"):
+        concern.read_fields(path, VolumeData)
 
 
 def test_the_opacity_knee_is_remembered_for_late_viewers(qapp):
@@ -642,7 +893,7 @@ def test_the_severity_contour_is_added_once_and_removed_on_toggle(qapp):
         said = []
         app.bridge.status_changed.connect(said.append)
         app.show_hotspot_field(mid, on=True, style="contour")
-        assert not app._volumes and any("no hotspots computed" in s for s in said)
+        assert not app._volumes and any("no hotspots yet" in s for s in said)
 
         app.compute_hotspots(mid)
         deadline = time.time() + 300
