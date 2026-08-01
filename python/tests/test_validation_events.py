@@ -233,6 +233,60 @@ def test_agreement_rejects_a_shuffled_field():
     assert not report.ok
 
 
+def _map_fit_events():
+    """A cc gap over three atoms; a fourth atom was never measured."""
+    return [
+        ve.ValidationEvent(metric="cc_gap", value=-0.12, units="correlation",
+                           outlier=False, atom_indices=(0,)),
+        ve.ValidationEvent(metric="cc_gap", value=-0.05, units="correlation",
+                           outlier=False, atom_indices=(1,)),
+        ve.ValidationEvent(metric="cc_gap", value=0.03, units="correlation",
+                           outlier=True, atom_indices=(2,)),
+    ]
+
+
+def test_per_atom_field_keeps_negatives_and_marks_unmeasured_atoms():
+    """Map-fit values are a continuous scale, not badness-from-zero.
+
+    A negative correlation is the worst possible fit, not the absence of one, and 0.0 is a
+    real reading — for a resolution in angstroms it is the *best* possible one. So nothing is
+    filtered and unmeasured atoms are nan rather than zero.
+    """
+    values = ve.per_atom_field(_map_fit_events(), 4, metric="cc_gap")
+    assert values[0] == pytest.approx(-0.12)
+    assert values[1] == pytest.approx(-0.05)
+    assert values[2] == pytest.approx(0.03)
+    assert np.isnan(values[3])            # never measured, not "fits perfectly"
+
+
+def test_per_atom_refuses_map_fit_events_on_the_severity_defaults():
+    """The corrupted field this prevents is silent, so the guard has to be loud.
+
+    With the severity defaults a normally-negative cc gap collapses to a field of zeros,
+    indistinguishable from atoms that were never measured at all.
+    """
+    events = _map_fit_events()
+    with pytest.raises(ValueError, match="per_atom_field"):
+        ve.per_atom(events, 4, metric="cc_gap")
+
+    # Saying what you mean is always allowed: an explicit transform maps a correlation onto a
+    # badness scale on purpose, and explicit flags ask for the continuous behaviour.
+    onto_severity = ve.per_atom(events, 4, metric="cc_gap",
+                                transform=lambda e: max(0.0, -e.value))
+    assert onto_severity.tolist() == [pytest.approx(0.12), pytest.approx(0.05), 0.0, 0.0]
+    explicit = ve.per_atom(events, 4, metric="cc_gap", skip_nonpositive=False, fill=np.nan)
+    assert explicit[0] == pytest.approx(-0.12) and np.isnan(explicit[3])
+
+
+def test_the_guard_only_looks_at_the_metric_being_asked_for():
+    """A caller rolling up a geometry metric must not be blocked by map-fit events that
+    happen to share the list."""
+    mixed = _map_fit_events() + [
+        ve.ValidationEvent(metric="clash", value=0.5, units="angstrom", outlier=True,
+                           atom_indices=(0, 1))]
+    assert ve.per_atom(mixed, 3, metric="clash").tolist() == [0.5, 0.5, 0.0]
+
+
 def test_per_atom_rolls_up_with_max_never_sum():
     """One mistake seen several times is still one mistake — and a sum would rank a large
     residue above a small one for no reason but atom count."""

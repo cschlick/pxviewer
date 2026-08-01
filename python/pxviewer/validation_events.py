@@ -27,6 +27,14 @@ and one localization** (which residue, which atoms, and — for a validator — 
 boolean); turning a value into a score or a color is the caller's business. That is why a
 disagreement between the three projects becomes impossible rather than merely unlikely.
 
+**The two families do not share a roll-up.** Geometry values are badness measured up from
+zero, so :func:`per_atom` filters non-positives and fills unmarked atoms with ``0.0`` — for
+that family both are true statements. Map-fit values are a continuous scale where negatives
+are the *worst* atoms and zero is a real reading, so they use :func:`per_atom_field`, which
+keeps every value and fills ``nan``. Getting this wrong is silent rather than loud — a cc gap
+is normally negative, so severity defaults turn a well-fit structure into a field of zeros —
+so :func:`per_atom` refuses map-fit events outright unless the caller says what it means.
+
 **It carries native values, not calibrated ones.** A Ramachandran result travels as its
 probability *percentage*, a rotamer result as its percentage, a clash as its *overlap in
 angstroms* — plus the validator's own ``outlier`` boolean. Turning those into a score is the
@@ -575,6 +583,13 @@ def extract_all(model: Any, *, dots=None, data_manager: Any = None,
 # file stays standalone; a caller supplies its own frozen convention.
 # =============================================================================
 
+#: The map-fit metrics. These are **continuous fields**, not badness-from-zero: a value may
+#: legitimately be negative (a correlation, a cc gap), and zero is a real point on the scale
+#: rather than "nothing here". :func:`per_atom`'s severity defaults would corrupt them, so
+#: they are named here and :func:`per_atom_field` is the roll-up that suits them.
+MAP_FIT_METRICS = frozenset({
+    "cc_mapmodel", "cc_half", "cc_star", "cc_gap", "qscore", "local_resolution", "rsr"})
+
 #: Q-score radial shells (angstrom), 0.0..2.0 by 0.1 -- the standard shell set.
 #: Q-score probe geometry. These are cctbx's own defaults (``cctbx.programs.qscore``'s phil:
 #: 20 shells from 0.1 to 2.0 A, 32 probes, rtol 0.9), and matching them is what makes the
@@ -833,10 +848,13 @@ def extract_fit(mmm, d_min, *,
 # -- rolling up ---------------------------------------------------------------
 
 
+_UNSET = object()
+
+
 def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optional[str] = None,
-             transform=None, outliers_only: bool = False, skip_nonpositive: bool = True,
-             fill: float = 0.0) -> np.ndarray:
-    """Roll events onto atoms with a **max**, never a sum.
+             transform=None, outliers_only: bool = False, skip_nonpositive=_UNSET,
+             fill=_UNSET) -> np.ndarray:
+    """Roll events onto atoms with a **max**, never a sum — for a SEVERITY field.
 
     Max because one physical mistake is routinely seen several times — a badly placed atom
     clashes with three neighbours, and a phi/psi is assigned to four backbone atoms — and
@@ -846,11 +864,29 @@ def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optiona
     ``transform(event) -> float`` converts a native value to whatever scale the caller uses;
     the default records the native value itself.
 
-    Defaults suit a geometry SEVERITY field (non-negative, unmarked atoms = 0). For a
-    continuous MAP-FIT field (cc / Q-score / local resolution, which are one value per atom
-    and may be <= 0) pass ``skip_nonpositive=False`` to keep every value and ``fill=np.nan``
-    so unmodelled atoms read as absent rather than a real zero.
+    The defaults (``skip_nonpositive=True``, ``fill=0.0``) encode badness-from-zero: a value
+    at or below zero is nothing to report, and an atom no event touched is clean. That is
+    true of the geometry channels and false of every map-fit one, so handing this function
+    map-fit events without saying how to treat them **raises** rather than quietly returning
+    a corrupted field — use :func:`per_atom_field`. Passing ``transform`` counts as saying:
+    a caller mapping a correlation onto a badness scale has already thought about it.
     """
+    events = list(events)
+    if skip_nonpositive is _UNSET and fill is _UNSET and transform is None:
+        offenders = sorted({e.metric for e in events
+                            if e.metric in MAP_FIT_METRICS
+                            and (metric is None or e.metric == metric)})
+        if offenders:
+            raise ValueError(
+                f"per_atom() got continuous map-fit events ({', '.join(offenders)}) with the "
+                "severity defaults, which would drop every negative value and read unmeasured "
+                "atoms back as 0.0 — for a cc gap, normally negative, that is a field of "
+                "zeros; for local resolution, 0.0 A is the best possible value. Use "
+                "per_atom_field() for a continuous field, or pass an explicit transform= "
+                "(and skip_nonpositive=/fill=) to map these onto a severity scale on purpose.")
+    skip_nonpositive = True if skip_nonpositive is _UNSET else skip_nonpositive
+    fill = 0.0 if fill is _UNSET else fill
+
     out = np.full(int(n_atoms), float(fill), dtype=float)
     seen = np.zeros(int(n_atoms), dtype=bool)
     for event in events:
@@ -866,6 +902,34 @@ def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optiona
                 out[i] = value
                 seen[i] = True
     return out
+
+
+def per_atom_field(events: Iterable[ValidationEvent], n_atoms: int, *,
+                   metric: Optional[str] = None, transform=None) -> np.ndarray:
+    """Roll a **continuous** field onto atoms — the map-fit counterpart of :func:`per_atom`.
+
+    Same max combination, but nothing is filtered and nothing is invented: negative values
+    survive, and an atom no event touched reads ``nan``. Those two differences are the whole
+    point.
+
+    * Keeping negatives matters because they are the interesting atoms. A negative
+      correlation is the worst possible fit, not an absence of one; dropping it and filling
+      ``0.0`` turns the worst atom in the structure into an average-looking one.
+    * ``nan`` rather than ``0.0`` matters because zero is a real value on these scales. For a
+      resolution in angstroms it is the *best* possible reading, so an unmeasured atom would
+      display as perfectly resolved.
+
+    ``nan`` is also what a viewer's attribute theme draws in its "missing" colour, so
+    unmeasured atoms read as unmeasured rather than as a score.
+
+    Note the polarity is the caller's to handle: local resolution is lower-is-better while
+    every other field here is higher-is-better, and the max combination does not know that.
+    It only bites when several events touch one atom (a per-residue field fanned out over its
+    atoms); the per-atom metrics emit exactly one event per atom, so there is nothing to
+    combine. Pass a negating ``transform`` if you need worst-case semantics.
+    """
+    return per_atom(events, n_atoms, metric=metric, transform=transform,
+                    skip_nonpositive=False, fill=np.nan)
 
 
 def outlier_atoms(events: Iterable[ValidationEvent], *, metric: Optional[str] = None,
