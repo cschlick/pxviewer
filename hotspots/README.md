@@ -353,10 +353,12 @@ A successful generation must satisfy all of the following:
 
 ## Important limitations
 
-- ~~Probe exposes only reportable clashes, so the clash layer has no
-  sub-threshold tail.~~ Fixed: extraction moved to `probe2`, which reports every
-  contact with a negative gap. On 1TEC with hydrogens, 1380 of 1476 contacts fall
-  below the 0.40 Å reporting boundary and now carry concern.
+- The clash layer has no sub-threshold tail *by choice*, no longer by limitation.
+  probe2 does report every contact with a negative gap (on 1TEC with hydrogens,
+  1380 of 1476 fall below the 0.40 Å boundary) and those events are available, but
+  concern is gated at 0.40 Å: a 0.1 Å brush is not a modeling problem, and letting
+  thousands of them deposit put 10.4% of the box past the display threshold and
+  swamped every other channel in the combined map.
 - Q-score concern is resolution-dependent; the `0.20` saturation deficit is a
   declared visualization choice rather than a published outlier threshold.
 - Local CC depends on map preprocessing, model-map resolution, scattering table,

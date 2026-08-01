@@ -176,6 +176,55 @@ def _clash_event(e) -> Event:
                  meta=dict(id="", overlap=-float(e.value), outlier=bool(e.outlier)))
 
 
+def _contour_event(e) -> Event:
+    """CaBLAM / CA-geometry: a contour fraction where lower is worse, like rama/rota."""
+    cut = ve.CABLAM_OUTLIER if e.metric == "cablam" else ve.CA_GEOM_OUTLIER
+    # Reuse the surprisal shape for the legacy severity mark; the score is a fraction, so
+    # scale to a percentage first to match _surprisal_mark's units.
+    return Event(e.metric, _surprisal_mark(e.value * 100.0, cut * 100.0), list(e.atoms_xyz),
+                 meta=dict(id=e.detail.get("id", ""), score=e.value,
+                           disfavored=e.detail.get("disfavored"),
+                           outlier=bool(e.outlier)))
+
+
+def _cbeta_event(e) -> Event:
+    return Event("cbeta", e.value / ve.CBETA_OUTLIER_A, list(e.atoms_xyz),
+                 meta=dict(id=e.detail.get("id", ""), deviation=e.value,
+                           dihedral_NABB=e.detail.get("dihedral_NABB"),
+                           outlier=bool(e.outlier)))
+
+
+def _omega_event(e) -> Event:
+    return Event("omega", 1.0 if e.outlier else 0.0, list(e.atoms_xyz),
+                 meta=dict(id=e.detail.get("id", ""), twist=e.value,
+                           omega=e.detail.get("omega"), kind=e.detail.get("kind"),
+                           is_proline=e.detail.get("is_proline"),
+                           resname=e.detail.get("resname"), outlier=bool(e.outlier)))
+
+
+def _covalent_event(e) -> Event:
+    return Event(e.metric, e.detail["z"] / 4.0, list(e.atoms_xyz),
+                 meta=dict(id="", z=e.detail["z"], delta=e.detail["delta"],
+                           sigma=e.detail["sigma"], ideal=e.detail["ideal"],
+                           outlier=bool(e.outlier)))
+
+
+#: Which adapter each shared metric goes through.
+_ADAPTERS = {
+    "rama": lambda e: _rama_event(e), "rota": lambda e: _rota_event(e),
+    "clash": lambda e: _clash_event(e),
+    "cablam": _contour_event, "ca_geom": _contour_event,
+    "cbeta": _cbeta_event, "omega": _omega_event,
+    "bond": _covalent_event, "angle": _covalent_event,
+}
+
+#: Every channel this module can extract. rama/rota/clash are the calibrated core; the rest
+#: complete the MolProbity set and the covalent geometry.
+ALL_METRICS = ("rama", "rota", "clash", "cablam", "ca_geom", "cbeta", "omega",
+               "bond", "angle")
+CORE_METRICS = ("rama", "rota", "clash")
+
+
 def extract_ramachandran(hierarchy, amap=None) -> List[Event]:
     """Rama result -> deposit on residue i's backbone atoms (N, CA, C, O)."""
     return [_rama_event(e) for e in ve.extract_ramachandran(hierarchy)]
@@ -242,40 +291,58 @@ def extract_clash(model, keep_hydrogens=False, dots=None):
     return events, clashscore
 
 
-def extract_all(model, use_hydrogens=True, dots=None) -> Dict:
-    """Extract the core event set (rama + rota + clash). Returns events plus a
-    manifest declaring what went into them (H mode, clashscore).
+def extract_all(model, use_hydrogens=True, dots=None, metrics=CORE_METRICS) -> Dict:
+    """Extract ``metrics``. Returns events plus a manifest of what went into them.
 
-    ``model`` is an mmtbx model manager (see :func:`load_model`). With ``use_hydrogens``
-    (the default) hydrogens are placed by reduce2 first, which is the calibrated
-    MolProbity clash path; without, only heavy-atom contacts are found and the manifest
-    says so. Rama and rota read the *original* model either way, so the residue numbering
-    in the manifest matches the input.
+    ``model`` is an mmtbx model manager (see :func:`load_model`). ``metrics`` defaults to
+    the calibrated core (rama, rota, clash); pass :data:`ALL_METRICS` for the full
+    MolProbity set plus covalent geometry.
+
+    With ``use_hydrogens`` (the default) hydrogens are placed by reduce2 before probing,
+    which is the calibrated MolProbity clash path; without, only heavy-atom contacts are
+    found and the manifest says so. Every other channel reads the *original* model, so the
+    residue numbering in the manifest matches the input.
     """
-    hierarchy = model.get_hierarchy()
-    index = ve.residue_atom_index(hierarchy)
-    events: List[Event] = []
-    events += [_rama_event(e) for e in ve.extract_ramachandran(hierarchy, index=index)]
-    events += [_rota_event(e) for e in ve.extract_rotamer(hierarchy, index=index)]
+    metrics = tuple(metrics)
+    unknown = [m for m in metrics if m not in _ADAPTERS]
+    if unknown:
+        raise ValueError(f"unknown metric(s) {unknown}; known: {list(_ADAPTERS)}")
 
-    # Hydrogens are added to a *separate* model used only for probe2. The events carry
-    # Cartesian footprints, so they need no atom-index agreement with the original -- and
-    # keeping the original untouched means rama/rota above are unaffected by it.
+    hierarchy = model.get_hierarchy()
+    # Restraints first when the covalent channels are wanted: building them reorders the
+    # hierarchy, so anything indexed beforehand would point at the wrong atoms.
+    geometry = None
+    if "bond" in metrics or "angle" in metrics:
+        geometry = ve._restraints_geometry(model)
+    index = ve.residue_atom_index(hierarchy)
+
+    hierarchy_metrics = tuple(m for m in metrics if m != "clash")
+    shared = ve.extract_all(model, metrics=hierarchy_metrics, geometry=geometry) \
+        if hierarchy_metrics else []
+    events: List[Event] = [_ADAPTERS[e.metric](e) for e in shared if e.metric in metrics]
+
+    hydrogens_used = None
+    clashscore_val = None
     clash_model = model
-    hydrogens_used = bool(use_hydrogens)
-    if use_hydrogens and not model_has_hydrogens(model):
-        try:
-            clash_model = add_hydrogens(model)
-        except Exception as exc:   # reduce2 unavailable or refused this model
-            hydrogens_used = False
-            print(f"warning: reduce2 could not add hydrogens ({exc}); "
-                  f"falling back to the heavy-atom clash pass", flush=True)
-    clash_events, clashscore_val = extract_clash(clash_model, dots=dots)
-    events += clash_events
+    if "clash" in metrics:
+        # Hydrogens go on a *separate* model used only for probe2. Events carry Cartesian
+        # footprints, so they need no atom-index agreement with the original -- and leaving
+        # the original alone means every other channel is unaffected by the H placement.
+        hydrogens_used = bool(use_hydrogens)
+        if use_hydrogens and not model_has_hydrogens(model):
+            try:
+                clash_model = add_hydrogens(model)
+            except Exception as exc:   # reduce2 unavailable or refused this model
+                hydrogens_used = False
+                print(f"warning: reduce2 could not add hydrogens ({exc}); "
+                      f"falling back to the heavy-atom clash pass", flush=True)
+        clash_events, clashscore_val = extract_clash(clash_model, dots=dots)
+        events += clash_events
+
     return dict(
         events=events,
         manifest=dict(
-            core_metrics=["rama", "rota", "clash"],
+            core_metrics=list(metrics),
             hydrogens=hydrogens_used,
             clashscore=clashscore_val,
             n_atoms=hierarchy.atoms_size(),

@@ -7,7 +7,7 @@ import os
 
 from concern import (build_concern_fields, molprobity_concern_events,
                      qscore_concern_events, QSCORE_SATURATION_DEFICIT)
-from events import extract_all, load_model
+from events import ALL_METRICS, CORE_METRICS, extract_all, load_model
 from field import write_ccp4
 from color_scale import display_contract, empirical_percentile_field
 
@@ -43,20 +43,26 @@ def main():
                              "--spacing is a compatibility alias)")
     parser.add_argument("--heavy-atom-clashes", action="store_true",
                         help="skip H addition; labeled preview, not calibrated default")
+    parser.add_argument("--metrics", default=",".join(CORE_METRICS),
+                        help="comma-separated channels, or 'all'. Default: %(default)s. "
+                             "Available: " + ",".join(ALL_METRICS))
     args = parser.parse_args()
     if args.spacing <= 0:
         parser.error("--output-pixel-size must be positive")
     if args.sigma <= 0:
         parser.error("--sigma must be positive")
+    metrics = (ALL_METRICS if args.metrics.strip().lower() == "all"
+               else tuple(m.strip() for m in args.metrics.split(",") if m.strip()))
     manifest = generate(
         args.model, args.out_dir, sigma=args.sigma, spacing=args.spacing,
         heavy_atom_clashes=args.heavy_atom_clashes, qscore_json=args.qscore_json,
-        resolution=args.resolution, expected_q=args.expected_q)
+        resolution=args.resolution, expected_q=args.expected_q, metrics=metrics)
     print(json.dumps(manifest, indent=2, sort_keys=True))
 
 
 def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=False,
-             qscore_json=None, resolution=None, expected_q=None, fields_out=None):
+             qscore_json=None, resolution=None, expected_q=None, fields_out=None,
+             metrics=CORE_METRICS):
     """Generate every map and the manifest for one model, and return the manifest.
 
     The same code path the CLI runs, exposed so a batch driver (see run_corpus.py) does not
@@ -74,14 +80,18 @@ def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=
     args.heavy_atom_clashes = heavy_atom_clashes
     args.qscore_json, args.resolution, args.expected_q = qscore_json, resolution, expected_q
 
+    metrics = tuple(metrics)
     model = load_model(args.model)
     extracted = extract_all(
-        model, use_hydrogens=not args.heavy_atom_clashes)
+        model, use_hydrogens=not args.heavy_atom_clashes, metrics=metrics)
     mp_events = molprobity_concern_events(extracted["events"])
-    by_metric = {
-        metric: [e for e in mp_events if e.metric == metric]
-        for metric in ("clash", "rama", "rota")
-    }
+    # Keep only channels that produced something: an empty field would be written as a
+    # uniform zero map, which reads as "checked and clean" rather than "not measured".
+    by_metric = {}
+    for metric in metrics:
+        picked = [e for e in mp_events if e.metric == metric]
+        if picked:
+            by_metric[metric] = picked
     q_manifest = None
     if args.qscore_json:
         q_events = qscore_concern_events(

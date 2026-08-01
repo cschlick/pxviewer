@@ -18,6 +18,51 @@ ROTAMER_FAVORED_PCT = 2.0
 ROTAMER_OUTLIER_PCT = 0.30
 CLASH_ZERO_OVERLAP_A = 0.0
 CLASH_SATURATION_OVERLAP_A = 0.80
+
+# Below this overlap a contact deposits nothing. The original calibration was
+# clip(overlap / 0.80) with no floor, which was safe only because the extractor could not
+# see sub-threshold contacts: mmtbx.validation.clashscore reports at 0.40 A and no closer,
+# so in practice the channel started at concern 0.5. Moving to probe2 supplied the whole
+# tail and quietly changed what the same formula means -- 1476 contacts instead of 536 on
+# 1TEC, most of them mild, each depositing a little, summing to 10.4% of the box past the
+# display threshold and swamping every other channel in the combined map.
+#
+# A 0.1 A brush is not a modeling problem; 0.40 A is where MolProbity says a contact becomes
+# a clash. Gating there restores the calibration's original behaviour exactly -- a reported
+# clash still lands at 0.5 and saturates at 0.80 -- while the sub-threshold contacts remain
+# in the events for consumers that want them.
+CLASH_REPORTING_OVERLAP_A = 0.40
+
+# Covalent geometry. The native value is a deviation from the restraint ideal, so the
+# scale-free quantity is Z = |delta| / sigma; MolProbity flags at 4 sigma.
+#
+# The zero anchor is at the cut itself, not at 0 sigma, and that is not a stylistic choice.
+# Unlike every other channel, *every* restraint is an event -- 2589 bonds and 3547 angles on
+# a 2737-atom model, against ~300 Ramachandran results -- and concern *sums* within a metric
+# before it saturates. Anchored at 0 sigma the median restraint (~1 sigma) deposits ~0.13,
+# thousands of those overlap, and the field saturates across the whole protein: measured, it
+# put 6695 of 39900 voxels past the display threshold, against 52 for Ramachandran, and the
+# combined map stopped meaning "where to look" and started meaning "where the protein is".
+#
+# Anchoring at the community cut keeps the channel sparse like the others: an unremarkable
+# restraint deposits exactly nothing, and only genuine strain accumulates.
+GEOMETRY_ZERO_SIGMA = 4.0
+GEOMETRY_SATURATION_SIGMA = 8.0
+
+# CaBLAM and C-beta. CaBLAM's score is a probability-like fraction where lower is worse, so
+# it is log-interpolated exactly like rama/rota, from the "disfavored" boundary to the
+# outlier cut. C-beta deviation is a distance, so it is linear like clash.
+CABLAM_FAVORED = 0.05        # above this, unremarkable
+CABLAM_OUTLIER = 0.01        # the CaBLAM outlier cut
+CA_GEOM_FAVORED = 0.05
+CA_GEOM_OUTLIER = 0.005      # the CA-geometry outlier cut
+CBETA_ZERO_A = 0.0
+CBETA_SATURATION_A = 0.50    # twice the 0.25 A MolProbity cut, as with clash
+
+# Non-trans peptides. omegalyze reports the omega dihedral; a cis or twisted peptide is
+# flagged. Concern is the twist away from the nearest ideal (0 for cis, 180 for trans),
+# saturating at 30 degrees -- twice the 15 degree boundary omegalyze calls "twisted".
+OMEGA_TWIST_SATURATION_DEG = 30.0
 QSCORE_EXPECTED_INTERCEPT = 1.1192
 QSCORE_EXPECTED_RESOLUTION_SLOPE = -0.1775
 QSCORE_SATURATION_DEFICIT = 0.20
@@ -43,8 +88,40 @@ def qscore_expected(resolution):
     return QSCORE_EXPECTED_INTERCEPT + QSCORE_EXPECTED_RESOLUTION_SLOPE * float(resolution)
 
 
+def _omega_concern(meta):
+    """Non-trans peptides. Categorical first, then continuous.
+
+    omegalyze flags every non-trans peptide, so an ordinary cis-proline arrives flagged; it
+    is common and legitimate, and treating it as a problem would light up a hotspot on most
+    structures. A cis peptide that is *not* proline is a real modeling error and saturates
+    regardless of how cleanly cis it is — the twist away from the nearest ideal is near zero
+    there, so the continuous measure alone would score it clean.
+
+    Everything else is scored by that twist, saturating at the 30 degree boundary where
+    omegalyze stops calling a peptide trans and starts calling it twisted.
+    """
+    if meta.get("kind") == "cis":
+        return 0.0 if meta.get("is_proline") else 1.0
+    return linear_concern(meta.get("twist", 0.0), 0.0, OMEGA_TWIST_SATURATION_DEG)
+
+
 def molprobity_concern_events(events):
-    """Recalibrate extracted MolProbity events onto bounded [0,1] concern."""
+    """Recalibrate extracted MolProbity events onto bounded [0,1] concern.
+
+    Two shapes, chosen by what the native quantity is rather than per metric:
+
+    * a **probability-like** score where lower is worse (rama, rota, cablam, ca_geom) is log
+      interpolated from its "unremarkable" boundary to its outlier cut, so the community cut
+      lands at concern 1.0;
+    * a **deviation** with no reference tail behind it (clash, cbeta, bond, angle) is linear
+      from zero to a saturation anchor set at twice the community cut, so the cut lands at
+      concern 0.5.
+
+    Those two conventions disagree about where an outlier sits, which is inherited rather
+    than chosen — it predates this file. It matters because the combined field is a maximum:
+    a flagged clash reaches 0.5 while a flagged rotamer reaches 1.0, so geometry outranks
+    sterics in the "where to look" map. Worth revisiting; not worth changing silently.
+    """
     calibrated = []
     for event in events:
         if event.metric == "rama":
@@ -58,8 +135,22 @@ def molprobity_concern_events(events):
                 ROTAMER_OUTLIER_PCT)
         elif event.metric == "clash":
             overlap = max(0.0, -float(event.meta["overlap"]))
+            concern = (0.0 if overlap < CLASH_REPORTING_OVERLAP_A else linear_concern(
+                overlap, CLASH_ZERO_OVERLAP_A, CLASH_SATURATION_OVERLAP_A))
+        elif event.metric == "cablam":
+            concern = log_low_concern(
+                event.meta["score"], CABLAM_FAVORED, CABLAM_OUTLIER)
+        elif event.metric == "ca_geom":
+            concern = log_low_concern(
+                event.meta["score"], CA_GEOM_FAVORED, CA_GEOM_OUTLIER)
+        elif event.metric == "cbeta":
             concern = linear_concern(
-                overlap, CLASH_ZERO_OVERLAP_A, CLASH_SATURATION_OVERLAP_A)
+                event.meta["deviation"], CBETA_ZERO_A, CBETA_SATURATION_A)
+        elif event.metric == "omega":
+            concern = _omega_concern(event.meta)
+        elif event.metric in ("bond", "angle"):
+            concern = linear_concern(
+                event.meta["z"], GEOMETRY_ZERO_SIGMA, GEOMETRY_SATURATION_SIGMA)
         else:
             raise ValueError("unsupported MolProbity metric %r" % event.metric)
         meta = dict(event.meta)

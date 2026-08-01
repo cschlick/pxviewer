@@ -107,13 +107,18 @@ The 0.80 Å saturation anchor is an explicit visualization choice: twice the
 starts at concern 0.5, a 0.60 Å overlap has concern 0.75, and overlaps of 0.80 Å
 or worse have concern 1.
 
-**The sub-threshold gap is closed.** This channel used to have no values between
-0 and 0.5, because `mmtbx.validation.clashscore` reports only clashes at or past
-the 0.40 Å boundary. Extraction now goes through `probe2` (see
-[`hotspots/events.py`](hotspots/events.py)), which reports every contact with a
-negative gap, so the tail below the reporting boundary is populated. On 1TEC with
-hydrogens, 1380 of 1476 contacts are sub-threshold. Remove the old limitation
-wherever it is still repeated.
+**The gap below 0.5 is now a choice, not a limitation.** It used to exist because
+`mmtbx.validation.clashscore` reports only clashes at or past 0.40 Å. Extraction
+now goes through `probe2` (see [`hotspots/events.py`](hotspots/events.py)), which
+reports every contact with a negative gap — on 1TEC with hydrogens, 1380 of 1476
+contacts are sub-threshold — so the data exists and rides in the events.
+
+Concern is nonetheless **gated at 0.40 Å**. The original `clip(overlap / 0.80)`
+was safe only because the extractor could not see below the boundary; supplying
+the tail changed what the same formula means. Measured: the mild contacts each
+deposit a little, they sum within the metric before saturation, and the clash
+field went from 0.8% to 10.4% of the box past the display threshold, swamping
+every other channel in the combined map. A 0.1 Å brush is not a modeling problem.
 
 Hydrogen-added MolProbity clashes are the default: `extract_all` places hydrogens
 with reduce2 before probing, on a separate model so the input's residue numbering

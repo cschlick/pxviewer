@@ -277,6 +277,137 @@ def extract_rotamer(hierarchy: Any, *, index=None, rotalyze_result=None
     return events
 
 
+#: CaBLAM contour cuts (fractions, not percentages; the comparisons are strict `<`).
+CABLAM_OUTLIER = 0.01        # cablam score below this is an outlier
+CABLAM_DISFAVORED = 0.05     # below this is "disfavored" — the allowed-region analogue
+CA_GEOM_OUTLIER = 0.005      # c_alpha_geom below this is a CA-geometry outlier
+
+#: MolProbity's C-beta deviation cut, in angstroms. Note `>=`, not `>`.
+CBETA_OUTLIER_A = 0.25
+
+
+def extract_cablam(hierarchy: Any, *, index=None, cablam_result=None
+                   ) -> List[ValidationEvent]:
+    """CaBLAM backbone conformation, as **two** metrics on residue *i*'s own CA/O/N.
+
+    ``cablam`` is the backbone-conformation contour and ``ca_geom`` the CA-trace geometry
+    contour; they are different quantities with different cuts, so they travel as separate
+    events rather than one blended number. Both are contour fractions in ``[0, 1]`` where
+    **lower is worse**, the same shape as a Ramachandran percentage.
+
+    CaBLAM sees five consecutive CAs, so the score is unavailable at chain ends (``None``,
+    skipped here) and it is informed by residues *i±2*. It is still assigned narrowly to
+    residue *i*, for the reason Ramachandran is: implicating the neighbours would smear one
+    residue's problem across five.
+    """
+    from libtbx.utils import null_out
+    from mmtbx.validation.cablam import cablamalyze
+
+    if cablam_result is None:
+        cablam_result = cablamalyze(pdb_hierarchy=hierarchy, outliers_only=False,
+                                    out=null_out(), quiet=True)
+    index = residue_atom_index(hierarchy) if index is None else index
+    names, xyz = _names(hierarchy), _xyz(hierarchy)
+
+    events = []
+    for r in cablam_result.results:
+        key = _key_of(r)     # cablam right-pads chain_id to 2 chars; _key_of strips it
+        picked = [i for i in atoms_of(index, key, getattr(r, "altloc", ""))
+                  if names[i] in ("CA", "O", "N")]
+        seat = dict(residue=key, atom_indices=tuple(picked),
+                    atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in picked))
+        if r.scores.cablam is not None:
+            events.append(ValidationEvent(
+                metric="cablam", value=float(r.scores.cablam), units="fraction",
+                outlier=bool(r.feedback.cablam_outlier), **seat,
+                detail={"id": r.mp_id().strip(),
+                        "disfavored": bool(r.feedback.cablam_disfavored)}))
+        if r.scores.c_alpha_geom is not None:
+            events.append(ValidationEvent(
+                metric="ca_geom", value=float(r.scores.c_alpha_geom), units="fraction",
+                outlier=bool(r.feedback.c_alpha_geom_outlier), **seat,
+                detail={"id": r.mp_id().strip()}))
+    return events
+
+
+def extract_cbeta(hierarchy: Any, *, index=None, cbetadev_result=None
+                  ) -> List[ValidationEvent]:
+    """C-beta deviation, in angstroms, on the CB atom whose position is off.
+
+    Narrow on purpose, like Ramachandran: the deviation *is* a statement about where CB
+    sits relative to the backbone that positions it, so it implicates CB and not the
+    residue at large. MolProbity's cut is 0.25 A.
+    """
+    from mmtbx.validation.cbetadev import cbetadev
+
+    if cbetadev_result is None:
+        cbetadev_result = cbetadev(pdb_hierarchy=hierarchy, outliers_only=False)
+    index = residue_atom_index(hierarchy) if index is None else index
+    names, xyz = _names(hierarchy), _xyz(hierarchy)
+
+    events = []
+    for r in cbetadev_result.results:
+        if r.deviation is None:
+            continue
+        key = _key_of(r)
+        picked = [i for i in atoms_of(index, key, getattr(r, "altloc", ""))
+                  if names[i] == "CB"]
+        events.append(ValidationEvent(
+            metric="cbeta", value=float(r.deviation), units="angstrom",
+            outlier=bool(r.outlier), residue=key,
+            atom_indices=tuple(picked),
+            atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in picked),
+            detail={"id": r.id_str().strip(), "dihedral_NABB": r.dihedral_NABB}))
+    return events
+
+
+def extract_omega(hierarchy: Any, *, index=None, omegalyze_result=None
+                  ) -> List[ValidationEvent]:
+    """Peptide omega dihedral, in degrees, on the backbone atoms that define it.
+
+    ``value`` is the **twist away from the nearest ideal** — 0 for a cis peptide, 180 for a
+    trans one — rather than omega itself, so that a larger number is always worse, as with
+    every other channel. omega itself is in ``detail``, along with omegalyze's own category:
+    a cis non-proline or a twisted peptide is flagged, a cis-proline is not.
+
+    The dihedral spans two residues; the reported residue's own N and CA carry it. The
+    preceding carbonyl is within a bond length, which is well inside any field kernel.
+    """
+    from mmtbx.validation import omegalyze as _om
+
+    if omegalyze_result is None:
+        omegalyze_result = _om.omegalyze(pdb_hierarchy=hierarchy, nontrans_only=False,
+                                         out=None, quiet=True)
+    index = residue_atom_index(hierarchy) if index is None else index
+    names, xyz = _names(hierarchy), _xyz(hierarchy)
+
+    kinds = {_om.OMEGALYZE_TRANS: "trans", _om.OMEGALYZE_CIS: "cis",
+             _om.OMEGALYZE_TWISTED: "twisted"}
+    events = []
+    for r in omegalyze_result.results:
+        if r.omega is None:
+            continue
+        omega = float(r.omega)
+        twist = min(abs(omega), abs(180.0 - abs(omega)))   # distance to cis or to trans
+        key = _key_of(r)
+        picked = [i for i in atoms_of(index, key, getattr(r, "altloc", ""))
+                  if names[i] in ("N", "CA")]
+        events.append(ValidationEvent(
+            metric="omega", value=twist, units="degree",
+            # omegalyze flags *any* non-trans peptide, so a perfectly ordinary cis-proline
+            # arrives with outlier=True. `is_proline` is what lets a consumer apply the
+            # MolProbity reading: cis-Pro is common, cis-nonPro and twisted are the problems.
+            outlier=bool(r.outlier), residue=key,
+            atom_indices=tuple(picked),
+            atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in picked),
+            detail={"id": r.id_str().strip(), "omega": omega,
+                    "kind": kinds.get(r.omega_type, str(r.omega_type)),
+                    "is_proline": bool(r.res_type == _om.OMEGA_PRO),
+                    "resname": r.resname.strip(),
+                    "prev_resname": str(getattr(r, "prev_resname", "")).strip()}))
+    return events
+
+
 def probe2_dots(model: Any, *, data_manager: Any = None) -> List[dict]:
     """Run cctbx's **probe2** in memory and return its raw ``flat_results`` dots.
 
@@ -541,8 +672,8 @@ def extract_all(model: Any, *, dots=None, data_manager: Any = None,
                 metrics: Sequence[str] = ("rama", "rota", "clash")) -> List[ValidationEvent]:
     """Every event for ``metrics``. ``model`` is an mmtbx model manager.
 
-    Clash needs a model (probe2 runs on one); rama/rota need only its hierarchy;
-    bond/angle read the restraints. ``metrics`` defaults to the three original
+    Clash needs a model (probe2 runs on one); rama/rota/cablam/ca_geom/cbeta/omega need
+    only its hierarchy; bond/angle read the restraints. ``metrics`` defaults to the three original
     channels -- pass ``metrics=("rama","rota","clash","bond","angle")`` for the full
     covalent set. Pass any result you already have (``dots``, ``ramalyze_result``,
     ``rotalyze_result``, ``geometry``) so an expensive step is not repeated -- and, for
@@ -565,6 +696,13 @@ def extract_all(model: Any, *, dots=None, data_manager: Any = None,
         events += extract_rotamer(hierarchy, index=index, rotalyze_result=rotalyze_result)
     if "clash" in metrics:
         events += extract_clashes(model, dots=dots, data_manager=data_manager)
+    if "cablam" in metrics or "ca_geom" in metrics:
+        both = extract_cablam(hierarchy, index=index)
+        events += [e for e in both if e.metric in metrics]
+    if "cbeta" in metrics:
+        events += extract_cbeta(hierarchy, index=index)
+    if "omega" in metrics:
+        events += extract_omega(hierarchy, index=index)
     if "bond" in metrics:
         events += extract_bonds(model, geometry=geometry)
     if "angle" in metrics:
