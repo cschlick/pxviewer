@@ -31,24 +31,52 @@ The scientific calibration and field definitions are documented in
 
 ## Requirements
 
-Run the programs with a configured Phenix/cctbx Python environment. The tested
-environment is:
+Run the programs with a configured Phenix/cctbx Python environment, using
+`libtbx.python` rather than the system or Miniforge Python — the latter may import
+parts of cctbx but lack the MolProbity reference data `rotalyze` needs.
+
+Dependencies are **cctbx, numpy and scipy**, and nothing else. In particular nothing
+here imports pxviewer, Qt, or any viewer machinery, so this runs headless on a compute
+node with no display; `test_hotspots_runs_without_the_viewer` pins that.
+
+On the machine this was developed on:
 
 ```bash
-source /root/phenix/build/setpaths.sh
+cd hotspots
+/Users/christopher/miniconda3/envs/pxviewer/bin/libtbx.python hotspots/make_concern_maps.py ...
 ```
 
-Use `libtbx.python`, not the system or Miniforge Python. The latter may import
-parts of cctbx but lack the MolProbity reference data required by `rotalyze`.
+All commands below are run from this directory. Input models may be PDB or mmCIF,
+optionally gzip-compressed. Experimental maps may be MRC, CCP4, or gzip-compressed
+map files accepted by cctbx.
 
-All commands below are run from the repository root:
+## Corpus runs
+
+`run_corpus.py` drives generation over many models unattended, and QCs each result
+rather than trusting that "no exception" means "correct":
 
 ```bash
-cd /root/hotspots
+libtbx.python hotspots/run_corpus.py MODELS_DIR OUT_DIR --output-pixel-size 2.0
 ```
 
-Input models may be PDB or mmCIF, optionally gzip-compressed. Experimental maps
-may be MRC, CCP4, or gzip-compressed map files accepted by cctbx.
+It isolates failures so one bad model cannot end a long run, appends one JSON line per
+model as it goes (so a killed run keeps everything it finished), and takes `--resume`.
+Parallelism is by sharding rather than a process pool, because forked cctbx state is a
+poor bet and a dying shard should take nothing else with it:
+
+```bash
+for k in $(seq 0 15); do
+    libtbx.python hotspots/run_corpus.py MODELS OUT --shard $k/16 --resume &
+done; wait
+libtbx.python hotspots/run_corpus.py MODELS OUT --report
+```
+
+Each model is checked with `validation_events.check_field_agreement`: the field is
+sampled back at the atoms and compared against the validation it was built from. The
+number to watch is **recall** — the fraction of flagged outlier atoms the field still
+marks. A field that loses a real outlier is wrong, and the run reports which models did
+it. `--report` merges every shard and prints the offenders. `--heavy-atom-clashes` skips
+reduce2 and is much faster if you are surveying rather than calibrating.
 
 ## Quick start: MolProbity hotspot maps
 
@@ -89,6 +117,23 @@ libtbx.python hotspots/make_concern_maps.py \
 This setting changes sampling density, not the Gaussian width or `[0,1]`
 calibration. `--spacing` remains accepted as a compatibility alias. Do not change
 `--sigma` merely to alter visual contrast.
+
+**Do not go coarser than 2.0 Å.** Sampling density is not free: the splat peak falls
+between voxels on a coarse grid, so deposited concern reads back lower and outliers
+drop under the display threshold. Measured on 1TEC, as the fraction of flagged
+outlier atoms the field still marks at concern ≥ 0.5 (`run_corpus.py`'s recall):
+
+| output pixel | rama recall | rota recall |
+| --- | ---: | ---: |
+| 1.0 Å | 1.000 | 1.000 |
+| 1.5 Å | 1.000 | 1.000 |
+| 2.0 Å | 1.000 | 0.989 |
+| 2.5 Å | 0.800 | 0.737 |
+| 3.0 Å | 0.450 | 0.400 |
+
+2.0 Å is the last safe setting. At 2.5 Å the field already loses one flagged
+outlier in five, and at 3.0 Å more than half — silently, since the maps still look
+plausible. Use 1.0 Å when the sampled numbers matter.
 
 For a model named `model.cif`, the principal outputs are:
 
@@ -277,9 +322,9 @@ hotspots/make_concern_maps.py
 hotspots/make_local_cc_map.py
 ```
 
-`hotspots/make_map.py` is the superseded additive-severity prototype. Do not use
-it to generate current viewer maps. The analysis scripts remain for historical
-ablation and consistency work; they are not required for normal map generation.
+The superseded additive-severity prototype (`make_map.py`) has been removed. The
+analysis scripts remain for historical ablation and consistency work; they are not
+required for normal map generation.
 
 ## Smoke tests
 

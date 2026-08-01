@@ -60,9 +60,6 @@ libtbx.python hotspots/make_local_cc_map.py \
 For local CC, `--output-pixel-size` resamples only viewer concern/percentile/mask
 maps. Raw local CC remains on the native calculation grid.
 
-Do not use `hotspots/make_map.py`; it is the superseded additive-severity
-prototype.
-
 ## Output interpretation
 
 - `*_hotspot.ccp4` and `*_concern.ccp4`: authoritative bounded concern,

@@ -48,6 +48,31 @@ def main():
         parser.error("--output-pixel-size must be positive")
     if args.sigma <= 0:
         parser.error("--sigma must be positive")
+    manifest = generate(
+        args.model, args.out_dir, sigma=args.sigma, spacing=args.spacing,
+        heavy_atom_clashes=args.heavy_atom_clashes, qscore_json=args.qscore_json,
+        resolution=args.resolution, expected_q=args.expected_q)
+    print(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=False,
+             qscore_json=None, resolution=None, expected_q=None, fields_out=None):
+    """Generate every map and the manifest for one model, and return the manifest.
+
+    The same code path the CLI runs, exposed so a batch driver (see run_corpus.py) does not
+    have to reimplement it. ``fields_out``, if given a dict, receives the in-memory
+    :class:`Field` objects, which lets a caller check the field against the events it was
+    built from without re-reading the CCP4s.
+    """
+    if spacing <= 0 or sigma <= 0:
+        raise ValueError("sigma and output pixel size must be positive")
+
+    class _Args:
+        pass
+    args = _Args()
+    args.model, args.out_dir, args.sigma, args.spacing = model_path, out_dir, sigma, spacing
+    args.heavy_atom_clashes = heavy_atom_clashes
+    args.qscore_json, args.resolution, args.expected_q = qscore_json, resolution, expected_q
 
     model = load_model(args.model)
     extracted = extract_all(
@@ -127,7 +152,11 @@ def main():
     with open(manifest_path, "w") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    print(json.dumps(manifest, indent=2, sort_keys=True))
+    manifest["manifest_path"] = manifest_path
+    if fields_out is not None:
+        fields_out.update(fields)
+        fields_out["_events"] = extracted["events"]
+    return manifest
 
 
 if __name__ == "__main__":

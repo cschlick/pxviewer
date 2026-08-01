@@ -45,6 +45,10 @@ dependencies:
   - chem_data
   - rdkit
   - "numpy<2.5"
+  # hotspots/ convolves and resamples its concern fields with scipy.ndimage. cctbx pulls
+  # scipy in transitively today, but hotspots/ is meant to be separable and to run on a
+  # bare compute node, so name it rather than inherit it.
+  - scipy
   - pyside6>=6.5
   - qt6-webengine
   - molviewspec>=1.8.0
