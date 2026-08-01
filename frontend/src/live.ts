@@ -1369,18 +1369,25 @@ export class LiveViewer {
         // Without a declared contract (the computed severity field) the anchors are derived
         // from the cut instead, so the outlier threshold stays legible whatever this
         // structure's worst severity happens to be.
+        // Mol* sizes the palette texture as 10^(most decimal places among these offsets)
+        // (ColorTheme.Palette), so an offset that arrives with float noise — 0.37 * 1.5 is
+        // 0.5549999999999999 — asks it to build 10^16 colors and throws "Invalid array
+        // length", leaving nothing rendered. Quantize every stop: 3 decimals is the same
+        // 1000-entry resolution the old fixed cut happened to produce, and it cannot blow up
+        // whatever the cut or the declared anchors are.
+        const stop = (x: number) => Math.round(clamp01(x) * 1000) / 1000;
         const a = this.hotspotAnchors;
         const colorList: [Color, number][] = a
             ? [
-                [ColorNames.yellow, clamp01(a.yellow)],
-                [ColorNames.orange, clamp01(a.orange)],
-                [ColorNames.red, clamp01(a.red)],
+                [ColorNames.yellow, stop(a.yellow)],
+                [ColorNames.orange, stop(a.orange)],
+                [ColorNames.red, stop(a.red)],
             ]
             : [
                 [ColorNames.green, 0.0],
-                [ColorNames.yellow, cut],
-                [ColorNames.orange, clamp01(cut * 1.5)],
-                [ColorNames.red, clamp01(cut * 2.5)],
+                [ColorNames.yellow, stop(cut)],
+                [ColorNames.orange, stop(cut * 1.5)],
+                [ColorNames.red, stop(cut * 2.5)],
             ];
         // Opacity: invisible below the knee, then ramping up. The knee is the user's slider —
         // raise it to keep only the worst regions, lower it to let more of the protein haze in.

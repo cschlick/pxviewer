@@ -951,6 +951,27 @@ a `map_model_manager` working frame is recorded in `shift_cart`. Considering onl
 put standalone NXSTART-placed maps at Cartesian zero. For a boxed map the first term is zero,
 so the older behaviour is recovered exactly.
 
+### Rebuild the frontend, and do not mistake a typecheck for one
+
+`npm run typecheck` is `tsc --noEmit`: it proves the TypeScript is well-typed and builds
+**nothing**. The desktop app serves `frontend/build/index.js`, which only
+`./scripts/build_frontend.sh` produces, and `build/` is gitignored — so a source checkout
+runs whatever bundle happens to be on disk. **After editing `frontend/src/*`, run the build
+script.** Every Python test here can pass against a months-old renderer.
+
+This bit once, and the failure mode was not obvious. The importer began sending the live
+threshold as the direct-volume's `cutFrac`, where it had previously been a fixed 0.5. The
+stale bundle had no `hotspot_anchors` support, so it still derived its colour ramp from that
+value — and `0.37 * 1.5` is `0.5549999999999999`. Mol\*'s `ColorTheme.Palette` sizes its
+palette as `10^(most decimal places among the stop offsets)`, so it tried to build 10^16
+colours, threw `RangeError: Invalid array length`, rendered nothing at any threshold, and
+wedged the viewport. 31 of the 101 slider positions were fatal.
+
+`hotspotReprParams` now quantizes every stop to 3 decimals, which caps the palette at 1000
+entries — the same resolution the old fixed cut happened to produce — no matter what the cut
+or the declared anchors are. Any offset handed to a Mol\* colour list needs that treatment;
+arithmetic on a user-driven float will otherwise produce one of these eventually.
+
 ### Verification
 
 - 1TEC samples, both combined + rama + rota (`debug/` is gitignored — regenerate rather than
