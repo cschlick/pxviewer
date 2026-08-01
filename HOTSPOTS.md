@@ -17,6 +17,11 @@
 > [HOTSPOTS_NOTES.md](HOTSPOTS_NOTES.md) is the handoff *to* that generator — what the viewer
 > reads from its manifest, the shared extraction module to copy, the field/validation sanity
 > check, and the open asks. Its counterpart coming the other way is `hotspots/VIEWER_NOTES.md`.
+>
+> [VALIDATION_NOTES.md](VALIDATION_NOTES.md) covers `python/pxviewer/validation_events.py`
+> itself — the shared extraction module, now with covalent and map-fit channels and a third
+> consumer. Read it before changing that file: it records what is verified exact, the
+> integration defects already found and fixed, and what is still open.
 
 Status: **implemented** — `python/pxviewer/hotspots.py`, the Hotspots tab (flame icon), and
 `python/tests/test_hotspots.py`. This records the reasoning behind the per-atom "hotspot"
