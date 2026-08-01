@@ -856,11 +856,25 @@ pick dynamic updates back up, this fingerprint is the seam a live re-score would
 Status: **implemented** — `python/pxviewer/concern.py`, the same Hotspots tab, and the
 `concern`-named tests in `python/tests/test_hotspots.py`.
 
-The field generator moved out of pxviewer into the sibling repository `hotspots/`
-(`make_concern_maps.py`, run under Phenix python). It writes CCP4 maps plus a
-`*_hotspots.json` manifest; pxviewer's job is now to **import and honour** them, not to
-compute them. Read that repo's `AGENTS.md`, `README.md` and `HOTSPOT_FIELDS.md` before
-changing anything about its behaviour.
+The field generator is [`hotspots/`](hotspots/) (`make_concern_maps.py`, run under the cctbx
+python). It writes CCP4 maps plus a `*_hotspots.json` manifest; pxviewer's job is to
+**import and honour** them, not to compute them. Read its `AGENTS.md`, `README.md` and
+`HOTSPOT_FIELDS.md` before changing its behaviour.
+
+It began as a separate repository and **is kept separable** — nothing in `hotspots/` imports
+pxviewer, because the intent is to upstream it. The one shared thing is
+`python/pxviewer/validation_events.py`, deliberately a **single file** rather than a copy:
+`hotspots/hotspots/events.py` resolves it by explicit path, preferring a sibling copy if one
+exists, so splitting the directory back out means copying that one file and changing nothing
+else. `test_there_is_exactly_one_copy_of_this_module` fails if a second copy appears.
+
+Since the merge, extraction on both sides runs through that shared module, which is what
+finally made the **clash channel work here**: it uses `probe2` rather than
+`mmtbx.validation.clashscore`, which shells out to a `probe` binary this environment does not
+have. Two consequences worth knowing — the generated maps now carry a clash field, and the
+channel's documented "no concern between 0 and 0.5" gap is closed, because probe2 reports
+sub-threshold contacts (on 1TEC with hydrogens, 1380 of 1476 contacts are below the 0.40 Å
+reporting boundary).
 
 ### Concern is a different quantity from severity
 
@@ -1056,15 +1070,19 @@ arithmetic on a user-driven float will otherwise produce one of these eventually
     so E38 reads 0.483 against a deposited 0.699 and E185 0.201 against 0.273; at 1.0 Å the
     same residues read 0.663 and 0.260. Same calibration either way — only sampling density
     changes, which is why `--sigma` must not be touched to compensate.
-- Both contain **no clash field**. `mmtbx.validation.clashscore` shells out to the classic
-  Duke `probe` binary, which is not installed here; `mmtbx.probe2` *is* present (pxviewer's
-  own Clashes tab uses it) but clashscore has no probe2 path, so
-  `make_concern_maps.py` cannot complete in this environment with or without
-  `--heavy-atom-clashes`. The samples were made by driving the generator's own
-  `extract_ramachandran`/`extract_rotamer`, `build_concern_fields`, `empirical_percentile_field`
-  and `write_ccp4` and skipping only the clash step — no generator code was modified. The
-  manifest records the omission in `molprobity.partial_generation`, and the importer surfaces
-  that disclosure rather than silently showing a short field list.
+- Both now carry **all four fields**, clash included, and are produced by the ordinary CLI:
+
+  ```bash
+  cd hotspots && libtbx.python hotspots/make_concern_maps.py \
+      ../python/pxviewer/data/1tec.pdb OUT --output-pixel-size 2.0
+  ```
+
+  The clash channel used to be impossible here — `mmtbx.validation.clashscore` shells out to
+  the classic Duke `probe` binary, which is not installed — so earlier samples were made by
+  driving the generator's library functions and skipping that step, and the manifest declared
+  the omission. Moving extraction onto `probe2` removed the blocker; `molprobity.omitted_metrics`
+  is now empty. On 1TEC the run places hydrogens with reduce2 first (2737 atoms → 5147) and
+  reports clashscore 18.7.
 - Targeted tests only: `test_hotspots.py`, `test_volume_io.py`, `test_live_maps.py`. **Do not
   run the whole suite casually** — a previous full run consumed ~10 GB and locked the machine.
 - `test_desktop.py` needs `cd python` (it resolves a relative data path);

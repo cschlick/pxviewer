@@ -6,6 +6,8 @@ supposed to guarantee: the same atoms get implicated as pxviewer's own scoring u
 field-agreement check actually discriminates a correct field from a wrong one.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -14,6 +16,20 @@ pytest.importorskip("mmtbx")
 from pxviewer import hotspots, validation_events as ve  # noqa: E402
 
 _MODEL = "python/pxviewer/data/1tec.pdb"
+
+
+def test_there_is_exactly_one_copy_of_this_module():
+    """One definition, one file.
+
+    `hotspots/` resolves it by explicit path (see its `events._load_shared`) rather than
+    keeping a copy, because a second copy that drifts looks like one definition while being
+    two — which is the failure this module exists to prevent. If `hotspots/` is ever split
+    back out it will need its own copy; until then, a second one in the tree is a mistake.
+    """
+    copies = sorted(p for p in Path(".").rglob("validation_events.py")
+                    if "__pycache__" not in p.parts)
+    assert copies == [Path("python/pxviewer/validation_events.py")], (
+        f"expected exactly one validation_events.py, found {copies}")
 
 
 @pytest.fixture(scope="module")

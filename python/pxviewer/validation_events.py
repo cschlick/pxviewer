@@ -355,7 +355,12 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
     # Collapse to one event per atom pair, keeping its worst overlap: an event means "these
     # two atoms are too close", and a consumer that deposits one kernel per event would
     # otherwise weight a contact by how much of it happens to be dotted.
+    # Also keep where the worst dot sat. A consumer that deposits a kernel per event may
+    # legitimately prefer the contact point -- the interface itself -- to the two atom
+    # centres; carrying it means that choice stays the consumer's rather than being decided
+    # here by omission.
     worst: Dict[Tuple[int, int], float] = {}
+    contact: Dict[Tuple[int, int], Optional[Xyz]] = {}
     for row in dots:
         # A hydrogen bond has the donor and acceptor well inside the vdW sum, so it shows a
         # negative gap and would otherwise be counted as a steric clash. MolProbity subtracts
@@ -376,6 +381,8 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
         pair = (a, b) if a < b else (b, a)
         if overlap > worst.get(pair, 0.0):
             worst[pair] = overlap
+            loc = row.get("loc")
+            contact[pair] = tuple(float(c) for c in loc) if loc else None
 
     events: List[ValidationEvent] = []
     for pair, overlap in sorted(worst.items()):
@@ -393,7 +400,8 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
                                int(first.resseq_as_int()), first.icode.strip()),
             atom_indices=picked,
             atoms_xyz=tuple(tuple(float(c) for c in xyz[i]) for i in picked),
-            detail={"pair": [int(i) for i in pair]}))
+            detail={"pair": [int(i) for i in pair],
+                    "contact_xyz": contact.get(pair)}))
     return events
 
 

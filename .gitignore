@@ -18,6 +18,9 @@ __pycache__/
 
 # Project-specific generated files
 AGENTS.md
+# ...but hotspots/ carries a hand-written one, and it travels with that directory when it is
+# eventually split back out.
+!hotspots/AGENTS.md
 
 # Local dev fixtures for manual GUI testing (regenerate: scripts/make_dev_fixtures.py)
 python/tests/data/
