@@ -4,14 +4,17 @@ Everything else comes straight from ``libtbx.test_utils``: ``approx_equal`` for 
 comparison, ``raises`` (already a context manager, same shape as pytest's), ``show_diff``,
 ``Exception_expected``, ``open_tmp_directory``.
 
-Only two things have no cctbx analogue, because cctbx tests rarely need them:
+One thing has no cctbx analogue: **optional dependencies.** pxviewer's GUI and live-session
+tests need PySide6, QtWebEngine or websockets, none of which a headless cctbx build has.
+Coarse gating belongs in ``run_tests.py`` (the pattern mmtbx uses for probe); :func:`have`
+and :func:`skip` are for the finer-grained cases inside a script.
 
-* **optional dependencies.** pxviewer's GUI and live-session tests need PySide6, QtWebEngine
-  or websockets, none of which a headless cctbx build has. Coarse gating belongs in
-  ``run_tests.py`` (the pattern mmtbx uses for probe); :func:`have` and :func:`skip` are for
-  the finer-grained cases inside a script.
-* **monkeypatching.** A couple of tests replace a classmethod to avoid reading real map files.
-  :func:`monkeypatched` restores on the way out, so a failure cannot leak into the next test.
+**There is deliberately no monkeypatch helper.** Not one of cctbx's 768 ``tst_*.py`` files
+patches or mocks anything: they build real objects and write real files, because in this
+domain the real thing is cheap to make. A test that needs a map should write one --
+``VolumeData.from_numpy(...).write_map(path)`` is two lines, and the CCP4 round trip it then
+exercises is usually part of what the test is about. A test tempted to spy on which method
+got called should assert on the state that results instead.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -44,21 +47,6 @@ def skip(reason):
     print("SKIP: %s" % reason)
     sys.stdout.flush()
     sys.exit(0)
-
-
-@contextlib.contextmanager
-def monkeypatched(obj, name, value):
-    """Temporarily replace ``obj.name``, restoring it on exit even if the body raises."""
-    missing = object()
-    original = getattr(obj, name, missing)
-    setattr(obj, name, value)
-    try:
-        yield value
-    finally:
-        if original is missing:
-            delattr(obj, name)
-        else:
-            setattr(obj, name, original)
 
 
 @contextlib.contextmanager

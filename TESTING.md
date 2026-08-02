@@ -60,13 +60,28 @@ Most of it is mechanical. `libtbx.test_utils` already provides the equivalents:
 | `pytest.importorskip("m")` | `if not have("m"): skip("...")` |
 | `pytest.skip(reason)` | `skip(reason)` |
 | `tmp_path` | `with tmp_dir() as path:` |
-| `monkeypatch.setattr(o, "a", v)` | `with monkeypatched(o, "a", v):` |
+| `monkeypatch` / `mock` | **nothing — build the real thing.** See below. |
 | `@pytest.fixture(scope="module")` | a module-level function with a cache list |
 | `@pytest.mark.parametrize` | a `for` loop over the cases |
 | `capsys` | `contextlib.redirect_stdout(io.StringIO())` |
 
-`have`, `skip`, `monkeypatched`, `tmp_dir`, `qt_application` and `data_path` are in
+`have`, `skip`, `tmp_dir`, `qt_application` and `data_path` are in
 `pxviewer/regression/tst_utils.py` — the only things cctbx does not already supply.
+
+**Do not patch or mock.** Not one of cctbx's 768 `tst_*.py` files does, and it is a habit
+worth dropping rather than porting: in this domain the real thing is cheap to build, and
+faking it tests less. Two substitutions cover essentially every case:
+
+- *A test that needs a map should write one.* `VolumeData.from_numpy(...).write_map(path)` is
+  two lines, and the CCP4 round trip it then exercises is usually part of what the test is
+  about — `tst_concern.py` gained real coverage of NXSTART placement and anisotropic pixel
+  sizes by making exactly this swap.
+- *A test tempted to spy on which method got called should assert on the resulting state.*
+  Watching for `set_volume_iso(vid, 1.5)` tests the implementation; reading the volume's `iso`
+  back afterwards tests the behaviour, and survives the implementation changing.
+
+The remaining pytest suite has 53 `monkeypatch` uses, so this is the single decision that
+most shapes what the rest of the conversion looks like.
 
 Two things to watch when converting:
 

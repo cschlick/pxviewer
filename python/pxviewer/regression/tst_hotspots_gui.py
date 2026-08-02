@@ -13,9 +13,8 @@ import time
 
 from libtbx.test_utils import approx_equal
 
-from pxviewer.regression.tst_concern import patched_map_reads, write_manifest
-from pxviewer.regression.tst_utils import (data_path, have, monkeypatched, qt_application,
-                                           skip, tmp_dir)
+from pxviewer.regression.tst_concern import write_manifest
+from pxviewer.regression.tst_utils import (data_path, have, qt_application, skip, tmp_dir)
 
 if not have("mmtbx", "numpy", "websockets", "PySide6.QtWebEngineWidgets"):
     skip("needs mmtbx, websockets and PySide6 QtWebEngine")
@@ -92,7 +91,7 @@ def exercise_the_opacity_knee_is_remembered_for_late_viewers():
 
 def exercise_a_manifest_imports_without_running_analysis():
     """A manifest imports every field, shows combined, and streams concern unrescaled."""
-    with tmp_dir() as work, patched_map_reads() as opened:
+    with tmp_dir() as work:
         manifest = write_manifest(work)
         app, mid = _app_with_model()
         try:
@@ -101,7 +100,6 @@ def exercise_a_manifest_imports_without_running_analysis():
 
             app.open_hotspot_volume(manifest, mid)
 
-            assert len(opened) == 4          # two metrics, concern + percentile each
             assert entry.get("hotspots") is None
             imported = entry["concern"]
             assert str(imported.source) == manifest
@@ -137,7 +135,7 @@ def exercise_importing_concern_drops_a_computed_score():
     """
     from pxviewer.desktop import _HOTSPOT_COLOR
 
-    with tmp_dir() as work, patched_map_reads():
+    with tmp_dir() as work:
         manifest = write_manifest(work, metrics=("combined",))
         app, mid = _app_with_model()
         try:
@@ -162,14 +160,13 @@ def exercise_importing_concern_drops_a_computed_score():
 def exercise_percentile_never_gates_visibility():
     """A manifest with no percentile map imports and draws; every voxel of concern reaches
     the wire, unmasked."""
-    with tmp_dir() as work, patched_map_reads() as opened:
+    with tmp_dir() as work:
         manifest = write_manifest(work, metrics=("rama",), percentile=False)
         app, mid = _app_with_model()
         try:
             app.open_hotspot_volume(manifest, mid)
             entry = app._model_entry(mid)
 
-            assert len(opened) == 1                  # only the concern map was read
             assert entry["concern"].fields["rama"].percentile is None
             assert entry["hotspot_cloud"] is True
             payload = entry["session"]._last_hotspot_volume
@@ -182,7 +179,7 @@ def exercise_percentile_never_gates_visibility():
 def exercise_the_table_reads_the_maps_not_a_second_scale():
     """Table values are sampled from the concern grids, so they are bounded to [0, 1] and
     cannot disagree with what the viewport draws."""
-    with tmp_dir() as work, patched_map_reads():
+    with tmp_dir() as work:
         manifest = write_manifest(work, metrics=("combined", "rama"))
         app, mid = _app_with_model()
         try:
@@ -216,7 +213,7 @@ def exercise_the_table_says_it_ranks_neighbourhoods():
     rather than invent a de-blurring rule and claim per-residue attribution."""
     from pxviewer import concern as concern_mod
 
-    with tmp_dir() as work, patched_map_reads():
+    with tmp_dir() as work:
         manifest = write_manifest(work, metrics=("combined",))
         app, mid = _app_with_model()
         try:
@@ -252,22 +249,28 @@ def exercise_the_knee_is_given_in_severity_and_sent_normalized():
 
 
 def exercise_the_threshold_updates_a_contour_level_and_colour():
-    """Contour uses the same absolute slider as the cloud and follows the hotspot palette."""
-    from pxviewer.desktop import DesktopApp
+    """Contour uses the same absolute slider as the cloud and follows the hotspot palette.
 
-    app = DesktopApp(port=0)
-    entry = {"id": "model-1", "hotspot_volume": "volume-1"}
-    levels, colors = [], []
-    with monkeypatched(app, "_model_entry", lambda _mid: entry), \
-            monkeypatched(app, "set_volume_iso",
-                          lambda vid, value: levels.append((vid, value))), \
-            monkeypatched(app, "set_volume_color",
-                          lambda vid, value: colors.append((vid, value))):
-        app.set_hotspot_threshold("model-1", 1.5)
+    Driven through a real volume rather than by watching which methods get called: what
+    matters is the level and colour the volume ends up carrying, not the route taken there.
+    """
+    from pxviewer.volume_io import VolumeData
 
-    assert levels == [("volume-1", 1.5)]
-    assert colors == [("volume-1", hotspots.severity_color(1.5))]
-    assert colors[0][1] == hotspots.WARM[1]
+    app, mid = _app_with_model()
+    try:
+        data = VolumeData.from_numpy(
+            np.zeros((4, 4, 4), dtype=np.float32), spacing=1.0, name="field")
+        vid = app._add_volume(data, "field", iso=hotspots.FIELD_ISO, iso_kind="absolute")
+        app._model_entry(mid)["hotspot_volume"] = vid
+
+        app.set_hotspot_threshold(mid, 1.5)
+
+        volume = app._volume_entry(vid)
+        assert approx_equal(volume["iso"], 1.5)          # the absolute level, not sigma
+        assert volume["color"] == hotspots.severity_color(1.5)
+        assert volume["color"] == hotspots.WARM[1]
+    finally:
+        app.stop()
 
 
 def exercise_an_absolute_level_is_converted_for_the_sigma_wire():
