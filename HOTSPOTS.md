@@ -1,5 +1,22 @@
 # Validation hotspots — design notes
 
+> **Scope, before anything else.** pxviewer is a visualization tool, and this is a
+> **visualization** feature: a light, deliberately simple overlay that shows where several
+> validators happen to agree, so the eye goes to a place worth looking at. It is **not a
+> validation metric** and must not be presented, reported, or refined against as one. The
+> numbers below exist to decide what colour a voxel is, not to score a structure.
+>
+> Two consequences run through everything here. The aggregate is only ever allowed to
+> **rank**, never to stand alone — and the per-metric channels are always kept, so any
+> combined value can be decomposed into the channels that produced it. A calibration
+> argument in this file is an argument about *display*: anchoring on community thresholds
+> means the same colour means the same thing in every structure, which is a comparability
+> property, not a claim to have measured anything new.
+>
+> An earlier aim — turning this into a defensible metric, with a concentration model and
+> PDB-REDO validation — was dropped. See "Direction not taken" below so it is not
+> re-proposed.
+
 > **Two generations live side by side. Read this first.**
 >
 > Everything from "The idea" down to "Future work" describes the **computed severity** score:
@@ -651,169 +668,24 @@ Leave as badges rather than score components:
 - **bond/angle deviations** — objection 2 above; add only if shown to carry signal
   independent of the refinement weight
 
-## Making it rigorous: from surprisal to a concentration field
+## Direction not taken: a rigorous concentration metric
 
-This section records where the thinking went when we asked "what would make the hotspot score a
-*rigorous* metric, not a plausible heuristic?" — and it is written as a hand-off to an agent
-with PDB (and ideally PDB-REDO) access, because that is what the next step needs. It supersedes
-nothing above: the code still implements the surprisal design. This is the trajectory *away* from
-it, and why, so the drift is legible to whoever picks it up.
+This file used to carry a long section working out how to turn the hotspot score into a
+*defensible validation metric* — recasting it as a marked spatial point process, testing
+concentration against a complete-spatial-randomness null with Ripley's K, and validating
+region recovery against PDB-REDO with PR/ROC curves. A companion manuscript draft framed it
+as the project's novel contribution.
 
-### The trajectory (so the drift is legible)
+**That aim was dropped, and the section with it.** pxviewer is a visualization tool. The
+aggregation view is intended to be light, simple, and obvious — a way to see where several
+validators agree, not a new number to report. Anything that makes it a metric invites exactly
+the Goodhart problem "The hazard" describes above: a score people refine against.
 
-**Where we started — surprisal severity.** Everything above: a per-atom severity, calibrated so
-`1.0` = the community outlier threshold (surprisal `−log₁₀(p) / −log₁₀(p_cut)` for the geometry
-metrics), the metrics combined at each atom by a p-norm with *no denominator*, the result rendered
-as a spatial cloud/contour. The value was *semi-interpretable* — "how many thresholds deep" — and
-that semi-interpretability is exactly what got interrogated.
-
-**The rigor question, in three parts.** (1) Do we enforce full inclusion of components to show a
-score, or tolerate ones that omit clash, or hydrogens, or the map term? (2) How do we validate
-that the number is meaningful? (3) What figures demonstrate it?
-
-**Fork 1 — ranking vs. calibrated probability.** The first framing offered was a fork: is the
-score a *discriminative ranking* (only the order matters; validate by ROC/PR) or a *calibrated
-quantity* (the value means something; validate by calibration)? Ranking was the initial
-recommendation, because it is validatable with data you can synthesize yourself.
-
-**Detour — how does MolProbity do it?** Worth knowing before inventing. The MolProbity *score* is
-**not** a probability: it is a log-linear regression (`≈ 0.43·ln(1+clashscore) + 0.33·ln(1+…rota…)
-+ 0.25·ln(1+…rama…) + 0.5`) whose coefficients were fit so the composite predicts the *resolution*
-at which those statistics would be unremarkable. Its unit is Ångströms. The *individual* checks are
-percentile calls against reference distributions (rota outlier = <1% likely; rama contours), but
-the headline number is a regression to an external observable, and it is **global — one number per
-structure, with no spatial/per-residue aggregate at all.** That last fact is the gap this whole
-project fills. It also surfaced a *third* option beyond Fork 1: calibrate against an external
-physical quantity (as MolProbity calibrates to resolution), e.g. PDB-REDO displacement.
-
-**The calibrated-probability elaboration.** We then developed `P(residue mismodeled | evidence)`
-as an additive-log-odds / logistic model: `logit P = b₀(context) + Σ_m w_m·f_m`, features `f_m` the
-per-component severities, `w_m` learned evidence weights. It was appealing because (a) omission
-became exact — a missing component is a *dropped term*, still a valid posterior; (b) the
-uncalibrated clash tail stopped being a blocker, because the model *learns* clash's evidence weight
-from labels rather than needing its tail probability asserted; (c) resolution could enter as
-*context* (`b₀`), so an outlier at 3.5 Å is correctly less alarming than the same outlier at 1.2 Å.
-
-**The course correction (the important one).** That probability model drifted in two ways from the
-original imagining, and both were wrong:
-
-- It had quietly become **per-residue / per-model**, not *localized*. The hotspot was always meant
-  to be a *spatial* thing — a field over the structure — not a verdict attached to each residue.
-- It made the **value itself interpretable** ("72% mismodeled"). But the original idea was never a
-  per-site probability; it was a **concentration of errors** — a density that says *errors pile up
-  here*, whose absolute value is deliberately *not* meant to be read as anything but relative.
-
-**Where it landed — a concentration field.** Correcting both lands on a specific, well-established
-object, and — pointedly — one that already owns the word we are using.
-
-### The object, stated properly
-
-The hotspot field is a **marked spatial point process** and its intensity:
-
-```
-λ(x) = Σ_i  s_i · K(x − x_i)
-```
-
-Each validation problem `i` is an *event* at atom position `x_i` carrying a *severity mark* `s_i`;
-`K` is a spatial kernel of some bandwidth. This is **kernel density estimation of a marked point
-process** — the density of validation trouble in space. Two stages, and only the second is new:
-
-1. **Combine metrics at a point → the mark.** This is the existing per-atom p-norm across
-   rama/rota/clash/fit. The surprisal work is *not discarded* — it is demoted from "the score" to
-   "the magnitude of an event." The `1.0`-at-threshold anchoring becomes a principled *feature
-   scaling* for the marks, not a claim about the field's value.
-2. **Concentrate in space → the field.** Smoothing the marked events into `λ(x)` is the cloud/
-   contour already on screen. The rendering *already commits to the concentration view* — a
-   probability is pointwise, but we are drawing a field. The probability detour was inconsistent
-   with what the app already shows.
-
-The value of `λ` is **relative and non-interpretable by design**: high = errors concentrated here,
-low = not. The superlinear emphasis on *coincidence* — several problems (across metrics, across
-neighbouring residues) landing in one region making a tall peak where any one alone makes a bump —
-is the entire point, and the thing a per-metric outlier *list* cannot express.
-
-### Why the name forces the framing
-
-"Find where events concentrate more than chance" is an established subfield: **spatial hotspot
-analysis** — Getis-Ord `Gi*`, local Moran's `I` / LISA, kernel-density hotspots in epidemiology and
-crime mapping, peak-calling over background in genomics. We literally call this feature *hotspots*.
-We cannot keep the name and ignore the discipline that named it. The rigorous move is to adopt
-hotspot analysis *proper*: a **hotspot is a statistically significant local concentration** (a
-`Gi*`-style call against a null), not merely a bright patch of summed severity.
-
-### What "rigorous" means for a concentration field
-
-Not calibration to a probability — **significance of a concentration against a null.** Three nested
-claims, cheapest and most decisive first:
-
-1. **Do errors cluster in space at all?** — justifies having a *field* rather than a *list*.
-   Test with **Ripley's `K` / the pair-correlation function** on validation outliers across a
-   benchmark, versus complete spatial randomness (CSR). If outliers are spatially random, a
-   concentration field adds nothing over the outlier list and the concept is dead. If they cluster,
-   the test *measures the correlation length* — which fixes the kernel bandwidth non-arbitrarily.
-   **This is the load-bearing first experiment, and it needs no ground-truth labels.**
-2. **Does concentration localize real trouble?** — rank *regions* (not atoms) by field value and
-   measure recovery of ground-truth error *patches*. Ground truth from a synthetic-corruption
-   harness (exact labels, controlled error type) and from PDB-REDO high-displacement regions
-   (real, at scale). Report region-level precision/recall.
-3. **Does concentration beat the raw outlier list?** — the novelty claim. Where several
-   *sub-threshold* signals coincide, does the field flag real problems that no single metric
-   called an outlier? Compare region-recovery of the field against the union of per-metric outlier
-   flags. If the field wins, "coincidence carries signal" is demonstrated, not asserted.
-
-**Optional — a scale reference, still not a probability.** To make "high" comparable across
-structures, express the field as **excess over the null background** a clean structure of the same
-size and resolution would produce — a fold-enrichment, or a `Gi*` z-score. That calibrates
-*significance* ("more concentrated than chance for a structure like this"), never the probability
-that a given atom is wrong.
-
-### The omission question, dissolved
-
-Under this framing it is barely a question. Components are just **marks summed into one density.**
-Omitting clash, or hydrogens, or the map term means *fewer events* → a lower field: honest and
-graceful, because a density is a sum of contributions. There are no incomparable profiles, no
-lower-bound gymnastics, no per-profile scales. The *only* bookkeeping is that the **null background
-must be computed under the same mark set**, so "excess over background" compares like with like.
-Concentration degrades by construction — which is why it, not the p-norm severity and not the
-per-residue probability, is the right home for the "tolerate omission" answer.
-
-### Figures
-
-- **Pair-correlation / Ripley's `K`** of outliers against the CSR envelope — "errors cluster, and
-  here is the length scale" (justifies the field and fixes the bandwidth).
-- **Region-level PR / ROC** for recovering injected (synthetic) and PDB-REDO error patches.
-- **Field vs. raw-outlier-union** region recovery, overlaid — does concentration, especially
-  coincidence, beat the list.
-- **Excess-over-background maps** — the field minus its null, so "hot" means *significantly*
-  concentrated rather than merely present.
-- **Coincidence anatomy** — for the top hotspots, show each is driven by *multiple* nearby or
-  overlapping weak signals, not one loud one. This is the visual case for a field over a list.
-
-### For the PDB-access agent: data and first steps
-
-- **Clustering test first (no labels needed).** Take a resolution-stratified sample of PDB entries,
-  compute per-atom validation outliers (rama, rota, clash via reduce/probe, map-fit where a map is
-  available), treat the outlier atoms as a point pattern per structure, and run Ripley's `K` /
-  pair-correlation against CSR. Answer the one question everything rests on: *are structural errors
-  spatially clustered, and over what length scale?* This sets the bandwidth for everything after.
-- **Ground truth for claims 2–3.** (a) A local **synthetic-corruption harness** — take a
-  high-quality structure, inject a *typed* error (rotamer flip, backbone distortion, injected clash,
-  local map misfit) at known sites, keep the ground-truth mask; exact labels, no external data,
-  build this first for controlled experiments. (b) **PDB-REDO** — per-atom/-residue displacement
-  between deposited and re-refined coordinates, thresholded, as a real and largely *independent*
-  error label at scale (independent because it is not one of the input metrics).
-- **A clean reference set** for the null background — a high-resolution, well-validated subset
-  (a Top-*N*–style set) to characterise what `λ` looks like in the *absence* of concentrated error,
-  per size/resolution bin.
-- **Regime splits.** Expect to characterise X-ray vs. cryo-EM, and resolution bins, separately —
-  clustering length and background level will differ; do not assume one transfers.
-
-### What survives from the surprisal design
-
-The per-atom severity (p-norm across metrics, threshold-anchored) **stays** — as the *mark* on each
-event, i.e. the magnitude the density integrates. What changes is its status: it is no longer "the
-score," and its absolute value is no longer asked to mean anything on its own. The score is the
-*field*, and the field's rigor is spatial-statistical significance, not calibration of the mark.
+Recorded here so the direction is not re-proposed as though it were new. What survives from
+that thinking is already implemented and documented above: severity is anchored on community
+thresholds so it inherits their calibration rather than inventing weights, the aggregate is
+only ever allowed to rank, and the per-metric channels are always kept so any combined value
+can be decomposed into the channels that produced it.
 
 ## Future work: dynamic updates
 
