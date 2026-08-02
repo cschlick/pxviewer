@@ -874,7 +874,7 @@ LOCAL_RESOLUTION_FSC_CUTOFF = 0.143
 
 
 def extract_local_resolution(mmm, *, fsc_cutoff=LOCAL_RESOLUTION_FSC_CUTOFF, n_bins=20,
-                             smoothing_radius_ratio=1.0, index=None
+                             smoothing_radius=None, smoothing_radius_ratio=1.0, index=None
                              ) -> List[ValidationEvent]:
     """Local resolution (angstrom) per ATOM, half-map FSC
     (``map_model_manager.local_resolution_map``). Needs both half maps.
@@ -883,12 +883,22 @@ def extract_local_resolution(mmm, *, fsc_cutoff=LOCAL_RESOLUTION_FSC_CUTOFF, n_b
     native so a colorer inverts as it likes, but note that :func:`per_atom` combines with a
     max, which on an inverted field selects the *best*-resolved value rather than the worst.
     Pass a negating ``transform=`` if you want worst-case behaviour from it.
+
+    DETERMINISM: with only ``smoothing_radius_ratio``, the smoothing sphere is
+    ``ratio * mmm.resolution()`` -- and ``mmm.resolution()`` is a MUTABLE cache that a prior
+    ``generate_map`` (e.g. computing the CC* gap first) overwrites, and that otherwise falls
+    back to the unreliable single-map d99. So the result depends on call order. Pass an
+    explicit ``smoothing_radius`` (absolute, angstrom, e.g. ratio * a pinned FSC resolution)
+    to make it order-independent and reproducible; it overrides the ratio.
     """
     from cctbx import maptbx
+    kw = dict(fsc_cutoff=float(fsc_cutoff), n_bins=n_bins)
+    if smoothing_radius is not None:
+        kw["smoothing_radius"] = float(smoothing_radius)
+    else:
+        kw["smoothing_radius_ratio"] = smoothing_radius_ratio
     lr = mmm.local_resolution_map(
-        map_id_1="map_manager_1", map_id_2="map_manager_2",
-        fsc_cutoff=float(fsc_cutoff), n_bins=n_bins,
-        smoothing_radius_ratio=smoothing_radius_ratio).map_data()
+        map_id_1="map_manager_1", map_id_2="map_manager_2", **kw).map_data()
     model = mmm.model()
     xrs = model.get_xray_structure()
     sf = xrs.unit_cell().fractionalize(xrs.sites_cart())
@@ -913,7 +923,7 @@ def extract_local_resolution(mmm, *, fsc_cutoff=LOCAL_RESOLUTION_FSC_CUTOFF, n_b
 
 def extract_rsr(mmm, d_min, *, radius=None, scattering="electron", index=None
                 ) -> List[ValidationEvent]:
-    """Real-space R-value per residue: R = sum|obs - calc| / sum|obs + calc| over a
+    """Real-space R-value per residue: R = sum|obs - calc| / (sum|obs| + sum|calc|) over a
     radius-angstrom window, with calc LINEARLY SCALED to obs over the molecular
     envelope (least squares) so the R-value is not dominated by a global scale
     mismatch. obs = full map, calc = model map at ``d_min``.
@@ -938,7 +948,7 @@ def extract_rsr(mmm, d_min, *, radius=None, scattering="electron", index=None
     calc_np = calc.as_1d().as_numpy_array().astype(float)
     env = maptbx.grid_indices_around_sites(
         uc, n_real, n_real, sites, flex.double(sites.size(), radius))
-    e = np.array(list(env), dtype=np.int64)
+    e = flex.size_t(env).as_numpy_array().astype(np.int64)  # not list(env): 1e6-1e8 elems
     A = np.vstack([calc_np[e], np.ones(e.size)]).T
     a, b = np.linalg.lstsq(A, obs_np[e], rcond=None)[0]
     calc_s = a * calc_np + b
@@ -951,11 +961,17 @@ def extract_rsr(mmm, d_min, *, radius=None, scattering="electron", index=None
             atoms = rg.atoms()
             sel = maptbx.grid_indices_around_sites(
                 uc, n_real, n_real, atoms.extract_xyz(), flex.double(atoms.size(), radius))
-            idx = np.array(list(sel), dtype=np.int64)
+            idx = flex.size_t(sel).as_numpy_array().astype(np.int64)
             if idx.size < 10:
                 continue
             oo, cc = obs_np[idx], calc_s[idx]
-            denom = float(np.abs(oo + cc).sum())
+            # denominator = sum|obs| + sum|calc|, NOT sum|obs+calc|. The classic X-ray RSR
+            # uses sum|obs+calc| assuming POSITIVE electron density; on a signed cryo-EM map
+            # obs+calc cancels toward zero, so RSR blows past 1 and loses all signal exactly
+            # in the poor-density periphery (verified: 9zi8/13es RSR ~1, spearman-with-fit ~0).
+            # sum|obs|+sum|calc| >= sum|obs-calc| always, so RSR stays in [0,1] and never
+            # cancels. (Gate 0.3; VALIDATION_NOTES sec 5.5.)
+            denom = float(np.abs(oo).sum() + np.abs(cc).sum())
             if denom <= 0:
                 continue
             key = ResidueKey(ch.id.strip(), rg.resseq_as_int(), rg.icode.strip())

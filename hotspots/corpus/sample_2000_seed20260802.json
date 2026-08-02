@@ -1,0 +1,10 @@
+{
+ "mirror": "/root/data/pdb_mmcif",
+ "n": 2000,
+ "population": "/root/hotspots/pxviewer/hotspots/corpus/protein_population.txt",
+ "population_n": 214435,
+ "population_sha256": "c9a1c65477715847e8ccebb97a6afd867dbd438ca5a72fd98f98a6c0f351016d",
+ "sample": "/root/hotspots/pxviewer/hotspots/corpus/sample_2000_seed20260802.txt",
+ "sample_sha256": "c09e3461f63c2794c33fe695433b2403533809eaade5b5da87148e3d72841361",
+ "seed": 20260802
+}

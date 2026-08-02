@@ -291,7 +291,8 @@ def extract_clash(model, keep_hydrogens=False, dots=None):
     return events, clashscore
 
 
-def extract_all(model, use_hydrogens=True, dots=None, metrics=CORE_METRICS) -> Dict:
+def extract_all(model, use_hydrogens=True, dots=None, metrics=CORE_METRICS,
+                extras_out=None) -> Dict:
     """Extract ``metrics``. Returns events plus a manifest of what went into them.
 
     ``model`` is an mmtbx model manager (see :func:`load_model`). ``metrics`` defaults to
@@ -320,6 +321,12 @@ def extract_all(model, use_hydrogens=True, dots=None, metrics=CORE_METRICS) -> D
     shared = ve.extract_all(model, metrics=hierarchy_metrics, geometry=geometry) \
         if hierarchy_metrics else []
     events: List[Event] = [_ADAPTERS[e.metric](e) for e in shared if e.metric in metrics]
+    # A corpus driver needs the *shared* events (native value + outlier flag, the ground
+    # truth a field is scored against) and the H-added model the clash events are indexed
+    # against. Both are built here and would otherwise have to be rebuilt -- reduce2 twice
+    # is the expensive step in the stack. Same contract as make_concern_maps' ``fields_out``.
+    extras = extras_out if extras_out is not None else {}
+    extras["shared_events"] = list(shared)
 
     hydrogens_used = None
     clashscore_val = None
@@ -336,8 +343,16 @@ def extract_all(model, use_hydrogens=True, dots=None, metrics=CORE_METRICS) -> D
                 hydrogens_used = False
                 print(f"warning: reduce2 could not add hydrogens ({exc}); "
                       f"falling back to the heavy-atom clash pass", flush=True)
+        # Probe the dots once and hand the same set to both consumers. probe2 is the most
+        # expensive step in the stack, so letting extract_clash and the extras each probe
+        # independently would double the cost of every corpus model.
+        if dots is None and extras_out is not None:
+            dots = ve.probe2_dots(clash_model)
         clash_events, clashscore_val = extract_clash(clash_model, dots=dots)
         events += clash_events
+        if extras_out is not None:
+            extras["clash_model"] = clash_model
+            extras["shared_clash"] = ve.extract_clashes(clash_model, dots=dots)
 
     return dict(
         events=events,
