@@ -36,11 +36,14 @@ import sys
 #: Pure computation: cctbx, numpy, scipy. No Qt, no websockets, no display.
 core_tests = [
     "$D/regression/tst_validation_events.py",
+    "$D/regression/tst_hotspots.py",
+    "$D/regression/tst_concern.py",
     "$D/regression/tst_hotspots_standalone.py",
 ]
 
 #: Need PySide6 + QtWebEngine (the desktop shell) or websockets (the live session).
 gui_tests = [
+    "$D/regression/tst_hotspots_gui.py",
 ]
 
 tst_list = tuple(core_tests)

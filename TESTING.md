@@ -36,15 +36,18 @@ relative to the repository root.
 This is not a style preference — the pytest suite has *contradictory* working-directory
 requirements and there is no directory that runs all of it. Measured:
 
+Measured on `test_hotspots.py` before it was converted, against `test_desktop.py` which
+still is not:
+
 | | from repo root | from `python/` |
 | --- | --- | --- |
-| `tests/test_hotspots.py` | 40 passed | 22 failed, 6 errors |
+| `tests/test_hotspots.py` (now converted) | 40 passed | 22 failed, 6 errors |
 | `tests/test_desktop.py` | 4 spurious failures | passes |
 
-`test_hotspots.py` hardcodes `python/pxviewer/data/1tec.pdb`, which only resolves from the
-root; `test_desktop.py` resolves data through the installed package and only works from
-`python/`. Converted tests resolve against the package and run from anywhere, which is what
-cctbx assumes.
+One hardcoded `python/pxviewer/data/1tec.pdb`, which only resolves from the root; the other
+resolves data through the installed package and only works from `python/`. Converted tests
+resolve against the package and run from anywhere, which is what cctbx assumes -- every
+`tst_*.py` here is verified from `/tmp`.
 
 ## Converting a pytest test
 
@@ -78,28 +81,27 @@ Two things to watch when converting:
 
 Converted, and the pytest originals removed:
 
-| test | exercises |
-| --- | ---: |
-| `regression/tst_validation_events.py` | 14 |
-| `regression/tst_hotspots_standalone.py` | 3 |
+| test | exercises | list |
+| --- | ---: | --- |
+| `regression/tst_validation_events.py` | 14 | core |
+| `regression/tst_hotspots.py` | 22 | core |
+| `regression/tst_concern.py` | 5 | core |
+| `regression/tst_hotspots_standalone.py` | 3 | core |
+| `regression/tst_hotspots_gui.py` | 15 | gui |
 
-**Not yet converted: 35 files, 10,944 lines, still requiring pytest.** Run them per file,
-from the directory that file happens to want (see the table above — there is no single
-choice that works for all of them):
+`test_hotspots.py` became three files rather than one. Its 40 tests mixed pure calibration
+with desktop-shell wiring, and splitting them along that seam is what lets the calibration
+half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
+The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
 
-```bash
-QT_QPA_PLATFORM=offscreen python -m pytest -q python/tests/test_hotspots.py   # repo root
-cd python && QT_QPA_PLATFORM=offscreen python -m pytest -q tests/test_desktop.py
-```
-
-Do not run the whole suite casually — a previous full run consumed ~10 GB and locked the
-machine. Prefer targeted files.
+**Not yet converted: 34 files, 9,925 lines, still requiring pytest.**
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
-together a third of the remainder. Both are GUI/live-session tests that would go in the
-gated `gui_tests` list rather than `core_tests`. `test_hotspots.py` (1,019 lines) is the
-next most valuable to convert, being the closest to the work in `regression/` already.
+together nearly half the remainder. Both are GUI/live-session tests and would go in the
+gated `gui_tests` list. `test_live_maps.py`, `test_volume_io.py` and `test_cctbx_io.py` are
+the natural next ones -- small, pure computation, and they belong in `core_tests` where they
+would run in a headless build.
 
-Counts of what the remainder leans on, which is what makes the conversion mechanical rather
-than hard: 308 `importorskip`, 166 `tmp_path`, 84 `approx`, 74 `monkeypatch`, 47 `raises`,
-21 fixtures, 10 `parametrize`, 2 `capsys`.
+Counts of what the remainder leans on, which is what keeps the conversion mechanical rather
+than hard: 271 `importorskip`, 138 `tmp_path`, 53 `monkeypatch`, 52 `approx`, 44 `raises`,
+16 fixtures, 10 `parametrize`, 2 `capsys`.
