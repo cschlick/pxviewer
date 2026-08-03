@@ -98,30 +98,33 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **13 files, 113 exercises**:
+Converted, and the pytest originals removed — **16 files, 141 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
 | `regression/tst_bcif.py` | 5 | core |
-| `regression/tst_palettes.py` | 7 | core |
+| `regression/tst_concern.py` | 6 | core |
+| `regression/tst_data.py` | 10 | core |
+| `regression/tst_edits.py` | 4 | core |
+| `regression/tst_hotspots.py` | 22 | core |
+| `regression/tst_hotspots_gui.py` | 15 | gui |
+| `regression/tst_hotspots_standalone.py` | 3 | core |
+| `regression/tst_hydrogens.py` | 1 | core |
 | `regression/tst_kinemage.py` | 9 | core |
 | `regression/tst_loader.py` | 9 | core |
-| `regression/tst_volume_io.py` | 6 | core |
-| `regression/tst_data.py` | 11 | core |
-| `regression/tst_hydrogens.py` | 1 | core |
+| `regression/tst_mvs.py` | 19 | core |
+| `regression/tst_palettes.py` | 7 | core |
 | `regression/tst_validation_events.py` | 14 | core |
-| `regression/tst_hotspots.py` | 22 | core |
-| `regression/tst_concern.py` | 6 | core |
-| `regression/tst_hotspots_standalone.py` | 3 | core |
+| `regression/tst_volume.py` | 6 | core |
+| `regression/tst_volume_io.py` | 6 | core |
 | `regression/tst_webapp.py` | 5 | gui |
-| `regression/tst_hotspots_gui.py` | 15 | gui |
 
 `test_hotspots.py` became three files rather than one. Its 40 tests mixed pure calibration
 with desktop-shell wiring, and splitting them along that seam is what lets the calibration
 half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
 The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
 
-**Not yet converted: 26 files, 9,219 lines, still requiring pytest.**
+**Not yet converted: 23 files, 8,857 lines, still requiring pytest.**
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the
