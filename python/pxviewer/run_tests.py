@@ -35,6 +35,11 @@ import sys
 
 #: Pure computation: cctbx, numpy, scipy. No Qt, no websockets, no display.
 core_tests = [
+    "$D/regression/tst_bcif.py",
+    "$D/regression/tst_palettes.py",
+    "$D/regression/tst_kinemage.py",
+    "$D/regression/tst_loader.py",
+    "$D/regression/tst_volume_io.py",
     "$D/regression/tst_validation_events.py",
     "$D/regression/tst_hotspots.py",
     "$D/regression/tst_concern.py",

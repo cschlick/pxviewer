@@ -94,13 +94,18 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed:
+Converted, and the pytest originals removed — **10 files, 96 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
+| `regression/tst_bcif.py` | 5 | core |
+| `regression/tst_palettes.py` | 7 | core |
+| `regression/tst_kinemage.py` | 9 | core |
+| `regression/tst_loader.py` | 9 | core |
+| `regression/tst_volume_io.py` | 6 | core |
 | `regression/tst_validation_events.py` | 14 | core |
 | `regression/tst_hotspots.py` | 22 | core |
-| `regression/tst_concern.py` | 5 | core |
+| `regression/tst_concern.py` | 6 | core |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 
@@ -109,7 +114,7 @@ with desktop-shell wiring, and splitting them along that seam is what lets the c
 half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
 The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
 
-**Not yet converted: 34 files, 9,925 lines, still requiring pytest.**
+**Not yet converted: 29 files, 9,478 lines, still requiring pytest.**
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the
