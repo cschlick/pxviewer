@@ -47,6 +47,8 @@ core_tests = [
     "$D/regression/tst_mvs.py",
     "$D/regression/tst_geometry.py",
     "$D/regression/tst_validation.py",
+    "$D/regression/tst_probe.py",
+    "$D/regression/tst_ligands.py",
     "$D/regression/tst_validation_events.py",
     "$D/regression/tst_hotspots.py",
     "$D/regression/tst_concern.py",
@@ -56,6 +58,8 @@ core_tests = [
 #: Need PySide6 + QtWebEngine (the desktop shell), websockets (the live session), or a
 #: built frontend bundle (the webapp serves it).
 gui_tests = [
+    "$D/regression/tst_appserver.py",
+    "$D/regression/tst_console.py",
     "$D/regression/tst_webapp.py",
     "$D/regression/tst_hotspots_gui.py",
 ]

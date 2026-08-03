@@ -98,12 +98,14 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **18 files, 155 exercises**:
+Converted, and the pytest originals removed — **22 files, 177 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
+| `regression/tst_appserver.py` | 3 | gui |
 | `regression/tst_bcif.py` | 5 | core |
 | `regression/tst_concern.py` | 6 | core |
+| `regression/tst_console.py` | 5 | gui |
 | `regression/tst_data.py` | 10 | core |
 | `regression/tst_edits.py` | 4 | core |
 | `regression/tst_geometry.py` | 6 | core |
@@ -112,9 +114,11 @@ Converted, and the pytest originals removed — **18 files, 155 exercises**:
 | `regression/tst_hotspots_standalone.py` | 3 | core |
 | `regression/tst_hydrogens.py` | 1 | core |
 | `regression/tst_kinemage.py` | 9 | core |
+| `regression/tst_ligands.py` | 9 | core |
 | `regression/tst_loader.py` | 9 | core |
 | `regression/tst_mvs.py` | 19 | core |
 | `regression/tst_palettes.py` | 7 | core |
+| `regression/tst_probe.py` | 5 | core |
 | `regression/tst_validation.py` | 8 | core |
 | `regression/tst_validation_events.py` | 14 | core |
 | `regression/tst_volume.py` | 6 | core |
@@ -133,7 +137,24 @@ is not reachable here without patching — chem_data is installed and importable
 the environment alone still finds geostd. The reachable half of the guard is kept and the
 gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
 
-**Not yet converted: 21 files, 8,629 lines, still requiring pytest.**
+**Not yet converted: 17 files, 8,260 lines, still requiring pytest:**
+- `test_analysis.py`
+- `test_api.py`
+- `test_api_guide.py`
+- `test_cctbx_io.py`
+- `test_demos.py`
+- `test_desktop.py`
+- `test_gpu.py`
+- `test_gui_concurrency.py`
+- `test_gui_fuzz.py`
+- `test_live.py`
+- `test_live_maps.py`
+- `test_minimize.py`
+- `test_primitives.py`
+- `test_qscore.py`
+- `test_reflections.py`
+- `test_tug.py`
+- `test_volume_demos.py`
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the
