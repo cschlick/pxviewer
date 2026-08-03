@@ -98,7 +98,7 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **16 files, 141 exercises**:
+Converted, and the pytest originals removed — **18 files, 155 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -106,6 +106,7 @@ Converted, and the pytest originals removed — **16 files, 141 exercises**:
 | `regression/tst_concern.py` | 6 | core |
 | `regression/tst_data.py` | 10 | core |
 | `regression/tst_edits.py` | 4 | core |
+| `regression/tst_geometry.py` | 6 | core |
 | `regression/tst_hotspots.py` | 22 | core |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
@@ -114,6 +115,7 @@ Converted, and the pytest originals removed — **16 files, 141 exercises**:
 | `regression/tst_loader.py` | 9 | core |
 | `regression/tst_mvs.py` | 19 | core |
 | `regression/tst_palettes.py` | 7 | core |
+| `regression/tst_validation.py` | 8 | core |
 | `regression/tst_validation_events.py` | 14 | core |
 | `regression/tst_volume.py` | 6 | core |
 | `regression/tst_volume_io.py` | 6 | core |
@@ -124,7 +126,14 @@ with desktop-shell wiring, and splitting them along that seam is what lets the c
 half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
 The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
 
-**Not yet converted: 23 files, 8,857 lines, still requiring pytest.**
+**One test was dropped rather than converted.** `test_geometry.py` checked that
+`build_geometry` returns `None` when no monomer library is present, by deleting two
+environment variables and replacing `geometry._chem_data_geostd` with a stub. That branch
+is not reachable here without patching — chem_data is installed and importable, so clearing
+the environment alone still finds geostd. The reachable half of the guard is kept and the
+gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
+
+**Not yet converted: 21 files, 8,629 lines, still requiring pytest.**
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the

@@ -45,6 +45,8 @@ core_tests = [
     "$D/regression/tst_volume.py",
     "$D/regression/tst_edits.py",
     "$D/regression/tst_mvs.py",
+    "$D/regression/tst_geometry.py",
+    "$D/regression/tst_validation.py",
     "$D/regression/tst_validation_events.py",
     "$D/regression/tst_hotspots.py",
     "$D/regression/tst_concern.py",
