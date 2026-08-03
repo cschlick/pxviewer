@@ -91,10 +91,14 @@ Two things to watch when converting:
   restraints and reorders the hierarchy, for instance, so pass `geometry=` rather than
   letting it mutate a shared model.
 - **`approx_equal` prints a diff and returns a bool**; it does not raise. Keep the `assert`.
+- **`raises` cannot handle every exception.** It instantiates the class with no arguments to
+  test `isinstance`, so it blows up on anything whose constructor requires them —
+  `urllib.error.HTTPError` needs five. Fall back to `try` / `except` with
+  `raise Exception_expected` in the try, which is the older cctbx idiom and always works.
 
 ## Inventory
 
-Converted, and the pytest originals removed — **10 files, 96 exercises**:
+Converted, and the pytest originals removed — **13 files, 113 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -103,10 +107,13 @@ Converted, and the pytest originals removed — **10 files, 96 exercises**:
 | `regression/tst_kinemage.py` | 9 | core |
 | `regression/tst_loader.py` | 9 | core |
 | `regression/tst_volume_io.py` | 6 | core |
+| `regression/tst_data.py` | 11 | core |
+| `regression/tst_hydrogens.py` | 1 | core |
 | `regression/tst_validation_events.py` | 14 | core |
 | `regression/tst_hotspots.py` | 22 | core |
 | `regression/tst_concern.py` | 6 | core |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
+| `regression/tst_webapp.py` | 5 | gui |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 
 `test_hotspots.py` became three files rather than one. Its 40 tests mixed pure calibration
@@ -114,7 +121,7 @@ with desktop-shell wiring, and splitting them along that seam is what lets the c
 half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
 The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
 
-**Not yet converted: 29 files, 9,478 lines, still requiring pytest.**
+**Not yet converted: 26 files, 9,219 lines, still requiring pytest.**
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the
