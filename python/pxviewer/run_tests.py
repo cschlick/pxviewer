@@ -58,6 +58,7 @@ core_tests = [
 #: Need PySide6 + QtWebEngine (the desktop shell), websockets (the live session), or a
 #: built frontend bundle (the webapp serves it).
 gui_tests = [
+    "$D/regression/tst_cctbx_io.py",
     "$D/regression/tst_appserver.py",
     "$D/regression/tst_console.py",
     "$D/regression/tst_webapp.py",

@@ -98,12 +98,13 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **22 files, 177 exercises**:
+Converted, and the pytest originals removed — **23 files, 201 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
 | `regression/tst_appserver.py` | 3 | gui |
 | `regression/tst_bcif.py` | 5 | core |
+| `regression/tst_cctbx_io.py` | 24 | gui |
 | `regression/tst_concern.py` | 6 | core |
 | `regression/tst_console.py` | 5 | gui |
 | `regression/tst_data.py` | 10 | core |
@@ -137,24 +138,24 @@ is not reachable here without patching — chem_data is installed and importable
 the environment alone still finds geostd. The reachable half of the guard is kept and the
 gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
 
-**Not yet converted: 17 files, 8,260 lines, still requiring pytest:**
-- `test_analysis.py`
-- `test_api.py`
-- `test_api_guide.py`
-- `test_cctbx_io.py`
-- `test_demos.py`
-- `test_desktop.py`
-- `test_gpu.py`
-- `test_gui_concurrency.py`
-- `test_gui_fuzz.py`
-- `test_live.py`
-- `test_live_maps.py`
-- `test_minimize.py`
-- `test_primitives.py`
-- `test_qscore.py`
-- `test_reflections.py`
-- `test_tug.py`
-- `test_volume_demos.py`
+**Not yet converted: 16 files, 7,894 lines, still requiring pytest:**
+
+- `test_analysis.py` (166 lines)
+- `test_api.py` (300 lines)
+- `test_api_guide.py` (75 lines)
+- `test_demos.py` (180 lines)
+- `test_desktop.py` (3600 lines)
+- `test_gpu.py` (109 lines)
+- `test_gui_concurrency.py` (218 lines)
+- `test_gui_fuzz.py` (361 lines)
+- `test_live.py` (1063 lines)
+- `test_live_maps.py` (189 lines)
+- `test_minimize.py` (182 lines)
+- `test_primitives.py` (188 lines)
+- `test_qscore.py` (170 lines)
+- `test_reflections.py` (458 lines)
+- `test_tug.py` (480 lines)
+- `test_volume_demos.py` (155 lines)
 
 The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
 together nearly half the remainder. Both are GUI/live-session tests and would go in the
