@@ -26,7 +26,8 @@ import threading
 import time
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets"):
     skip("PySide6 QtWebEngine / websockets not available")
@@ -72,7 +73,7 @@ def desktop():
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 @contextlib.contextmanager
@@ -80,7 +81,7 @@ def xray_desktop():
     """An app with a model and reflections loaded but unpaired -- ready to phase."""
     with desktop() as app:
         app.load_xray_demo(d_min=3.0)
-        QApplication.processEvents()
+        process_events()
         yield app
 
 
@@ -90,7 +91,7 @@ def phase_and_land(app):
     mid = app._models[0]["id"]
     app.make_maps(rid, mid)
     drain("pxviewer-phasing")
-    QApplication.processEvents()
+    process_events()
     assert_viewer_consistent(app)
     return rid
 
@@ -118,7 +119,7 @@ def exercise_make_maps_survives_unload_before_it_lands():
             if unload in ("reflections", "both"):
                 app.remove_reflections(rid)
 
-            QApplication.processEvents()  # land it against the mutated registry
+            process_events()  # land it against the mutated registry
             assert_viewer_consistent(app)
 
             if unload == "none":
@@ -150,7 +151,7 @@ def exercise_the_update_chain_survives_unload():
 
             # Exactly what the post-minimization chain emits to run on the GUI thread.
             app._update_maps_if_live(rid)
-            QApplication.processEvents()
+            process_events()
             assert_viewer_consistent(app)
 
 
@@ -170,21 +171,21 @@ def exercise_minimize_survives_concurrent_removal():
     with desktop() as app:
         app.load_file(data_path("1ubq.pdb"))
         app.load_file(data_path("1tec.pdb"))
-        QApplication.processEvents()
+        process_events()
         victim = app._models[1]["id"]
         app.set_active_model(app._models[0]["id"])
 
         app.minimize_model()                  # streams on pxviewer-minimize
         time.sleep(0.05)                      # let it get going
         app.remove_model(victim)              # mutate the shared list while it streams
-        QApplication.processEvents()
+        process_events()
         assert_viewer_consistent(app)
 
         # The run is continuous -- it holds at its minimum until ended -- so stop it, then
         # let the thread wind down and land its result against the mutated registry.
         app.stop_minimization()
         drain("pxviewer-minimize")
-        QApplication.processEvents()
+        process_events()
         assert_viewer_consistent(app)
         assert app._model_entry(victim) is None
 
@@ -204,7 +205,7 @@ def exercise_a_drag_ends_when_its_model_is_unloaded():
 
     with desktop() as app:
         app.load_file(data_path("1ubq.pdb"))
-        QApplication.processEvents()
+        process_events()
         mid = app._models[0]["id"]
 
         # Driven synchronously, bypassing the worker thread, so the interleaving is
@@ -217,7 +218,7 @@ def exercise_a_drag_ends_when_its_model_is_unloaded():
         app._serve_tug(mid, "end", 0, None)
         assert app._tug is None, "the drag was not closed out after its model was unloaded"
 
-        QApplication.processEvents()
+        process_events()
         assert_viewer_consistent(app)
 
 

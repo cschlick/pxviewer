@@ -166,6 +166,80 @@ def closing_modals(interval_ms=20):
         timer.stop()
 
 
+def process_events():
+    """Let Qt catch up, *including* the deletions it has deferred.
+
+    Use instead of a bare ``QApplication.processEvents()`` anywhere a test drives the UI
+    repeatedly. ``processEvents`` deliberately does not deliver ``DeferredDelete`` -- the
+    whole point of those events is to outlive the current event loop -- so a rebuilt pane
+    posts its old widgets for deletion and they are never collected. Under a real event
+    loop they would be; under a test that only calls ``processEvents`` they accumulate for
+    the length of the run, which measured as a walk growing from 888 to 3694 live widgets
+    without the scene itself getting any bigger.
+
+    Delivering them here is what makes a test's memory resemble the application's.
+    """
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.processEvents()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+def dispose(app):
+    """Stop a ``DesktopApp`` and actually free it. Use instead of a bare ``app.stop()``.
+
+    ``stop`` closes the windows and calls ``deleteLater`` on them, which only *posts* a
+    deletion — and ``processEvents`` does not deliver ``DeferredDelete``, by design, since
+    the events exist precisely to defer past the current event loop. In a desktop run the
+    posted deletes are collected as Qt shuts down and nobody notices. In a test script
+    nothing collects them, so every app a script builds stays resident: measured at 430
+    live widgets each, and a script that built five carried all five to the end.
+
+    Delivering them explicitly is what makes a multi-app script cost one app rather than
+    all of them. After this, ``QApplication.allWidgets()`` is empty again.
+
+    **The settle step is not optional.** A worker thread posts its result back with
+    ``run_on_main``; if the widgets are freed while such a callback is still queued, it
+    lands on a deleted C++ object and the process dies with ``libshiboken: Internal C++
+    object ... already deleted`` -- a real use-after-free that the old leak was hiding,
+    since objects that are never freed cannot be used after free. So: stop, let the
+    workers finish and their callbacks run *against live widgets*, and only then deliver
+    the deletes.
+    """
+    try:
+        app.stop()
+    finally:
+        settle()              # workers finish and their callbacks land, widgets alive
+        process_events()      # ... and only now deliver the deferred deletes
+
+
+#: Worker threads the app starts are named for it, which is what makes them identifiable
+#: without reaching into the app's internals.
+WORKER_PREFIX = "pxviewer-"
+
+
+def settle(timeout=120.0):
+    """Pump the loop until no pxviewer worker thread is left running.
+
+    Deliberately does *not* deliver ``DeferredDelete``: the point is to let everything
+    still in flight land while the objects it refers to are alive.
+    """
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not any(t.name.startswith(WORKER_PREFIX) and t.is_alive()
+                   for t in threading.enumerate()):
+            break
+        QApplication.processEvents()
+        time.sleep(0.02)
+    QApplication.processEvents()   # let the last callbacks land
+
+
 def data_path(*parts):
     """A path under ``pxviewer/data``, independent of the working directory.
 

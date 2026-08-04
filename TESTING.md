@@ -306,11 +306,66 @@ had already drawn the same one for logging. It is not a licence to add a hook wh
 patch used to be — the first question stays "what state does this leave behind?", and it
 had an answer for the other 23 cases in this file.
 
+## Memory
+
+**A test should cost about what using the application costs.** That is the standard, and
+three things broke it. All three are the same mistake in different clothes: Qt frees things
+*through the event loop*, and a test script does not run one.
+
+**`deleteLater` is a post, not a delete.** `QApplication.processEvents()` deliberately does
+not deliver `DeferredDelete` events — deferring past the current loop is the entire point of
+them. So every pane the app rebuilt sat in the posted-event queue for the whole run. Use
+`process_events()` from `tst_utils` instead of `QApplication.processEvents()`: it delivers
+them, the way a real event loop eventually would. One walk went from 3694 live widgets to a
+flat 454 with no other change.
+
+**`app.stop()` did not free the app.** Use `dispose(app)` from `tst_utils`, never a bare
+`app.stop()`. Measured before the fix: each `DesktopApp` left 429 of its 430 widgets alive
+for the rest of the process, so a script that built five carried all five to the end. Two
+production gaps fed this and are now closed — `ControlsWindow` had no teardown at all, and
+`DesktopApp` never released its main window or splash (the splash is held by the closure
+connected to the page-load signal, so an app that never loads a page keeps one alive with
+nothing left to dismiss it). After: 430 widgets built, **zero** residual, flat across apps.
+
+**Freeing things exposed a use-after-free the leak had been hiding.** The first `dispose`
+deleted the widgets as soon as `stop` returned — and a worker thread that posts its result
+back with `run_on_main` could still have a callback queued. It then landed on a freed
+object and took the process down with `libshiboken: Internal C++ object ... already
+deleted`. Nondeterministic, so it crashed one run and printed `OK` on the next. Objects
+that are never freed cannot be used after free, so the leak had been acting as a very
+expensive safety net. `dispose` now calls `settle()` first, which pumps the loop until no
+`pxviewer-` worker thread is alive, so callbacks land against live widgets; only then are
+the deletes delivered. **If you add a teardown path, settle before you free.**
+
+**A random walk that only grows stops being a random walk.** `tst_gui_fuzz.py` was weighted
+towards loading, so it climbed to 15 models and 8 generated map+model groups — about 2 GB,
+and a scene nobody builds. Worse as a *test*: the late steps all re-probed one enormous
+state instead of many different ones. `Walk.make_room` now evicts at random to stay under
+`MAX_MODELS` / `MAX_VOLUMES` / `MAX_GROUPS`, which bounds the footprint, keeps the walk
+moving through varied small scenes, and exercises the remove paths on the way.
+
+Together: `tst_gui_fuzz.py` fell from **2588 MB to 889 MB** and got *faster* (239 s → 159 s
+on comparable runs), and within a walk RSS is now flat at ~520 MB where it used to climb
+past 2260 MB. Since the runner is serial the suite costs whatever its heaviest script costs,
+and that ceiling went from **1563 MB to ~1120 MB** — nothing now exceeds roughly what one
+viewport and a loaded scene cost in the application itself, which was the point.
+
+If you suspect a leak, measure rather than guess — `QApplication.allWidgets()` is the honest
+signal, and it is the one to trust. **Peak RSS is a poor instrument**: `tst_live_maps.py`
+measured 491, 745 and 827 MB on three consecutive runs of *identical* code, so a single
+before/after pair proves nothing at that resolution. Two further traps: `ru_maxrss` is a
+high-water mark and so cannot show memory coming back (the figures here are current RSS from
+`ps`), and a peak sampled by polling misses short spikes entirely on fast scripts. Live
+widget counts are exact, reproducible, and directly answer the question being asked.
+
 ## Running it
 
-The full registry is not cheap: 49 scripts, one process each, several of which start a
-QtWebEngine viewport and a few of which refine or phase for real. Run it when you mean to,
-not casually — and not two at once. A single script is the normal unit of work:
+The registry is 49 scripts, one process each, run **serially** — `_run_standalone` does one
+`subprocess.call` at a time, so the suite costs whatever its heaviest single script costs,
+not the sum. Do not run two registries at once; that, not the tests themselves, is what once
+took the machine down.
+
+A single script is the normal unit of work:
 
 ```bash
 libtbx.python python/pxviewer/regression/tst_desktop_tables.py

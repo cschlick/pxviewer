@@ -15,7 +15,8 @@ import sys
 from libtbx.test_utils import approx_equal, raises
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "numpy"):
     skip("PySide6 QtWebEngine / websockets not available")
@@ -77,7 +78,7 @@ def desktop(**kwargs):
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 def blob(app, name="blob", shape=(8, 8, 8)):
@@ -366,7 +367,7 @@ def exercise_a_visibility_box_never_rebuilds_the_tree_inside_the_signal():
         assert item.text(2) == "A"                       # still alive and usable
         assert app._model_entry(a)["visible"]            # deferred, so not applied yet
 
-        QApplication.processEvents()
+        process_events()
         assert not app._model_entry(a)["visible"]        # applied on the next turn
 
 
@@ -430,7 +431,7 @@ def exercise_the_appearance_pane_follows_the_active_model():
         radios = dict((r.property("mid"), r)
                       for r in app._controls._loaded_tree.findChildren(QRadioButton))
         app._controls._on_active_radio(radios[a])
-        QApplication.processEvents()                     # deferred off the click signal
+        process_events()                     # deferred off the click signal
 
         assert app._active_model_id == a
         assert app._controls._focused == ("model", a)
@@ -468,7 +469,7 @@ def exercise_the_active_model_radio():
         # Activation is deferred one turn: the rebuild it triggers deletes the radio that
         # is still delivering this click, so it must not run inside the signal.
         app._controls._on_active_radio(radios[a])
-        QApplication.processEvents()
+        process_events()
         assert app._active_model_id == a
 
         radios = dict((r.property("mid"), r) for r in tree.findChildren(QRadioButton))
@@ -484,7 +485,7 @@ def exercise_rebuilding_the_appearance_pane_spawns_no_stray_windows():
     with desktop() as app:
         app._controls.widget().show()
         app.load_xray_demo(d_min=2.5)
-        QApplication.processEvents()
+        process_events()
         assert stray_windows(app) == []
 
         # And the flow that orphaned them directly: rebuild the pane across kinds.
@@ -492,7 +493,7 @@ def exercise_rebuilding_the_appearance_pane_spawns_no_stray_windows():
         controls._update_appearance("model", app._models[0]["id"])
         controls._update_appearance("reflections", app._reflections[0]["id"])
         controls._update_appearance("model", app._models[0]["id"])
-        QApplication.processEvents()
+        process_events()
         assert stray_windows(app) == []
 
 
@@ -693,7 +694,7 @@ def exercise_the_controls_repalette_across_live_theme_changes():
     finally:
         QAPP.setPalette(original)
         QAPP.processEvents()
-        app.stop()
+        dispose(app)
 
 
 def exercise_the_mouse_bindings_are_shown_in_the_gui():

@@ -10,7 +10,7 @@ import contextlib
 import sys
 
 from pxviewer.regression.tst_utils import (
-    data_path, have, qt_application, shipped_defaults, skip)
+    data_path, dispose, have, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "mmtbx.geometry_restraints.reference", "numpy"):
@@ -38,7 +38,7 @@ def desktop_with_model():
         app.load_file(MODEL)
         yield app, app._models[0]["id"]
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_the_scope_setting_reaches_the_tug():

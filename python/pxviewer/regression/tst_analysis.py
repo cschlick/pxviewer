@@ -12,7 +12,7 @@ from __future__ import absolute_import, division, print_function
 import sys
 import time
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import data_path, dispose, have, skip
 
 if not have("mmtbx", "numpy"):
     skip("mmtbx / numpy not available")
@@ -225,7 +225,7 @@ def exercise_moving_the_atoms_drops_the_shared_caches():
         assert "validation" not in entry
         assert "hotspots" not in entry
     finally:
-        app.stop()
+        dispose(app)
 
 
 def run():

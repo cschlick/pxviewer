@@ -3784,6 +3784,24 @@ class ControlsWindow:
     def widget(self):
         return self._window
 
+    def close(self) -> None:
+        """Tear the controls down, releasing the several hundred widgets they own.
+
+        The counterpart to :meth:`ViewportWindow.close`, and needed for the same reason:
+        a controls window is a tree of ~430 widgets, and nothing else drops the last
+        reference to it. Closing the window hides it; ``deleteLater`` is what actually
+        frees the tree, once the event loop next delivers deferred deletes.
+
+        Immaterial to a desktop run, which builds one and then exits — but a process that
+        builds several, as a test script does, otherwise carries every one of them to the
+        end. No event loop is pumped here, for the reason given on the viewport's close.
+        """
+        try:
+            self._window.close()
+            self._window.deleteLater()
+        except Exception:  # pragma: no cover - defensive teardown
+            pass
+
     _STATUS_STYLE = "color: palette(placeholder-text);"
 
     def _status_warn_style(self) -> str:
@@ -5218,8 +5236,11 @@ class DesktopApp:
         self._reframing_dock = False
         self._controls_dock.topLevelChanged.connect(self._reframe_dock)
         self._controls_dock.topLevelChanged.connect(self._controls.reflect_dock_state)
+        # "Is the app still up?" — a torn-down app answers no rather than raising, since
+        # stop() drops the window and this filter can outlive it.
         self._dock_close_filter = _make_dock_close_filter(
-            self._controls_dock, lambda: self._main.isVisible())
+            self._controls_dock,
+            lambda: self._main is not None and self._main.isVisible())
         self._controls_dock.installEventFilter(self._dock_close_filter)
         self._main.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._controls_dock)
 
@@ -5295,7 +5316,10 @@ class DesktopApp:
         self._splash = None
 
         def finished(_ok=True):
-            splash.finish(self._main)
+            # The page can finish loading after stop() has already dropped the window and
+            # the splash with it; there is then nothing left to dismiss.
+            if self._main is not None:
+                splash.finish(self._main)
 
         view = getattr(self._viewport, "_view", None)
         if view is None:
@@ -5369,6 +5393,30 @@ class DesktopApp:
         self._clear_all()  # stops all model sessions, volumes, and the dummy
         self._webapp.stop()
         self._viewport.close()  # release the QtWebEngine render process (see close())
+        self._controls.close()  # release the controls widget tree (see close())
+        self._release_shell()
+
+    def _release_shell(self) -> None:
+        """Drop the window the viewport and controls were docked into, and the splash.
+
+        Both outlive their own teardown otherwise: the main window is held by this object,
+        and the splash by the ``finished`` closure connected to the page-load signal — so
+        a run that never loads a page (a test that builds an app but never calls
+        :meth:`start`) keeps a splash screen alive with nothing to dismiss it.
+
+        Guarded with ``getattr`` because ``stop`` is reachable before the shell is built:
+        an exception during construction runs teardown on a half-built app.
+        """
+        for name in ("_splash", "_main"):
+            widget = getattr(self, name, None)
+            setattr(self, name, None)
+            if widget is None:
+                continue
+            try:
+                widget.close()
+                widget.deleteLater()
+            except Exception:  # pragma: no cover - defensive teardown
+                pass
 
     def _size_controls_dock(self) -> None:
         """Give the controls dock ~1/3 of the width, the viewport the rest.
@@ -5378,6 +5426,8 @@ class DesktopApp:
         """
         from PySide6.QtCore import Qt
 
+        if self._main is None:      # queued, so it can arrive after stop()
+            return
         width = self._main.width() or 1600
         self._main.resizeDocks(
             [self._controls_dock], [max(320, width // 3)], Qt.Orientation.Horizontal)

@@ -16,7 +16,8 @@ import time
 from libtbx.test_utils import raises
 
 from pxviewer.regression.tst_utils import (
-    data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
+    data_path, dispose, have, process_events, qt_application, shipped_defaults, skip,
+    tmp_dir)
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager", "numpy"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
 
@@ -70,16 +71,16 @@ def desktop():
     try:
         yield app
     finally:
-        app.stop()
+        dispose(app)
 
 
 def pump_until(predicate, what, timeout=PHASE_TIMEOUT_S):
     """Run the Qt loop until a worker's result lands on the main thread."""
     deadline = time.time() + timeout
     while time.time() < deadline and not predicate():
-        QCoreApplication.processEvents()
+        process_events()
         time.sleep(0.05)
-    QCoreApplication.processEvents()
+    process_events()
     assert predicate(), what
 
 

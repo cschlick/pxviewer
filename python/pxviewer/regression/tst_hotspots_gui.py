@@ -15,7 +15,8 @@ from libtbx.test_utils import approx_equal
 
 from pxviewer.regression.tst_concern import write_manifest
 from pxviewer.regression.tst_utils import (
-    data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
+    data_path, dispose, have, process_events, qt_application, shipped_defaults, skip,
+    tmp_dir)
 
 if not have("mmtbx", "numpy", "websockets", "PySide6.QtWebEngineWidgets"):
     skip("needs mmtbx, websockets and PySide6 QtWebEngine")
@@ -38,7 +39,7 @@ def _wait_for(signal_box, seconds=300):
     """Pump the Qt loop until a background score lands."""
     deadline = time.time() + seconds
     while time.time() < deadline and not signal_box:
-        qapp().processEvents()
+        process_events()
         time.sleep(0.05)
     assert signal_box, "hotspots never landed"
 
@@ -124,7 +125,7 @@ def exercise_a_manifest_imports_without_running_analysis():
             assert entry["concern_metric"] == "clash"
             assert entry["session"]._last_hotspot_volume is not None
         finally:
-            app.stop()
+            dispose(app)
 
 
 def exercise_importing_concern_drops_a_computed_score():
@@ -155,7 +156,7 @@ def exercise_importing_concern_drops_a_computed_score():
             assert entry["color"] != _HOTSPOT_COLOR
             assert entry["concern_metric"] == "combined"
         finally:
-            app.stop()
+            dispose(app)
 
 
 def exercise_percentile_never_gates_visibility():
@@ -174,7 +175,7 @@ def exercise_percentile_never_gates_visibility():
             assert approx_equal(
                 np.frombuffer(payload, dtype="<f4", offset=72).min(), 0.6)
         finally:
-            app.stop()
+            dispose(app)
 
 
 def exercise_the_table_reads_the_maps_not_a_second_scale():
@@ -204,7 +205,7 @@ def exercise_the_table_reads_the_maps_not_a_second_scale():
             app.set_hotspot_threshold(mid, 0.9)
             assert emitted[-1][3] == []
         finally:
-            app.stop()
+            dispose(app)
 
 
 def exercise_the_table_says_it_ranks_neighbourhoods():
@@ -225,7 +226,7 @@ def exercise_the_table_says_it_ranks_neighbourhoods():
             assert concern_mod.TABLE_CAVEAT in summary
             assert "rank neighborhoods, not residues" in summary
         finally:
-            app.stop()
+            dispose(app)
 
 
 # -- the shared threshold -----------------------------------------------------
@@ -246,7 +247,7 @@ def exercise_the_knee_is_given_in_severity_and_sent_normalized():
         assert approx_equal(entry["session"]._hotspot_knee,
                             1.5 / hotspots.SEVERITY_CAP)
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_the_threshold_updates_a_contour_level_and_colour():
@@ -271,7 +272,7 @@ def exercise_the_threshold_updates_a_contour_level_and_colour():
         assert volume["color"] == hotspots.severity_color(1.5)
         assert volume["color"] == hotspots.WARM[1]
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_an_absolute_level_is_converted_for_the_sigma_wire():
@@ -332,7 +333,7 @@ def exercise_the_cloud_and_contour_are_mutually_exclusive():
         assert entry.get("hotspot_cloud") is None and entry.get("hotspot_volume") is None
         assert not app._volumes
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_the_contour_is_added_once_and_removed_on_toggle():
@@ -366,7 +367,7 @@ def exercise_the_contour_is_added_once_and_removed_on_toggle():
         assert not app._volumes
         assert app._model_entry(mid).get("hotspot_volume") is None
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_computing_colours_through_the_attribute_path():
@@ -388,7 +389,7 @@ def exercise_computing_colours_through_the_attribute_path():
         assert spec["attribute"]["name"] == _HOTSPOT_COLOR
         assert list(spec["attribute"]["domain"]) == list(hotspots.DOMAIN)
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_choosing_hydrogens_drops_a_stale_score():
@@ -405,7 +406,7 @@ def exercise_choosing_hydrogens_drops_a_stale_score():
         assert app._hotspot_hydrogens is True
         assert entry.get("hotspots") is None    # the stale score was dropped
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_validation_staleness_tracks_model_movement():
@@ -436,7 +437,7 @@ def exercise_validation_staleness_tracks_model_movement():
         app._refresh_validation_staleness()
         assert seen[-1] is False
     finally:
-        app.stop()
+        dispose(app)
 
 
 def run():

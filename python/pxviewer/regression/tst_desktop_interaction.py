@@ -20,7 +20,8 @@ import time
 from libtbx.test_utils import approx_equal, raises
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
@@ -66,7 +67,7 @@ def desktop(**kwargs):
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 @contextlib.contextmanager
@@ -77,15 +78,15 @@ def bare_desktop(**kwargs):
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 def pump_until(predicate, what, timeout=BUILD_TIMEOUT_S):
     deadline = time.time() + timeout
     while time.time() < deadline and not predicate():
-        QApplication.processEvents()
+        process_events()
         time.sleep(0.02)
-    QApplication.processEvents()
+    process_events()
     assert predicate(), what
 
 
@@ -94,7 +95,7 @@ def settle(seconds=1.0):
     of their own to wait on."""
     end = time.time() + seconds
     while time.time() < end:
-        QApplication.processEvents()
+        process_events()
         time.sleep(0.01)
 
 
@@ -147,12 +148,12 @@ def exercise_minimize_buttons_show_which_state_is_live():
         assert accented(play) and not accented(stop)
 
         app.bridge.minimizing_changed.emit(True)
-        QApplication.processEvents()
+        process_events()
         assert stop.isEnabled() and not play.isEnabled()
         assert accented(stop) and not accented(play)
 
         app.bridge.minimizing_changed.emit(False)
-        QApplication.processEvents()
+        process_events()
         assert play.isEnabled() and not stop.isEnabled()
         assert accented(play) and not accented(stop)
 
@@ -185,21 +186,21 @@ def exercise_refine_drag_arm_is_exactly_pause():
         app.bridge.status_changed.connect(status.append)
 
         app._on_tug("m", "arm", -1, None)
-        QApplication.processEvents()
+        process_events()
         assert not app._minimize_stop.is_set()
         assert status == []
 
         # A run is going, with idle cleared as minimize_model would leave it.
         app._minimize_idle.clear()
         app._on_tug("m", "arm", -1, None)
-        QApplication.processEvents()
+        process_events()
         armed = list(status)
         assert app._minimize_stop.is_set()
         assert armed and "stopping" in armed[-1].lower()
 
         status[:] = []
         app.stop_minimization()
-        QApplication.processEvents()
+        process_events()
         assert status == [armed[-1]]              # the identical message
 
 
@@ -218,7 +219,7 @@ def exercise_minimization_runs_continuously_until_stopped():
         status = []
         app.bridge.status_changed.connect(status.append)
         app.load_files([data_path("1ubq.pdb")])
-        QApplication.processEvents()
+        process_events()
 
         app.minimize_model(use_map=False)
         pump_until(lambda: any("holding" in s for s in status),
@@ -400,7 +401,7 @@ def exercise_a_smiles_ligand_carries_and_saves_its_restraints():
 
         # A protein model has no restraints of its own to save.
         app.load_files([data_path("1ubq.pdb")])
-        QApplication.processEvents()
+        process_events()
         protein = next(m for m in app._models if m["name"].endswith(".pdb"))
         protein_item = next(it for it in app._loaded_summary()["items"]
                             if it["id"] == protein["id"])
@@ -565,7 +566,7 @@ def exercise_the_selection_pane_describes_picked_atoms():
         controls = app._controls
 
         app._on_model_selection(mid, SimpleNamespace(indices=[0]))
-        QApplication.processEvents()
+        process_events()
         text = controls._selection_label.text()
         assert "1 atom selected" in text
         assert "1ubq · chain A · MET 1 · N (N)" in text
@@ -576,7 +577,7 @@ def exercise_the_selection_pane_describes_picked_atoms():
         residue = model.get_hierarchy().only_model().chains()[0].residue_groups()[0]
         app._on_model_selection(
             mid, SimpleNamespace(indices=list(range(len(residue.atoms())))))
-        QApplication.processEvents()
+        process_events()
         text = controls._selection_label.text()
         assert text.startswith("1 residue selected · %d atoms" % len(residue.atoms()))
         assert "1ubq · chain A: MET 1" in text
@@ -585,7 +586,7 @@ def exercise_the_selection_pane_describes_picked_atoms():
         assert "· N (N)" not in text            # no per-atom dump
 
         app.clear_selection()
-        QApplication.processEvents()
+        process_events()
         assert controls._selection_label.text() == "None"
 
 
@@ -907,7 +908,7 @@ def exercise_a_checkable_combo_requires_a_click_inside_the_popup():
     combo.on_change = lambda data, checked: fired.append((data, checked))
 
     combo.showPopup()
-    QApplication.processEvents()
+    process_events()
     view = combo.view()
     viewport = view.viewport()
     first = combo.model().index(0, 0)

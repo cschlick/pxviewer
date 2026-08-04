@@ -26,7 +26,8 @@ import random
 import sys
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "numpy"):
     skip("PySide6 QtWebEngine / websockets not available")
@@ -36,7 +37,7 @@ import numpy as np                                   # noqa: E402
 qt_application()
 
 from PySide6.QtWidgets import (                     # noqa: E402
-    QAbstractSlider, QApplication, QCheckBox, QComboBox, QPushButton)
+    QAbstractSlider, QCheckBox, QComboBox, QPushButton)
 
 from pxviewer.desktop import DesktopApp             # noqa: E402
 from pxviewer.regression.gui_invariants import assert_viewer_consistent   # noqa: E402
@@ -51,6 +52,14 @@ WIDGET_SEEDS = [0, 1]
 
 STEPS_PER_WALK = 150
 POKES_PER_WALK = 80
+
+#: How large the walk lets a scene get before it evicts to make room (see
+#: :meth:`Walk.make_room`). Chosen to match a working session rather than to be generous:
+#: a few models, a few maps, and one or two paired groups is what the app is used with,
+#: and holding more only makes the test heavier, not broader.
+MAX_MODELS = 4
+MAX_VOLUMES = 4
+MAX_GROUPS = 2
 
 #: How much of the trail to print on a failure. Enough to see how the state was built up
 #: without burying the assertion that broke.
@@ -86,22 +95,59 @@ class Walk(object):
     def pick(self, sequence):
         return self.rng.choice(sequence) if sequence else None
 
+    def make_room(self, entries, limit, remove):
+        """Evict at random until there is room for one more, and say what went.
+
+        The walk is weighted towards loading, so left alone it only ever grows: measured
+        at 15 models and 8 generated map+model groups by the end of a single walk, around
+        2 GB of them. That is not a scene anyone builds, and it is not even good fuzzing
+        -- the later steps all re-test one enormous state instead of testing many
+        different ones.
+
+        Evicting rather than refusing keeps every step productive, keeps the walk moving
+        through *different* small scenes, and exercises the remove paths on the way. The
+        ceiling is what a real session looks like, so the footprint is too.
+        """
+        evicted = []
+        while len(entries()) >= limit:
+            before = len(entries())
+            victim = self.pick(entries())
+            if victim is None:                    # nothing left to evict; let it grow
+                break
+            remove(victim)
+            if len(entries()) >= before:
+                # The removal did not take. Stop rather than spin: a walk that hangs here
+                # would look like a slow test rather than the bug it actually is.
+                raise AssertionError(
+                    "removing %r left %d entries" % (victim, len(entries())))
+            evicted.append(victim)
+        return " (evicted %d)" % len(evicted) if evicted else ""
+
     # -- actions --------------------------------------------------------------
 
     def load_model(self):
+        room = self.make_room(
+            self.models, MAX_MODELS, lambda m: self.app.remove_model(m["id"]))
         path = data_path(self.rng.choice(MODELS))
         self.app.load_file(path)
-        return "load_model %s" % os.path.basename(path)
+        return "load_model %s%s" % (os.path.basename(path), room)
 
     def load_volume(self):
         from pxviewer.volume_io import VolumeData
 
+        room = self.make_room(
+            self.volumes, MAX_VOLUMES, lambda v: self.app.remove_volume(v["id"]))
         self.app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "blob")
-        return "load_volume"
+        return "load_volume%s" % room
 
     def load_group(self):
+        # The heaviest action by far: the density is computed, not read, and the group
+        # keeps the map_model_manager that produced it.
+        room = self.make_room(
+            lambda: list(self.app._groups), MAX_GROUPS,
+            lambda gid: self.app.remove_group(gid))
         self.app.load_map_model_demo(d_min=4.0)
-        return "load_group (map+model)"
+        return "load_group (map+model)%s" % room
 
     def focus_object(self):
         objects = ([("model", m["id"]) for m in self.models()]
@@ -292,10 +338,10 @@ def exercise_a_random_walk_over_the_actions_keeps_the_model_consistent():
                 if label is None:
                     continue          # a precondition was not met; try again next step
                 log.append(label)
-                QApplication.processEvents()
+                process_events()
                 check(app, log, seed, "actions")
         finally:
-            app.stop()
+            dispose(app)
 
 
 def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
@@ -315,7 +361,7 @@ def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
             app.load_file(data_path("1ubq.pdb"))
             app.load_map_model_demo(d_min=4.0)
             app.load_xray_demo(d_min=3.0)
-            QApplication.processEvents()
+            process_events()
 
             controls = app._controls
             poked = []
@@ -328,7 +374,7 @@ def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
                         app.set_active_model(item["id"])
                     else:
                         controls._update_appearance(item["kind"], item["id"])
-                    QApplication.processEvents()
+                    process_events()
 
                 actions = interactive_widgets(controls)
                 if not actions:
@@ -336,10 +382,10 @@ def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
                 label, act = rng.choice(actions)
                 poked.append(label)
                 act()
-                QApplication.processEvents()
+                process_events()
                 check(app, poked, seed, "widget pokes")
         finally:
-            app.stop()
+            dispose(app)
 
 
 def run():

@@ -17,7 +17,8 @@ import sys
 import time
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
@@ -55,15 +56,15 @@ def desktop():
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 def pump_until(predicate, what, timeout=LOAD_TIMEOUT_S):
     deadline = time.time() + timeout
     while time.time() < deadline and not predicate():
-        QApplication.processEvents()
+        process_events()
         time.sleep(0.02)
-    QApplication.processEvents()
+    process_events()
     assert predicate(), what
 
 
@@ -72,9 +73,9 @@ def pump_while(predicate, timeout):
     letting a minimization settle, for instance, which has no definite end."""
     deadline = time.time() + timeout
     while time.time() < deadline and predicate():
-        QApplication.processEvents()
+        process_events()
         time.sleep(0.05)
-    QApplication.processEvents()
+    process_events()
 
 
 def stop_minimizing(app):
@@ -198,7 +199,7 @@ def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
         assert progress(app) == "Step 1 / 3"
 
         app.load_real_space_refinement_demo(shake=0.6)
-        QApplication.processEvents()
+        process_events()
         assert len(app._models) == 1
         assert len(app._volumes) == 1
         gid = app._models[0]["group"]
@@ -241,7 +242,7 @@ def exercise_the_xray_tutorial_walks_the_difference_map_loop():
         assert progress(app) == "Step 1 / 6"
 
         app.load_xray_demo()
-        QApplication.processEvents()
+        process_events()
         assert len(app._models) == 1
         assert len(app._reflections) == 1
         assert app.map_for_model() is None                  # not phased yet
@@ -329,7 +330,7 @@ def exercise_the_ligand_fitting_demo_makes_maps_and_fits_atp():
 
     with desktop() as app:
         app.load_ligand_fitting_demo()
-        QApplication.processEvents()
+        process_events()
         assert len(app._models) == 1
         assert len(app._reflections) == 1
         assert app.map_for_model() is None                 # not phased yet

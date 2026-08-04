@@ -13,7 +13,8 @@ import os
 import sys
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
+    closing_modals, data_path, dispose, have, qt_application, shipped_defaults, skip,
+    tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
@@ -58,7 +59,7 @@ def desktop():
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 def headers_of(model):
@@ -336,7 +337,7 @@ def exercise_geometry_restraints_populate_the_tables():
         # The atoms column reads i_seqs back as labels.
         assert "/" in bond["model"].data(bond["model"].index(0, 0))
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_the_shared_filter_applies_to_every_restraint_table():
@@ -366,7 +367,7 @@ def exercise_the_shared_filter_applies_to_every_restraint_table():
         controls._filter_selection_check.setChecked(False)
         assert bond["model"].rowCount() == full
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_every_geostd_row_resolves_to_a_file_on_disk():
@@ -389,7 +390,7 @@ def exercise_every_geostd_row_resolves_to_a_file_on_disk():
                 resolved += 1
         assert resolved > 0
     finally:
-        app.stop()
+        dispose(app)
 
 
 # -- selecting a restraint row ------------------------------------------------
@@ -424,7 +425,7 @@ def exercise_selecting_restraint_rows_draws_their_notations():
         assert app._restraint_prim_ids == []
         assert len(session._primitives) == 0
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_a_restraint_row_marks_every_atom_in_the_restraint():

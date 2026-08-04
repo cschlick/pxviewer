@@ -12,7 +12,7 @@ import sys
 import time
 
 from pxviewer.regression.tst_utils import (
-    have, qt_application, shipped_defaults, skip)
+    dispose, have, process_events, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "cctbx.maptbx.qscore", "iotbx.map_model_manager", "numpy"):
@@ -45,7 +45,7 @@ def wait_for_attribute(app, entry):
     """Pump the Qt loop until the worker's result lands on the main thread."""
     deadline = time.time() + COLOR_TIMEOUT_S
     while time.time() < deadline and entry.get("attribute") is None:
-        QAPP.processEvents()
+        process_events()
         time.sleep(0.05)
     return entry.get("attribute") is not None
 
@@ -79,7 +79,7 @@ def exercise_qscore_is_one_value_per_atom_of_the_original_model():
         assert finite.max() <= 1.0                        # 1 is a textbook fit
         assert finite.mean() > 0.3                        # a model in its own map fits well
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_hydrogens_come_back_missing_not_as_a_bad_fit():
@@ -102,7 +102,7 @@ def exercise_hydrogens_come_back_missing_not_as_a_bad_fit():
             else:
                 assert np.isfinite(values[i]), "heavy atom %d did not score" % i
     finally:
-        app.stop()
+        dispose(app)
 
 
 # -- colouring by it ----------------------------------------------------------
@@ -127,7 +127,7 @@ def exercise_colouring_by_qscore_needs_a_map():
         assert entry.get("attribute") is None
         assert any("Q-score needs a map" in s for s in said)     # and it says why
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_colouring_by_qscore_sends_per_atom_values():
@@ -149,7 +149,7 @@ def exercise_colouring_by_qscore_sends_per_atom_values():
         assert list(spec["attribute"]["domain"]) == [0.0, 1.0]
         assert spec["attribute"]["palette"] == "red-yellow-green"     # low red, high green
     finally:
-        app.stop()
+        dispose(app)
 
 
 def exercise_leaving_qscore_drops_the_values_it_coloured_by():
@@ -167,7 +167,7 @@ def exercise_leaving_qscore_drops_the_values_it_coloured_by():
         spec = list(entry["session"]._representations.values())[0]
         assert spec["color"] == "chain-id"
     finally:
-        app.stop()
+        dispose(app)
 
 
 def run():

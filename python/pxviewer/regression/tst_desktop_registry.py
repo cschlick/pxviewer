@@ -18,7 +18,8 @@ import time
 from libtbx.test_utils import approx_equal, raises
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "iotbx.map_model_manager", "numpy"):
@@ -46,7 +47,7 @@ def desktop(**kwargs):
         try:
             yield app
         finally:
-            app.stop()
+            dispose(app)
 
 
 @contextlib.contextmanager
@@ -94,9 +95,9 @@ def model_and_map_files(model_offset=None, boxed_origin=None, external_origin=No
 def pump_until(predicate, what, timeout=PHASE_TIMEOUT_S):
     deadline = time.time() + timeout
     while time.time() < deadline and not predicate():
-        QApplication.processEvents()
+        process_events()
         time.sleep(0.05)
-    QApplication.processEvents()
+    process_events()
     assert predicate(), what
 
 
@@ -302,7 +303,7 @@ def exercise_a_model_and_its_reflections_are_one_group_before_phasing():
 
     with desktop() as app:
         app.load_xray_demo()
-        QApplication.processEvents()
+        process_events()
 
         model, reflections = app._models[0], app._reflections[0]
         gid = model["group"]
@@ -331,7 +332,7 @@ def exercise_separately_loaded_models_stay_out_of_a_group():
         assert app._model_entry(b)["group"] is None
 
         app.load_xray_demo()                        # a later unit-load forms its own
-        QApplication.processEvents()
+        process_events()
 
         assert app._model_entry(a)["group"] is None
         assert app._model_entry(b)["group"] is None
@@ -343,9 +344,9 @@ def exercise_a_standalone_object_is_not_indented_like_a_group_member():
     x as a standalone object's and everything reads as belonging to the group above."""
     with desktop() as app:
         app.load_xray_demo()                        # a group: model + reflections
-        QApplication.processEvents()
+        process_events()
         app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "loose")
-        QApplication.processEvents()
+        process_events()
 
         tree = app._controls._loaded_tree
         roots = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
