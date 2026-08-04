@@ -74,8 +74,16 @@ def qt_application():
     """
     if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
+    # Every dialog must be a Qt widget, so :func:`closing_modals` can find and cancel it.
+    # A *native* dialog -- an NSSavePanel on macOS -- is not in topLevelWidgets() and runs
+    # its own modal loop in AppKit, so nothing in Qt can dismiss it and a run that opens
+    # one hangs until it is killed. That is not hypothetical: it wedged the widget fuzzer
+    # for half an hour, because this machine has XQuartz installed, DISPLAY is therefore
+    # set, and the platform stays cocoa rather than falling back to offscreen.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
     return QApplication.instance() or QApplication([])
 
 

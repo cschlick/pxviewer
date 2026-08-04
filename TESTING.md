@@ -1,7 +1,8 @@
 # Testing
 
-Moving to the cctbx/phenix convention, so this code can be dropped into one of those trees
-without rework. **This migration is partial** — see the inventory at the end.
+The cctbx/phenix convention throughout, so this code can be dropped into one of those
+trees without rework. **The migration is complete**: no test uses pytest, and
+`python/tests/` holds only a `conftest.py` the pattern does not need.
 
 ## The pattern
 
@@ -64,8 +65,11 @@ Most of it is mechanical. `libtbx.test_utils` already provides the equivalents:
 | `@pytest.mark.parametrize` | a `for` loop over the cases |
 | `capsys` | `contextlib.redirect_stdout(io.StringIO())` |
 
-`have`, `skip`, `tmp_dir`, `qt_application` and `data_path` are in
-`pxviewer/regression/tst_utils.py` — the only things cctbx does not already supply.
+`have`, `skip`, `tmp_dir`, `qt_application`, `data_path`, `closing_modals` and
+`shipped_defaults` are in `pxviewer/regression/tst_utils.py` — the only things cctbx does
+not already supply. Two subject-specific helpers sit beside them: `gui_invariants.py` (the
+bank a GUI fuzzer asserts) and `live_harness.py` (connecting to a session and reading its
+wire).
 
 **Do not patch or mock.** Not one of cctbx's 768 `tst_*.py` files does, and it is a habit
 worth dropping rather than porting: in this domain the real thing is cheap to build, and
@@ -101,7 +105,7 @@ Two more entries earned their place while `test_desktop.py` was being split:
 | wrap `_viewport.load` to prove no reload | read `app._scene_counter` | the app's own counter, one per composed scene. Reading the scene *file* does not work: composing one is what writes it, so the observer causes the event |
 | wrap `_clear_layout` to catch a pane rebuild | compare the pane's child widgets | a rebuild replaces them, so the same objects still being there *is* the claim |
 
-Seven `monkeypatch` uses remain, all in the two files still on pytest.
+No `monkeypatch` uses remain anywhere in the suite.
 
 **A test that builds a `DesktopApp` must take `shipped_defaults()`.** The app reads four
 `QSettings` keys at construction, so an exercise asserting "a non-polymer opens as
@@ -143,7 +147,7 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **48 files, 483 exercises**:
+Converted, and the pytest originals removed — **49 files, 485 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -166,6 +170,7 @@ Converted, and the pytest originals removed — **48 files, 483 exercises**:
 | `regression/tst_geometry.py` | 6 | core |
 | `regression/tst_gpu.py` | 15 | core |
 | `regression/tst_gui_concurrency.py` | 4 | gui |
+| `regression/tst_gui_fuzz.py` | 2 | gui |
 | `regression/tst_hotspots.py` | 22 | core |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
@@ -254,17 +259,33 @@ second — turned up two facts the patched version could not have:
 - A pair opened *together* can still need aligning. Pairing on load works from file metadata
   and cannot know about coordinates that are simply in the wrong place.
 
-**Not yet converted: 1 file, 361 lines, still requiring pytest:**
+**Every pytest file is converted.** `python/tests/` holds only `conftest.py`, which the
+cctbx pattern does not use.
 
-- `test_gui_fuzz.py`
+**Cancelling a real dialog needs `AA_DontUseNativeDialogs`.** `test_gui_fuzz.py` clicks
+random widgets, so it really does open dialogs, and its `guarded_modals` patches were
+load-bearing where `test_gui_concurrency.py`'s were not. Replacing them with
+`closing_modals()` — a timer that cancels a dialog that really opened — is right, but it
+is *not* sufficient on its own, which cost half an hour to learn:
 
-It builds a random walk over the app's own controls, clicking, toggling and dragging real
-widgets, so the modals it opens are real and its `guarded_modals` patches are load-bearing
-in a way `test_gui_concurrency.py`'s were not. The substitute is already written:
-`closing_modals()` cancels a dialog that really opened, and returns exactly what the stubs
-returned. What remains to settle is the walk itself — how to seed it reproducibly under
-one-process-per-script, and whether the parametrised seeds become a loop or separate
-exercises.
+`QFileDialog.getSaveFileName` on macOS opens a **native** `NSSavePanel`. That is not a Qt
+widget, so it is not in `topLevelWidgets()`, and it runs its own modal loop inside AppKit
+where nothing in Qt can reach it. The run simply hangs until it is killed. The stack from
+`sample(1)` on the wedged process said so plainly — `QDialog::exec` →
+`runApplicationModalPanel` → `NSApplication _doModalLoop:` — which is worth remembering as
+the fastest way to tell a hung GUI test from a slow one.
+
+Two things follow:
+
+- `qt_application()` now sets `AA_DontUseNativeDialogs`, so every dialog is a Qt widget and
+  `closing_modals()` can cancel it. Cancelling then returns exactly what the old stubs
+  returned (`("", "")`, `([], "")`, an invalid `QColor`), so the replacement really is
+  behaviour-for-behaviour — but only with that attribute set.
+- **The offscreen fallback does not fire on this machine.** `qt_application()` defaults to
+  the offscreen platform only when there is no display, and XQuartz is installed here, so
+  `DISPLAY` is set and the platform stays `cocoa`. That is the intended behaviour — a
+  machine with a display should exercise the real GPU path — but it means "it will be
+  offscreen anyway" is not a safe assumption to build on.
 
 `test_gpu.py` was expected to be the hard case — 109 lines carrying 24 `monkeypatch` uses,
 which read as a file built entirely out of faked hardware states. It converted whole, with
@@ -285,5 +306,15 @@ had already drawn the same one for logging. It is not a licence to add a hook wh
 patch used to be — the first question stays "what state does this leave behind?", and it
 had an answer for the other 23 cases in this file.
 
-Counts of what the remainder leans on: 7 `monkeypatch`, 3 `importorskip`,
-2 fixtures, 2 `parametrize`.
+## Running it
+
+The full registry is not cheap: 49 scripts, one process each, several of which start a
+QtWebEngine viewport and a few of which refine or phase for real. Run it when you mean to,
+not casually — and not two at once. A single script is the normal unit of work:
+
+```bash
+libtbx.python python/pxviewer/regression/tst_desktop_tables.py
+```
+
+The slowest are `tst_desktop_tutorials.py` (real phasing, ligand fitting and refinement),
+`tst_gui_fuzz.py` (five seeded walks) and `tst_qscore.py`.
