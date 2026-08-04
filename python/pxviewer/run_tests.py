@@ -76,6 +76,8 @@ gui_tests = [
     "$D/regression/tst_desktop_tables.py",
     "$D/regression/tst_desktop_registry.py",
     "$D/regression/tst_desktop_appearance.py",
+    "$D/regression/tst_desktop_interaction.py",
+    "$D/regression/tst_desktop_tutorials.py",
     "$D/regression/tst_gui_concurrency.py",
     "$D/regression/tst_appserver.py",
     "$D/regression/tst_console.py",

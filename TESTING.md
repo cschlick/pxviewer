@@ -33,20 +33,19 @@ the finer-grained cases inside a script.
 **Tests must run from any directory.** Use `tst_utils.data_path()` rather than a path
 relative to the repository root.
 
-This is not a style preference — the pytest suite has *contradictory* working-directory
-requirements and there is no directory that runs all of it. Measured:
-
-Measured on `test_hotspots.py` before it was converted, against `test_desktop.py` which
-still is not:
+This is not a style preference — the pytest suite had *contradictory* working-directory
+requirements, and there was no directory that ran all of it. Measured before either file was
+converted:
 
 | | from repo root | from `python/` |
 | --- | --- | --- |
-| `tests/test_hotspots.py` (now converted) | 40 passed | 22 failed, 6 errors |
+| `tests/test_hotspots.py` | 40 passed | 22 failed, 6 errors |
 | `tests/test_desktop.py` | 4 spurious failures | passes |
 
 One hardcoded `python/pxviewer/data/1tec.pdb`, which only resolves from the root; the other
-resolves data through the installed package and only works from `python/`. Converted tests
-resolve against the package and run from anywhere, which is what cctbx assumes -- every
+resolved data through the installed package and only worked from `python/`. Four more
+hardcoded `pxviewer/data/1ubq.pdb` turned up while converting `test_desktop.py`. Converted
+tests resolve against the package and run from anywhere, which is what cctbx assumes — every
 `tst_*.py` here is verified from `/tmp`.
 
 ## Converting a pytest test
@@ -95,7 +94,14 @@ with one method in two different categories and one in none — and the real cat
 already puts `select` and `color_by` in different groups, so a four-method class exercises
 every path against the shipping configuration.
 
-43 `monkeypatch` uses remain, 24 of them in `test_gpu.py`.
+Two more entries earned their place while `test_desktop.py` was being split:
+
+| the spy was | the state is | why it is better |
+| --- | --- | --- |
+| wrap `_viewport.load` to prove no reload | read `app._scene_counter` | the app's own counter, one per composed scene. Reading the scene *file* does not work: composing one is what writes it, so the observer causes the event |
+| wrap `_clear_layout` to catch a pane rebuild | compare the pane's child widgets | a rebuild replaces them, so the same objects still being there *is* the claim |
+
+Seven `monkeypatch` uses remain, all in the two files still on pytest.
 
 Two things to watch when converting:
 
@@ -112,7 +118,7 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **37 files, 333 exercises**:
+Converted, and the pytest originals removed — **43 files, 426 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -126,9 +132,15 @@ Converted, and the pytest originals removed — **37 files, 333 exercises**:
 | `regression/tst_console.py` | 5 | gui |
 | `regression/tst_data.py` | 10 | core |
 | `regression/tst_demos.py` | 7 | core |
+| `regression/tst_desktop_appearance.py` | 25 | gui |
+| `regression/tst_desktop_interaction.py` | 22 | gui |
+| `regression/tst_desktop_registry.py` | 16 | gui |
+| `regression/tst_desktop_tables.py` | 16 | gui |
+| `regression/tst_desktop_tutorials.py` | 10 | gui |
 | `regression/tst_edits.py` | 4 | core |
 | `regression/tst_geometry.py` | 6 | core |
 | `regression/tst_gpu.py` | 15 | core |
+| `regression/tst_gui_concurrency.py` | 4 | gui |
 | `regression/tst_hotspots.py` | 22 | core |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
@@ -154,7 +166,7 @@ Converted, and the pytest originals removed — **37 files, 333 exercises**:
 | `regression/tst_volume_io.py` | 6 | core |
 | `regression/tst_webapp.py` | 5 | gui |
 
-**Three files were split rather than converted one-to-one**, each along the same seam: a
+**Five files were split rather than converted one-to-one**, each along the same seam: a
 subject whose computation is pure cctbx and whose consequences are desktop wiring.
 `test_hotspots.py` became `tst_hotspots.py`, `tst_hotspots_gui.py` and
 `tst_hotspots_standalone.py`; `test_reflections.py` and `test_tug.py` each became a core
@@ -164,6 +176,25 @@ cctbx build with no Qt at all, which is the environment they are most likely to 
 once upstreamed. The concern-import tests that need no viewer went to `tst_concern.py` for
 the same reason.
 
+`test_desktop.py` was split for a different reason: size. Its 90 tests and 3,600 lines
+became five files grouped by subject — `tables`, `registry`, `appearance`, `interaction`
+and `tutorials` — because a single 3,600-line `tst_*.py` would be unlike anything in cctbx
+and unpleasant to run one exercise from. All five are gated, since all of them need Qt.
+
+**Three assertions were already failing and are restated rather than ported.** Converting a
+test means running it, which is how these surfaced; each was checked against the pytest
+original first, so none is conversion damage.
+
+- `test_analysis.py` demanded more than 200 severe clashes on 1TEC. That predated the 0.40 Å
+  reporting gate and the hydrogen-bond exclusion, which together cut it to 172. It is now
+  stated as the with-hydrogen versus bare ratio (172 against 10), which is the actual claim
+  and does not move when the calibration is re-anchored.
+- `test_desktop.py` asserted that the inactive minimize button had *no* stylesheet. It has
+  one — the plain framed look. The accent is a `background:` fill, so that is what the
+  exercise now looks for.
+- The same file's `_detect_map_model_shift` tests passed only because the detector was
+  patched out; see the note on building a misplaced pair, below.
+
 **One test was dropped rather than converted.** `test_geometry.py` checked that
 `build_geometry` returns `None` when no monomer library is present, by deleting two
 environment variables and replacing `geometry._chem_data_geostd` with a stub. That branch
@@ -171,31 +202,36 @@ is not reachable here without patching — chem_data is installed and importable
 the environment alone still finds geostd. The reachable half of the guard is kept and the
 gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
 
-**Not yet converted: 4 files, 5,242 lines, still requiring pytest:**
+**A patched test can pass for the wrong reason, and only building the real thing shows it.**
+`test_desktop.py` replaced `_detect_map_model_shift` with one returning a chosen shift, so
+the join between detecting a shift and applying it was never exercised. Writing a genuinely
+misplaced pair instead — the real search recovers 2.98 Å from a 3.0 Å offset in well under a
+second — turned up two facts the patched version could not have:
 
-- `test_desktop.py` (3600 lines)
+- Displacing a model with `shift_model_and_set_crystal_symmetry` writes an *undisplaced*
+  file. `model_as_pdb` undoes the shift to recover the source coordinates, which is exactly
+  what that API is for and what the production path is asserted to rely on elsewhere. The
+  offset has to be a plain `set_sites_cart` move.
+- A pair opened *together* can still need aligning. Pairing on load works from file metadata
+  and cannot know about coordinates that are simply in the wrong place.
+
+**Not yet converted: 2 files, 1,424 lines, still requiring pytest:**
+
 - `test_live.py` (1063 lines)
 - `test_gui_fuzz.py` (361 lines)
-- `test_gui_concurrency.py` (218 lines)
 
-Everything mechanical is done, and what is left is the awkward part rather than the bulky
-part. All four are GUI or live-session tests bound for the gated list:
+`test_live.py` is not hard in kind, only in size — the live-session protocol, which the
+converted `tst_mvs.py`, `tst_primitives.py` and `tst_cctbx_io.py` already touch the edges
+of. It will want splitting the way `test_desktop.py` was.
 
-- `test_desktop.py` and `test_live.py` are 89% of the remaining lines. Neither is hard in
-  kind, only in size; both will want splitting the way `test_reflections.py` was.
-- `test_gui_fuzz.py` and `test_gui_concurrency.py` drive a Qt event loop, which has to be
-  pumped by hand under one-process-per-script rather than by a fixture. They also share a
-  `guarded_modals` fixture that patches `QMessageBox`/`QFileDialog`/`QColorDialog` so a
-  dialog cannot block forever, and the two files need different answers to it. In
-  `test_gui_concurrency.py` it is only insurance — none of the paths it drives (`make_maps`,
-  `update_maps`, `minimize_model`, `_serve_tug`) reaches a modal, so it can likely go. In
-  `test_gui_fuzz.py` it is load-bearing, because the walk clicks random widgets and really
-  does open them. That file already carries the honest substitute next to the patch: a
-  `modal_autocloser` that lets the dialog open and closes it from a `QTimer`.
-
-Both files also import `gui_invariants.py` as a top-level module, which only resolves
-because pytest puts `tests/` on `sys.path`. It needs to move into the package alongside
-`tst_utils.py` before either can run as a standalone script.
+`test_gui_fuzz.py` is the one file with a genuine design question left. It builds a random
+walk over the app's own controls, clicking, toggling and dragging real widgets, so the
+modals it opens are real and its `guarded_modals` patches are load-bearing in a way
+`test_gui_concurrency.py`'s were not. The substitute is already written: `closing_modals()`
+in `tst_utils.py` cancels a dialog that really opened, and returns exactly what the stubs
+returned. What remains to settle is the walk itself — how to seed it reproducibly under
+one-process-per-script, and whether the parametrised seeds become a loop or separate
+exercises.
 
 `test_gpu.py` was expected to be the hard case — 109 lines carrying 24 `monkeypatch` uses,
 which read as a file built entirely out of faked hardware states. It converted whole, with
@@ -216,5 +252,5 @@ had already drawn the same one for logging. It is not a licence to add a hook wh
 patch used to be — the first question stays "what state does this leave behind?", and it
 had an answer for the other 23 cases in this file.
 
-Counts of what the remainder leans on: 178 `importorskip`, 35 `tmp_path`, 26 `raises`,
-19 `monkeypatch`, 15 `approx`, 7 fixtures, 5 `parametrize`, 2 `capsys`.
+Counts of what the remainder leans on: 9 `raises`, 7 `monkeypatch`, 6 `approx`,
+4 `importorskip`, 4 fixtures, 3 `parametrize`.
