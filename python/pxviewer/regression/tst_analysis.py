@@ -203,12 +203,15 @@ def exercise_moving_the_atoms_drops_the_shared_caches():
     if not have("PySide6"):
         print("    (skipped: PySide6 not available)")
         return
-    from pxviewer.regression.tst_utils import qt_application
+    from pxviewer.regression.tst_utils import qt_application, shipped_defaults
 
     qt_application()
     from pxviewer.desktop import DesktopApp
 
-    app = DesktopApp(port=0)
+    # DesktopApp reads its defaults from QSettings, so build it against a fresh
+    # install's preferences rather than whatever this machine has configured.
+    with shipped_defaults():
+        app = DesktopApp(port=0)
     try:
         entry = {"session": Stand_in_session(model())}
         entry["analysis"] = app._model_analysis(entry)

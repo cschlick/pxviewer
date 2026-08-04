@@ -79,6 +79,53 @@ def qt_application():
     return QApplication.instance() or QApplication([])
 
 
+#: Every ``QSettings`` key the desktop reads or writes. Listed rather than discovered:
+#: on macOS ``allKeys()`` also returns the whole NSGlobalDomain, so anything that walked
+#: it would snapshot several hundred of the user's system preferences.
+DESKTOP_SETTINGS_KEYS = (
+    "defaults/focus_surroundings",
+    "defaults/model_representations",
+    "defaults/molstar_interactions",
+    "defaults/shown_structure_types",
+    "work_dir",
+)
+
+
+@contextlib.contextmanager
+def shipped_defaults():
+    """Run with the preferences a fresh install has, and put the user's back afterwards.
+
+    **Any test that constructs a ``DesktopApp`` needs this**, not only the ones that write
+    a preference. The app reads these keys at construction, so an exercise asserting that
+    "a non-polymer opens as ball-and-stick" is really asserting about whatever the person
+    running the tests happens to have configured.
+
+    Snapshot-and-restore rather than redirection, because redirection does not work here:
+    ``QSettings.setDefaultFormat`` leaves the two-argument constructor on ``NativeFormat``
+    on macOS, and ``setPath`` is documented not to apply to that format. A run that dies
+    between the snapshot and the restore therefore *can* leave a key behind -- which is
+    exactly what happened once, and is why every desktop script takes this rather than
+    only the two that set a preference deliberately.
+    """
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings("pxviewer", "pxviewer")
+    saved = [(key, settings.contains(key), settings.value(key))
+             for key in DESKTOP_SETTINGS_KEYS]
+    for key in DESKTOP_SETTINGS_KEYS:
+        settings.remove(key)
+    settings.sync()
+    try:
+        yield settings
+    finally:
+        for key, existed, value in saved:
+            if existed:
+                settings.setValue(key, value)
+            else:
+                settings.remove(key)
+        settings.sync()
+
+
 @contextlib.contextmanager
 def closing_modals(interval_ms=20):
     """Cancel any modal dialog that appears, so a stray one cannot hang the run.

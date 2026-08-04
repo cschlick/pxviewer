@@ -26,7 +26,7 @@ import threading
 import time
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, skip)
+    closing_modals, data_path, have, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets"):
     skip("PySide6 QtWebEngine / websockets not available")
@@ -222,11 +222,14 @@ def exercise_a_drag_ends_when_its_model_is_unloaded():
 
 
 def run():
-    for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
-            print("  %s" % name)
-            sys.stdout.flush()
-            fn()
+    # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
+    # so the whole file runs against a fresh install's preferences, not the user's.
+    with shipped_defaults():
+        for name, fn in sorted(globals().items()):
+            if name.startswith("exercise"):
+                print("  %s" % name)
+                sys.stdout.flush()
+                fn()
     print("OK")
 
 

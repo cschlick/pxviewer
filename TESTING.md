@@ -103,6 +103,31 @@ Two more entries earned their place while `test_desktop.py` was being split:
 
 Seven `monkeypatch` uses remain, all in the two files still on pytest.
 
+**A test that builds a `DesktopApp` must take `shipped_defaults()`.** The app reads four
+`QSettings` keys at construction, so an exercise asserting "a non-polymer opens as
+ball-and-stick" is otherwise asserting about whatever the person running the tests has
+configured — and two exercises *write* those keys.
+
+This was learned the expensive way. The first attempt redirected `QSettings` to a temporary
+directory with `setDefaultFormat(IniFormat)` and `setPath(...)`. On macOS that is a silent
+no-op: the two-argument constructor stays on `NativeFormat`, and `setPath` is documented not
+to apply to it. So the exercises wrote the *real* preferences, and three other files — which
+never touched a setting and passed on their own — failed in the registry afterwards, because
+they now opened models against defaults a previous script had left behind.
+
+Two things worth taking from it:
+
+- **A file passing standalone says nothing about it passing in the registry** when the state
+  it depends on lives outside the process. One-process-per-script isolates memory, not the
+  filesystem or the user's preferences.
+- **Verify that isolation isolates.** `QSettings("pxviewer", "pxviewer").fileName()` said
+  `~/Library/Preferences/...` the whole time; one line would have caught it.
+
+`shipped_defaults()` snapshots the named keys, clears them, and restores on the way out.
+Snapshot-and-restore is weaker than redirection — a run killed mid-exercise can still leave a
+key behind — so it is applied to every script that constructs the app, not only the two that
+set a preference deliberately.
+
 Two things to watch when converting:
 
 - **A fixture becomes a cached function, and the cache is per process.** Under `run_tests`

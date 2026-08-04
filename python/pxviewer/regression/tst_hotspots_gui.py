@@ -14,7 +14,8 @@ import time
 from libtbx.test_utils import approx_equal
 
 from pxviewer.regression.tst_concern import write_manifest
-from pxviewer.regression.tst_utils import (data_path, have, qt_application, skip, tmp_dir)
+from pxviewer.regression.tst_utils import (
+    data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
 
 if not have("mmtbx", "numpy", "websockets", "PySide6.QtWebEngineWidgets"):
     skip("needs mmtbx, websockets and PySide6 QtWebEngine")
@@ -440,11 +441,14 @@ def exercise_validation_staleness_tracks_model_movement():
 
 def run():
     qapp()
-    for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
-            print("  %s" % name)
-            sys.stdout.flush()
-            fn()
+    # Every exercise builds a DesktopApp, which reads its defaults from QSettings -- so
+    # the whole file runs against a fresh install's preferences, not the user's.
+    with shipped_defaults():
+        for name, fn in sorted(globals().items()):
+            if name.startswith("exercise"):
+                print("  %s" % name)
+                sys.stdout.flush()
+                fn()
     print("OK")
 
 

@@ -11,7 +11,8 @@ from __future__ import absolute_import, division, print_function
 import sys
 import time
 
-from pxviewer.regression.tst_utils import have, qt_application, skip
+from pxviewer.regression.tst_utils import (
+    have, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "cctbx.maptbx.qscore", "iotbx.map_model_manager", "numpy"):
@@ -170,11 +171,14 @@ def exercise_leaving_qscore_drops_the_values_it_coloured_by():
 
 
 def run():
-    for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
-            print("  %s" % name)
-            sys.stdout.flush()
-            fn()
+    # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
+    # so the whole file runs against a fresh install's preferences, not the user's.
+    with shipped_defaults():
+        for name, fn in sorted(globals().items()):
+            if name.startswith("exercise"):
+                print("  %s" % name)
+                sys.stdout.flush()
+                fn()
     print("OK")
 
 

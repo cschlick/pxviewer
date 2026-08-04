@@ -5,35 +5,27 @@ has converged but is still holding must not look idle; a button that started a j
 come back even when the job raises; the show-all-markers label has to track the individual
 boxes rather than its own last click.
 
-**Preferences are redirected here.** Several exercises write real ``QSettings`` keys, and
-the app reads them at construction. Rather than saving and restoring the user's own
-settings -- which loses them if a run dies partway -- the whole process is pointed at a
-temporary directory before anything reads one.
+**Two exercises write real preference keys**, and every one of them builds a DesktopApp,
+which reads those keys at construction. ``run()`` therefore wraps the lot in
+``shipped_defaults()`` -- see its docstring for why redirecting QSettings to a temporary
+directory does not work on macOS, which is a lesson learned the expensive way.
 """
 
 from __future__ import absolute_import, division, print_function
 
-import atexit
 import contextlib
-import shutil
 import sys
-import tempfile
 import time
 
 from libtbx.test_utils import approx_equal, raises
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, have, qt_application, skip, tmp_dir)
+    closing_modals, data_path, have, qt_application, shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
 
 from PySide6.QtCore import QSettings                # noqa: E402
-
-_SETTINGS_DIR = tempfile.mkdtemp(prefix="pxviewer_tst_settings_")
-atexit.register(shutil.rmtree, _SETTINGS_DIR, True)
-QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, _SETTINGS_DIR)
 
 QAPP = qt_application()
 
@@ -943,11 +935,14 @@ def exercise_a_checkable_combo_requires_a_click_inside_the_popup():
 
 
 def run():
-    for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
-            print("  %s" % name)
-            sys.stdout.flush()
-            fn()
+    # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
+    # so the whole file runs against a fresh install's preferences, not the user's.
+    with shipped_defaults():
+        for name, fn in sorted(globals().items()):
+            if name.startswith("exercise"):
+                print("  %s" % name)
+                sys.stdout.flush()
+                fn()
     print("OK")
 
 

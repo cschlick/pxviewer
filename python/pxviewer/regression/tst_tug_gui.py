@@ -9,7 +9,8 @@ from __future__ import absolute_import, division, print_function
 import contextlib
 import sys
 
-from pxviewer.regression.tst_utils import data_path, have, qt_application, skip
+from pxviewer.regression.tst_utils import (
+    data_path, have, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "mmtbx.geometry_restraints.reference", "numpy"):
@@ -114,11 +115,14 @@ def exercise_continuous_mode_free_runs_and_does_not_resend_a_settled_frame():
 
 
 def run():
-    for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
-            print("  %s" % name)
-            sys.stdout.flush()
-            fn()
+    # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
+    # so the whole file runs against a fresh install's preferences, not the user's.
+    with shipped_defaults():
+        for name, fn in sorted(globals().items()):
+            if name.startswith("exercise"):
+                print("  %s" % name)
+                sys.stdout.flush()
+                fn()
     print("OK")
 
 
