@@ -65,11 +65,50 @@ def qt_application():
     Qt allows exactly one per process and cannot recreate it after teardown, so every GUI
     test in a script shares this. Tests run as separate processes under ``run_tests``, so
     there is no cross-test leakage to worry about.
+
+    The platform plugin is chosen the way the pytest ``conftest.py`` chose it: default to
+    ``offscreen`` only where there is no display, since it needs neither a display nor a
+    GPU and is where the suite is proven to pass headless. Where a display *is* present,
+    leave Qt to pick the native platform, so the tests exercise the same GPU path the app
+    would. Set ``QT_QPA_PLATFORM`` yourself to override.
     """
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
     return QApplication.instance() or QApplication([])
+
+
+@contextlib.contextmanager
+def closing_modals(interval_ms=20):
+    """Cancel any modal dialog that appears, so a stray one cannot hang the run.
+
+    A timer rather than a patched ``QMessageBox.warning`` / ``QFileDialog.getSaveFileName``
+    / ``QColorDialog.getColor``: the timer fires inside the nested event loop the dialog's
+    ``exec()`` spins, so the dialog is really constructed, really shown, and really
+    cancelled, and the calling handler gets its answer and carries on.
+
+    That is not merely the no-patching rule applied for its own sake -- cancelling returns
+    exactly what the stubs used to return (``("", "")``, ``([], "")``, an invalid
+    ``QColor``), so this is a strict replacement that additionally covers the dialog
+    construction and the app's own handling of a cancel.
+    """
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication, QDialog
+
+    def cancel_visible_modals():
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget.isVisible() and widget.isModal():
+                widget.reject()
+
+    timer = QTimer()
+    timer.setInterval(interval_ms)
+    timer.timeout.connect(cancel_visible_modals)
+    timer.start()
+    try:
+        yield
+    finally:
+        timer.stop()
 
 
 def data_path(*parts):

@@ -73,6 +73,7 @@ gui_tests = [
     "$D/regression/tst_qscore.py",
     "$D/regression/tst_reflections_gui.py",
     "$D/regression/tst_tug_gui.py",
+    "$D/regression/tst_gui_concurrency.py",
     "$D/regression/tst_appserver.py",
     "$D/regression/tst_console.py",
     "$D/regression/tst_webapp.py",
