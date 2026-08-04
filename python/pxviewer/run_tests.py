@@ -33,7 +33,10 @@ import sys
 # $D is the module's dist path, filled in by libtbx.test_utils.run_tests. Keep each list
 # in dependency order: cheap and self-contained first, so a broken environment fails fast.
 
-#: Pure computation: cctbx, numpy, scipy. No Qt, no websockets, no display.
+#: No Qt and no display, so these run in a headless cctbx build. Mostly pure computation
+#: over cctbx, numpy and scipy; the ``tst_live_*`` scripts additionally want websockets,
+#: which is a small pure-Python dependency rather than a GUI stack, and they skip
+#: themselves cleanly when it is absent.
 core_tests = [
     "$D/regression/tst_bcif.py",
     "$D/regression/tst_palettes.py",
@@ -49,6 +52,11 @@ core_tests = [
     "$D/regression/tst_edits.py",
     "$D/regression/tst_api.py",
     "$D/regression/tst_mvs.py",
+    "$D/regression/tst_live_frames.py",
+    "$D/regression/tst_live_overlays.py",
+    "$D/regression/tst_live_selection.py",
+    "$D/regression/tst_live_volumes.py",
+    "$D/regression/tst_live_attributes.py",
     "$D/regression/tst_primitives.py",
     "$D/regression/tst_demos.py",
     "$D/regression/tst_geometry.py",

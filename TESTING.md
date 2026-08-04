@@ -143,7 +143,7 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **43 files, 426 exercises**:
+Converted, and the pytest originals removed — **48 files, 483 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -172,7 +172,12 @@ Converted, and the pytest originals removed — **43 files, 426 exercises**:
 | `regression/tst_hydrogens.py` | 1 | core |
 | `regression/tst_kinemage.py` | 9 | core |
 | `regression/tst_ligands.py` | 9 | core |
+| `regression/tst_live_attributes.py` | 12 | core |
+| `regression/tst_live_frames.py` | 7 | core |
 | `regression/tst_live_maps.py` | 6 | core |
+| `regression/tst_live_overlays.py` | 12 | core |
+| `regression/tst_live_selection.py` | 17 | core |
+| `regression/tst_live_volumes.py` | 9 | core |
 | `regression/tst_loader.py` | 9 | core |
 | `regression/tst_minimize.py` | 9 | core |
 | `regression/tst_mvs.py` | 19 | core |
@@ -201,10 +206,19 @@ cctbx build with no Qt at all, which is the environment they are most likely to 
 once upstreamed. The concern-import tests that need no viewer went to `tst_concern.py` for
 the same reason.
 
-`test_desktop.py` was split for a different reason: size. Its 90 tests and 3,600 lines
-became five files grouped by subject — `tables`, `registry`, `appearance`, `interaction`
-and `tutorials` — because a single 3,600-line `tst_*.py` would be unlike anything in cctbx
-and unpleasant to run one exercise from. All five are gated, since all of them need Qt.
+The two largest files were split for a different reason: size. `test_desktop.py`'s 90
+tests and 3,600 lines became five files grouped by subject — `tables`, `registry`,
+`appearance`, `interaction` and `tutorials` — and `test_live.py`'s 61 tests became
+`frames`, `overlays`, `selection`, `volumes` and `attributes`. A single 3,600-line
+`tst_*.py` would be unlike anything in cctbx and unpleasant to run one exercise from. The
+desktop five are gated; the live five are not, since they need websockets but no Qt.
+
+`test_live.py` also gained a helper module, `live_harness.py`. Sixty exercises shared one
+shape — connect, consume the topology, provoke something, read the answer — written out
+longhand each time, which buried the assertion in scaffolding. Two things it encodes were
+open-coded inconsistently before: that the topology always arrives first, and that text and
+binary messages interleave, so "the next message" is a race a command's echo can lose to a
+coordinate frame.
 
 **Three assertions were already failing and are restated rather than ported.** Converting a
 test means running it, which is how these surfaced; each was checked against the pytest
@@ -240,20 +254,14 @@ second — turned up two facts the patched version could not have:
 - A pair opened *together* can still need aligning. Pairing on load works from file metadata
   and cannot know about coordinates that are simply in the wrong place.
 
-**Not yet converted: 2 files, 1,424 lines, still requiring pytest:**
+**Not yet converted: 1 file, 361 lines, still requiring pytest:**
 
-- `test_live.py` (1063 lines)
-- `test_gui_fuzz.py` (361 lines)
+- `test_gui_fuzz.py`
 
-`test_live.py` is not hard in kind, only in size — the live-session protocol, which the
-converted `tst_mvs.py`, `tst_primitives.py` and `tst_cctbx_io.py` already touch the edges
-of. It will want splitting the way `test_desktop.py` was.
-
-`test_gui_fuzz.py` is the one file with a genuine design question left. It builds a random
-walk over the app's own controls, clicking, toggling and dragging real widgets, so the
-modals it opens are real and its `guarded_modals` patches are load-bearing in a way
-`test_gui_concurrency.py`'s were not. The substitute is already written: `closing_modals()`
-in `tst_utils.py` cancels a dialog that really opened, and returns exactly what the stubs
+It builds a random walk over the app's own controls, clicking, toggling and dragging real
+widgets, so the modals it opens are real and its `guarded_modals` patches are load-bearing
+in a way `test_gui_concurrency.py`'s were not. The substitute is already written:
+`closing_modals()` cancels a dialog that really opened, and returns exactly what the stubs
 returned. What remains to settle is the walk itself — how to seed it reproducibly under
 one-process-per-script, and whether the parametrised seeds become a loop or separate
 exercises.
@@ -277,5 +285,5 @@ had already drawn the same one for logging. It is not a licence to add a hook wh
 patch used to be — the first question stays "what state does this leave behind?", and it
 had an answer for the other 23 cases in this file.
 
-Counts of what the remainder leans on: 9 `raises`, 7 `monkeypatch`, 6 `approx`,
-4 `importorskip`, 4 fixtures, 3 `parametrize`.
+Counts of what the remainder leans on: 7 `monkeypatch`, 3 `importorskip`,
+2 fixtures, 2 `parametrize`.
