@@ -37,6 +37,7 @@ import sys
 core_tests = [
     "$D/regression/tst_bcif.py",
     "$D/regression/tst_palettes.py",
+    "$D/regression/tst_gpu.py",
     "$D/regression/tst_api_guide.py",
     "$D/regression/tst_kinemage.py",
     "$D/regression/tst_loader.py",

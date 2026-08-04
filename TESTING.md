@@ -112,7 +112,7 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **36 files, 318 exercises**:
+Converted, and the pytest originals removed — **37 files, 333 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
@@ -128,6 +128,7 @@ Converted, and the pytest originals removed — **36 files, 318 exercises**:
 | `regression/tst_demos.py` | 7 | core |
 | `regression/tst_edits.py` | 4 | core |
 | `regression/tst_geometry.py` | 6 | core |
+| `regression/tst_gpu.py` | 15 | core |
 | `regression/tst_hotspots.py` | 22 | core |
 | `regression/tst_hotspots_gui.py` | 15 | gui |
 | `regression/tst_hotspots_standalone.py` | 3 | core |
@@ -170,26 +171,50 @@ is not reachable here without patching — chem_data is installed and importable
 the environment alone still finds geostd. The reachable half of the guard is kept and the
 gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
 
-**Not yet converted: 5 files, 5,351 lines, still requiring pytest:**
+**Not yet converted: 4 files, 5,242 lines, still requiring pytest:**
 
 - `test_desktop.py` (3600 lines)
 - `test_live.py` (1063 lines)
 - `test_gui_fuzz.py` (361 lines)
 - `test_gui_concurrency.py` (218 lines)
-- `test_gpu.py` (109 lines)
 
 Everything mechanical is done, and what is left is the awkward part rather than the bulky
-part. All five are GUI or live-session tests bound for the gated list, and each carries one
-difficulty of its own:
+part. All four are GUI or live-session tests bound for the gated list:
 
-- `test_desktop.py` and `test_live.py` are 87% of the remaining lines. Neither is hard in
+- `test_desktop.py` and `test_live.py` are 89% of the remaining lines. Neither is hard in
   kind, only in size; both will want splitting the way `test_reflections.py` was.
 - `test_gui_fuzz.py` and `test_gui_concurrency.py` drive a Qt event loop, which has to be
-  pumped by hand under one-process-per-script rather than by a fixture.
-- `test_gpu.py` is 109 lines and 24 of the 43 remaining `monkeypatch` uses — every one of
-  them faking a hardware state that is not present. It is the file where "build the real
-  thing" has no answer, so expect the `test_geometry.py` precedent: keep what is reachable,
-  state the gap, drop the stub-only cases rather than reintroduce patching for them.
+  pumped by hand under one-process-per-script rather than by a fixture. They also share a
+  `guarded_modals` fixture that patches `QMessageBox`/`QFileDialog`/`QColorDialog` so a
+  dialog cannot block forever, and the two files need different answers to it. In
+  `test_gui_concurrency.py` it is only insurance — none of the paths it drives (`make_maps`,
+  `update_maps`, `minimize_model`, `_serve_tug`) reaches a modal, so it can likely go. In
+  `test_gui_fuzz.py` it is load-bearing, because the walk clicks random widgets and really
+  does open them. That file already carries the honest substitute next to the patch: a
+  `modal_autocloser` that lets the dialog open and closes it from a `QTimer`.
 
-Counts of what the remainder leans on: 178 `importorskip`, 43 `monkeypatch`, 37 `tmp_path`,
-27 `raises`, 15 `approx`, 8 fixtures, 5 `parametrize`, 2 `capsys`.
+Both files also import `gui_invariants.py` as a top-level module, which only resolves
+because pytest puts `tests/` on `sys.path`. It needs to move into the package alongside
+`tst_utils.py` before either can run as a standalone script.
+
+`test_gpu.py` was expected to be the hard case — 109 lines carrying 24 `monkeypatch` uses,
+which read as a file built entirely out of faked hardware states. It converted whole, with
+nothing dropped and one patch left. Most of those 24 were `setenv`/`delenv`, and the
+chooser reads the environment because the environment is genuinely its input: setting a
+variable and restoring it afterwards is not a mock. Two more pointed `XDG_CACHE_HOME` at a
+temp directory, which made the *real* cache file cheap to use — and using it added coverage
+the original had none of, since the round trip through the machine signature and the
+version stamp is what decides whether a remembered verdict is trusted (three new exercises:
+a cache from another machine, from an older version, and unreadable).
+
+That left `os.execv`, which cannot be substituted by building anything, because it does not
+return — a test that let it fire would be replaced by the process it launched. It is now a
+`restart=` parameter with `os.execv` as its default, the same injectable seam the module
+already gives `log`. Worth stating plainly: **that is a change to production code made for
+a test.** It is justified here because the parameter marks a real boundary and the module
+had already drawn the same one for logging. It is not a licence to add a hook wherever a
+patch used to be — the first question stays "what state does this leave behind?", and it
+had an answer for the other 23 cases in this file.
+
+Counts of what the remainder leans on: 178 `importorskip`, 35 `tmp_path`, 26 `raises`,
+19 `monkeypatch`, 15 `approx`, 7 fixtures, 5 `parametrize`, 2 `capsys`.

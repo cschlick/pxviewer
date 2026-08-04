@@ -118,11 +118,19 @@ def mark_hardware_ok() -> None:
     _remember("hardware")
 
 
-def on_webgl_missing(*, log: Callable[[str], None] = print) -> None:
+def on_webgl_missing(
+    *,
+    log: Callable[[str], None] = print,
+    restart: Callable[[str, list], None] = os.execv,
+) -> None:
     """The viewport could not get WebGL: remember it and restart on software rendering.
 
     Re-execs the same command with the software flags set (via ``PXVIEWER_GPU`` and a
     sentinel so the restart cannot loop). Called at most once per process.
+
+    ``restart`` is the boundary, injectable for the same reason ``log`` is: it does not
+    return, so a test that could not substitute it would have to fork to observe what was
+    decided before it fired.
     """
     if not _STATE["autofix"]:
         return
@@ -135,7 +143,7 @@ def on_webgl_missing(*, log: Callable[[str], None] = print) -> None:
     sys.stdout.flush()
     os.environ[_RETRY_ENV] = "1"
     os.environ["PXVIEWER_GPU"] = "software"
-    os.execv(sys.executable, _relaunch_argv())
+    restart(sys.executable, _relaunch_argv())
 
 
 # -- internals ---------------------------------------------------------------
