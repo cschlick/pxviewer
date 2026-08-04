@@ -216,12 +216,13 @@ because a concern curve rises well before the outlier cut. There is a worked exa
 
 ## 6. Testing and environment
 
-- Tests: `python/tests/test_validation_events.py` (13 tests, ~15 s — most use synthetic
+- Tests: `python/pxviewer/regression/tst_validation_events.py` (~15 s — most use synthetic
   events, so they are cheap). They pin the localization agreement with pxviewer's scoring,
   the clash-per-contact collapse, the `geometry=` injection preserving host edits, the
   roll-up split, and the field-agreement checker including a **negative control** (a shuffled
   field must fail — a check that only ever passes is worthless).
-- Do **not** run pxviewer's whole suite casually; a previous full run consumed ~10 GB.
+- The whole suite is affordable now: it runs serially and no script exceeds ~1.1 GB. The
+  old ~10 GB warning predates the teardown fixes; see the Memory section of TESTING.md.
 - cctbx python here: `/Users/christopher/miniconda3/envs/pxviewer/bin/libtbx.python`.
 - Self-test: `libtbx.python validation_events.py MODEL.pdb`. On 1TEC (events / outliers /
   atoms implicated): rama 338 / 5 / 20, rota 260 / **27** / 103, clash 536 / 5 / 10,

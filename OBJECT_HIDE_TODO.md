@@ -97,14 +97,12 @@ its tests (`test_software_pins_a_model_and_says_why_on_click`,
 - Python is an editable install, so Python edits are live on restart.
 - **Frontend edits require a rebuild**: `cd frontend && npm run build`, then restart the app.
 - Run: `python -m pxviewer desktop`.
-- Tests: `QT_QPA_PLATFORM=offscreen python -m pytest python/tests/test_desktop.py
-  python/tests/test_live.py python/tests/test_gui_fuzz.py -q` — run per-file, the full
-  `tests/` run in one process hangs on a pre-existing leaked-thread issue.
-- Five tests in `test_desktop.py` fail on a clean checkout for unrelated pre-existing reasons
-  (`test_minimize_buttons_show_which_state_is_live`, `test_validation_subtabs_and_row_focus`,
-  `test_restraint_row_marks_all_atoms_and_draws_its_notation`,
-  `test_atom_precision_actions_switch_a_ribbon_to_ball_and_stick`,
-  `test_residue_orientation_and_space_navigation`). Don't blame them on hide work.
+- Tests: the ones that bear on hide work are `tst_desktop_appearance.py`,
+  `tst_desktop_registry.py` and the `tst_live_*.py` scripts, each an ordinary program:
+  `libtbx.python python/pxviewer/regression/tst_desktop_appearance.py`. See TESTING.md.
+- The five `test_desktop.py` failures once listed here are gone: that file has been split
+  into `tst_desktop_*.py` and the stale assertions behind those failures were fixed while
+  converting it. The suite passes clean, so a failure now is a real one.
 
 ## Constraints
 

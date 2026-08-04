@@ -41,7 +41,7 @@
 > integration defects already found and fixed, and what is still open.
 
 Status: **implemented** — `python/pxviewer/hotspots.py`, the Hotspots tab (flame icon), and
-`python/tests/test_hotspots.py`. This records the reasoning behind the per-atom "hotspot"
+`python/pxviewer/regression/tst_hotspots.py`. This records the reasoning behind the per-atom "hotspot"
 score that aggregates several validation metrics into one field you can color by, so the eye
 goes straight to the places worth rebuilding.
 
@@ -726,7 +726,7 @@ pick dynamic updates back up, this fingerprint is the seam a live re-score would
 ## The second generation: imported concern fields
 
 Status: **implemented** — `python/pxviewer/concern.py`, the same Hotspots tab, and the
-`concern`-named tests in `python/tests/test_hotspots.py`.
+`python/pxviewer/regression/tst_concern.py`.
 
 The field generator is [`hotspots/`](hotspots/) (`make_concern_maps.py`, run under the cctbx
 python). It writes CCP4 maps plus a `*_hotspots.json` manifest; pxviewer's job is to
@@ -862,7 +862,7 @@ result belongs to, which atoms it implicates, and whether the validator flagged 
 pxviewer's `ramachandran_severity`, `rotamer_severity` and `clash_severity` are now thin
 calibrations over this module, and `_RAMA_ATOMS` / `_MAINCHAIN` / `_hydrogen_parents` are
 re-exports of it, so the sharing is enforced rather than hoped for.
-`test_validation_events.py` pins that the atoms severity scores are exactly the atoms the
+`tst_validation_events.py` pins that the atoms severity scores are exactly the atoms the
 extractor picks.
 
 Two things worth knowing if you copy it:
@@ -955,11 +955,13 @@ arithmetic on a user-driven float will otherwise produce one of these eventually
   the omission. Moving extraction onto `probe2` removed the blocker; `molprobity.omitted_metrics`
   is now empty. On 1TEC the run places hydrogens with reduce2 first (2737 atoms → 5147) and
   reports clashscore 18.7.
-- Targeted tests only: `test_hotspots.py`, `test_volume_io.py`, `test_live_maps.py`. **Do not
-  run the whole suite casually** — a previous full run consumed ~10 GB and locked the machine.
-- `test_desktop.py` needs `cd python` (it resolves a relative data path);
-  `test_minimize_buttons_show_which_state_is_live` fails on a button stylesheet assertion
-  unrelated to any of this.
+- Targeted tests only: `tst_hotspots.py`, `tst_volume_io.py`, `tst_live_maps.py`, each run
+  as an ordinary program (`libtbx.python python/pxviewer/regression/tst_hotspots.py`).
+- The whole registry is affordable now — it runs serially and no script exceeds ~1.1 GB,
+  where the fuzzer alone once reached 2.6 GB. The old warning about a full run consuming
+  ~10 GB and locking the machine no longer applies; see the Memory section of TESTING.md.
+- Tests run from any directory now: they resolve data through the package rather than a
+  path relative to the repository root, so the old `cd python` requirement is gone.
 
 ### Open items
 

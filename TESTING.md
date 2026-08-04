@@ -2,7 +2,7 @@
 
 The cctbx/phenix convention throughout, so this code can be dropped into one of those
 trees without rework. **The migration is complete**: no test uses pytest, and
-`python/tests/` holds only a `conftest.py` the pattern does not need.
+`python/tests/` is gone.
 
 ## The pattern
 
@@ -259,8 +259,10 @@ second — turned up two facts the patched version could not have:
 - A pair opened *together* can still need aligning. Pairing on load works from file metadata
   and cannot know about coordinates that are simply in the wrong place.
 
-**Every pytest file is converted.** `python/tests/` holds only `conftest.py`, which the
-cctbx pattern does not use.
+**Every pytest file is converted, and `python/tests/` has been removed.** Its last
+occupant was a `conftest.py` that set `QT_QPA_PLATFORM` before collection; that choice now
+lives in `tst_utils.qt_application()`, where it belongs — every script calls it, and it
+holds the rest of the Qt setup besides.
 
 **Cancelling a real dialog needs `AA_DontUseNativeDialogs`.** `test_gui_fuzz.py` clicks
 random widgets, so it really does open dialogs, and its `guarded_modals` patches were

@@ -26,7 +26,7 @@ pxviewer maps the same events to a different scale; neither is a rescaling of th
 and they must never disagree about *where* a problem is.
 
 Do not add a localization rule to `events.py`. Change the shared file, and check
-`python/tests/test_validation_events.py` still passes.
+`python/pxviewer/regression/tst_validation_events.py` still passes.
 
 Clash extraction uses **probe2**, which ships with cctbx, not
 `mmtbx.validation.clashscore`, which shells out to the classic Duke `probe` binary that is
