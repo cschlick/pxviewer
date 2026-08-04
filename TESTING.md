@@ -80,8 +80,22 @@ faking it tests less. Two substitutions cover essentially every case:
   Watching for `set_volume_iso(vid, 1.5)` tests the implementation; reading the volume's `iso`
   back afterwards tests the behaviour, and survives the implementation changing.
 
-The remaining pytest suite has 53 `monkeypatch` uses, so this is the single decision that
-most shapes what the rest of the conversion looks like.
+The second substitution has been the more valuable one in practice, because the state is
+usually a stronger assertion than the spy it replaces:
+
+| the spy was | the state is | why it is better |
+| --- | --- | --- |
+| wrap `session.push` and count calls | read `session._frame_index` | it is what the wire protocol numbers frames with, so it moves if and only if a frame really went out |
+| wrap `fmodel.update_all_scales` | compare `k_isotropic`, `k_anisotropic`, `k_masks` | catches a rescale reached *any* way, including from inside cctbx where no spy would see it |
+| replace `_CATEGORIES` with a stub | run the shipping map against a small local class | tests the configuration that ships rather than one invented for the test |
+
+The last of those is worth generalising: patching a module constant to something convenient
+usually means the test no longer covers the real value. `tst_api_guide.py` needed a class
+with one method in two different categories and one in none — and the real category map
+already puts `select` and `color_by` in different groups, so a four-method class exercises
+every path against the shipping configuration.
+
+43 `monkeypatch` uses remain, 24 of them in `test_gpu.py`.
 
 Two things to watch when converting:
 
@@ -98,16 +112,20 @@ Two things to watch when converting:
 
 ## Inventory
 
-Converted, and the pytest originals removed — **23 files, 201 exercises**:
+Converted, and the pytest originals removed — **36 files, 318 exercises**:
 
 | test | exercises | list |
 | --- | ---: | --- |
+| `regression/tst_analysis.py` | 8 | core |
+| `regression/tst_api.py` | 13 | core |
+| `regression/tst_api_guide.py` | 7 | core |
 | `regression/tst_appserver.py` | 3 | gui |
 | `regression/tst_bcif.py` | 5 | core |
 | `regression/tst_cctbx_io.py` | 24 | gui |
 | `regression/tst_concern.py` | 6 | core |
 | `regression/tst_console.py` | 5 | gui |
 | `regression/tst_data.py` | 10 | core |
+| `regression/tst_demos.py` | 7 | core |
 | `regression/tst_edits.py` | 4 | core |
 | `regression/tst_geometry.py` | 6 | core |
 | `regression/tst_hotspots.py` | 22 | core |
@@ -116,20 +134,34 @@ Converted, and the pytest originals removed — **23 files, 201 exercises**:
 | `regression/tst_hydrogens.py` | 1 | core |
 | `regression/tst_kinemage.py` | 9 | core |
 | `regression/tst_ligands.py` | 9 | core |
+| `regression/tst_live_maps.py` | 6 | core |
 | `regression/tst_loader.py` | 9 | core |
+| `regression/tst_minimize.py` | 9 | core |
 | `regression/tst_mvs.py` | 19 | core |
 | `regression/tst_palettes.py` | 7 | core |
+| `regression/tst_primitives.py` | 24 | core |
 | `regression/tst_probe.py` | 5 | core |
+| `regression/tst_qscore.py` | 5 | gui |
+| `regression/tst_reflections.py` | 7 | core |
+| `regression/tst_reflections_gui.py` | 9 | gui |
+| `regression/tst_tug.py` | 13 | core |
+| `regression/tst_tug_gui.py` | 3 | gui |
 | `regression/tst_validation.py` | 8 | core |
 | `regression/tst_validation_events.py` | 14 | core |
 | `regression/tst_volume.py` | 6 | core |
+| `regression/tst_volume_demos.py` | 6 | core |
 | `regression/tst_volume_io.py` | 6 | core |
 | `regression/tst_webapp.py` | 5 | gui |
 
-`test_hotspots.py` became three files rather than one. Its 40 tests mixed pure calibration
-with desktop-shell wiring, and splitting them along that seam is what lets the calibration
-half -- the part that pins the science -- run in a headless cctbx build with no Qt at all.
-The concern-import tests that need no viewer went to `tst_concern.py` for the same reason.
+**Three files were split rather than converted one-to-one**, each along the same seam: a
+subject whose computation is pure cctbx and whose consequences are desktop wiring.
+`test_hotspots.py` became `tst_hotspots.py`, `tst_hotspots_gui.py` and
+`tst_hotspots_standalone.py`; `test_reflections.py` and `test_tug.py` each became a core
+file and a `_gui` one. The split is what lets the half that pins the science — hotspot
+calibration, phasing and sigma-scaling, what a tug does to coordinates — run in a headless
+cctbx build with no Qt at all, which is the environment they are most likely to be run in
+once upstreamed. The concern-import tests that need no viewer went to `tst_concern.py` for
+the same reason.
 
 **One test was dropped rather than converted.** `test_geometry.py` checked that
 `build_geometry` returns `None` when no monomer library is present, by deleting two
@@ -138,31 +170,26 @@ is not reachable here without patching — chem_data is installed and importable
 the environment alone still finds geostd. The reachable half of the guard is kept and the
 gap is stated in the exercise's docstring, rather than reintroducing patching for one case.
 
-**Not yet converted: 16 files, 7,894 lines, still requiring pytest:**
+**Not yet converted: 5 files, 5,351 lines, still requiring pytest:**
 
-- `test_analysis.py` (166 lines)
-- `test_api.py` (300 lines)
-- `test_api_guide.py` (75 lines)
-- `test_demos.py` (180 lines)
 - `test_desktop.py` (3600 lines)
-- `test_gpu.py` (109 lines)
-- `test_gui_concurrency.py` (218 lines)
-- `test_gui_fuzz.py` (361 lines)
 - `test_live.py` (1063 lines)
-- `test_live_maps.py` (189 lines)
-- `test_minimize.py` (182 lines)
-- `test_primitives.py` (188 lines)
-- `test_qscore.py` (170 lines)
-- `test_reflections.py` (458 lines)
-- `test_tug.py` (480 lines)
-- `test_volume_demos.py` (155 lines)
+- `test_gui_fuzz.py` (361 lines)
+- `test_gui_concurrency.py` (218 lines)
+- `test_gpu.py` (109 lines)
 
-The bulk is concentrated: `test_desktop.py` alone is 3,600 lines and `test_live.py` 1,063,
-together nearly half the remainder. Both are GUI/live-session tests and would go in the
-gated `gui_tests` list. `test_live_maps.py`, `test_volume_io.py` and `test_cctbx_io.py` are
-the natural next ones -- small, pure computation, and they belong in `core_tests` where they
-would run in a headless build.
+Everything mechanical is done, and what is left is the awkward part rather than the bulky
+part. All five are GUI or live-session tests bound for the gated list, and each carries one
+difficulty of its own:
 
-Counts of what the remainder leans on, which is what keeps the conversion mechanical rather
-than hard: 271 `importorskip`, 138 `tmp_path`, 53 `monkeypatch`, 52 `approx`, 44 `raises`,
-16 fixtures, 10 `parametrize`, 2 `capsys`.
+- `test_desktop.py` and `test_live.py` are 87% of the remaining lines. Neither is hard in
+  kind, only in size; both will want splitting the way `test_reflections.py` was.
+- `test_gui_fuzz.py` and `test_gui_concurrency.py` drive a Qt event loop, which has to be
+  pumped by hand under one-process-per-script rather than by a fixture.
+- `test_gpu.py` is 109 lines and 24 of the 43 remaining `monkeypatch` uses — every one of
+  them faking a hardware state that is not present. It is the file where "build the real
+  thing" has no answer, so expect the `test_geometry.py` precedent: keep what is reachable,
+  state the gap, drop the stub-only cases rather than reintroduce patching for them.
+
+Counts of what the remainder leans on: 178 `importorskip`, 43 `monkeypatch`, 37 `tmp_path`,
+27 `raises`, 15 `approx`, 8 fixtures, 5 `parametrize`, 2 `capsys`.
