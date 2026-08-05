@@ -74,6 +74,51 @@ than from 1TEC.
 Generate figure data at **1.0 Å**, not the 2.0 Å fast-viewing default: at 2.5 Å the field
 already loses one flagged outlier in five. See the pixel-size table in `../README.md`.
 
+## Nine-channel survey — 50 structures, 2026-08-05
+
+`channel_survey.py` over a seeded 50-structure draw (seed 20260805), all nine channels,
+46 ok. Median 46.5 s/structure with restraints built.
+
+| channel | family | deposit% | outlier% | hot% of box |
+|---|---|---:|---:|---:|
+| rama | backbone | 4.7 | 0.27 | 0.04 |
+| rota | sidechain | 14.2 | 3.31 | 0.35 |
+| clash | sterics | 19.5 | 8.42 | **4.12** |
+| cablam | backbone | 6.4 | 1.57 | 0.19 |
+| ca_geom | backbone | 4.8 | 0.41 | 0.07 |
+| cbeta | cbeta | 2.0 | 0.19 | 0.01 |
+| omega | omega | 5.4 | 0.08 | 0.01 |
+| bond | covalent | 3.0 | 0.97 | 0.05 |
+| angle | covalent | 9.1 | 3.79 | 0.25 |
+
+**Clash dominates**: 4.12% of the box against 0.35% for the next channel. Any aggregate is
+mostly clash unless that is deliberately handled.
+
+### The family grouping is supported, with two corrections the data forced
+
+Residue-level Jaccard, within-family vs across-family: **median 0.088 within, 0.000 across**
+(across-family maximum 0.055). Channels in a family really do mark the same residues, which is
+what justifies combining them by `max` rather than accumulating them.
+
+Two members of the proposed taxonomy did not survive contact with the measurement:
+
+* **cbeta** has Jaccard **0.000** with both bond and angle — no shared residues at all —
+  against 0.047 with rota. It is the backbone–sidechain junction, not a restraint deviation.
+  Given its own family.
+* **omega**'s within-backbone Jaccards (0.037 rama, 0.053 cablam, 0.045 ca_geom) sit at or
+  *below* the across-family maximum, so it is not redundant with backbone conformation either.
+  Also given its own family. Peptide-bond planarity is a distinct property from phi/psi, so
+  the physics and the data agree here.
+
+Final grouping: `backbone` (rama, cablam, ca_geom), `sidechain` (rota), `sterics` (clash),
+`covalent` (bond, angle), `cbeta`, `omega`.
+
+> **Do not read the Spearman half of that matrix.** It is computed over the union of residues
+> either channel marks, filling zero where one is silent; across largely disjoint supports
+> that construction returns negative values for everything and means nothing. Jaccard is the
+> measure that answers the question. Left in the output rather than deleted so nobody
+> recomputes it and reaches the same wrong conclusion.
+
 ## The harness
 
 ```

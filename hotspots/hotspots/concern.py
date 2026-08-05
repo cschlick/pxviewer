@@ -54,13 +54,14 @@ CLASH_SATURATION_OVERLAP_A = 0.40
 # A 0.1 A brush is not a modeling problem; 0.40 A is where MolProbity says a contact becomes
 # a clash.
 #
-# The gate now sits at the ramp's zero anchor (0.20 A) rather than at the cut, so contacts
-# between 0.20 and 0.40 A deposit a graded sub-threshold amount instead of nothing. Gating at
+# The gate now sits at the ramp's zero anchor (0.30 A) rather than at the cut, so contacts
+# between 0.30 and 0.40 A deposit a graded sub-threshold amount instead of nothing. Gating at
 # the cut itself made the channel binary once the cut moved to 1.0, which would have excluded
 # clash from co-locality accumulation entirely -- the one effect a continuous field can show
 # that an outlier list cannot. The swamping this constant exists to prevent is a property of
-# the *dense* mild tail below ~0.2 A, not of the 0.2-0.4 A band; that is measured rather than
-# assumed in calibration_cuts.py's swamping check.
+# the dense mild tail below ~0.3 A, not of the 0.3-0.4 A band; 0.20 was tried first and
+# admitted 35% of all contacts, so this is measured rather than assumed -- see the swamping
+# check in calibration_cuts.py.
 CLASH_REPORTING_OVERLAP_A = 0.30
 
 # Covalent geometry. The native value is a deviation from the restraint ideal, so the
@@ -92,10 +93,10 @@ CABLAM_FAVORED = 0.05        # above this, unremarkable
 CABLAM_OUTLIER = 0.01        # the CaBLAM outlier cut
 CA_GEOM_FAVORED = 0.05
 CA_GEOM_OUTLIER = 0.005      # the CA-geometry outlier cut
-CBETA_ZERO_A = 0.15
-CBETA_SATURATION_A = 0.25    # the MolProbity cut itself, so a flagged C-beta reaches 1.0
 #: Zero anchor from the measured deviation distribution (p50 0.04, p90 0.16): at 0.0 every
 #: residue with a C-beta deposited something and the channel marked the whole protein.
+CBETA_ZERO_A = 0.15
+CBETA_SATURATION_A = 0.25    # the MolProbity cut itself, so a flagged C-beta reaches 1.0
 
 # Non-trans peptides. omegalyze reports the omega dihedral; a cis or twisted peptide is
 # flagged. Concern is the twist away from the nearest ideal (0 for cis, 180 for trans).
@@ -104,6 +105,12 @@ CBETA_SATURATION_A = 0.25    # the MolProbity cut itself, so a flagged C-beta re
 # cut-at-1.0 invariant. Checked against the classifier rather than the previous comment here,
 # which claimed the boundary was 15 degrees: mmtbx/validation/omegalyze.py find_omega_type
 # calls a peptide trans within 30 degrees of 180 and twisted beyond that, so 30 is the cut.
+#: Zero anchor, from the measured twist distribution (996 peptides: p50 3.5, p90 9.7 deg).
+#: At 0 every peptide in the structure deposited something -- 99.8% of events, measured over
+#: 43 structures -- which is harmless for a max-combined field but is a constant background
+#: under accumulation, where it would inflate exactly the co-locality effect being measured.
+#: 10 degrees leaves ~10% depositing, in line with the other channels.
+OMEGA_TWIST_ZERO_DEG = 10.0
 OMEGA_TWIST_SATURATION_DEG = 30.0
 QSCORE_EXPECTED_INTERCEPT = 1.1192
 QSCORE_EXPECTED_RESOLUTION_SLOPE = -0.1775
@@ -144,7 +151,8 @@ def _omega_concern(meta):
     """
     if meta.get("kind") == "cis":
         return 0.0 if meta.get("is_proline") else 1.0
-    return linear_concern(meta.get("twist", 0.0), 0.0, OMEGA_TWIST_SATURATION_DEG)
+    return linear_concern(meta.get("twist", 0.0), OMEGA_TWIST_ZERO_DEG,
+                          OMEGA_TWIST_SATURATION_DEG)
 
 
 def molprobity_concern_events(events):
@@ -282,10 +290,16 @@ def _sample_on(source, target):
 #: of evidence, so they accumulate. See ../AGGREGATION_PROPOSAL.md, and channel_survey.py for
 #: the measurement that tests whether the grouping actually holds.
 FAMILIES = {
-    "backbone": ("rama", "cablam", "ca_geom", "omega"),
+    "backbone": ("rama", "cablam", "ca_geom"),
+    "omega": ("omega",),
     "sidechain": ("rota",),
     "sterics": ("clash",),
-    "covalent": ("bond", "angle", "cbeta"),
+    # cbeta is NOT grouped with bond/angle: measured over 43 structures its residue-level
+    # co-occurrence with both is exactly 0.000 Jaccard, against 0.063 with rota. It is the
+    # backbone-sidechain junction, not a restraint deviation, so it gets its own family
+    # rather than a guessed home. See channel_survey.py.
+    "covalent": ("bond", "angle"),
+    "cbeta": ("cbeta",),
     "map_fit": ("qscore",),
 }
 

@@ -47,10 +47,12 @@ MAX_ATOMS = 50_000
 #: The grouping under test. Not assumed anywhere in the measurement — only used to label the
 #: report, so a pair that contradicts it is visible rather than silently absorbed.
 FAMILIES = {
-    "backbone": ("rama", "cablam", "ca_geom", "omega"),
+    "backbone": ("rama", "cablam", "ca_geom"),
+    "omega": ("omega",),
     "sidechain": ("rota",),
     "sterics": ("clash",),
-    "covalent": ("bond", "angle", "cbeta"),
+    "covalent": ("bond", "angle"),
+    "cbeta": ("cbeta",),
 }
 FAMILY_OF = {m: f for f, ms in FAMILIES.items() for m in ms}
 

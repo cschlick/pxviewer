@@ -1,9 +1,9 @@
 # Proposal: cross-metric accumulation without becoming a validation metric
 
-*Status: **proposal**, 2026-08-05. Nothing here is implemented. It argues for changing how
-per-metric concern fields are combined, and for a calibration change that has to happen
-either way. Written after the 2,000-structure corpus run — see
-[corpus/CONCLUSIONS.md](corpus/CONCLUSIONS.md).*
+*Status: **tested, and the central hypothesis did not survive**, 2026-08-05. The calibration
+half was right and is now implemented. The accumulation half was measured and adds almost
+nothing — see [Measured outcome](#measured-outcome-the-accumulation-hypothesis-fails) at the
+end before reading the argument below, which is preserved as written.*
 
 ---
 
@@ -206,3 +206,65 @@ phenomena (above). Measure the strict version before anyone writes a sentence ab
 5. Falsification-test the convention with the figure C null.
 6. Re-run the corpus and compare A/B/C under both combination rules. Figure B is the check that
    matters: accumulation must not push hot volume away from concerning atoms.
+
+---
+
+## Measured outcome: the accumulation hypothesis fails
+
+Measured 2026-08-05 on 50 structures (`corpus/accumulation.py`, seed 20260805, 46 ok), with
+clash held out of the field entirely so it could serve as the signal the field was never told
+about. Both combination rules were run over the identical structures and calibration, so the
+difference between the columns *is* the accumulation contribution.
+
+| | family (max within, p=1 across) | max (control) |
+|---|---:|---:|
+| hot volume from never-flagged observations, as share of all hot volume | 27.5% | **27.1%** |
+| ... from observations that are individually *invisible* (concern < 0.5) | 0.5% | 0.1% |
+| held-out clash enrichment inside that region | 1.23× | **1.23×** |
+| spatially matched null | 0.97× | 0.96× |
+| structures with p < 0.05 | 16.7% | 13.9% |
+
+**Cross-metric accumulation changes nothing that matters.** Identical novel-volume share,
+identical enrichment. It inflates the absolute hot volume (0.37% of the box against 0.24%) but
+inflates the full field by the same proportion, so it surfaces no region that `max` did not.
+
+### Why — and the survey already contained the answer
+
+Co-located sub-threshold problems are rare because **problems of different kinds happen at
+different residues**. `channel_survey.py` measured across-family residue-level Jaccard at
+**0.000**: a residue with a marginal rotamer is essentially never the residue with a marginal
+bond deviation. Accumulation needs coincidence within ~2 Å, and the coincidence does not exist.
+
+There is an irony worth recording. The same measurement that *justifies* `max` within a family
+(members mark the same residues, so they are redundant) is what *dooms* accumulation across
+families: independent lines of evidence are independent in space too, so there is nothing to
+accumulate. Those are one fact, and it points in opposite directions for the two halves of the
+proposal.
+
+### What survives, and it is a different claim
+
+**27% of hot volume comes from observations MolProbity never flagged.** That is real, it holds
+under either combination rule, and it is worth saying — but it is a property of having a
+**continuous scale**, not of co-locality. Most of it is single observations sitting between
+0.5 and 1.0 concern: individually visible, just never flagged.
+
+The strict version of the original idea — *nothing here is individually visible, yet together
+they light up* — accounts for **0.1–0.5%** of hot volume. It essentially does not happen.
+
+And those regions are **weaker** evidence than the field overall: 1.23× enrichment against
+1.92× for the whole field. Real (the null is correctly centred at 0.97) but modest, with
+per-structure significance rare.
+
+### Consequences
+
+1. **Do not ship family/p-norm aggregation as the default.** It costs a display-contract
+   argument and a taxonomy to defend, and buys no measurable improvement. It stays behind
+   `--combine family` for anyone who wants to re-test it.
+2. **The calibration half of this proposal was right and is independent of the above.** Every
+   community cut now lands at 1.0, which fixed clash recall (0.355 → 0.983 on 1TEC) and is
+   what makes the two combination rules comparable at all.
+3. **The honest figure, if one is wanted, is the continuous-scale claim**, not the additive
+   one: the overlay shows sub-outlier concerns that no outlier list contains, and they carry
+   weak but non-zero independent signal. Keep it in navigation language.
+4. **`max` remains the shipping combination rule** — now on a corrected calibration where it
+   no longer means "geometry outranks sterics".
