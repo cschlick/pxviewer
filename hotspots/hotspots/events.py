@@ -203,9 +203,14 @@ def _omega_event(e) -> Event:
 
 
 def _covalent_event(e) -> Event:
+    # The residue travels for these two alone: they are the only channels reporting per
+    # *restraint* rather than per residue, so the concern layer has to roll them up to one
+    # event per residue (concern.PER_RESTRAINT_METRICS) and needs a key to group on.
     return Event(e.metric, e.detail["z"] / 4.0, list(e.atoms_xyz),
                  meta=dict(id="", z=e.detail["z"], delta=e.detail["delta"],
                            sigma=e.detail["sigma"], ideal=e.detail["ideal"],
+                           residue=((e.residue.chain, e.residue.resseq, e.residue.icode)
+                                    if e.residue is not None else None),
                            outlier=bool(e.outlier)))
 
 

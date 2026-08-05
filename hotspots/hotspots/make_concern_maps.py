@@ -62,7 +62,7 @@ def main():
 
 def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=False,
              qscore_json=None, resolution=None, expected_q=None, fields_out=None,
-             metrics=CORE_METRICS):
+             metrics=CORE_METRICS, combine="max", norm_p=1.0):
     """Generate every map and the manifest for one model, and return the manifest.
 
     The same code path the CLI runs, exposed so a batch driver (see run_corpus.py) does not
@@ -106,7 +106,7 @@ def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=
         }
 
     fields = build_concern_fields(
-        by_metric, spacing=args.spacing, sigma=args.sigma)
+        by_metric, spacing=args.spacing, sigma=args.sigma, combine=combine, p=norm_p)
     os.makedirs(args.out_dir, exist_ok=True)
     stem = os.path.basename(args.model).split(".")[0]
     outputs = {}
@@ -128,7 +128,9 @@ def generate(model_path, out_dir, *, sigma=2.0, spacing=1.0, heavy_atom_clashes=
         **display_contract(),
         "model": os.path.abspath(args.model),
         "field_semantics": "bounded concern; 0=reassuring, 1=saturated concern",
-        "combination": "voxel-wise maximum of capped metric fields",
+        "combination": ("voxel-wise maximum of capped metric fields" if combine == "max"
+                        else "max within family, p-norm (p=%g) across families" % norm_p),
+        "combination_mode": combine,
         "color_scaling": color_scaling,
         "sigma_angstrom": args.sigma,
         "spacing_angstrom": args.spacing,

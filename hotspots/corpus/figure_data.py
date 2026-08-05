@@ -60,6 +60,9 @@ SIGMA = 2.0
 SPACING = 1.0
 #: Figure B's target set: "worse than 2.0%" is where the concern curve starts rising.
 CONCERNING_PCT = 2.0
+#: The same idea for clash, in angstroms of overlap: its concern curve starts rising here.
+#: Imported rather than hardcoded so the figure cannot drift from the calibration it judges.
+from concern import CLASH_ZERO_OVERLAP_A as CLASH_CONCERNING_OVERLAP_A  # noqa: E402
 #: Skip anything larger. Both guards are recorded when they fire, never silent.
 #:
 #: Measured over this 2000-structure sample: median 4,197 atoms, p90 16,096, p99 73,475,
@@ -256,7 +259,18 @@ def figure_b(field, shared, sites, heavy, metric) -> dict:
     """
     from scipy.spatial import cKDTree
 
-    predicate = None if metric == "clash" else ve.worse_than_percent(CONCERNING_PCT)
+    # Judge each channel against the set it was actually built from, never against flagged
+    # outliers alone -- that is the whole point of this figure. For rama/rota the concern
+    # curve rises from the 2% favored boundary. Clash used to have no sub-threshold tail, so
+    # its flagged set *was* its deposited set and the default outlier predicate was correct;
+    # since the re-anchoring it deposits from CLASH_ZERO_OVERLAP_A upward, and judging it
+    # against outliers alone grew exactly the artifact this figure exists to avoid (1TEC max
+    # 3.79 -> 10.10 A, from hot voxels legitimately placed on sub-threshold contacts).
+    if metric == "clash":
+        predicate = (lambda e: e.units == "angstrom"
+                     and abs(float(e.value)) >= CLASH_CONCERNING_OVERLAP_A)
+    else:
+        predicate = ve.worse_than_percent(CONCERNING_PCT)
     idx = sorted(i for i in ve.outlier_atoms(shared, metric=metric, predicate=predicate)
                  if heavy[i])
     hot = hot_voxel_xyz(field)
@@ -420,7 +434,8 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
     return out
 
 
-def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
+def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
+            metrics=("rama", "rota", "clash"), combine="max", norm_p=1.0):
     """Returns ``(record, observation_lines)``.
 
     The lines are *returned* rather than streamed so the caller can append them only after
@@ -460,7 +475,7 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
 
         extras = {}
         extracted = extract_all(model, use_hydrogens=True,
-                                metrics=("rama", "rota", "clash"), extras_out=extras)
+                                metrics=tuple(metrics), extras_out=extras)
         shared = extras["shared_events"]
         shared_clash = extras.get("shared_clash") or []
         clash_model = extras.get("clash_model", model)
@@ -469,7 +484,7 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
 
         concern_events = molprobity_concern_events(extracted["events"])
         by_metric = {}
-        for m in ("rama", "rota", "clash"):
+        for m in metrics:
             picked = [e for e in concern_events if e.metric == m]
             if picked:
                 by_metric[m] = picked
@@ -492,7 +507,8 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
             rec["seconds"] = round(time.time() - started, 1)
             return rec, obs
 
-        fields = build_concern_fields(by_metric, spacing=spacing, sigma=sigma)
+        fields = build_concern_fields(by_metric, spacing=spacing, sigma=sigma,
+                                      combine=combine, p=norm_p)
         rec["grid"] = list(fields["combined"].data.shape)
 
         sites = np.asarray(hierarchy.atoms().extract_xyz()).reshape(-1, 3)
@@ -502,7 +518,7 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
         clash_heavy = heavy_mask(ch)
 
         rec["A"], rec["B"] = {}, {}
-        for m in ("rama", "rota", "clash"):
+        for m in metrics:
             field = fields.get(m)
             if field is None:
                 continue
@@ -517,7 +533,8 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
 
         # Figure C holds the clash channel out and asks what the geometry-only field finds.
         geom = {m: v for m, v in by_metric.items() if m in ("rama", "rota")}
-        rec["C"] = (figure_c(build_concern_fields(geom, spacing=spacing, sigma=sigma),
+        rec["C"] = (figure_c(build_concern_fields(geom, spacing=spacing, sigma=sigma,
+                                                 combine=combine, p=norm_p),
                              shared_clash, clash_sites, clash_heavy, seed)
                     if geom and shared_clash else None)
 
@@ -634,11 +651,23 @@ def main():
     ap.add_argument("--null-budget", type=int, metavar="N",
                     help="override the figure C null placement budget; a large value "
                          "forces the flat NULL_TRIALS policy")
+    ap.add_argument("--metrics", default="rama,rota,clash",
+                    help="comma-separated channels, or 'all'")
+    ap.add_argument("--combine", choices=("max", "family"), default="max",
+                    help="cross-metric combination (see concern.combine_arrays)")
+    ap.add_argument("--norm-p", type=float, default=1.0)
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
     if args.null_budget:
         global _NULL_BUDGET_OVERRIDE
         _NULL_BUDGET_OVERRIDE = int(args.null_budget)
+
+    from events import ALL_METRICS
+    metrics = (tuple(ALL_METRICS) if args.metrics.strip() == "all"
+               else tuple(m.strip() for m in args.metrics.split(",") if m.strip()))
+    unknown = [m for m in metrics if m not in ALL_METRICS]
+    if unknown:
+        ap.error("unknown metric(s) %s; known: %s" % (unknown, list(ALL_METRICS)))
 
     if args.report:
         report(args.out_dir)
@@ -687,7 +716,9 @@ def main():
             # null would be unreproducible across runs and differ between shards.
             seed = int(hashlib.sha256(pdb_id.encode()).hexdigest()[:8], 16)
             rec, obs = run_one(pdb_id, spacing=args.spacing, sigma=args.sigma,
-                               seed=seed, want_dump=dump is not None)
+                               seed=seed, want_dump=dump is not None,
+                               metrics=metrics, combine=args.combine,
+                               norm_p=args.norm_p)
             # Results first, then observations: both are appended only once the model is
             # complete, so the two files always agree about which models are in the run.
             with open(results_path, "a") as fh:
