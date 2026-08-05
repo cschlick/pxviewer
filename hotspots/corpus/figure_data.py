@@ -112,6 +112,51 @@ NULL_HOT_CAP = 20_000     # subsample the hot region past this, for tractable KD
 NULL_ENV_R = 5.0          # a point is "inside the molecular envelope" within this of an atom
 NULL_MIN_INSIDE = 0.90    # a placement is valid if this fraction of it lands in the envelope
 NULL_PLACEMENT_TRIES = 40
+#: Total placement searches allowed per structure. The null costs
+#: NULL_TRIALS x n_components placements, and n_components grows with the number of
+#: concerning residues -- so a badly-strained structure can want hundreds of thousands of KD
+#: queries and grind for hours. Trials are reduced (never below a floor) to stay inside this,
+#: and ``n_null`` is recorded so a noisier null is visible rather than assumed away.
+NULL_PLACEMENT_BUDGET = 4_000
+NULL_MIN_TRIALS = 8
+
+#: Hard per-model wall clock. Some structures in the tail of this corpus ran for hours in a
+#: single stage; without a bound one model can hold a whole shard indefinitely. A model that
+#: hits this is recorded as ``timeout`` -- a stated exclusion, not a silent hole.
+MODEL_TIMEOUT_S = 1200
+
+
+#: Overridable at the command line (``--null-budget``) so a structure the budget throttled
+#: can be recomputed under the flat policy. A corpus figure whose configuration varies between
+#: structures is a corpus figure nobody can restate, so the override exists to *remove* that
+#: variation, not to add a knob.
+_NULL_BUDGET_OVERRIDE = None
+
+
+def _null_budget() -> int:
+    return NULL_PLACEMENT_BUDGET if _NULL_BUDGET_OVERRIDE is None else _NULL_BUDGET_OVERRIDE
+
+
+class _Timeout(Exception):
+    """A model exceeded MODEL_TIMEOUT_S."""
+
+
+def _arm_timeout(seconds: int):
+    """Arm (or with 0, disarm) the per-model wall clock.
+
+    SIGALRM is delivered between Python bytecodes, so this bounds Python-level work -- which
+    is where the pathological cost sat (the figure C null's placement loop). It cannot
+    interrupt a single long call inside numpy or scipy C code; such a call would overrun and
+    the alarm would fire when it returns. A hard bound would need a subprocess per model,
+    which is not worth its cost for the tail this catches.
+    """
+    import signal
+
+    if not hasattr(signal, "SIGALRM"):
+        return
+    if seconds:
+        signal.signal(signal.SIGALRM, lambda *_a: (_ for _ in ()).throw(_Timeout()))
+    signal.alarm(int(seconds))
 
 
 def model_path(pdb_id: str) -> str:
@@ -217,7 +262,9 @@ def figure_b(field, shared, sites, heavy, metric) -> dict:
     hot = hot_voxel_xyz(field)
     if not idx or not len(hot):
         return {"n_hot_voxels": int(len(hot)), "n_target_atoms": len(idx), "hist": None}
-    d, _ = cKDTree(sites[idx]).query(hot, k=1)
+    # workers=-1: this query runs over every hot voxel (millions on a large
+    # structure) and is otherwise single-threaded for no reason.
+    d, _ = cKDTree(sites[idx]).query(hot, k=1, workers=-1)
     counts, _ = np.histogram(d, bins=B_EDGES)
     return {
         "n_hot_voxels": int(len(hot)),
@@ -289,11 +336,20 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
 
     labels, n_comp = label(field.data >= HOT)
     origin = np.asarray(field.origin, dtype=float)
+    # Group the voxels by label in ONE pass. The obvious loop -- argwhere(labels == k) for
+    # each k -- rescans the whole grid per component, i.e. O(n_components x n_voxels); on a
+    # structure with hundreds of blobs on a 12M-voxel grid that is billions of comparisons
+    # and it burned over two CPU-hours on a single model before this was caught.
+    vox = np.argwhere(labels > 0)
     comps = []
-    for idx in np.array_split(np.arange(1, n_comp + 1), 1)[0]:
-        vox = np.argwhere(labels == idx)
-        if vox.size:
-            comps.append(vox.astype(float) * field.spacing + origin)
+    if vox.size:
+        lab = labels[vox[:, 0], vox[:, 1], vox[:, 2]]
+        order = np.argsort(lab, kind="stable")
+        vox, lab = vox[order], lab[order]
+        starts = np.searchsorted(lab, np.arange(1, n_comp + 1), side="left")
+        ends = np.searchsorted(lab, np.arange(1, n_comp + 1), side="right")
+        comps = [vox[s:e].astype(float) * field.spacing + origin
+                 for s, e in zip(starts, ends) if e > s]
     if not comps:
         return {"n_hot_voxels": int(len(hot)), "enrichment": None, "reason": "no components"}
     total = sum(len(c) for c in comps)
@@ -315,8 +371,10 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
     env = cKDTree(sites)
     centred = [c - c.mean(axis=0) for c in comps]
 
+    trials = max(NULL_MIN_TRIALS,
+                 min(NULL_TRIALS, _null_budget() // max(1, len(comps))))
     null_rates, inside_fracs = [], []
-    for _ in range(NULL_TRIALS):
+    for _ in range(trials):
         placed = []
         for shape in centred:
             best, best_frac = None, -1.0
@@ -348,6 +406,7 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
         "enrichment": (observed_rate / base) if (base > 0 and observed_rate is not None)
                       else None,
         "n_null": len(null_rates),
+        "null_trials_requested": trials,
     }
     if null_rates and base > 0:
         nulls = np.array(null_rates) / base
@@ -372,6 +431,7 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
     started = time.time()
     obs: list = []
     rec = {"id": pdb_id, "model": path}
+    _arm_timeout(MODEL_TIMEOUT_S)
     try:
         waited, avail = wait_for_memory()
         if waited:
@@ -465,9 +525,13 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True):
             obs = _observation_lines(pdb_id, shared, shared_clash, fields,
                                      sites, heavy, clash_sites, clash_heavy)
         rec["status"] = "ok"
+    except _Timeout:
+        rec.update(status="timeout", reason=f"exceeded {MODEL_TIMEOUT_S}s")
     except Exception as exc:
         rec.update(status="failed", error=f"{type(exc).__name__}: {exc}",
                    traceback=traceback.format_exc()[-1500:])
+    finally:
+        _arm_timeout(0)
     rec["seconds"] = round(time.time() - started, 1)
     return rec, obs
 
@@ -501,9 +565,24 @@ def _observation_lines(pdb_id, shared, shared_clash, fields,
 
 
 def _paths(out_dir, shard):
+    """Results are appended across restarts; observations are NOT.
+
+    A gzip stream that is appended to across process restarts is a trap: SIGKILL (OOM, or a
+    deliberate stop) loses the compressor's buffered tail, leaving a truncated member, and
+    the next process appends a fresh member after it. The result decompresses up to the
+    break and then raises ``Error -3 while decompressing data`` -- every byte after the first
+    kill is unreadable. That cost the observations for 366 structures here. Writing per-model
+    was not enough: the loss is in zlib's buffer, not in line boundaries.
+
+    So each *process* owns its own observations file, named with its pid and start time, and
+    never appends to a stream another process opened. A killed process can still truncate its
+    own tail -- losing at most the last model -- but it can no longer corrupt anyone else's,
+    and every other file stays independently readable. Reduction globs them all.
+    """
     tag = "" if shard is None else f".shard{shard[0]}of{shard[1]}"
+    stamp = f"{os.getpid()}_{int(time.time())}"
     return (os.path.join(out_dir, f"results{tag}.jsonl"),
-            os.path.join(out_dir, f"observations{tag}.jsonl.gz"))
+            os.path.join(out_dir, f"observations{tag}.{stamp}.jsonl.gz"))
 
 
 def report(out_dir):
@@ -552,8 +631,14 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--no-dump", action="store_true",
                     help="skip the per-observation dump (summaries only)")
+    ap.add_argument("--null-budget", type=int, metavar="N",
+                    help="override the figure C null placement budget; a large value "
+                         "forces the flat NULL_TRIALS policy")
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
+    if args.null_budget:
+        global _NULL_BUDGET_OVERRIDE
+        _NULL_BUDGET_OVERRIDE = int(args.null_budget)
 
     if args.report:
         report(args.out_dir)

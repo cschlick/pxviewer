@@ -135,3 +135,67 @@ base rate — "clash outliers are 0.365% of atoms overall" — reproduces exactl
 So the 6.1× headline rests on **5 clash events in one structure**, from the path `../README.md`
 calls "a labeled preview, not the calibrated default". The corpus run uses the calibrated path
 and reports a smaller enrichment against a much larger base rate. The anchor needs restating.
+
+## Results — 2,000-structure run, 2026-08-03
+
+`sample_2000_seed20260802.txt`, 1.0 Å output pixel, calibrated (hydrogen) clash path.
+69.0 h of compute. Data: `output/figures2000/figures.json`.
+
+**Corpus.** 2,000 attempted → **1,877 ok**, 88 failed, 35 skipped for size. Every structure
+has a terminal outcome; nothing was left deferred.
+
+| failure | n | what it is |
+|---|---:|---|
+| reduce2/probe2 hydrogen | 72 | ligands and modified nucleotides reduce2 will not protonate |
+| improper rotation matrix | 13 | deposited symmetry cctbx rejects |
+| other cctbx `Sorry` | 2 | invalid atom radius; missing bonding information |
+| `AttributeError` | 1 | upstream bug — see [UPSTREAM_BUGS.md](UPSTREAM_BUGS.md) |
+
+All are data properties or upstream defects, not defects here. The 35 skips are the size cap.
+
+### Figure A — the operating point
+
+| channel | structures | pooled recall | pooled precision | recall = 1.0 |
+|---|---:|---:|---:|---:|
+| rama | 806 | **1.0000** | 0.285 | 100.0% |
+| rota | 1,613 | **0.9999** | 0.506 | 99.6% |
+| clash | 1,866 | 0.6144 | 0.432 | 0.1% |
+
+Ramachandran loses **nothing** across the corpus; rotamer loses one atom in ~10,000.
+
+**Clash is a calibration artefact, not a field failure** — its 0.40 Å community cut maps to
+concern exactly 0.50, the display threshold itself, so roughly 40% of flagged clashes sit
+just under visibility by construction. See the finding above.
+
+### Figure B — spatial error (the figure that carries the section)
+
+Distance from every hot voxel to the nearest *concerning* atom, pooled over **22.0 M** voxels:
+
+| channel | voxels | median | p90 | p99 | worst structure max |
+|---|---:|---:|---:|---:|---:|
+| rama | 1,072,178 | 1.48 Å | 2.28 Å | 2.88 Å | 3.94 Å |
+| rota | 4,442,038 | 1.48 Å | 2.17 Å | 2.78 Å | 4.87 Å |
+| clash | 16,532,612 | 1.88 Å | 2.88 Å | 3.73 Å | 7.80 Å |
+
+Every channel's p99 is under 3.8 Å — inside a residue. The claim "when the overlay marks a
+place, the thing it is marking is within about a residue" holds at corpus scale, and the 1TEC
+anchor was not optimistic.
+
+### Figure C — held-out enrichment against a spatially matched null
+
+1,324 structures usable, 552 excluded by the stated rule (≥50 atoms in the held-out region,
+≥1 clash outlier, ≥10 null placements).
+
+| | |
+|---|---:|
+| observed enrichment, median | **1.92×** |
+| **null enrichment, median** | **0.98×** |
+| observed / null | 1.97× |
+| enriched above 1.0 | 91.3% of structures |
+| p < 0.05 | 62.6% of structures |
+
+**The null landing on 0.98× is the result to trust.** A spatially matched null must come out
+at 1.0 if it is built correctly; that it does is the evidence the 1.92× is not the free
+co-localization enrichment `FIGURES.md` warns about. Keep the claim in the language of
+navigation — regions the overlay highlights contain more than the one thing that highlighted
+them — and do not fit anything to it.

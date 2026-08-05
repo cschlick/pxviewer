@@ -42,12 +42,40 @@ C_MIN_BASE_CLASHES = 1
 MAX_ATOMS = 50_000
 
 
+#: Preference when one structure has several records. A deferral is provisional -- the model
+#: is retried later -- so a structure can legitimately appear as ``deferred`` and again with
+#: its real outcome. Reducing without collapsing these would count such structures twice and
+#: let a superseded deferral sit in the corpus totals as if it were a result.
+_STATUS_RANK = {"ok": 0, "failed": 1, "timeout": 2, "skipped": 3, "deferred": 4}
+
+
+def _preference(rec):
+    """Sort key for choosing between several records of the same structure.
+
+    Status first. Then, among equally-terminal records, **more figure C null placements
+    wins** — a structure recomputed under the flat null policy supersedes one the placement
+    budget throttled, so the corpus converges on a single configuration instead of keeping
+    whichever record happened to be read first. Making this explicit matters: the alternative
+    is depending on filename sort order, which is invisible and breaks the moment a file is
+    renamed.
+    """
+    n_null = ((rec.get("C") or {}).get("n_null") or 0) if rec.get("status") == "ok" else 0
+    return (_STATUS_RANK.get(rec["status"], 9), -n_null)
+
+
 def load(out_dir):
-    recs = []
+    """Every record, collapsed to one per structure (see :func:`_preference`)."""
+    best = {}
     for p in sorted(glob.glob(os.path.join(out_dir, "results*.jsonl"))):
         with open(p) as fh:
-            recs += [json.loads(l) for l in fh if l.strip()]
-    return recs
+            for line in fh:
+                if not line.strip():
+                    continue
+                r = json.loads(line)
+                prev = best.get(r["id"])
+                if prev is None or _preference(r) < _preference(prev):
+                    best[r["id"]] = r
+    return list(best.values())
 
 
 def _quantiles_from_hist(counts, edges):
