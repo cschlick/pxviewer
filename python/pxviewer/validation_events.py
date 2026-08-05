@@ -259,6 +259,18 @@ def extract_rotamer(hierarchy: Any, *, index=None, rotalyze_result=None
         rotalyze_result = rotalyze.rotalyze(pdb_hierarchy=hierarchy, outliers_only=False)
     index = residue_atom_index(hierarchy) if index is None else index
     names, xyz = _names(hierarchy), _xyz(hierarchy)
+    # MAINCHAIN excludes the backbone *by name*, and it lists only heavy atoms — so the
+    # backbone amide `H` and alpha `HA` are not in it and used to survive the filter, putting
+    # a rotamer result on the residue's own backbone in direct contradiction of the rule this
+    # function's docstring states. A hydrogen belongs wherever its parent heavy atom belongs,
+    # so judge it by the parent rather than by its own name.
+    parents = hydrogen_parents(hierarchy)
+
+    def _is_sidechain(i: int) -> bool:
+        if names[i] in MAINCHAIN:
+            return False
+        parent = parents.get(i)
+        return parent is None or names[parent] not in MAINCHAIN
 
     events = []
     for t in rotalyze_result.results:
@@ -266,7 +278,7 @@ def extract_rotamer(hierarchy: Any, *, index=None, rotalyze_result=None
             continue
         key = _key_of(t)
         picked = [i for i in atoms_of(index, key, getattr(t, "altloc", ""))
-                  if names[i] not in MAINCHAIN]
+                  if _is_sidechain(i)]
         events.append(ValidationEvent(
             metric="rota", value=float(t.score), units="percent",
             outlier=bool(t.is_outlier()), residue=key,
