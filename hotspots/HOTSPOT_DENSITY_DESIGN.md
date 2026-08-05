@@ -112,10 +112,33 @@ scale, separate name — `hotspot_density`, units *outlier-equivalents*:
 
 ```text
 0.0   transparent
-1.0   knee — as much trouble here as one flagged outlier
-2.0   strong
-3.0   display ceiling
+1.0   knee       — as much trouble here as one flagged outlier
+2.5   saturated  — more than any single residue can account for
 ```
+
+**Two anchors, both inherited, answering different questions.**
+
+*Knee at 1.0.* Visibility starts where a neighbourhood holds one flagged outlier's worth of
+trouble — so **a severe lone outlier still reaches the map, deliberately.** Multi-residue
+accumulation is *one* argument for having a field, not its entrance requirement; a "where to
+look" tool that hid the most obvious problems would be perverse. Measured over 67,292 residues
+in 46 structures: 18.3% carry any concern, and **4.8% of all residues reach 1.0 unaided** —
+the navigation budget this implies.
+
+*Saturation at 2.5.* Set at the level a **single residue essentially cannot reach alone**, so
+full intensity marks precisely the phenomenon only this field can show. Measured as per-residue
+total (max within family, summed across families) over 12,287 concern-carrying residues:
+median 0.505, p99 1.879, p99.9 2.253, and **8 of 12,287 (0.065%) reach 2.5 unaided**. It also
+lands near p93 of the measured envelope density, so a criterion derived from single-residue
+exclusion and one derived from "how much can a user visit" agree, having come from different
+data.
+
+The shelf in that distribution at exactly 1.0 — p90 1.000, p95 1.022 — is the cut-at-1.0
+calibration working as designed: a quarter of concern-carrying residues have one flagged
+outlier and nothing else, so they land on 1.0 precisely.
+
+**Re-measure both anchors if the calibration or the family taxonomy changes.** They are
+consequences of those, not independent of them, and both changed twice during development.
 
 Absolute, fixed, identical in every structure — the same rule the concern contract already
 states. Component fields are retained per family so any bright region can be attributed.

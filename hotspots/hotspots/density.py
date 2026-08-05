@@ -35,10 +35,27 @@ from field import Field, _splat, compute_field
 #: Neighbourhood radius, angstrom. See the module docstring before changing it.
 DEFAULT_RADIUS = 6.0
 
-#: Display knee: as much trouble here as one flagged outlier.
+#: Display knee: as much trouble here as one flagged outlier. Visibility starts here, so a
+#: severe lone outlier still reaches the map -- deliberately. Multi-residue accumulation is
+#: *one* argument for having a field, not its entrance requirement, and a "where to look" tool
+#: that hid the most obvious problems would be perverse.
+#:
+#: Measured over 67,292 residues in 46 structures: 18.3% carry any concern at all, and 4.8% of
+#: all residues reach 1.0 on their own. That is the navigation budget this knee implies.
 KNEE = 1.0
-#: Display ceiling for the absolute domain [0, CEILING]. Not a clip on the data.
-CEILING = 3.0
+
+#: Full intensity. Set at the level a *single residue* essentially cannot reach alone, so
+#: saturation marks exactly the phenomenon only this field can show: accumulation across
+#: residues. Measured as the per-residue total (max within each family, summed across
+#: families) over 12,287 concern-carrying residues -- median 0.505, p99 1.879, p99.9 2.253,
+#: and only 8 residues of 12,287 (0.065%) reach 2.5 unaided.
+#:
+#: So the two anchors answer different questions and are both inherited rather than chosen:
+#: 1.0 = "as much trouble as one flagged outlier" (visible), 2.5 = "more than any one residue
+#: can account for" (saturated). Re-measure both if the cut-at-1.0 calibration or the family
+#: taxonomy changes -- they are consequences of those, not independent of them.
+SINGLE_RESIDUE_CEILING = 2.5
+CEILING = SINGLE_RESIDUE_CEILING
 
 
 def epanechnikov_stencil(radius: float, spacing: float) -> np.ndarray:
