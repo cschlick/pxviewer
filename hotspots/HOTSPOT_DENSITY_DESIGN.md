@@ -321,3 +321,71 @@ The packing question is answered and is **not** a problem: the 0.714 correlation
 clash (rho 0.697) while conformation channels barely track packing (rama 0.139, rota 0.172) —
 real physics, since a buried atom has more neighbours to collide with. So the existing
 envelope-matched null in figure C is adequate, and no packing-matched null is needed.
+
+---
+
+## Closed: density at its own knee, and what it actually adds (2026-08-05)
+
+Two tests were owed before the head-to-head could be called. Both were run.
+
+### 1. Density at its own operating point
+
+The earlier comparison ran both fields at 0.5, which was concern's knee, not density's.
+
+| | density @ 0.5 | density @ 1.0 | concern @ 0.5 |
+|---|---:|---:|---:|
+| A recall rama | 1.0000 | **0.6404** | 1.0000 |
+| A recall rota | 1.0000 | **0.3601** | 1.0000 |
+| B median rama | 2.33 Å | 1.77 Å | **1.38 Å** |
+| C obs/null | 1.57× | **2.09×** | 2.07× |
+
+At its own knee the density field **ties on figure C** (2.09× against 2.07×, p<0.05 in 79.3%
+against 78.8%) and improves on B — and **loses 64% of flagged rotamer outliers.**
+
+The mechanism is worse than a threshold-on-the-peak coin flip. A rotamer event spreads severity
+over ~12 side-chain atoms and is normalized to peak at 1.0 *at one atom*, so the peripheral
+atoms read below 1.0 and count as missed. Multi-atom events lose their edges at a threshold
+sitting on their peak.
+
+**This is a dominance argument, not a confounded one.** Concern at 0.5 achieves recall 1.0000,
+B 1.38 Å and C 2.07× *simultaneously*. Density would need a threshold low enough for full
+recall (≤0.5, since events peak at exactly 1.0) and high enough for tight B and undiluted C.
+Those are contradictory. Unlike the first comparison, this rests on recall — the one guarantee
+the field owes — rather than on precision (confounded) or figure B (which largely measures
+kernel width).
+
+*Caveat: two points, not a curve. An intermediate knee was not measured.*
+
+### 2. What density adds, measured directly
+
+Both fields on the same grid, clash held out of both, voxels partitioned:
+
+| partition | share of union | obs/null | p<0.05 |
+|---|---:|---:|---:|
+| **novel** — density-hot, concern-cold | **55.9%** | **1.17×** | 29% |
+| shared | 36.1% | **1.44×** | 33% |
+| **concern_only** — what density loses | 8.0% | **1.24×** | 26% |
+
+**What density adds is less informative than what it discards.** Its novel regions sit barely
+above the null while carrying 56% of the union's volume; the signal concentrates where both
+fields agree. This partition removes the volume confound that made the first head-to-head
+objectionable — each set is measured on its own terms.
+
+### Verdict
+
+**The concern field stays. The density field is dropped.** Not because it was blurrier by
+construction, but because at every operating point something essential is worse, and the volume
+it uniquely contributes is near-null.
+
+`density.py`, `packing_bias.py` and `novel_regions.py` are kept, unwired from the shipping
+path, so this is not re-derived from scratch in six months.
+
+### What this does NOT settle
+
+Everything above compares two *field* constructions. It says nothing about whether a field of
+any kind beats MolProbity markers — that question is perceptual, it is unmeasured, and the
+numerical work here cannot reach it. See the note on alpha compositing in FIGURES.md item 6:
+a translucent volume integrates faint signal along a view ray and is visible through occluding
+geometry, and discrete markers do neither. **Every accumulation test in this document asked
+whether a voxel crosses a threshold; a volume render never asks that question.** That claim is
+the field's remaining justification and it has not been tested.

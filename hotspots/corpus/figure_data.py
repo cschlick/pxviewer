@@ -141,6 +141,17 @@ def _null_budget() -> int:
     return NULL_PLACEMENT_BUDGET if _NULL_BUDGET_OVERRIDE is None else _NULL_BUDGET_OVERRIDE
 
 
+#: Overridable at the command line (``--hot-threshold``). Exists so a field can be measured at
+#: its *own* operating point rather than at another field's: the density construction's natural
+#: knee is 1.0 while concern's is 0.5, and comparing them at one shared number prices only one
+#: point on each curve.
+_HOT_OVERRIDE = None
+
+
+def _hot() -> float:
+    return HOT if _HOT_OVERRIDE is None else _HOT_OVERRIDE
+
+
 class _Timeout(Exception):
     """A model exceeded MODEL_TIMEOUT_S."""
 
@@ -217,9 +228,9 @@ def heavy_mask(hierarchy) -> np.ndarray:
     return np.array([e not in ("H", "D") for e in elements], dtype=bool)
 
 
-def hot_voxel_xyz(field, threshold=HOT) -> np.ndarray:
+def hot_voxel_xyz(field, threshold=None) -> np.ndarray:
     """Cartesian centres of every voxel at or above the display threshold."""
-    idx = np.argwhere(field.data >= threshold)
+    idx = np.argwhere(field.data >= (_hot() if threshold is None else threshold))
     if not idx.size:
         return np.empty((0, 3))
     return idx.astype(float) * field.spacing + np.asarray(field.origin, dtype=float)
@@ -237,7 +248,7 @@ def figure_a(shared, sampled, heavy, metric) -> dict:
     for i in ve.outlier_atoms(shared, metric=metric):
         flagged[i] = True
     flagged &= heavy
-    marked = (sampled >= HOT) & heavy
+    marked = (sampled >= _hot()) & heavy
     n_flagged, n_marked = int(flagged.sum()), int(marked.sum())
     hit = int((flagged & marked).sum())
     return {
@@ -349,7 +360,7 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
     # blobs sit, which is precisely the co-localization the null has to control for.
     from scipy.ndimage import label
 
-    labels, n_comp = label(field.data >= HOT)
+    labels, n_comp = label(field.data >= _hot())
     origin = np.asarray(field.origin, dtype=float)
     # Group the voxels by label in ONE pass. The obvious loop -- argwhere(labels == k) for
     # each k -- rescans the whole grid per component, i.e. O(n_components x n_voxels); on a
@@ -414,7 +425,7 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
         "null_inside_fraction_mean": (float(np.mean(inside_fracs))
                                       if inside_fracs else None),
         "n_atoms_in_region": n_in,
-        "n_atoms_hot_by_sample": int((sampled >= HOT).sum()),
+        "n_atoms_hot_by_sample": int((sampled >= _hot()).sum()),
         "n_heavy": int(heavy_idx.size),
         "base_rate": base,
         "region_rate": observed_rate,
@@ -678,6 +689,8 @@ def main():
     ap.add_argument("--combine", choices=("max", "family"), default="max",
                     help="cross-metric combination (see concern.combine_arrays)")
     ap.add_argument("--norm-p", type=float, default=1.0)
+    ap.add_argument("--hot-threshold", type=float, default=None,
+                    help="operating point; defaults to 0.5 (half the community cut)")
     ap.add_argument("--field", choices=("concern", "density"), default="concern",
                     help="which field construction to measure")
     ap.add_argument("--radius", type=float, default=6.0,
@@ -687,6 +700,9 @@ def main():
     if args.null_budget:
         global _NULL_BUDGET_OVERRIDE
         _NULL_BUDGET_OVERRIDE = int(args.null_budget)
+    if args.hot_threshold is not None:
+        global _HOT_OVERRIDE
+        _HOT_OVERRIDE = float(args.hot_threshold)
 
     from events import ALL_METRICS
     metrics = (tuple(ALL_METRICS) if args.metrics.strip() == "all"
