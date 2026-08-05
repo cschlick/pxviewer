@@ -201,3 +201,48 @@ it rather than ship both.
 
 Step 4 is the gate. If the hotspot field's regions are no more informative than the locator's,
 this is two fields for one field's worth of information and should not ship.
+
+---
+
+## Measured: the packing-bias gate (step 2), 46 structures, 2026-08-05
+
+`corpus/packing_bias.py`. The control is the identical kernel over heavy atoms, weight 1.
+
+| | |
+|---|---:|
+| Spearman(intensity, packing) | **0.714** (p10 0.654, p90 0.781) |
+| atom density, hot set vs envelope | **1.55×** (p90 1.99×) |
+| after per-atom normalization, Spearman | **0.310** |
+| hot-set overlap between the two definitions | 66.5% |
+
+**Two findings, one of them a design error.**
+
+**1. The knee was in the wrong place, and that is my error.** It was anchored at "one flagged
+outlier's worth" without checking what a typical 6 Å neighbourhood already holds. Measured
+distribution inside the envelope: **median 0.55, p95 2.89, p99 4.54, max 8.34**. A knee at 1.0
+marks **33% of the envelope** — a third of the protein, which is not a hotspot map. The *unit*
+is sound and interpretable; as a *threshold* 1.0 is meaningless and belongs near p95, ~3.0.
+
+**2. Packing dependence is real and only half-removable.** Per-atom normalization cuts
+Spearman from 0.714 to 0.310 — a large reduction, not an elimination. Hot regions are
+systematically 1.55× denser than the envelope.
+
+### What this does not yet distinguish
+
+Some correlation with packing is *legitimate*: a buried core genuinely has more clashes and
+more strain, so trouble really is denser there. The residual 0.310 could be real signal or
+residual artifact, and the aggregate number cannot tell them apart.
+
+**The diagnostic that would:** run the correlation channel by channel. Clash should track
+packing (a buried atom has more neighbours to clash with — real), while Ramachandran and
+rotamer should not (backbone and side-chain conformation are not obviously a function of local
+density). If the residual is carried by clash it is signal; if rama and rota correlate with
+packing just as strongly, it is artifact and the field is measuring the wrong thing.
+
+### Status
+
+**Not resolved, and step 4 is still the gate.** Two non-inherited constants now exist —
+bandwidth 6 Å and a knee near 3.0 — plus an unsettled choice between per-volume and per-atom.
+That is exactly the parameter accumulation this project exists to avoid, so no more should be
+added before the falsification test says whether the field finds anything the locator does not.
+If step 4 fails, none of these choices matter.
