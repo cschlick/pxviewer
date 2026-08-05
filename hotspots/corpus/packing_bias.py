@@ -41,7 +41,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hotspots"))
 sys.path.insert(0, HERE)
 
 from concern import molprobity_concern_events  # noqa: E402
-from density import DEFAULT_RADIUS, KNEE, atom_density, build_density_fields  # noqa: E402
+from density import (DEFAULT_RADIUS, KNEE, atom_density,  # noqa: E402
+                     build_density_fields, compute_density)
 from events import ALL_METRICS, extract_all, load_model  # noqa: E402
 from figure_data import MAX_ATOMS, MAX_VOXELS, heavy_mask, model_path  # noqa: E402
 
@@ -114,9 +115,45 @@ def run_one(pdb_id, spacing=SPACING, radius=DEFAULT_RADIUS):
         rho_pa = (spearmanr(per_atom_scaled, a).correlation
                   if per_atom_scaled.size > 10 else float("nan"))
 
+        # Per channel, because the aggregate cannot tell real physics from artifact. Clash
+        # SHOULD track packing -- a buried atom has more neighbours to collide with -- while
+        # rama and rota should not, since backbone and side-chain conformation are not a
+        # function of local density. If every channel correlates alike, the field is measuring
+        # how many atoms are nearby regardless of what is deposited.
+        per_channel = {}
+        all_events = [e for evs in by_metric.values() for e in evs]
+        for metric, evs in by_metric.items():
+            f = compute_density(evs, spacing=spacing, radius=radius, grid_events=all_events)
+            if f is None or f.data.shape != dens.data.shape:
+                continue
+            v = f.data[env]
+            if v.max() <= 0:
+                continue
+            per_channel[metric] = float(spearmanr(v, a).correlation)
+
+        # Counting control: the same kernel with every event weighted 1.0. If severity-weighted
+        # intensity correlates no more strongly than a plain event count, the severity is
+        # adding nothing over "how many events are near here".
+        counts = compute_density(all_events, spacing=spacing, radius=radius,
+                                 grid_events=all_events, weight=lambda _e: 1.0)
+        rho_count = None
+        mean_sev_rho = None
+        if counts is not None and counts.data.shape == dens.data.shape:
+            c = counts.data[env]
+            rho_count = float(spearmanr(c, a).correlation)
+            # Mean severity per event: does a hot region hold *worse* events, or merely more?
+            with np.errstate(invalid="ignore", divide="ignore"):
+                mean_sev = np.where(c > 1e-9, d / np.maximum(c, 1e-9), 0.0)
+            m = c > 0.1
+            if m.sum() > 10:
+                mean_sev_rho = float(spearmanr(mean_sev[m], a[m]).correlation)
+
         rec.update(
             status="ok",
             n_env=int(env.sum()),
+            per_channel_rho=per_channel,
+            spearman_count_vs_packing=rho_count,
+            spearman_meansev_vs_packing=mean_sev_rho,
             spearman_density_vs_packing=float(rho) if rho == rho else None,
             spearman_peratom_vs_packing=float(rho_pa) if rho_pa == rho_pa else None,
             peratom_median_env=float(np.median(per_atom_scaled)),
@@ -187,6 +224,41 @@ def report(out_dir):
         print("   -> %s" % ("per-atom REMOVES the packing dependence"
                             if abs(np.median(rho_pa)) < 0.3 else
                             "per-atom does NOT remove it; the confound is not packing alone"))
+
+    print("\n2b. PER CHANNEL: is the correlation real physics or artifact?")
+    print("    clash should track packing (buried atoms have more neighbours to hit);")
+    print("    rama/rota should not (conformation is not a function of local density).")
+    chans = {}
+    for r in ok:
+        for m, v in (r.get("per_channel_rho") or {}).items():
+            chans.setdefault(m, []).append(v)
+    for m in sorted(chans, key=lambda k: -np.median(chans[k])):
+        vals = np.array(chans[m])
+        print("      %-9s rho median %6.3f   (n=%d)" % (m, np.median(vals), len(vals)))
+    if chans:
+        conf = [np.median(chans[m]) for m in ("rama", "rota") if m in chans]
+        cl = np.median(chans["clash"]) if "clash" in chans else float("nan")
+        if conf and cl == cl:
+            gap = cl - max(conf)
+            print("    clash minus worst-of(rama,rota) = %+.3f" % gap)
+            print("    -> %s" % ("SIGNAL: clash tracks packing and conformation does not"
+                                 if gap > 0.25 else
+                                 "ARTIFACT-LIKE: conformation channels track packing nearly as"
+                                 " strongly as clash"))
+    rc = np.array([r["spearman_count_vs_packing"] for r in ok
+                   if r.get("spearman_count_vs_packing") is not None])
+    ms = np.array([r["spearman_meansev_vs_packing"] for r in ok
+                   if r.get("spearman_meansev_vs_packing") is not None])
+    if rc.size:
+        print("\n    event-count density vs packing : rho median %.3f" % np.median(rc))
+        print("    severity  density vs packing   : rho median %.3f" % np.median(rho))
+        print("    -> severity %s beyond counting events" % (
+            "adds nothing" if abs(np.median(rc) - np.median(rho)) < 0.05 else "differs"))
+    if ms.size:
+        print("    MEAN severity per event vs packing: rho median %.3f" % np.median(ms))
+        print("    -> hot regions hold %s" % (
+            "WORSE events, not merely more" if np.median(ms) > 0.15 else
+            "merely MORE events, not worse ones"))
 
     ov = np.array([r["overlap_hot_and_peratom"] for r in ok])
     hf = np.array([100 * r["hot_fraction"] for r in ok])

@@ -269,3 +269,55 @@ bandwidth 6 Å and a knee near 3.0 — plus an unsettled choice between per-volu
 That is exactly the parameter accumulation this project exists to avoid, so no more should be
 added before the falsification test says whether the field finds anything the locator does not.
 If step 4 fails, none of these choices matter.
+
+---
+
+## Head-to-head: the density field loses (2026-08-05)
+
+Both fields through **identical figure A/B/C code**, same 46 structures, same events, same
+calibration, same 0.5 threshold — so only the accumulation differs.
+
+| | concern (existing) | density (proposed) |
+|---|---|---|
+| **A** recall rama / rota / clash | 1.0000 / 1.0000 / 0.9999 | 1.0000 / 1.0000 / 1.0000 |
+| **A** precision | 0.255 / 0.431 / 0.204 | 0.116 / 0.170 / 0.100 |
+| **B** median distance | 1.38 / 1.43 / 1.93 Å | 2.33 / 2.43 / 2.58 Å |
+| **B** p99 | 2.78 / 2.68 / 3.73 Å | 4.08 / 4.12 / 4.83 Å |
+| **C** observed vs null | 2.06× vs 0.99× = **2.07×** | 1.65× vs 1.04× = **1.57×** |
+| **C** p < 0.05 | **78.8%** of structures | 69.0% |
+
+Recall ties. The density field is **worse on every other axis**: half the precision, ~1.7×
+the spatial error, and — the one that decides it — **less informative about the held-out
+channel**, 1.57× against the concern field's 2.07×.
+
+The mechanism is dilution, and the packing diagnostic named it independently: **mean severity
+per event correlates −0.047 with packing**, so a density-hot region is one holding *more*
+events, not *worse* ones. Spreading severity over a 6 Å neighbourhood buys recall that was
+already 1.0 and pays for it in everything else.
+
+The only axis where density wins is that figure C is computable on more structures (42 of 46
+against 33), purely because its regions are larger and more of them clear the ≥50-atom
+inclusion rule. That is a property of region size, not of quality.
+
+### Decision: one field, and it is the existing one
+
+The density field is not better as a single field and there will not be a second one. The
+accumulation it was built to provide is real but small (measured earlier: no gain over `max`),
+and it costs precision and informativeness that are measured and larger.
+
+### The caveat on this comparison
+
+Both fields were run at threshold 0.5. The density field's natural display knee is 1.0, where
+it would mark less volume and likely score better on B and C. It was not run there — because
+that threshold has its own defect: a lone flagged outlier peaks at *exactly* 1.0, so recall
+becomes a coin flip on grid read-back, the same failure the clash calibration had. The density
+field is squeezed between the two: 0.5 dilutes it, 1.0 breaks its recall. Running the 1.0
+variant would close this off properly, and until it is run the comparison is one operating
+point rather than a curve.
+
+### What survives
+
+The packing question is answered and is **not** a problem: the 0.714 correlation is carried by
+clash (rho 0.697) while conformation channels barely track packing (rama 0.139, rota 0.172) —
+real physics, since a buried atom has more neighbours to collide with. So the existing
+envelope-matched null in figure C is adequate, and no packing-matched null is needed.

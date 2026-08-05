@@ -46,6 +46,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hotspots"))
 
 from concern import build_concern_fields, molprobity_concern_events  # noqa: E402
+from density import build_density_fields  # noqa: E402
 from events import _load_shared, extract_all, load_model  # noqa: E402
 
 ve = _load_shared()
@@ -435,7 +436,8 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
 
 
 def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
-            metrics=("rama", "rota", "clash"), combine="max", norm_p=1.0):
+            metrics=("rama", "rota", "clash"), combine="max", norm_p=1.0,
+            field="concern", radius=6.0):
     """Returns ``(record, observation_lines)``.
 
     The lines are *returned* rather than streamed so the caller can append them only after
@@ -507,8 +509,15 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
             rec["seconds"] = round(time.time() - started, 1)
             return rec, obs
 
-        fields = build_concern_fields(by_metric, spacing=spacing, sigma=sigma,
-                                      combine=combine, p=norm_p)
+        # Both field constructions go through identical A/B/C code below, so the comparison
+        # is of the fields and not of two analyses. The threshold is 0.5 for both: in each, a
+        # flagged outlier peaks at 1.0, so "half the community cut" means the same thing. It
+        # also avoids the failure the clash calibration just taught us -- a threshold sitting
+        # exactly on an event's peak makes recall a coin flip.
+        fields = (build_concern_fields(by_metric, spacing=spacing, sigma=sigma,
+                                       combine=combine, p=norm_p) if field == "concern"
+                  else build_density_fields(by_metric, spacing=spacing, radius=radius))
+        rec["field"] = field
         rec["grid"] = list(fields["combined"].data.shape)
 
         sites = np.asarray(hierarchy.atoms().extract_xyz()).reshape(-1, 3)
@@ -518,23 +527,36 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
         clash_heavy = heavy_mask(ch)
 
         rec["A"], rec["B"] = {}, {}
+        # The density construction keys its outputs by family, so a per-channel figure needs
+        # its own single-channel field rather than the family one it happens to sit in.
+        def _channel_field(metric):
+            if field == "concern":
+                return fields.get(metric)
+            single = build_density_fields({metric: by_metric[metric]}, spacing=spacing,
+                                          radius=radius, grid_events=all_ev)
+            return single.get("combined")
+        all_ev = [e for evs in by_metric.values() for e in evs]
         for m in metrics:
-            field = fields.get(m)
-            if field is None:
+            if m not in by_metric:
+                continue
+            fld = _channel_field(m)
+            if fld is None:
                 continue
             if m == "clash":
-                s = sample_field(field, clash_sites)
-                rec["A"][m] = figure_a(shared_clash, s, clash_heavy, m)
-                rec["B"][m] = figure_b(field, shared_clash, clash_sites, clash_heavy, m)
+                sv = sample_field(fld, clash_sites)
+                rec["A"][m] = figure_a(shared_clash, sv, clash_heavy, m)
+                rec["B"][m] = figure_b(fld, shared_clash, clash_sites, clash_heavy, m)
             else:
-                s = sample_field(field, sites)
-                rec["A"][m] = figure_a(shared, s, heavy, m)
-                rec["B"][m] = figure_b(field, shared, sites, heavy, m)
+                sv = sample_field(fld, sites)
+                rec["A"][m] = figure_a(shared, sv, heavy, m)
+                rec["B"][m] = figure_b(fld, shared, sites, heavy, m)
 
         # Figure C holds the clash channel out and asks what the geometry-only field finds.
         geom = {m: v for m, v in by_metric.items() if m in ("rama", "rota")}
-        rec["C"] = (figure_c(build_concern_fields(geom, spacing=spacing, sigma=sigma,
-                                                 combine=combine, p=norm_p),
+        rec["C"] = (figure_c((build_concern_fields(geom, spacing=spacing, sigma=sigma,
+                                                  combine=combine, p=norm_p)
+                              if field == "concern" else
+                              build_density_fields(geom, spacing=spacing, radius=radius)),
                              shared_clash, clash_sites, clash_heavy, seed)
                     if geom and shared_clash else None)
 
@@ -656,6 +678,10 @@ def main():
     ap.add_argument("--combine", choices=("max", "family"), default="max",
                     help="cross-metric combination (see concern.combine_arrays)")
     ap.add_argument("--norm-p", type=float, default=1.0)
+    ap.add_argument("--field", choices=("concern", "density"), default="concern",
+                    help="which field construction to measure")
+    ap.add_argument("--radius", type=float, default=6.0,
+                    help="neighbourhood radius for --field density")
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
     if args.null_budget:
@@ -718,7 +744,7 @@ def main():
             rec, obs = run_one(pdb_id, spacing=args.spacing, sigma=args.sigma,
                                seed=seed, want_dump=dump is not None,
                                metrics=metrics, combine=args.combine,
-                               norm_p=args.norm_p)
+                               norm_p=args.norm_p, field=args.field, radius=args.radius)
             # Results first, then observations: both are appended only once the model is
             # complete, so the two files always agree about which models are in the run.
             with open(results_path, "a") as fh:
