@@ -127,4 +127,5 @@ and it removes the most awkward sentence in the methods.
 | 3 | Verify the clash 7.80 Å figure-B max | Only unexplained number in B |
 | 4 | Run figure C with other held-out channels | `FIGURES.md` asks for it; harness makes it cheap |
 | 5 | Recover the 35 size-capped structures | Removes the weakest sentence in the methods |
-| 6 | Read [../AGGREGATION_PROPOSAL.md](../AGGREGATION_PROPOSAL.md) | Cross-metric accumulation — the effect a continuous field can show and an outlier list cannot; subsumes action 1 |
+| 6 | [../AGGREGATION_PROPOSAL.md](../AGGREGATION_PROPOSAL.md) — **tested, hypothesis failed** | Cross-metric accumulation adds nothing; `max` stays. Read the "Measured outcome" section |
+| 7 | [../HOTSPOT_DENSITY_DESIGN.md](../HOTSPOT_DENSITY_DESIGN.md) | The successor design: a second, density-based field that can accumulate across residues. Gate is step 4 |
