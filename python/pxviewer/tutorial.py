@@ -60,7 +60,7 @@ def validation_tutorial() -> Tutorial:
             "MolProbity **validation** flags the parts of a model that look wrong — bad "
             "rotamers, Ramachandran and C-beta outliers, backbone (CaBLAM) problems, odd "
             "cis-peptides. Let's run it on a structure built to trip every check.\n\nOpen it: "
-            "click **Demos** and pick **Thermitase-eglin (1TEC)**.",
+            "click **Get** and pick **Validation (1TEC)**.",
             done=lambda cw: bool(cw._desktop._models),
             target=lambda cw: cw._get_btn,
         ),
@@ -85,9 +85,9 @@ def ligand_fitting_tutorial() -> Tutorial:
     return Tutorial("Fit a ligand into density", [
         Step(
             "Phenix's ligand-fitting tutorial fits a flexible ligand into a difference map. "
-            "Let's do the same, straight from data.\n\nOpen the example: click **Demos** and "
-            "pick **Ligand fitting** — a ligand-free model plus reflections that secretly "
-            "contain an ATP.",
+            "Let's do the same, straight from data.\n\nOpen the example: click **Get** and "
+            "pick **Ligand fitting (ATP into a difference map)** — a ligand-free model "
+            "plus reflections that secretly contain an ATP.",
             done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
             target=lambda cw: cw._get_btn,
         ),
@@ -132,8 +132,8 @@ def cryo_em_refinement_tutorial() -> Tutorial:
         Step(
             "Cryo-EM refinement (phenix's `real_space_refine`) slides a model into a 3D "
             "density map — a gradient-driven minimization, not against reflections but "
-            "against the map itself.\n\nOpen the example: click **Demos** and pick **Cryo-EM "
-            "— real-space refine a model into density**. It loads a model that sits slightly "
+            "against the map itself.\n\nOpen the example: click **Get** and pick "
+            "**Real-space refinement (cryo-EM)**. It loads a model that sits slightly "
             "*off* its own density, waiting to be pushed back in.",
             done=lambda cw: cw._desktop.map_for_model() is not None,
             target=lambda cw: cw._get_btn,
@@ -168,8 +168,8 @@ def xray_refinement_tutorial() -> Tutorial:
             "X-ray refinement judges a model against **data**, not against a map someone "
             "already made. The honest reporter is the **mFo-DFc difference map**: green where "
             "the data wants density the model does not explain, red where the model puts "
-            "atoms the data will not support.\n\nOpen the example: click **Demos** and pick "
-            "**X-ray — model + reflections (make density)**. It loads a model alongside "
+            "atoms the data will not support.\n\nOpen the example: click **Get** and pick "
+            "**X-ray maps from reflections (1UBQ)**. It loads a model alongside "
             "amplitudes computed from that same model, so the two start in exact agreement — "
             "which gives us a flat difference map to break on purpose.",
             done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
@@ -229,7 +229,7 @@ def load_edits_tutorial() -> Tutorial:
         Step(
             "Restraint **edits** — custom bonds/angles the monomer library can't know — can "
             "be shared as a phenix PHIL file. Let's load one onto a metal site.\n\nOpen the "
-            "example: click **Demos** and pick **Metal site — Zn coordination**.",
+            "example: click **Get** and pick **Restraint edits (Zn site)**.",
             done=lambda cw: bool(cw._desktop._models),
             target=lambda cw: cw._get_btn,
         ),
@@ -256,7 +256,7 @@ def restraint_edits_tutorial() -> Tutorial:
         Step(
             "Now let's author a restraint by hand. A metal's coordination is a good case: "
             "cctbx guesses the Zn–His bonds, but not the water in the fourth site.\n\nOpen "
-            "the example: click **Demos** and pick **Metal site — Zn coordination**.",
+            "the example: click **Get** and pick **Restraint edits (Zn site)**.",
             done=lambda cw: bool(cw._desktop._models),
             target=lambda cw: cw._get_btn,
         ),

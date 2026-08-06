@@ -1569,22 +1569,26 @@ class ControlsWindow:
         menu.setObjectName("getMenu")
         self._add_menu_heading(menu, "Online", first=True)
         menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
+        # Named for what the example is *for*, with the structure in parentheses. A menu
+        # of protein names asks the reader to already know which one demonstrates what,
+        # and to remember a PDB code to find it again; the task is the thing they came
+        # here with.
         self._add_menu_heading(menu, "Examples")
-        menu.addAction("Ubiquitin (1UBQ)",
+        menu.addAction("Model only (1UBQ)",
                        lambda: self._on_load_sample("1ubq.pdb"))
-        menu.addAction("Ubiquitin — with density (map + model)",
+        menu.addAction("Map + model (1UBQ)",
                        self._on_run_map_model_demo)
-        menu.addAction("Thermitase-eglin (1TEC) — validation demo",
+        menu.addAction("Validation (1TEC)",
                        lambda: self._on_load_sample("1tec.pdb"))
-        menu.addAction("X-ray — model + reflections (make density)",
+        menu.addAction("X-ray maps from reflections (1UBQ)",
                        self._on_run_xray_demo)
-        menu.addAction("Ligand fitting — fit ATP into difference density",
+        menu.addAction("Ligand fitting (ATP into a difference map)",
                        self._on_run_ligand_fitting_demo)
-        menu.addAction("Cryo-EM — real-space refine a model into density",
+        menu.addAction("Real-space refinement (cryo-EM)",
                        self._on_run_real_space_refinement_demo)
-        menu.addAction("Metal site — Zn coordination (restraint edits)",
+        menu.addAction("Restraint edits (Zn site)",
                        lambda: self._on_load_sample("zn_site.pdb"))
-        menu.addAction("Crambin (3NIR) — alternate conformations",
+        menu.addAction("Alternate conformations (3NIR)",
                        lambda: self._on_load_sample("3nir.pdb"))
         self._add_menu_heading(menu, "Tutorials")
         for tut in tutorial.all_tutorials():

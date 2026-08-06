@@ -380,11 +380,39 @@ def exercise_help_and_the_get_menu():
         actions = controls._build_get_menu().actions()
         labels = [a.text() for a in actions]
         assert any("PDB / EMDB" in text for text in labels)          # remote data
-        assert any("ubiquitin" in text.lower() for text in labels)   # a sample
+        assert any("1UBQ" in text for text in labels)                # a sample
         assert any("restraint" in text.lower() for text in labels)   # a tutorial
 
         headings = [heading_text(a) for a in actions if heading_text(a)]
         assert headings == ["Online", "Examples", "Tutorials"]
+
+
+def exercise_every_menu_item_a_tutorial_names_actually_exists():
+    """A tutorial that says "click **X**" must be naming something the menu has.
+
+    Nothing checked this, and it drifted: four steps sent the reader to a **Demos**
+    button, which had been renamed **Get** long enough ago that the old name appeared
+    nowhere else. A tutorial is the one place in the app where a stale label is not a
+    cosmetic problem -- the reader cannot proceed, and assumes they have misunderstood
+    rather than that the instruction is wrong.
+
+    Only bolded phrases containing a parenthesis are checked, which is what a menu entry
+    looks like here; bolding is also used for emphasis, and this is not a spell-checker.
+    """
+    import re
+
+    from pxviewer import tutorial
+
+    with desktop() as app:
+        labels = {a.text().strip() for a in app._controls._build_get_menu().actions()}
+        for tut in tutorial.all_tutorials():
+            for index, step in enumerate(tut.steps):
+                for phrase in re.findall(r"\*\*([^*]+)\*\*", step.text or ""):
+                    if "(" not in phrase:
+                        continue
+                    assert phrase in labels, (
+                        "%s step %d names a menu item that does not exist: %r"
+                        % (tut.title, index, phrase))
 
 
 def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
@@ -415,10 +443,13 @@ def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
 
         examples = entries(examples_i + 1, tutorials_i)
         assert len(examples) == 8
-        for expected in ("1UBQ", "map + model", "validation", "X-ray",
-                         "Ligand fitting", "Cryo-EM", "Metal site",
-                         "alternate conformations"):
-            assert any(expected in text for text in examples), expected
+        # Named for the task, not the protein: every entry leads with what it is for, so
+        # a reader picking one does not have to already know which structure demonstrates
+        # what. The PDB code follows in parentheses for the ones that have one.
+        for expected in ("Model only", "Map + model", "Validation", "X-ray maps",
+                         "Ligand fitting", "Real-space refinement", "Restraint edits",
+                         "Alternate conformations"):
+            assert any(text.startswith(expected) for text in examples), expected
 
         tutorials = entries(tutorials_i + 1)
         assert [t.lower() for t in tutorials] == [t.lower() for t in TUTORIAL_TITLES]
