@@ -236,6 +236,34 @@ def hot_voxel_xyz(field, threshold=None) -> np.ndarray:
     return idx.astype(float) * field.spacing + np.asarray(field.origin, dtype=float)
 
 
+def _scored_events(shared, metric):
+    """The events recall should be scored against, and how many were set aside.
+
+    For every channel but one this is just the validator's outlier set. omega is the
+    exception, and not because of anything the field does: omegalyze flags *every* non-trans
+    peptide, so an ordinary cis-proline arrives flagged, and ``concern._omega_concern``
+    deliberately scores cis-proline 0.0 on the grounds that it is common, legitimate, and
+    would otherwise light up a hotspot on most structures in the PDB.
+
+    Scoring recall against the raw omegalyze flag therefore measures a disagreement the
+    project chose to have, and reports it as a field failure -- it comes out at exactly 0.000
+    on structures whose only flagged peptides are cis-prolines. The set aside count is
+    returned so the exclusion is visible in the data rather than buried here; figure B made
+    the same move for the same reason, scoring against *concerning* atoms rather than
+    outliers.
+    """
+    if metric != "omega":
+        return shared, 0
+    kept, dropped = [], 0
+    for e in shared:
+        if (e.metric == "omega" and e.detail.get("kind") == "cis"
+                and e.detail.get("is_proline") and e.outlier):
+            dropped += 1
+            continue
+        kept.append(e)
+    return kept, dropped
+
+
 def figure_a(shared, sampled, heavy, metric) -> dict:
     """Operating point: recall and precision at the display threshold, over heavy atoms.
 
@@ -244,8 +272,9 @@ def figure_a(shared, sampled, heavy, metric) -> dict:
     from it: the sigma ~ 2 A splat is wider than the ~3.8 A between adjacent CA atoms, so
     most "false positives" are neighbours of concerning residues.
     """
+    scored, n_excluded = _scored_events(shared, metric)
     flagged = np.zeros(heavy.size, dtype=bool)
-    for i in ve.outlier_atoms(shared, metric=metric):
+    for i in ve.outlier_atoms(scored, metric=metric):
         flagged[i] = True
     flagged &= heavy
     marked = (sampled >= _hot()) & heavy
@@ -259,6 +288,10 @@ def figure_a(shared, sampled, heavy, metric) -> dict:
         "recall": (hit / n_flagged) if n_flagged else None,
         "precision": (hit / n_marked) if n_marked else None,
         "prevalence": (n_flagged / int(heavy.sum())) if heavy.any() else None,
+        # Non-zero for omega only: legitimate cis-prolines the calibration scores 0.0 on
+        # purpose. Recorded so the corpus can say how large that population is rather than
+        # leaving the exclusion invisible.
+        "n_excluded": n_excluded,
     }
 
 
