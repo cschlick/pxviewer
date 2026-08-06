@@ -142,8 +142,11 @@ def exercise_a_pick_reaches_its_handler():
 
         async def scenario():
             async with client(live) as ws:
+                # ``altloc`` rides along with the rest: on a structure with alternate
+                # conformations the other five fields are identical for both conformers
+                # of an atom, so without it a pick does not say which one was clicked.
                 atom = {"id": 2, "name": "C", "resname": "UNL",
-                        "resseq": 1, "chain": "A"}
+                        "resseq": 1, "chain": "A", "altloc": "B"}
                 await ws.send(json.dumps(
                     {"type": "pick", "empty": False, "atom": atom}))
                 # The handler runs on the session's own loop, so it is not ordered
@@ -152,6 +155,7 @@ def exercise_a_pick_reaches_its_handler():
 
         run_client(scenario)
         assert received[0]["id"] == 2
+        assert received[0]["altloc"] == "B"
 
 
 def run():

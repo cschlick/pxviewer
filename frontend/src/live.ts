@@ -55,6 +55,13 @@ export interface AtomInfo {
     resname: string;
     resseq: number;
     chain: string;
+    /**
+     * The alternate conformation this atom belongs to, or '' when the atom is modelled
+     * in only one. Without it a click is ambiguous on any structure with altlocs: both
+     * conformers of THR 1 report the same name, residue and chain, so the two atoms are
+     * indistinguishable to everything downstream.
+     */
+    altloc: string;
 }
 
 interface LiveTrajectoryParams {
@@ -1641,6 +1648,7 @@ export class LiveViewer {
                     resname: StructureProperties.atom.label_comp_id(location),
                     resseq: StructureProperties.residue.label_seq_id(location),
                     chain: StructureProperties.chain.label_asym_id(location),
+                    altloc: StructureProperties.atom.label_alt_id(location),
                 } : null);
             }
             if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);

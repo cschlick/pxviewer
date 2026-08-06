@@ -129,6 +129,24 @@ This is what makes the update "in-place": the browser reuses the parsed topology
 """
 
 
+def describe_atom(info: Optional[dict]) -> str:
+    """A one-line human label for a picked atom: ``"CA THR1 (alt A)"``.
+
+    The altloc is shown only when the atom has one, because most structures have none and
+    a trailing ``(alt )`` on every label would be noise. When it *is* present it is not
+    decoration: two conformers of the same atom agree on name, residue and chain, so
+    without the altloc the label names two different atoms identically.
+    """
+    if not info:
+        return "empty space"
+    name = info.get("name") or "?"
+    resname = info.get("resname") or ""
+    resseq = info.get("resseq")
+    label = f"{name} {resname}{'' if resseq is None else resseq}".strip()
+    altloc = (info.get("altloc") or "").strip()
+    return f"{label} (alt {altloc})" if altloc else label
+
+
 def _encode_index_set(indices: Iterable[int]) -> dict:
     """Compactly encode a set of atom indices for the wire.
 

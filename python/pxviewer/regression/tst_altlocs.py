@@ -215,6 +215,34 @@ def exercise_secondary_structure_survives_the_altlocs():
     assert categories["_struct_sheet_range"]["rowCount"] == 2
 
 
+# -- describing a picked atom --------------------------------------------------
+
+
+def exercise_a_picked_atom_names_its_conformer():
+    """Two conformers of an atom agree on name, residue and chain, so a label without the
+    altloc names both of them identically -- which is what the viewer used to do."""
+    from pxviewer.live import describe_atom
+
+    a = {"id": 1, "name": "CA", "resname": "THR", "resseq": 1, "chain": "A", "altloc": "A"}
+    b = dict(a, id=2, altloc="B")
+    assert describe_atom(a) == "CA THR1 (alt A)"
+    assert describe_atom(b) == "CA THR1 (alt B)"
+    assert describe_atom(a) != describe_atom(b)
+
+
+def exercise_an_atom_without_a_conformer_is_described_plainly():
+    """The common case by far: no trailing "(alt )" noise on ordinary structures."""
+    from pxviewer.live import describe_atom
+
+    assert describe_atom(
+        {"id": 1, "name": "CA", "resname": "GLY", "resseq": 7, "chain": "A",
+         "altloc": ""}) == "CA GLY7"
+    # A viewer built before altlocs were sent omits the key entirely.
+    assert describe_atom(
+        {"id": 1, "name": "CA", "resname": "GLY", "resseq": 7}) == "CA GLY7"
+    assert describe_atom(None) == "empty space"
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

@@ -571,6 +571,92 @@ def exercise_tools_and_appearance_setters():
         app.reset_view()
 
 
+# -- alternate conformations ---------------------------------------------------
+
+
+def exercise_a_model_with_altlocs_offers_its_conformers():
+    """3NIR is crambin at 0.48 A: four conformers, and half its atoms in one."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        mid = app._models[0]["id"]
+        assert app.model_conformers(mid) == ["A", "B", "C", "D"]
+
+
+def exercise_a_model_without_altlocs_offers_none():
+    """Which is what keeps the control off the pane for ordinary structures."""
+    with desktop() as app:
+        app.load_file(data_path("1ubq.pdb"))
+        assert app.model_conformers(app._models[0]["id"]) == []
+
+
+def exercise_choosing_a_conformer_hides_only_the_others():
+    """The atoms with no altloc stay: they are the part of the residue every conformer
+    shares, so dropping them would cut the backbone at every alternate side chain."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        mid = app._models[0]["id"]
+        entry = app._model_entry(mid)
+
+        assert app._shown_indices(entry) is None          # all 1026 to begin with
+
+        app.set_model_conformer(mid, "A")
+        shown = app._shown_indices(entry)
+        assert len(shown) == 750                          # 492 shared + 258 in A
+
+        altloc = entry["session"]._data.arrays.altloc
+        assert {altloc[i].strip() for i in shown} == {"", "A"}
+
+        app.set_model_conformer(mid, "B")
+        assert len(app._shown_indices(entry)) == 745      # 492 shared + 253 in B
+
+        app.set_model_conformer(mid, None)
+        assert app._shown_indices(entry) is None          # back to all of them
+
+
+def exercise_a_conformer_choice_composes_with_hidden_types():
+    """Two independent reasons to hide an atom, so choosing a conformer must not put the
+    waters back on screen."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        mid = app._models[0]["id"]
+        entry = app._model_entry(mid)
+
+        app.set_model_type_hidden(mid, "Water", True)
+        without_water = set(app._shown_indices(entry))
+        app.set_model_conformer(mid, "A")
+        both = set(app._shown_indices(entry))
+
+        assert both < without_water                       # strictly fewer, not reset
+        resname = entry["session"]._data.arrays.resname
+        assert not any(resname[i] == "HOH" for i in both)
+
+
+def exercise_an_unknown_conformer_is_refused():
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        mid = app._models[0]["id"]
+        with raises(ValueError) as e:
+            app.set_model_conformer(mid, "Z")
+        assert "no conformer" in str(e.value)
+
+
+def exercise_the_conformer_control_appears_only_when_there_is_a_choice():
+    """A combo offering nothing but "All" would be a control that never does anything."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        app.load_file(data_path("1ubq.pdb"))
+        controls = app._controls
+
+        def conformer_labels():
+            return [w.text() for w in controls._appearance_box.findChildren(QLabel)]
+
+        controls._update_appearance("model", app._models[0]["id"])   # 3nir
+        assert "Conformer" in conformer_labels()
+
+        controls._update_appearance("model", app._models[1]["id"])   # 1ubq
+        assert "Conformer" not in conformer_labels()
+
+
 # -- clipping -----------------------------------------------------------------
 
 

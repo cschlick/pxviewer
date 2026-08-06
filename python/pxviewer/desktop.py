@@ -2994,6 +2994,19 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_model_color(mid, v))
 
             add_combo("Representation", _MODEL_REP_OPTIONS, it.get("rep"), _set_rep)
+
+            # Only for models that actually have alternate conformations, which is very
+            # few of them: offering "Conformer: All" on every ordinary structure would be
+            # a control that never does anything.
+            conformers = it.get("conformers") or []
+            if conformers:
+                def _set_conformer(v, it=it):
+                    it["conformer"] = v
+                    self._safe(lambda: self._desktop.set_model_conformer(mid, v))
+
+                add_combo("Conformer",
+                          [("All", None)] + [(label, label) for label in conformers],
+                          it.get("conformer"), _set_conformer)
             # Color-by themes *and* flat colors: a model can be colored by a property or
             # just set to one color, and the swatches/wheel are the only way to say the latter.
             self._add_color_row(it.get("color"), _set_color,
@@ -3858,8 +3871,14 @@ class ControlsWindow:
         self._real_status = text
         self._status_label.setText(text)
         self._status_label.setStyleSheet(self._status_warn_style())
+        # The label is passed as the timer's context object, not captured only by the
+        # lambda: four seconds is long enough for the window to be closed first, and
+        # without a context Qt still fires the callback onto a deleted C++ object and the
+        # process dies with a shiboken "already deleted" error. With one, Qt drops the
+        # pending call when the label goes.
         QTimer.singleShot(
-            4000, lambda: self._status_label.setStyleSheet(self._STATUS_STYLE))
+            4000, self._status_label,
+            lambda: self._status_label.setStyleSheet(self._STATUS_STYLE))
 
     def _on_tab_hover(self, index: int) -> None:
         """Name the hovered tab in the status line; restore the real status on leave."""
@@ -5974,11 +5993,70 @@ class DesktopApp:
             groups = self._type_groups(entry)
             for label in hidden_types:
                 drop.update(groups.get(label, []))
+        drop.update(self._other_conformer_indices(entry))
         if not drop:
             return None
         mask = np.ones(entry["session"]._n_atoms, dtype=bool)
         mask[list(drop)] = False
         return np.nonzero(mask)[0].tolist()
+
+    def model_conformers(self, mid: str) -> list:
+        """The alternate conformations present in a model, e.g. ``["A", "B"]``.
+
+        Empty for the overwhelming majority of structures, which is the signal the
+        Appearance pane uses to leave the conformer control out entirely rather than
+        offering a choice of one.
+        """
+        entry = self._model_entry(mid)
+        if entry is None:
+            return []
+        return self._conformers_of(entry)
+
+    def _conformers_of(self, entry) -> list:
+        """Sorted altloc labels in a model, cached on the entry (the arrays do not change)."""
+        cached = entry.get("conformers")
+        if cached is None:
+            arrays = entry["session"]._data.arrays
+            labels = {alt.strip() for alt in (getattr(arrays, "altloc", None) or []) if alt.strip()}
+            cached = entry["conformers"] = sorted(labels)
+        return cached
+
+    def _other_conformer_indices(self, entry) -> set:
+        """Atoms belonging to a conformer other than the chosen one.
+
+        The atoms with *no* altloc are never dropped: they are the part of the residue
+        both conformers share, so hiding them would break the backbone into fragments
+        around every alternate side chain.
+        """
+        chosen = entry.get("conformer")
+        if not chosen:
+            return set()
+        arrays = entry["session"]._data.arrays
+        altloc = getattr(arrays, "altloc", None) or []
+        return {i for i, alt in enumerate(altloc)
+                if alt.strip() and alt.strip() != chosen}
+
+    def set_model_conformer(self, mid: str, conformer: Optional[str]) -> None:
+        """Show only one alternate conformation, or ``None`` for all of them.
+
+        Implemented by hiding the other conformers' atoms rather than by selecting the
+        chosen one, so it composes with the type and atom hiding already in
+        :meth:`_shown_indices` instead of overriding them.
+        """
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        wanted = (conformer or "").strip() or None
+        if wanted is not None and wanted not in self._conformers_of(entry):
+            raise ValueError(
+                "model %s has no conformer %r (has %s)"
+                % (mid, wanted, ", ".join(self._conformers_of(entry)) or "none"))
+        if entry.get("conformer") == wanted:
+            return
+        entry["conformer"] = wanted
+        self._apply_model_rep(entry)
+        self._status("Showing conformer %s" % wanted if wanted
+                     else "Showing all conformers")
 
     def _apply_model_rep(self, entry) -> None:
         session = entry["session"]
@@ -8774,6 +8852,7 @@ class DesktopApp:
              "active": m["id"] == self._active_model_id, "group": m["group"], "rep": m.get("rep"),
              "color": m.get("color"), "interactions": m.get("interactions", False),
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
+             "conformers": self._conformers_of(m), "conformer": m.get("conformer"),
              "has_restraints_cif": bool(m.get("restraints_cif")),
              "edits": [{"kind": e["kind"], "summary": _edit_summary(e)} for e in (m.get("edits") or [])]}
             for m in self._models

@@ -23,7 +23,7 @@ import numpy as np
 
 from .appserver import announce_viewer, stop_all, stop_frontend
 from .cctbx_io import model_from_sites
-from .live import LiveSession
+from .live import LiveSession, describe_atom
 
 __all__ = ["DEMOS", "Player", "run_demo", "list_demos"]
 
@@ -122,11 +122,7 @@ class Player:
         with self._lock:
             self._picks.append(info)
         if info:
-            print(
-                f"  ● clicked atom {info.get('id')} "
-                f"({info.get('name')} {info.get('resname')}{info.get('resseq')})",
-                flush=True,
-            )
+            print(f"  ● clicked atom {info.get('id')} ({describe_atom(info)})", flush=True)
         else:
             print("  ○ clicked empty space", flush=True)
 
