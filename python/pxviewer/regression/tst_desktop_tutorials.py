@@ -310,7 +310,7 @@ def exercise_the_metal_example_and_its_sample_edits_file():
         assert app._model_entry(mid)["rep"] == "ball-and-stick"
 
         assert app.model_edits(mid) == []
-        assert app.load_edits(mid, str(edits)) == 0        # nothing skipped
+        assert app.load_edits(mid, str(edits)) == 1        # the Zn-water bond
         loaded = app.model_edits(mid)
         assert len(loaded) == 1
         assert loaded[0]["kind"] == "bond"
@@ -414,9 +414,10 @@ def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
         assert entries(online_i + 1, examples_i) == ["Fetch from PDB / EMDB…"]
 
         examples = entries(examples_i + 1, tutorials_i)
-        assert len(examples) == 7
+        assert len(examples) == 8
         for expected in ("1UBQ", "map + model", "validation", "X-ray",
-                         "Ligand fitting", "Cryo-EM", "Metal site"):
+                         "Ligand fitting", "Cryo-EM", "Metal site",
+                         "alternate conformations"):
             assert any(expected in text for text in examples), expected
 
         tutorials = entries(tutorials_i + 1)

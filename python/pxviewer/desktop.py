@@ -235,11 +235,19 @@ def _app_icon():
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
 
 
-def _edit_summary(edit: dict) -> str:
-    """A one-line label for a restraint edit, for the Loaded tree / edits list."""
+def _edit_summaries(scope) -> list:
+    """``[{"kind", "summary"}]`` for a model's edits scope, for the tree and edits list.
+
+    A read-only projection of cctbx's own scope. It is deliberately not the thing that
+    gets applied -- the scope is (see edits.build_restraints) -- so a field this summary
+    has no room for cannot go missing from the restraints.
+    """
     from . import edits
 
-    return edits.summarize(edit)
+    if scope is None:
+        return []
+    return [{"kind": kind, "summary": edits.summarize(kind, obj)}
+            for kind, obj in edits.entries(scope)]
 
 
 _HIGHLIGHT_OVERLAY_CLASS = None
@@ -1978,11 +1986,9 @@ class ControlsWindow:
         if not path:
             return
         try:
-            skipped = self._desktop.load_edits(mid, path)
-            msg = f"Loaded edits from {Path(path).name}"
-            if skipped:
-                msg += f" ({skipped} planarity/parallelity edit(s) skipped — not yet supported)"
-            self._set_status(msg)
+            added = self._desktop.load_edits(mid, path)
+            self._set_status(
+                f"Loaded {added} restraint edit(s) from {Path(path).name}")
         except Exception as exc:
             QMessageBox.warning(self._window, "Load edits failed", str(exc))
 
@@ -6228,7 +6234,7 @@ class DesktopApp:
                  "rep": rep, "reps": reps, "color": None,
                  "hidden_types": hidden_types, "hidden_atoms": set(),
                  "type_groups": type_groups, "clip": (0.0, 1.0),
-                 "interactions": self._default_model_interactions, "edits": [],
+                 "interactions": self._default_model_interactions, "edits": None,
                  # Opening color: a random pick from the session's current palette group
                  # (see palettes.PaletteCycler). Overridden the moment the user sets one by
                  # hand. Read by _model_color_kwargs.
@@ -7902,21 +7908,29 @@ class DesktopApp:
     # -- custom geometry restraint edits (phenix/cctbx geometry_restraints.edits) --------
 
     def model_edits(self, mid: str) -> list:
-        """The custom restraint edits carried on a model (list of dicts; see pxviewer.edits)."""
-        entry = self._model_entry(mid)
-        return list(entry.get("edits") or []) if entry else []
+        """One ``{"kind", "summary"}`` per custom restraint edit carried on a model.
 
-    def _apply_edits(self, entry: dict, new_edits: list) -> None:
-        """Attach ``new_edits`` to the model and rebuild its restraints. Validated: if cctbx
-        rejects them (e.g. a bond already restrained by the library), revert and raise, so a
-        model's stored edits are always ones a later minimize/drag can build."""
+        A summary for display and counting. The edits themselves live on the model as
+        cctbx's own PHIL scope -- reachable with ``pxviewer.edits.get_edits(model)`` --
+        because that is what gets handed to pdb_interpretation.
+        """
+        entry = self._model_entry(mid)
+        return _edit_summaries(entry.get("edits")) if entry else []
+
+    def _apply_edits(self, entry: dict, scope) -> None:
+        """Attach an edits scope to the model and rebuild its restraints.
+
+        Validated: if cctbx rejects them (a bond the library already restrains, a
+        selection naming no atom), revert and raise, so a model's stored edits are always
+        ones a later minimize or drag can build.
+        """
         from . import edits as edits_mod
 
         model = entry["session"].model
         if model is None:
             raise ValueError("the object has no cctbx model")
-        previous = list(entry.get("edits") or [])
-        edits_mod.set_edits(model, new_edits)
+        previous = entry.get("edits")
+        edits_mod.set_edits(model, scope)
         try:
             edits_mod.build_restraints(model, force=True)
         except Exception as exc:
@@ -7926,8 +7940,19 @@ class DesktopApp:
             except Exception:  # pragma: no cover - revert best effort
                 pass
             raise ValueError(str(exc).splitlines()[0] if str(exc) else "cctbx rejected the edit")
-        entry["edits"] = list(new_edits)
+        entry["edits"] = scope
         self._emit_loaded_changed()
+
+    def _edits_scope(self, entry):
+        """The model's edits scope, copied so a rejected change can be rolled back."""
+        import copy
+
+        from . import edits as edits_mod
+
+        existing = entry.get("edits")
+        if existing is None:
+            return edits_mod.empty_edits(entry["session"].model)
+        return copy.deepcopy(existing)
 
     def add_edit_from_selection(self, mid: str, kind: str, *, sigma: Optional[float] = None) -> dict:
         """Author a bond/angle/dihedral edit from the active model's selected atoms (2/3/4),
@@ -7949,61 +7974,75 @@ class DesktopApp:
         if len(atoms) != need:
             raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
         sites = model.get_sites_cart().as_numpy_array()
-        edit = {
-            "kind": kind, "action": "add",
-            "selections": [edits_mod.selection_for_atom(model, i) for i in atoms],
-            "ideal": edits_mod.geometry_value(kind, [sites[i] for i in atoms]),
-            # Authored here rather than read from a file, so a default weight is the app's
-            # to choose — unlike a PHIL, where a missing sigma is refused (see
-            # edits.AUTHORING_SIGMA).
-            "sigma": float(sigma) if sigma is not None else edits_mod.AUTHORING_SIGMA[kind]}
-        if kind == "dihedral":
-            edit["periodicity"] = 1
-        self._apply_edits(entry, list(entry.get("edits") or []) + [edit])
+        # Authored here rather than read from a file, so a default weight is the app's to
+        # choose — unlike a PHIL, where a missing sigma is refused (see AUTHORING_SIGMA).
+        obj = edits_mod.new_entry(
+            model, kind,
+            [edits_mod.selection_for_atom(model, i) for i in atoms],
+            ideal=edits_mod.geometry_value(kind, [sites[i] for i in atoms]),
+            sigma=float(sigma) if sigma is not None else edits_mod.AUTHORING_SIGMA[kind])
+        scope = self._edits_scope(entry)
+        edits_mod.add_entry(scope, obj, kind)
+        self._apply_edits(entry, scope)
         self.ensure_atoms_shown(mid)  # an edit is about specific atoms — show them
-        return edit
+        return {"kind": kind, "summary": edits_mod.summarize(kind, obj)}
 
     def remove_edit(self, mid: str, index: int) -> None:
         """Drop the edit at ``index`` and rebuild restraints without it."""
         entry = self._model_entry(mid)
         if entry is None:
             return
-        current = list(entry.get("edits") or [])
-        if 0 <= index < len(current):
-            del current[index]
-            self._apply_edits(entry, current)
+        from . import edits as edits_mod
+
+        scope = self._edits_scope(entry)
+        try:
+            edits_mod.remove(scope, index)
+        except IndexError:
+            return
+        self._apply_edits(entry, scope)
 
     def clear_edits(self, mid: str) -> None:
-        """Remove all edits from a model."""
+        """Drop every edit and rebuild the model's restraints without them."""
+        from . import edits as edits_mod
+
         entry = self._model_entry(mid)
-        if entry and entry.get("edits"):
-            self._apply_edits(entry, [])
+        if entry is None:
+            return
+        self._apply_edits(entry, edits_mod.empty_edits(entry["session"].model))
 
     def load_edits(self, mid: str, path: str) -> int:
-        """Read a geometry_restraints.edits PHIL file and add its edits to the model. Returns
-        the number of unsupported (planarity/parallelity) entries skipped."""
+        """Read a geometry_restraints.edits PHIL file and add its edits to the model.
+
+        Returns how many edits were added. Nothing is skipped any more: the file is
+        fetched against cctbx's own master and handed to pdb_interpretation whole, so
+        planarity and parallelity restraints -- which an earlier version counted and threw
+        away -- are applied like the rest.
+        """
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
         if entry is None:
             raise ValueError("no such model")
+        model = entry["session"].model
         with open(str(path)) as fh:
-            parsed, unsupported = edits_mod.parse_edits(fh.read())
-        if not parsed and not unsupported:
-            raise ValueError("no bond/angle/dihedral edits found in that file")
-        self._apply_edits(entry, list(entry.get("edits") or []) + parsed)
-        return unsupported
+            incoming = edits_mod.edits_from_phil(fh.read(), model)
+        if not edits_mod.count(incoming):
+            raise ValueError("no restraint edits found in that file")
+        scope = self._edits_scope(entry)
+        added = edits_mod.merge(scope, incoming)
+        self._apply_edits(entry, scope)
+        return added
 
     def save_edits(self, mid: str, path: str) -> None:
         """Write a model's edits as a geometry_restraints.edits PHIL file."""
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
-        current = list(entry.get("edits") or []) if entry else []
-        if not current:
+        scope = entry.get("edits") if entry else None
+        if scope is None or not edits_mod.count(scope):
             raise ValueError("this object has no edits to save")
         with open(str(path), "w") as fh:
-            fh.write(edits_mod.edits_to_phil(current))
+            fh.write(edits_mod.edits_as_phil(scope, entry["session"].model))
 
     def _volume_command(self, vid: str, key: str, value, send) -> None:
         """Record a volume appearance change and push it to the viewport live.
@@ -8936,7 +8975,7 @@ class DesktopApp:
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
              "conformers": self._conformers_of(m), "conformer": m.get("conformer"),
              "has_restraints_cif": bool(m.get("restraints_cif")),
-             "edits": [{"kind": e["kind"], "summary": _edit_summary(e)} for e in (m.get("edits") or [])]}
+             "edits": _edit_summaries(m.get("edits"))}
             for m in self._models
         ] + [
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],

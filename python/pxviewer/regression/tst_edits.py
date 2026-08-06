@@ -21,39 +21,123 @@ def exercise_geometry_value_distance_angle_dihedral():
     assert abs(abs(d) - 90.0) < 1e-6
 
 
-def exercise_serialize_parse_round_trip():
+def exercise_a_phil_round_trips_through_cctbx_unchanged():
+    """Read a file, write it back, read it again: same restraints, same values.
+
+    Both directions go through cctbx's own fetch and format, so this also covers the
+    fields pxviewer never looks at -- the point of not having an intermediate of our own.
+    """
     if not have("iotbx.phil", "mmtbx.monomer_library.pdb_interpretation"):
         print("  skipping: iotbx.phil / pdb_interpretation not available")
         return
 
-    original = [
-        {"kind": "bond", "action": "add",
-         "selections": ["chain A and resseq 1 and name SG",
-                        "chain B and resname LIG and name C7"],
-         "ideal": 1.81, "sigma": 0.02},
-        {"kind": "angle", "action": "add",
-         "selections": ["chain A and name NE2", "chain A and name ZN",
-                        "chain A and name ND1"],
-         "ideal": 109.5, "sigma": 3.0},
-        {"kind": "dihedral", "action": "add",
-         "selections": ["name C1", "name C2", "name C3", "name C4"],
-         "ideal": 180.0, "sigma": 20.0, "periodicity": 2},
-    ]
-    text = edits.edits_to_phil(original)
-    assert "geometry_restraints.edits" in text
-    parsed, unsupported = edits.parse_edits(text)
-    assert unsupported == 0
-    assert [e["kind"] for e in parsed] == ["bond", "angle", "dihedral"]
-    assert parsed[0]["selections"] == original[0]["selections"]
-    assert approx_equal(parsed[0]["ideal"], 1.81)
-    assert parsed[2]["periodicity"] == 2
+    text = """
+    geometry_restraints.edits {
+      bond {
+        atom_selection_1 = "chain A and resseq 1 and name SG"
+        atom_selection_2 = "chain B and resname LIG and name C7"
+        distance_ideal = 1.81
+        sigma = 0.02
+      }
+      angle {
+        atom_selection_1 = "chain A and name NE2"
+        atom_selection_2 = "chain A and name ZN"
+        atom_selection_3 = "chain A and name ND1"
+        angle_ideal = 109.5
+        sigma = 3.0
+      }
+      dihedral {
+        atom_selection_1 = "name C1"
+        atom_selection_2 = "name C2"
+        atom_selection_3 = "name C3"
+        atom_selection_4 = "name C4"
+        angle_ideal = 180.0
+        sigma = 20.0
+        periodicity = 2
+      }
+    }
+    """
+    scope = edits.edits_from_phil(text)
+    assert [kind for kind, _obj in edits.entries(scope)] == ["bond", "angle", "dihedral"]
+
+    written = edits.edits_as_phil(scope)
+    assert "geometry_restraints" in written
+    again = edits.edits_from_phil(written)
+
+    assert edits.count(again) == edits.count(scope)
+    assert again.bond[0].atom_selection_1 == "chain A and resseq 1 and name SG"
+    assert approx_equal(again.bond[0].distance_ideal, 1.81)
+    assert approx_equal(again.angle[0].angle_ideal, 109.5)
+    assert again.dihedral[0].periodicity == 2
 
 
-def exercise_parse_tolerates_a_refinement_prefix_and_flags_unsupported():
+def exercise_fields_pxviewer_has_no_opinion_about_survive():
+    """The reason the PHIL is handed to cctbx rather than parsed into something local.
+
+    ``symmetry_operation`` names a bond to a symmetry mate -- ordinary for a metal site
+    at a crystal contact. An intermediate with no field for it silently restrained the
+    wrong pair of atoms, and ``slack``, ``limit`` and ``top_out`` vanished the same way.
+    """
+    if not have("iotbx.phil", "mmtbx.monomer_library.pdb_interpretation"):
+        print("  skipping: iotbx.phil / pdb_interpretation not available")
+        return
+
+    scope = edits.edits_from_phil("""
+    geometry_restraints.edits {
+      bond {
+        atom_selection_1 = "name ZN"
+        atom_selection_2 = "name O"
+        symmetry_operation = -x-1,-y,z
+        distance_ideal = 2.1
+        sigma = 0.05
+        slack = 0.1
+        top_out = True
+      }
+    }
+    """)
+    bond = scope.bond[0]
+    assert bond.symmetry_operation == "-x-1,-y,z"
+    assert approx_equal(bond.slack, 0.1)
+    assert bond.top_out is True
+
+    # ... and they are still there after a write/read cycle.
+    again = edits.edits_from_phil(edits.edits_as_phil(scope))
+    assert again.bond[0].symmetry_operation == "-x-1,-y,z"
+    assert approx_equal(again.bond[0].slack, 0.1)
+
+
+def exercise_planarity_and_parallelity_are_kept_not_counted():
+    """They used to be tallied as "unsupported" and dropped. cctbx supports them, so
+    handing it the file means pxviewer does too, without writing any code for them."""
+    if not have("iotbx.phil", "mmtbx.monomer_library.pdb_interpretation"):
+        print("  skipping: iotbx.phil / pdb_interpretation not available")
+        return
+
+    scope = edits.edits_from_phil("""
+    geometry_restraints.edits {
+      planarity {
+        atom_selection = "chain S and resseq 1"
+        sigma = 0.02
+      }
+      parallelity {
+        atom_selection_1 = "chain S and resseq 1"
+        atom_selection_2 = "chain S and resseq 2"
+        sigma = 0.05
+      }
+    }
+    """)
+    kinds = [kind for kind, _obj in edits.entries(scope)]
+    assert kinds == ["planarity", "parallelity"]
+    assert edits.count(scope) == 2
+
+
+def exercise_the_refinement_prefix_phenix_writes_is_accepted():
+    """phenix.refine writes ``refinement.geometry_restraints.edits``; the master carries
+    the matching alias, so the same file works either way round."""
     if not have("mmtbx.monomer_library.pdb_interpretation"):
         print("  skipping: pdb_interpretation not available")
         return
-    text = """
+    scope = edits.edits_from_phil("""
     refinement.geometry_restraints.edits {
       bond {
         atom_selection_1 = "name A"
@@ -66,10 +150,8 @@ def exercise_parse_tolerates_a_refinement_prefix_and_flags_unsupported():
         sigma = 0.02
       }
     }
-    """
-    parsed, unsupported = edits.parse_edits(text)
-    assert len(parsed) == 1 and parsed[0]["kind"] == "bond"
-    assert unsupported == 1     # the planarity edit is counted, not silently dropped
+    """)
+    assert [kind for kind, _obj in edits.entries(scope)] == ["bond", "planarity"]
 
 
 def exercise_build_restraints_applies_a_custom_bond():
@@ -94,8 +176,10 @@ def exercise_build_restraints_applies_a_custom_bond():
     cache = model.get_atom_selection_cache()
     assert cache.selection(sels[0]).count(True) == 1    # each names exactly one atom
 
-    edits.set_edits(model, [{"kind": "bond", "selections": sels,
-                             "ideal": 2.4, "sigma": 0.02}])
+    scope = edits.empty_edits(model)
+    edits.add_entry(
+        scope, edits.new_entry(model, "bond", sels, ideal=2.4, sigma=0.02), "bond")
+    edits.set_edits(model, scope)
     edits.build_restraints(model, force=True)           # force: an edit changed
     n1 = model.get_restraints_manager().geometry.pair_proxies(
         ).bond_proxies.simple.size()
@@ -107,7 +191,7 @@ def exercise_build_restraints_applies_a_custom_bond():
         ).bond_proxies.simple.size() == n1
 
     # Clearing (forced) restores the plain build.
-    edits.set_edits(model, [])
+    edits.set_edits(model, edits.empty_edits(model))
     edits.build_restraints(model, force=True)
     assert model.get_restraints_manager().geometry.pair_proxies(
         ).bond_proxies.simple.size() == n0
@@ -136,14 +220,14 @@ def exercise_the_shipped_edits_phil_parses():
         print("  skipping: pdb_interpretation not available")
         return
     with open(data_path("zn_site_edits.phil")) as fh:
-        parsed, unsupported = edits.parse_edits(fh.read())
-    assert unsupported == 0
-    assert len(parsed) == 1
-    edit = parsed[0]
-    assert edit["kind"] == "bond"
-    assert approx_equal(edit["ideal"], 2.1)
-    assert approx_equal(edit["sigma"], 0.05)
-    assert all("ZN" in s or "name O" in s for s in edit["selections"])
+        scope = edits.edits_from_phil(fh.read())
+    listing = edits.entries(scope)
+    assert len(listing) == 1
+    kind, obj = listing[0]
+    assert kind == "bond"
+    assert approx_equal(obj.distance_ideal, 2.1)
+    assert approx_equal(obj.sigma, 0.05)
+    assert all("ZN" in s or "name O" in s for s in edits.selections_of(kind, obj))
 
 
 def exercise_the_shipped_edits_phil_applies_to_the_model_it_names():
@@ -160,8 +244,7 @@ def exercise_the_shipped_edits_phil_applies_to_the_model_it_names():
         ).bond_proxies.simple.size()
 
     with open(data_path("zn_site_edits.phil")) as fh:
-        parsed, _unsupported = edits.parse_edits(fh.read())
-    edits.set_edits(model, parsed)
+        edits.set_edits(model, edits.edits_from_phil(fh.read(), model))
     edits.build_restraints(model, force=True)
 
     after = model.get_restraints_manager().geometry.pair_proxies(
@@ -180,8 +263,7 @@ def exercise_a_restraint_from_a_phil_is_marked_as_user_supplied():
 
     model = read_model(data_path("zn_site.pdb"))
     with open(data_path("zn_site_edits.phil")) as fh:
-        parsed, _ = edits.parse_edits(fh.read())
-    edits.set_edits(model, parsed)
+        edits.set_edits(model, edits.edits_from_phil(fh.read(), model))
     edits.build_restraints(model, force=True)
 
     geo = GeometryRestraints(model)
@@ -213,8 +295,10 @@ def exercise_a_selection_that_names_no_atom_is_refused():
     from pxviewer.cctbx_io import read_model
 
     model = read_model(data_path("zn_site.pdb"))
-    edits.set_edits(model, [{"kind": "bond", "sigma": 0.02, "ideal": 2.0,
-                             "selections": ["name NOSUCHATOM", "name ZN"]}])
+    scope = edits.empty_edits(model)
+    edits.add_entry(scope, edits.new_entry(
+        model, "bond", ["name NOSUCHATOM", "name ZN"], ideal=2.0, sigma=0.02), "bond")
+    edits.set_edits(model, scope)
     try:
         edits.build_restraints(model, force=True)
     except Exception as exc:
@@ -228,7 +312,7 @@ def exercise_malformed_phil_is_reported_rather_than_ignored():
         print("  skipping: pdb_interpretation not available")
         return
     try:
-        edits.parse_edits("this is not phil {{{")
+        edits.edits_from_phil("this is not phil {{{")
     except Exception as exc:
         assert "Syntax error" in str(exc)
     else:
@@ -246,62 +330,76 @@ def exercise_a_misspelled_scope_yields_nothing_without_complaining():
     if not have("mmtbx.monomer_library.pdb_interpretation"):
         print("  skipping: pdb_interpretation not available")
         return
-    assert edits.parse_edits(
-        "geometry_restraints.edit { bond { distance_ideal = 2.0 } }") == ([], 0)
+    assert edits.count(edits.edits_from_phil(
+        "geometry_restraints.edit { bond { distance_ideal = 2.0 } }")) == 0
 
 
-def exercise_a_bond_without_a_sigma_is_refused_as_cctbx_refuses_it():
-    """cctbx will not guess a weight -- ``pdb_interpretation`` raises "The sigma for
-    custom bond #n is not defined" -- and neither does this.
+def exercise_an_edit_missing_its_sigma_is_refused_by_cctbxs_own_validator():
+    """cctbx will not restrain at a weight nobody chose -- but it does not refuse on its
+    own either. ``model.process`` **silently skips** an incomplete edit, so the user ends
+    up believing a restraint exists that does not.
 
-    The alternative, quietly substituting a default, was the behaviour here until it was
-    noticed: a PHIL that phenix.refine rejects would load without a word and enforce a
-    0.02 A restraint nobody had written down. Reading the same file format is only worth
-    anything if both agree about what the file says.
-
-    The GUI's authoring path still has a default (``edits.AUTHORING_SIGMA``) because there
-    is no file there to have left anything out of.
+    ``pdb_interpretation.validate_geometry_edits_params`` is the check phenix runs, and it
+    has to be called deliberately. :func:`edits.validate` calls it, and
+    :func:`edits.build_restraints` calls that before every build. Using cctbx's function
+    rather than a copy of its rules is the whole point -- a copy would drift.
     """
-    if not have("mmtbx.monomer_library.pdb_interpretation"):
-        print("  skipping: pdb_interpretation not available")
+    if not _restraints_ready():
+        print("  skipping: no monomer library")
         return
-    text = """
+    from pxviewer.cctbx_io import read_model
+
+    model = read_model(data_path("zn_site.pdb"))
+    scope = edits.edits_from_phil("""
     geometry_restraints.edits {
       bond {
-        atom_selection_1 = "name A"
-        atom_selection_2 = "name B"
-        distance_ideal = 2.0
+        atom_selection_1 = "chain S and resseq 1 and name ZN"
+        atom_selection_2 = "chain S and resseq 2 and name O"
+        distance_ideal = 2.1
       }
     }
-    """
+    """, model)
+    assert edits.count(scope) == 1          # well-formed PHIL: it parses
+
     try:
-        edits.parse_edits(text)
-    except ValueError as exc:
-        # Says which edit, the way cctbx's message does -- a file may hold many.
+        edits.validate(scope)
+    except Exception as exc:
         assert "sigma" in str(exc)
-        assert "name A" in str(exc)
+        assert "ZN" in str(exc)             # which edit, not just that one was bad
     else:
-        raise AssertionError("a bond edit with no sigma was accepted")
+        raise AssertionError("an edit with no sigma passed validation")
+
+    # And the build refuses rather than skipping it.
+    edits.set_edits(model, scope)
+    try:
+        edits.build_restraints(model, force=True)
+    except Exception as exc:
+        assert "sigma" in str(exc)
+    else:
+        raise AssertionError("an edit with no sigma was built")
 
 
-def exercise_an_angle_or_dihedral_without_a_sigma_is_refused_too():
-    """The same rule on every kind, since cctbx applies it to every kind."""
-    if not have("mmtbx.monomer_library.pdb_interpretation"):
-        print("  skipping: pdb_interpretation not available")
+def exercise_an_edit_missing_its_ideal_value_is_refused_too():
+    """The same validator covers a missing ideal distance/angle, which fails the same
+    silent way -- so it is worth knowing it is covered without writing the check here."""
+    if not _restraints_ready():
+        print("  skipping: no monomer library")
         return
-    for kind, body in (
-        ("angle", 'atom_selection_1 = "name A"\natom_selection_2 = "name B"\n'
-                  'atom_selection_3 = "name C"\nangle_ideal = 109.5'),
-        ("dihedral", 'atom_selection_1 = "name A"\natom_selection_2 = "name B"\n'
-                     'atom_selection_3 = "name C"\natom_selection_4 = "name D"\n'
-                     'angle_ideal = 180.0'),
-    ):
-        try:
-            edits.parse_edits("geometry_restraints.edits { %s { %s } }" % (kind, body))
-        except ValueError as exc:
-            assert kind in str(exc)
-        else:
-            raise AssertionError("a %s edit with no sigma was accepted" % kind)
+    scope = edits.edits_from_phil("""
+    geometry_restraints.edits {
+      bond {
+        atom_selection_1 = "name ZN"
+        atom_selection_2 = "name O"
+        sigma = 0.05
+      }
+    }
+    """)
+    try:
+        edits.validate(scope)
+    except Exception as exc:
+        assert "ideal distance" in str(exc)
+    else:
+        raise AssertionError("an edit with no ideal distance passed validation")
 
 
 def run():

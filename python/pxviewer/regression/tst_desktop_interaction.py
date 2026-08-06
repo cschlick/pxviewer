@@ -485,7 +485,7 @@ def exercise_authoring_saving_and_loading_restraint_edits():
         assert "geometry_restraints.edits" in open(phil).read()
         app.clear_edits(mid)
         assert app.model_edits(mid) == []
-        assert app.load_edits(mid, phil) == 0
+        assert app.load_edits(mid, phil) == 1
         assert len(app.model_edits(mid)) == 1
 
 
@@ -518,7 +518,7 @@ def exercise_loading_a_hand_written_edits_phil():
         app._controls._ensure_restraints()
         before = n_bonds()
 
-        assert app.load_edits(mid, data_path("zn_site_edits.phil")) == 0
+        assert app.load_edits(mid, data_path("zn_site_edits.phil")) == 1
         assert len(app.model_edits(mid)) == 1
         assert n_bonds() == before + 1        # the Zn-water bond cctbx does not add itself
 
@@ -545,7 +545,7 @@ def exercise_a_phil_with_nothing_in_it_is_refused():
 
         with raises(ValueError) as e:
             app.load_edits(mid, empty)
-        assert "no bond/angle/dihedral edits" in str(e.value)
+        assert "no restraint edits" in str(e.value)
         assert app.model_edits(mid) == []
 
 

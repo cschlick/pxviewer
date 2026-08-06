@@ -10,15 +10,23 @@ enumerate. Two common cases where that bites:
   * a **metal center** — there are no Zn–N/Zn–S bonds in the library, so the site collapses.
 
 An *edits* file is the escape hatch: a small PHIL scope
-(``geometry_restraints.edits``) adding those bonds/angles/dihedrals by hand. This module
-parses such a file into a simple list of dicts, serialises the list back out, and applies it
-when a model's restraints are built — so pxviewer's own minimize/drag honor the same
-restraints a downstream phenix.refine would. See :mod:`pxviewer.desktop` for the wiring and
-the authoring UI (which turns two/three/four picked atoms into an edit).
+(``geometry_restraints.edits``) adding those bonds/angles/dihedrals by hand.
 
-Each edit is a dict: ``{"kind", "action", "selections", "ideal", "sigma", ...}`` where
-``kind`` is ``bond`` | ``angle`` | ``dihedral``, ``selections`` is the matching list of cctbx
-atom-selection strings, and ``ideal`` is the target distance (Å) or angle (deg).
+**The file is cctbx's, and it is kept that way.** A user's PHIL is fetched against cctbx's
+own master scope and the resulting scope is handed to ``pdb_interpretation`` whole, so the
+proxies fall out of it exactly as they would in phenix. This module holds no representation
+of an edit of its own — it stores the scope, projects it for display, and appends to it when
+the GUI authors one.
+
+That is a correction, not a preference. An earlier version parsed each edit into a dict and
+rebuilt the params from those dicts at build time. Every field the dict had no key for was
+silently lost: ``symmetry_operation`` (so a bond to a symmetry mate restrained the wrong
+pair of atoms), ``slack``, ``limit``, ``top_out``, and planarity and parallelity restraints
+entirely — which were counted as "unsupported" and discarded. Nothing about them needed
+supporting; they only needed not to be thrown away.
+
+See :mod:`pxviewer.desktop` for the wiring and the authoring UI (which turns two/three/four
+picked atoms into an edit).
 """
 
 from __future__ import annotations
@@ -34,18 +42,28 @@ KIND_ARITY = {"bond": 2, "angle": 3, "dihedral": 4}
 
 #: Sigmas used when the *user authors* an edit in the GUI, where there is no file to read
 #: one from and clicking "add a bond restraint" has to mean something. Deliberately **not**
-#: applied when reading a PHIL: cctbx raises rather than assume a weight
-#: (``pdb_interpretation``: "The sigma for custom bond #n is not defined"), and a file that
-#: phenix refuses must not load quietly here at a tightness nobody chose. See
-#: :func:`_require_sigma`.
+#: applied to a PHIL: a file that leaves sigma out is refused by :func:`validate`, cctbx's
+#: own check, rather than quietly restrained at a tightness nobody chose.
 AUTHORING_SIGMA = {"bond": 0.02, "angle": 3.0, "dihedral": 20.0}
 
 
-def _master() -> Any:
-    """The phil master for just the edits scope, so external files parse against the real
-    cctbx definition. Carries the ``.alias = refinement.geometry_restraints`` that the full
-    master has, so files phenix.refine writes (``refinement.geometry_restraints.edits``)
-    resolve as well as the bare ``geometry_restraints.edits``."""
+def _master_scope(model: Any) -> Any:
+    """cctbx's own pdb_interpretation phil scope, taken from the model.
+
+    The master, not a hand-rolled subset: everything a user may legitimately write is
+    defined in it, and fetching against it is what makes their file mean the same thing
+    here as it does to phenix.
+    """
+    return model.get_default_pdb_interpretation_scope()
+
+
+def _standalone_master() -> Any:
+    """The edits scope alone, for reading a file with no model in hand.
+
+    Carries the ``.alias = refinement.geometry_restraints`` the full master has, so a file
+    phenix.refine wrote (``refinement.geometry_restraints.edits``) resolves as well as a
+    bare ``geometry_restraints.edits``.
+    """
     import iotbx.phil
     from mmtbx.monomer_library.pdb_interpretation import geometry_restraints_edits_str
 
@@ -54,128 +72,188 @@ def _master() -> Any:
         "  edits {\n%s\n  }\n}" % geometry_restraints_edits_str)
 
 
-def _require_sigma(kind: str, index: int, sigma: Any, selections: List[str]) -> float:
-    """The sigma for one edit, or a refusal naming it.
+def edits_from_phil(text: str, model: Any = None) -> Any:
+    """Fetch a ``geometry_restraints.edits`` PHIL string against cctbx's master.
 
-    cctbx will not guess a weight for a custom restraint -- ``pdb_interpretation`` raises
-    ``Sorry`` when a bond, angle or plane edit arrives without a sigma -- so neither does
-    this. Substituting a default would mean a PHIL that phenix.refine rejects loads
-    silently here, enforcing a restraint at a tightness the author never wrote down, and
-    the whole point of reading the same file format is agreeing about what it says.
-    """
-    if sigma is None:
-        raise ValueError(
-            "the sigma for custom %s #%d is not defined (atom selections: %s)"
-            % (kind, index, ", ".join(str(s) for s in selections)))
-    return float(sigma)
+    Returns the extracted ``edits`` scope -- cctbx's own object, with every field it
+    defines, including the ones pxviewer has no opinion about (``symmetry_operation``,
+    ``slack``, ``limit``, ``top_out``, planarity and parallelity restraints).
 
-
-def parse_edits(text: str) -> Tuple[List[dict], int]:
-    """Parse a ``geometry_restraints.edits`` PHIL string into ``(edits, n_unsupported)``.
-
-    Bond/angle/dihedral edits become dicts; planarity/parallelity are counted but not
-    returned (not yet supported here). Tolerates the ``refinement.`` prefix phenix writes.
-
-    Raises when an edit names its atoms and its ideal value but leaves out ``sigma``,
-    which is what cctbx does with the same file -- see :func:`_require_sigma`.
+    This deliberately does **not** convert to any structure of pxviewer's own. An earlier
+    version parsed each edit into a dict and rebuilt the params from those dicts at build
+    time, which silently dropped every field the dict had no key for: a symmetry-related
+    metal bond lost its ``symmetry_operation`` and was restrained to the wrong atom, and
+    planarity restraints were counted and discarded. The file the user wrote is now handed
+    to cctbx as-is and the proxies fall out of it normally.
     """
     import iotbx.phil
 
-    scope = _master().fetch(source=iotbx.phil.parse(text)).extract().geometry_restraints.edits
-    edits: List[dict] = []
-    for i, b in enumerate(scope.bond):
-        if b.atom_selection_1 and b.atom_selection_2 and b.distance_ideal is not None:
-            selections = [b.atom_selection_1, b.atom_selection_2]
-            edits.append({
-                "kind": "bond", "action": b.action or "add",
-                "selections": selections,
-                "ideal": float(b.distance_ideal),
-                "sigma": _require_sigma("bond", i, b.sigma, selections)})
-    for i, a in enumerate(scope.angle):
-        if a.atom_selection_1 and a.atom_selection_2 and a.atom_selection_3 \
-                and a.angle_ideal is not None:
-            edits.append({
-                "kind": "angle", "action": a.action or "add",
-                "selections": [a.atom_selection_1, a.atom_selection_2, a.atom_selection_3],
-                "ideal": float(a.angle_ideal),
-                "sigma": _require_sigma(
-                    "angle", i, a.sigma,
-                    [a.atom_selection_1, a.atom_selection_2, a.atom_selection_3])})
-    for i, d in enumerate(scope.dihedral):
-        if all([d.atom_selection_1, d.atom_selection_2, d.atom_selection_3,
-                d.atom_selection_4]) and d.angle_ideal is not None:
-            edits.append({
-                "kind": "dihedral", "action": d.action or "add",
-                "selections": [d.atom_selection_1, d.atom_selection_2,
-                               d.atom_selection_3, d.atom_selection_4],
-                "ideal": float(d.angle_ideal),
-                "sigma": _require_sigma(
-                    "dihedral", i, d.sigma,
-                    [d.atom_selection_1, d.atom_selection_2,
-                     d.atom_selection_3, d.atom_selection_4]),
-                "periodicity": int(d.periodicity) if d.periodicity else 1})
-    n_unsupported = len(scope.planarity) + len(scope.parallelity)
-    return edits, n_unsupported
+    master = _master_scope(model) if model is not None else _standalone_master()
+    extracted = master.fetch(sources=[iotbx.phil.parse(text)]).extract()
+    return extracted.geometry_restraints.edits
 
 
-def _q(selection: str) -> str:
-    """Quote an atom-selection for PHIL — they contain spaces, so always quote."""
-    return '"' + str(selection).replace('"', "'") + '"'
+def empty_edits(model: Any = None) -> Any:
+    """An edits scope with nothing in it."""
+    return edits_from_phil("", model)
 
 
-def edits_to_phil(edits: List[dict]) -> str:
-    """Serialise structured edits to a ``geometry_restraints.edits`` PHIL file (one
-    definition per line, as PHIL requires)."""
-    out = [
+def validate(scope: Any) -> None:
+    """Check an edits scope with cctbx's own validator, raising on anything incomplete.
+
+    ``pdb_interpretation.validate_geometry_edits_params`` is the check phenix runs over
+    this scope, and it has to be called deliberately: nothing inside ``model.process``
+    invokes it, so an edit missing its ``sigma`` or its ideal value is not refused there
+    -- it is **silently skipped**, and the user is left with a restraint they believe is
+    holding two atoms together and is not.
+
+    Calling cctbx's function rather than writing the same checks here is the point: the
+    rules for a well-formed edit belong to cctbx, and a copy of them would drift.
+    """
+    from mmtbx.monomer_library.pdb_interpretation import validate_geometry_edits_params
+
+    validate_geometry_edits_params(scope)
+
+
+#: The edit kinds cctbx defines, and the atom-selection fields each one carries. Order is
+#: the order they are listed to the user.
+EDIT_FIELDS = {
+    "bond": ("atom_selection_1", "atom_selection_2"),
+    "angle": ("atom_selection_1", "atom_selection_2", "atom_selection_3"),
+    "dihedral": ("atom_selection_1", "atom_selection_2", "atom_selection_3",
+                 "atom_selection_4"),
+    "planarity": ("atom_selection",),
+    "parallelity": ("atom_selection_1", "atom_selection_2"),
+}
+
+#: What each kind calls its target value, and how to render it.
+_IDEAL_FIELD = {"bond": "distance_ideal", "angle": "angle_ideal",
+                "dihedral": "angle_ideal", "parallelity": "target_angle_deg"}
+
+
+def entries(scope: Any):
+    """``(kind, object)`` for every populated edit in ``scope``, in cctbx's own order.
+
+    A *view* of the scope for display and removal -- never a copy that gets applied. An
+    entry counts as populated when its selections are filled in; cctbx's extract yields no
+    empty templates, but a partially written one should not be listed as a restraint.
+    """
+    out = []
+    for kind, fields in EDIT_FIELDS.items():
+        for obj in getattr(scope, kind, None) or []:
+            if all(getattr(obj, f, None) for f in fields):
+                out.append((kind, obj))
+    return out
+
+
+def selections_of(kind: str, obj: Any) -> List[str]:
+    return [getattr(obj, f) for f in EDIT_FIELDS[kind]]
+
+
+def summarize(kind: str, obj: Any) -> str:
+    """A one-line human label for the edits list in the UI."""
+    tags = [_short(s) for s in selections_of(kind, obj)]
+    sigma = getattr(obj, "sigma", None)
+    suffix = f"  (\u03c3 {sigma:g})" if sigma is not None else ""
+    if kind == "bond":
+        value = obj.distance_ideal
+        symop = getattr(obj, "symmetry_operation", None)
+        via = f"  [{symop}]" if symop else ""
+        return f"bond  {tags[0]} \u2013 {tags[1]}   {value:.2f} \u00c5{via}{suffix}"
+    if kind == "angle":
+        return (f"angle  {tags[0]} \u2013 {tags[1]} \u2013 {tags[2]}   "
+                f"{obj.angle_ideal:.1f}\u00b0{suffix}")
+    if kind == "dihedral":
+        return (f"dihedral  {tags[0]} \u2013 {tags[1]} \u2013 {tags[2]} \u2013 {tags[3]}   "
+                f"{obj.angle_ideal:.1f}\u00b0{suffix}")
+    if kind == "planarity":
+        return f"planarity  {tags[0]}{suffix}"
+    return (f"parallelity  {tags[0]} \u2013 {tags[1]}   "
+            f"{getattr(obj, 'target_angle_deg', 0) or 0:.1f}\u00b0{suffix}")
+
+
+def count(scope: Any) -> int:
+    return len(entries(scope))
+
+
+def merge(scope: Any, other: Any) -> int:
+    """Append ``other``'s edits onto ``scope``. Returns how many were added."""
+    added = 0
+    for kind in EDIT_FIELDS:
+        incoming = [obj for k, obj in entries(other) if k == kind]
+        if incoming:
+            setattr(scope, kind, list(getattr(scope, kind, None) or []) + incoming)
+            added += len(incoming)
+    return added
+
+
+def remove(scope: Any, index: int) -> None:
+    """Drop the ``index``-th populated edit, numbered as :func:`entries` lists them."""
+    listing = entries(scope)
+    if not 0 <= index < len(listing):
+        raise IndexError("no edit at position %d" % index)
+    kind, target = listing[index]
+    setattr(scope, kind,
+            [obj for obj in getattr(scope, kind) if obj is not target])
+
+
+def new_entry(model: Any, kind: str, selections: List[str], *, ideal: float,
+              sigma: float, periodicity: int = 1) -> Any:
+    """A populated cctbx edit object of ``kind``, for the GUI's authoring path.
+
+    Written as PHIL and fetched back, rather than assembled field by field. It is the same
+    round trip a file takes, so an authored edit and a loaded one are the same kind of
+    object with the same defaults filled in, and there is still no place where pxviewer
+    decides what an edit is made of.
+    """
+    if kind not in EDIT_FIELDS:
+        raise ValueError("unknown edit kind %r" % kind)
+    fields = EDIT_FIELDS[kind]
+    if len(selections) != len(fields):
+        raise ValueError("a %s needs %d selections (got %d)"
+                         % (kind, len(fields), len(selections)))
+
+    lines = ["    action = add"]
+    for field, selection in zip(fields, selections):
+        lines.append('    %s = "%s"' % (field, str(selection).replace('"', "'")))
+    if kind in _IDEAL_FIELD:
+        lines.append("    %s = %.6f" % (_IDEAL_FIELD[kind], float(ideal)))
+    lines.append("    sigma = %.6f" % float(sigma))
+    if kind == "dihedral":
+        lines.append("    periodicity = %d" % int(periodicity))
+
+    text = "geometry_restraints.edits {\n  %s {\n%s\n  }\n}" % (
+        kind, "\n".join(lines))
+    return getattr(edits_from_phil(text, model), kind)[0]
+
+
+def add_entry(scope: Any, obj: Any, kind: str) -> None:
+    setattr(scope, kind, list(getattr(scope, kind, None) or []) + [obj])
+
+
+def edits_as_phil(scope: Any, model: Any = None) -> str:
+    """Serialise an edits scope back to PHIL text, via cctbx's own formatter.
+
+    Formatted by cctbx rather than written by hand, so a field pxviewer never looks at is
+    still written out and still means the same thing when the file is read again -- by
+    this, by phenix, or by a person.
+    """
+    master = _master_scope(model) if model is not None else _standalone_master()
+    params = master.fetch(sources=[]).extract()
+    params.geometry_restraints.edits = scope
+    formatted = master.format(python_object=params).get_without_substitution(
+        "geometry_restraints.edits")
+    block = formatted[0] if isinstance(formatted, list) else formatted
+    return "\n".join([
         "# Custom geometry-restraints edits, written by pxviewer.",
-        "# Bond/angle/dihedral restraints added on top of the monomer-library defaults —",
+        "# Bond/angle/dihedral restraints added on top of the monomer-library defaults \u2014",
         "# e.g. a covalent-ligand link or metal coordination the library does not know.",
         "# Read by cctbx/phenix (refinement.geometry_restraints.edits) and by pxviewer.",
-        "geometry_restraints.edits {",
-    ]
-    for e in edits:
-        sels = e["selections"]
-        if e["kind"] == "bond":
-            out += ["  bond {",
-                    f"    action = {e.get('action', 'add')}",
-                    f"    atom_selection_1 = {_q(sels[0])}",
-                    f"    atom_selection_2 = {_q(sels[1])}",
-                    f"    distance_ideal = {e['ideal']:.4f}",
-                    f"    sigma = {e['sigma']:.4f}",
-                    "  }"]
-        elif e["kind"] == "angle":
-            out += ["  angle {",
-                    f"    action = {e.get('action', 'add')}",
-                    f"    atom_selection_1 = {_q(sels[0])}",
-                    f"    atom_selection_2 = {_q(sels[1])}",
-                    f"    atom_selection_3 = {_q(sels[2])}",
-                    f"    angle_ideal = {e['ideal']:.4f}",
-                    f"    sigma = {e['sigma']:.4f}",
-                    "  }"]
-        elif e["kind"] == "dihedral":
-            out += ["  dihedral {",
-                    f"    action = {e.get('action', 'add')}",
-                    f"    atom_selection_1 = {_q(sels[0])}",
-                    f"    atom_selection_2 = {_q(sels[1])}",
-                    f"    atom_selection_3 = {_q(sels[2])}",
-                    f"    atom_selection_4 = {_q(sels[3])}",
-                    f"    angle_ideal = {e['ideal']:.4f}",
-                    f"    sigma = {e['sigma']:.4f}",
-                    f"    periodicity = {int(e.get('periodicity', 1))}",
-                    "  }"]
-    out.append("}")
-    return "\n".join(out) + "\n"
-
-
-def summarize(edit: dict) -> str:
-    """A one-line human label for the edits list in the UI."""
-    tags = [_short(s) for s in edit["selections"]]
-    if edit["kind"] == "bond":
-        return f"bond  {tags[0]} – {tags[1]}   {edit['ideal']:.2f} Å  (σ {edit['sigma']:g})"
-    if edit["kind"] == "angle":
-        return f"angle  {tags[0]} – {tags[1]} – {tags[2]}   {edit['ideal']:.1f}°  (σ {edit['sigma']:g})"
-    return (f"dihedral  {tags[0]} – {tags[1]} – {tags[2]} – {tags[3]}   "
-            f"{edit['ideal']:.1f}°  (σ {edit['sigma']:g})")
+        "geometry_restraints {",
+        block.as_str().rstrip(),
+        "}",
+        "",
+    ])
 
 
 def _short(selection: str) -> str:
@@ -232,18 +310,22 @@ def geometry_value(kind: str, points: List[Any]) -> float:
     return float(np.degrees(np.arctan2(y, x)))
 
 
-def get_edits(model: Any) -> List[dict]:
-    """The structured edits carried on ``model`` (empty list if none)."""
-    return list(getattr(model, _ATTR, None) or [])
+def get_edits(model: Any) -> Any:
+    """The edits scope carried on ``model`` -- cctbx's own object, never a copy of it."""
+    scope = getattr(model, _ATTR, None)
+    if scope is None:
+        scope = empty_edits(model)
+        setattr(model, _ATTR, scope)
+    return scope
 
 
 #: Serialises restraint builds; see build_restraints.
 _BUILD_LOCK = threading.Lock()
 
 
-def set_edits(model: Any, edits: List[dict]) -> None:
-    """Carry ``edits`` on ``model`` so the next restraint build applies them."""
-    setattr(model, _ATTR, list(edits or []))
+def set_edits(model: Any, scope: Any) -> None:
+    """Carry an edits scope on ``model`` so the next restraint build applies it."""
+    setattr(model, _ATTR, scope if scope is not None else empty_edits(model))
 
 
 def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = False) -> None:
@@ -269,40 +351,13 @@ def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = 
         if not force and model.restraints_manager_available():
             return
         params = model.get_default_pdb_interpretation_params()
-        edits = get_edits(model)
-        if edits:
-            _fill_params(params.geometry_restraints.edits, edits)
+        scope = getattr(model, _ATTR, None)
+        if scope is not None and count(scope):
+            # cctbx skips an incomplete edit rather than refusing it, so check first --
+            # see validate().
+            validate(scope)
+            # The user's scope, handed over whole. Nothing is rebuilt from an
+            # intermediate of pxviewer's own, so nothing cctbx understands is lost on
+            # the way -- see edits_from_phil.
+            params.geometry_restraints.edits = scope
         model.process(pdb_interpretation_params=params, make_restraints=make_restraints)
-
-
-def _fill_params(scope: Any, edits: List[dict]) -> None:
-    """Replace a params ``geometry_restraints.edits`` scope's bond/angle/dihedral lists with
-    objects built from ``edits`` (deep-copying the scope's own template so every field the
-    cctbx scope expects is present)."""
-    import copy
-
-    bond_t, angle_t, dih_t = scope.bond[0], scope.angle[0], scope.dihedral[0]
-    bonds, angles, dihedrals = [], [], []
-    for e in edits:
-        sels = e["selections"]
-        if e["kind"] == "bond":
-            o = copy.deepcopy(bond_t)
-            o.action = e.get("action", "add")
-            o.atom_selection_1, o.atom_selection_2 = sels
-            o.distance_ideal, o.sigma = e["ideal"], e["sigma"]
-            bonds.append(o)
-        elif e["kind"] == "angle":
-            o = copy.deepcopy(angle_t)
-            o.action = e.get("action", "add")
-            o.atom_selection_1, o.atom_selection_2, o.atom_selection_3 = sels
-            o.angle_ideal, o.sigma = e["ideal"], e["sigma"]
-            angles.append(o)
-        elif e["kind"] == "dihedral":
-            o = copy.deepcopy(dih_t)
-            o.action = e.get("action", "add")
-            (o.atom_selection_1, o.atom_selection_2,
-             o.atom_selection_3, o.atom_selection_4) = sels
-            o.angle_ideal, o.sigma = e["ideal"], e["sigma"]
-            o.periodicity = int(e.get("periodicity", 1))
-            dihedrals.append(o)
-    scope.bond, scope.angle, scope.dihedral = bonds, angles, dihedrals
