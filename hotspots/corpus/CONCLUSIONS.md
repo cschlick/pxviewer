@@ -181,3 +181,52 @@ whether a user benefits. Two gaps remain, and the second is the important one:
   (`corpus/accumulation.py`). Real, but well below the 2.07× the threshold-crossing regions
   manage. **The honest statement is that the field visibly shows something markers cannot, and
   that something carries weak but non-zero independent signal.**
+
+### 8b. …but what it uniquely shows is not worth seeing
+
+The other half, measured (`corpus/subthreshold_value.py`, 46 structures, clash held out of the
+field). Sub-threshold regions are defined by *distance* — faint voxels more than 6 Å from any
+marked voxel, so the set excludes the halo of problems the markers already show.
+
+| region | share of volume | obs/null | p<0.05 |
+|---|---:|---:|---:|
+| **sub-threshold only** | 39.4% | **0.86×** | 5% |
+| marked | 60.6% | **1.48×** | 42% |
+
+**The faint regions carry no signal — they are marginally *depleted*, and significant at chance
+rate.** In hindsight this is what should have been expected: clashes concentrate where geometry
+is genuinely bad, and a sub-threshold region is by definition one where geometry is mildly off
+but *not* bad. It is the "fine, actually" part of the structure.
+
+### So the defence fails on its second leg
+
+Two turns of argument reduce to one sentence: **the field can show what markers cannot, and
+what it uniquely shows is not worth looking at.** A capability with no demonstrated benefit.
+
+Caveats, because the result should not be overstated either:
+
+* This tests one held-out channel. Faint geometry strain might predict something else — poor
+  map fit, say — which no map-free corpus can check.
+* "Worth seeing" is operationalised as *contains a held-out clash outlier*. A user might value
+  seeing mild strain for its own sake. But that is a much weaker claim than "shows places worth
+  visiting", and a table of mildly-strained residues would serve it.
+
+### What survives, and what the paper should claim
+
+Three expansions of the field have now been measured and all three failed: cross-metric
+accumulation (adds nothing over `max`), the density construction (dominated at every operating
+point, its unique volume near-null), and sub-threshold value (0.86×). One thing measured
+positive: faint concern really does composite into a visible contrast (0.383 alpha) — but on
+regions that carry nothing.
+
+The pattern is consistent and worth stating plainly: **the field is a good renderer of what
+validation already found, and every attempt to make it find more has failed.** That is exactly
+what `FIGURES.md` claimed from the start — a visualization layer, not a new validation score —
+and the honest paper claims precisely that and no more:
+
+* it loses no flagged problem at its operating point (figure A);
+* it puts hot voxels within about a residue of what they represent (figure B);
+* the regions it marks carry ~2× the base rate of *other* problems (figure C);
+* it renders through occluding geometry, which per-atom colouring cannot.
+
+Nothing about accumulation. Nothing about finding what validators miss.
