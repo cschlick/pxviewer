@@ -549,6 +549,37 @@ def exercise_a_phil_with_nothing_in_it_is_refused():
         assert app.model_edits(mid) == []
 
 
+def exercise_a_phil_with_no_sigma_is_refused_and_says_which_edit():
+    """Matching cctbx, which will not guess a weight. The message has to name the edit:
+    a real edits file can hold a dozen, and "sigma missing" alone does not say where."""
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: pdb_interpretation not available)")
+        return
+    import os
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(data_path("zn_site.pdb"))
+        mid = app._models[0]["id"]
+
+        path = os.path.join(directory, "nosigma.phil")
+        with open(path, "w") as fh:
+            fh.write("""
+            geometry_restraints.edits {
+              bond {
+                atom_selection_1 = "chain S and resseq 1 and name ZN"
+                atom_selection_2 = "chain S and resseq 2 and name O"
+                distance_ideal = 2.1
+              }
+            }
+            """)
+
+        with raises(ValueError) as e:
+            app.load_edits(mid, path)
+        assert "sigma" in str(e.value)
+        assert "ZN" in str(e.value)           # which edit, not just that one was bad
+        assert app.model_edits(mid) == []
+
+
 def exercise_a_phil_naming_an_atom_that_is_not_there_is_refused():
     """Loading it must leave the model exactly as it was: a half-applied edit list is
     one a later minimize or drag cannot build restraints from."""

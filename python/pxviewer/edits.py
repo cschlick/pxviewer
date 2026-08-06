@@ -31,7 +31,14 @@ from typing import Any, List, Optional, Tuple
 _ATTR = "_pxviewer_edits"
 
 KIND_ARITY = {"bond": 2, "angle": 3, "dihedral": 4}
-_DEFAULT_SIGMA = {"bond": 0.02, "angle": 3.0, "dihedral": 20.0}
+
+#: Sigmas used when the *user authors* an edit in the GUI, where there is no file to read
+#: one from and clicking "add a bond restraint" has to mean something. Deliberately **not**
+#: applied when reading a PHIL: cctbx raises rather than assume a weight
+#: (``pdb_interpretation``: "The sigma for custom bond #n is not defined"), and a file that
+#: phenix refuses must not load quietly here at a tightness nobody chose. See
+#: :func:`_require_sigma`.
+AUTHORING_SIGMA = {"bond": 0.02, "angle": 3.0, "dihedral": 20.0}
 
 
 def _master() -> Any:
@@ -47,32 +54,54 @@ def _master() -> Any:
         "  edits {\n%s\n  }\n}" % geometry_restraints_edits_str)
 
 
+def _require_sigma(kind: str, index: int, sigma: Any, selections: List[str]) -> float:
+    """The sigma for one edit, or a refusal naming it.
+
+    cctbx will not guess a weight for a custom restraint -- ``pdb_interpretation`` raises
+    ``Sorry`` when a bond, angle or plane edit arrives without a sigma -- so neither does
+    this. Substituting a default would mean a PHIL that phenix.refine rejects loads
+    silently here, enforcing a restraint at a tightness the author never wrote down, and
+    the whole point of reading the same file format is agreeing about what it says.
+    """
+    if sigma is None:
+        raise ValueError(
+            "the sigma for custom %s #%d is not defined (atom selections: %s)"
+            % (kind, index, ", ".join(str(s) for s in selections)))
+    return float(sigma)
+
+
 def parse_edits(text: str) -> Tuple[List[dict], int]:
     """Parse a ``geometry_restraints.edits`` PHIL string into ``(edits, n_unsupported)``.
 
     Bond/angle/dihedral edits become dicts; planarity/parallelity are counted but not
     returned (not yet supported here). Tolerates the ``refinement.`` prefix phenix writes.
+
+    Raises when an edit names its atoms and its ideal value but leaves out ``sigma``,
+    which is what cctbx does with the same file -- see :func:`_require_sigma`.
     """
     import iotbx.phil
 
     scope = _master().fetch(source=iotbx.phil.parse(text)).extract().geometry_restraints.edits
     edits: List[dict] = []
-    for b in scope.bond:
+    for i, b in enumerate(scope.bond):
         if b.atom_selection_1 and b.atom_selection_2 and b.distance_ideal is not None:
+            selections = [b.atom_selection_1, b.atom_selection_2]
             edits.append({
                 "kind": "bond", "action": b.action or "add",
-                "selections": [b.atom_selection_1, b.atom_selection_2],
+                "selections": selections,
                 "ideal": float(b.distance_ideal),
-                "sigma": float(b.sigma) if b.sigma else _DEFAULT_SIGMA["bond"]})
-    for a in scope.angle:
+                "sigma": _require_sigma("bond", i, b.sigma, selections)})
+    for i, a in enumerate(scope.angle):
         if a.atom_selection_1 and a.atom_selection_2 and a.atom_selection_3 \
                 and a.angle_ideal is not None:
             edits.append({
                 "kind": "angle", "action": a.action or "add",
                 "selections": [a.atom_selection_1, a.atom_selection_2, a.atom_selection_3],
                 "ideal": float(a.angle_ideal),
-                "sigma": float(a.sigma) if a.sigma else _DEFAULT_SIGMA["angle"]})
-    for d in scope.dihedral:
+                "sigma": _require_sigma(
+                    "angle", i, a.sigma,
+                    [a.atom_selection_1, a.atom_selection_2, a.atom_selection_3])})
+    for i, d in enumerate(scope.dihedral):
         if all([d.atom_selection_1, d.atom_selection_2, d.atom_selection_3,
                 d.atom_selection_4]) and d.angle_ideal is not None:
             edits.append({
@@ -80,7 +109,10 @@ def parse_edits(text: str) -> Tuple[List[dict], int]:
                 "selections": [d.atom_selection_1, d.atom_selection_2,
                                d.atom_selection_3, d.atom_selection_4],
                 "ideal": float(d.angle_ideal),
-                "sigma": float(d.sigma) if d.sigma else _DEFAULT_SIGMA["dihedral"],
+                "sigma": _require_sigma(
+                    "dihedral", i, d.sigma,
+                    [d.atom_selection_1, d.atom_selection_2,
+                     d.atom_selection_3, d.atom_selection_4]),
                 "periodicity": int(d.periodicity) if d.periodicity else 1})
     n_unsupported = len(scope.planarity) + len(scope.parallelity)
     return edits, n_unsupported

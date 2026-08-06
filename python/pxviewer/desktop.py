@@ -7953,7 +7953,10 @@ class DesktopApp:
             "kind": kind, "action": "add",
             "selections": [edits_mod.selection_for_atom(model, i) for i in atoms],
             "ideal": edits_mod.geometry_value(kind, [sites[i] for i in atoms]),
-            "sigma": float(sigma) if sigma is not None else edits_mod._DEFAULT_SIGMA[kind]}
+            # Authored here rather than read from a file, so a default weight is the app's
+            # to choose — unlike a PHIL, where a missing sigma is refused (see
+            # edits.AUTHORING_SIGMA).
+            "sigma": float(sigma) if sigma is not None else edits_mod.AUTHORING_SIGMA[kind]}
         if kind == "dihedral":
             edit["periodicity"] = 1
         self._apply_edits(entry, list(entry.get("edits") or []) + [edit])

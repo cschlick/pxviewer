@@ -250,18 +250,22 @@ def exercise_a_misspelled_scope_yields_nothing_without_complaining():
         "geometry_restraints.edit { bond { distance_ideal = 2.0 } }") == ([], 0)
 
 
-def exercise_a_bond_without_a_sigma_gets_the_default_one():
-    """Not a rejection -- a default, and a fairly tight one at 0.02 A.
+def exercise_a_bond_without_a_sigma_is_refused_as_cctbx_refuses_it():
+    """cctbx will not guess a weight -- ``pdb_interpretation`` raises "The sigma for
+    custom bond #n is not defined" -- and neither does this.
 
-    Worth stating explicitly because the alternative guess is that the edit is dropped.
-    It is not: the restraint exists and is enforced at a weight the user never chose, so
-    anyone reading a PHIL to find out what was restrained needs to know the sigma may not
-    be written down in it.
+    The alternative, quietly substituting a default, was the behaviour here until it was
+    noticed: a PHIL that phenix.refine rejects would load without a word and enforce a
+    0.02 A restraint nobody had written down. Reading the same file format is only worth
+    anything if both agree about what the file says.
+
+    The GUI's authoring path still has a default (``edits.AUTHORING_SIGMA``) because there
+    is no file there to have left anything out of.
     """
     if not have("mmtbx.monomer_library.pdb_interpretation"):
         print("  skipping: pdb_interpretation not available")
         return
-    parsed, unsupported = edits.parse_edits("""
+    text = """
     geometry_restraints.edits {
       bond {
         atom_selection_1 = "name A"
@@ -269,11 +273,35 @@ def exercise_a_bond_without_a_sigma_gets_the_default_one():
         distance_ideal = 2.0
       }
     }
-    """)
-    assert unsupported == 0
-    assert len(parsed) == 1
-    assert approx_equal(parsed[0]["ideal"], 2.0)
-    assert approx_equal(parsed[0]["sigma"], 0.02)
+    """
+    try:
+        edits.parse_edits(text)
+    except ValueError as exc:
+        # Says which edit, the way cctbx's message does -- a file may hold many.
+        assert "sigma" in str(exc)
+        assert "name A" in str(exc)
+    else:
+        raise AssertionError("a bond edit with no sigma was accepted")
+
+
+def exercise_an_angle_or_dihedral_without_a_sigma_is_refused_too():
+    """The same rule on every kind, since cctbx applies it to every kind."""
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("  skipping: pdb_interpretation not available")
+        return
+    for kind, body in (
+        ("angle", 'atom_selection_1 = "name A"\natom_selection_2 = "name B"\n'
+                  'atom_selection_3 = "name C"\nangle_ideal = 109.5'),
+        ("dihedral", 'atom_selection_1 = "name A"\natom_selection_2 = "name B"\n'
+                     'atom_selection_3 = "name C"\natom_selection_4 = "name D"\n'
+                     'angle_ideal = 180.0'),
+    ):
+        try:
+            edits.parse_edits("geometry_restraints.edits { %s { %s } }" % (kind, body))
+        except ValueError as exc:
+            assert kind in str(exc)
+        else:
+            raise AssertionError("a %s edit with no sigma was accepted" % kind)
 
 
 def run():
