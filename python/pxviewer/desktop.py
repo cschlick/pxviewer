@@ -493,6 +493,7 @@ def _make_bridge():
         interactions_changed = Signal(bool)
         structure_changed = Signal(object)  # the active LiveSession (or None)
         loaded_changed = Signal(object)     # {groups, items} for the Loaded tree
+        restraints_changed = Signal(object)  # a model's restraints were rebuilt (model id)
         run_on_main = Signal(object)        # call a thunk on the GUI thread
         analysis_ready = Signal(object)     # clash/contact analysis finished (model id)
         validation_ready = Signal(object)   # validation finished: (model id, [ValidationResult])
@@ -1367,6 +1368,7 @@ class ControlsWindow:
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.status_warned.connect(self._flash_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
+        desktop.bridge.restraints_changed.connect(self._on_restraints_changed)
         desktop.bridge.analysis_ready.connect(self._on_analysis_ready)
         desktop.bridge.validation_ready.connect(self._on_validation_ready)
         desktop.bridge.validation_stale_changed.connect(self._set_validation_stale)
@@ -4728,6 +4730,26 @@ class ControlsWindow:
         self._apply_table_selection()   # the Atoms table
         self._apply_restraint_filter()  # Bonds / Angles / Dihedrals / Chirality / Planarity
 
+    def _on_restraints_changed(self, mid) -> None:
+        """A model's restraints were rebuilt: drop the cache and refill the tables.
+
+        Without this an added restraint is real -- minimize honours it, and it is in the
+        file the user saves -- but invisible: ``_geo_cache`` is keyed by model id and the
+        entry it holds wraps the *previous* restraints manager, so the Bonds table goes on
+        listing the restraints from before the edit.
+
+        Only rebuilt when that model's tables are the ones on screen. For any other model
+        dropping the cache is enough; it will be rebuilt when the user looks at it.
+
+        Gated on ``_table_model_id`` rather than ``_restraints_model_id``: the loaded-tree
+        update runs first and has already cleared the latter, so comparing against it here
+        never matches and the tables would keep their stale contents.
+        """
+        self._geo_cache.pop(mid, None)
+        if self._table_model_id == mid:
+            self._restraints_model_id = None      # force _ensure_restraints to refill
+            self._ensure_restraints()
+
     def _on_origin_filter_changed(self, _index: int) -> None:
         self._apply_restraint_filter()
 
@@ -7942,6 +7964,9 @@ class DesktopApp:
             raise ValueError(str(exc).splitlines()[0] if str(exc) else "cctbx rejected the edit")
         entry["edits"] = scope
         self._emit_loaded_changed()
+        # The restraints manager was just rebuilt, so anything cached off the old one --
+        # the Geometry tables above all -- is describing restraints that no longer exist.
+        self.bridge.restraints_changed.emit(entry["id"])
 
     def _edits_scope(self, entry):
         """The model's edits scope, copied so a rejected change can be rolled back."""

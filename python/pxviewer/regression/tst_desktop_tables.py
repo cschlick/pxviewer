@@ -13,8 +13,8 @@ import os
 import sys
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, qt_application, shipped_defaults, skip,
-    tmp_dir)
+    closing_modals, data_path, dispose, have, process_events, qt_application,
+    shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
@@ -452,6 +452,85 @@ def exercise_a_model_without_user_edits_still_offers_its_origins():
         labels = [combo.itemText(i) for i in range(combo.count())]
         assert not any("user-defined" in t for t in labels)
         assert combo.findData(4) < 0
+    finally:
+        dispose(app)
+
+
+def exercise_a_link_authored_from_two_atoms_reaches_the_table_and_a_file():
+    """The whole loop the feature exists for: pick two atoms, add the bond, see it in the
+    Bonds table, write it out as a PHIL that phenix can read.
+
+    The table half is the part that silently did not work. The restraint was real --
+    minimize honoured it and it was in the saved file -- but ``_geo_cache`` is keyed by
+    model id and held a wrapper around the *previous* restraints manager, so the table
+    went on showing the restraints from before the edit. Nothing said so; the row simply
+    was not there.
+    """
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+    import os
+
+    app = zn_site_desktop(with_edits=False)
+    try:
+        controls = app._controls
+        bond = controls._restraint_tabs["bond"]["model"]
+        before = bond.rowCount()
+        mid = app._models[0]["id"]
+
+        # The Zn and the water oxygen it coordinates -- the bond cctbx does not add.
+        zinc, water_o = 30, 31
+        app._scene_selection[mid] = [zinc, water_o]
+        app.add_edit_from_selection(mid, "bond")
+        process_events()
+
+        assert bond.rowCount() == before + 1
+        assert len(app.model_edits(mid)) == 1
+
+        # It is there as a *user* restraint, not lost among the library's.
+        combo = controls._origin_filter
+        assert combo.findData(4) >= 0
+        combo.setCurrentIndex(combo.findData(4))
+        assert bond.rowCount() == 1
+        assert set(bond.i_seqs_for_row(0)) == {zinc, water_o}
+        combo.setCurrentIndex(combo.findData(None))
+
+        # And it writes out as a file phenix reads and this reads back.
+        with tmp_dir() as directory:
+            path = os.path.join(directory, "link.phil")
+            app.save_edits(mid, path)
+            text = open(path).read()
+            assert "geometry_restraints" in text
+            assert "name ZN" in text and "distance_ideal" in text
+
+            app.clear_edits(mid)
+            process_events()
+            assert bond.rowCount() == before        # the row goes when the edit does
+
+            assert app.load_edits(mid, path) == 1
+            process_events()
+            assert bond.rowCount() == before + 1    # and comes back with it
+    finally:
+        dispose(app)
+
+
+def exercise_removing_an_authored_link_takes_it_out_of_the_table():
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = zn_site_desktop(with_edits=True)
+    try:
+        controls = app._controls
+        bond = controls._restraint_tabs["bond"]["model"]
+        with_edit = bond.rowCount()
+        mid = app._models[0]["id"]
+
+        app.remove_edit(mid, 0)
+        process_events()
+        assert bond.rowCount() == with_edit - 1
+        assert app.model_edits(mid) == []
+        assert controls._origin_filter.findData(4) < 0   # no user restraints left
     finally:
         dispose(app)
 

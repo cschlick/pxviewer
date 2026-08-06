@@ -234,16 +234,22 @@ def add_entry(scope: Any, obj: Any, kind: str) -> None:
 def edits_as_phil(scope: Any, model: Any = None) -> str:
     """Serialise an edits scope back to PHIL text, via cctbx's own formatter.
 
-    Formatted by cctbx rather than written by hand, so a field pxviewer never looks at is
-    still written out and still means the same thing when the file is read again -- by
-    this, by phenix, or by a person.
+    ``fetch_diff`` rather than a plain format, so the file holds what the user actually
+    set and not the whole master: every default a bare format emits -- an empty ``angle``
+    block, ``symmetry_operation = None``, ``action = *add delete change`` -- is noise in a
+    file someone has to read, and ``excessive_bond_distance_limit = 10`` is a setting they
+    never made.
+
+    Still cctbx doing the writing, though. A field pxviewer never looks at is written out
+    if the user set it, and means the same thing when the file is read back -- by this, by
+    phenix, or by a person.
     """
     master = _master_scope(model) if model is not None else _standalone_master()
     params = master.fetch(sources=[]).extract()
     params.geometry_restraints.edits = scope
-    formatted = master.format(python_object=params).get_without_substitution(
-        "geometry_restraints.edits")
-    block = formatted[0] if isinstance(formatted, list) else formatted
+    diff = master.fetch_diff(source=master.format(python_object=params))
+    block = diff.get_without_substitution("geometry_restraints.edits")
+    block = block[0] if isinstance(block, list) else block
     return "\n".join([
         "# Custom geometry-restraints edits, written by pxviewer.",
         "# Bond/angle/dihedral restraints added on top of the monomer-library defaults \u2014",
