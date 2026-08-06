@@ -35,6 +35,7 @@ import gzip
 import importlib.util
 import math
 import os
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass, field
@@ -259,21 +260,30 @@ def add_hydrogens(model):
     from iotbx.data_manager import DataManager
     from mmtbx.programs import reduce2
 
+    # The temp directory is removed on the way out. It used to leak one directory of ~20 MB
+    # per call, which is invisible for a single model and fills a 12 GB /tmp after ~600 of
+    # them -- found the hard way at 2,731 orphaned directories and 4.8 GB during corpus work.
+    # reduce2 writes several intermediates beside its output, so the whole directory goes,
+    # not just the two files named here.
     workdir = tempfile.mkdtemp(prefix="hotspots-reduce2-")
-    in_path = os.path.join(workdir, "in.pdb")
-    out_path = os.path.join(workdir, "in_H.pdb")
-    with open(in_path, "w") as fh:
-        fh.write(model.model_as_pdb())
-    args = [in_path, "approach=add", "n_terminal_charge=no_charge",
-            "ignore_missing_restraints=True", "add_flip_movers=True",
-            f"output.filename={out_path}", "output.overwrite=True"]
-    with open(os.devnull, "w") as devnull:
-        run_program(program_class=reduce2.Program, args=args, logger=devnull)
+    try:
+        in_path = os.path.join(workdir, "in.pdb")
+        out_path = os.path.join(workdir, "in_H.pdb")
+        with open(in_path, "w") as fh:
+            fh.write(model.model_as_pdb())
+        args = [in_path, "approach=add", "n_terminal_charge=no_charge",
+                "ignore_missing_restraints=True", "add_flip_movers=True",
+                f"output.filename={out_path}", "output.overwrite=True"]
+        with open(os.devnull, "w") as devnull:
+            run_program(program_class=reduce2.Program, args=args, logger=devnull)
 
-    dm = DataManager()
-    dm.set_overwrite(True)
-    dm.process_model_file(out_path)
-    return dm.get_model(out_path)
+        dm = DataManager()
+        dm.set_overwrite(True)
+        dm.process_model_file(out_path)
+        # Read before the directory goes: get_model returns a model built from that file.
+        return dm.get_model(out_path)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def extract_clash(model, keep_hydrogens=False, dots=None):
