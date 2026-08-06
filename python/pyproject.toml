@@ -51,5 +51,3 @@ artifacts = [
     "pxviewer/frontend/**",
 ]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]

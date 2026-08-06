@@ -1574,6 +1574,8 @@ class ControlsWindow:
                        self._on_run_real_space_refinement_demo)
         menu.addAction("Metal site — Zn coordination (restraint edits)",
                        lambda: self._on_load_sample("zn_site.pdb"))
+        menu.addAction("Crambin (3NIR) — alternate conformations",
+                       lambda: self._on_load_sample("3nir.pdb"))
         self._add_menu_heading(menu, "Tutorials")
         for tut in tutorial.all_tutorials():
             menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))

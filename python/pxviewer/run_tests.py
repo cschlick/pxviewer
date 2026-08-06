@@ -52,6 +52,7 @@ core_tests = [
     "$D/regression/tst_edits.py",
     "$D/regression/tst_api.py",
     "$D/regression/tst_mvs.py",
+    "$D/regression/tst_altlocs.py",
     "$D/regression/tst_live_frames.py",
     "$D/regression/tst_live_overlays.py",
     "$D/regression/tst_live_selection.py",
