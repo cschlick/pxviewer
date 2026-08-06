@@ -242,8 +242,33 @@ def extract_rotamer(hierarchy, amap=None) -> List[Event]:
 
 
 def model_has_hydrogens(model) -> bool:
-    elements = {e.strip().upper() for e in model.get_hierarchy().atoms().extract_element()}
-    return bool(elements & {"H", "D"})
+    """Whether probe2 can run on this model as it stands.
+
+    "Any hydrogen present" is the wrong test and was the one used here. probe2 requires
+    *both* polar and non-polar hydrogens, and a deposit carrying only some -- polar-only, a
+    handful on waters, a ligand modelled with H in an otherwise heavy-atom protein -- passes
+    an any-H check, skips reduce2, and then dies inside probe2 with "Did not find both polar
+    and non-polar Hydrogens". That failure is indistinguishable from a real extraction error
+    in a corpus log, so it silently costs structures rather than routing them to reduce2.
+
+    A hydrogen on carbon is the non-polar case and one on N/O/S the polar case, so both
+    classes must be present for the model to be usable unmodified.
+    """
+    hierarchy = model.get_hierarchy()
+    elements = [e.strip().upper() for e in hierarchy.atoms().extract_element()]
+    if not (set(elements) & {"H", "D"}):
+        return False
+    polar = nonpolar = False
+    for h, parent in ve.hydrogen_parents(hierarchy).items():
+        if elements[h] not in ("H", "D"):
+            continue
+        if elements[parent] == "C":
+            nonpolar = True
+        elif elements[parent] in ("N", "O", "S"):
+            polar = True
+        if polar and nonpolar:
+            return True
+    return False
 
 
 def add_hydrogens(model):

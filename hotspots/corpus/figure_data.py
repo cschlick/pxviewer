@@ -448,7 +448,7 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
 
 def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
             metrics=("rama", "rota", "clash"), combine="max", norm_p=1.0,
-            field="concern", radius=6.0):
+            field="concern", radius=6.0, want_c=True):
     """Returns ``(record, observation_lines)``.
 
     The lines are *returned* rather than streamed so the caller can append them only after
@@ -562,14 +562,21 @@ def run_one(pdb_id, *, spacing=SPACING, sigma=SIGMA, seed=0, want_dump=True,
                 rec["A"][m] = figure_a(shared, sv, heavy, m)
                 rec["B"][m] = figure_b(fld, shared, sites, heavy, m)
 
-        # Figure C holds the clash channel out and asks what the geometry-only field finds.
-        geom = {m: v for m, v in by_metric.items() if m in ("rama", "rota")}
-        rec["C"] = (figure_c((build_concern_fields(geom, spacing=spacing, sigma=sigma,
-                                                  combine=combine, p=norm_p)
-                              if field == "concern" else
-                              build_density_fields(geom, spacing=spacing, radius=radius)),
-                             shared_clash, clash_sites, clash_heavy, seed)
-                    if geom and shared_clash else None)
+        # Figure C holds the clash channel out and asks what the geometry-only field finds
+        # -- a *predictive* claim. It costs a second field build per structure and the
+        # project no longer makes that claim: held-out enrichment was 1.92x against a 0.98x
+        # null, and the 6.1x quoted in FIGURES.md came from the uncalibrated heavy-atom path.
+        # Kept behind a switch rather than deleted, so the number can be regenerated.
+        if want_c:
+            geom = {m: v for m, v in by_metric.items() if m in ("rama", "rota")}
+            rec["C"] = (figure_c((build_concern_fields(geom, spacing=spacing, sigma=sigma,
+                                                      combine=combine, p=norm_p)
+                                  if field == "concern" else
+                                  build_density_fields(geom, spacing=spacing, radius=radius)),
+                                 shared_clash, clash_sites, clash_heavy, seed)
+                        if geom and shared_clash else None)
+        else:
+            rec["C"] = None
 
         if want_dump:
             obs = _observation_lines(pdb_id, shared, shared_clash, fields,
@@ -695,6 +702,9 @@ def main():
                     help="which field construction to measure")
     ap.add_argument("--radius", type=float, default=6.0,
                     help="neighbourhood radius for --field density")
+    ap.add_argument("--no-figure-c", dest="want_c", action="store_false",
+                    help="skip the held-out-clash prediction figure (a second field build "
+                         "per structure); the project no longer makes that claim")
     ap.add_argument("--report", action="store_true")
     args = ap.parse_args()
     if args.null_budget:
@@ -760,7 +770,8 @@ def main():
             rec, obs = run_one(pdb_id, spacing=args.spacing, sigma=args.sigma,
                                seed=seed, want_dump=dump is not None,
                                metrics=metrics, combine=args.combine,
-                               norm_p=args.norm_p, field=args.field, radius=args.radius)
+                               norm_p=args.norm_p, field=args.field, radius=args.radius,
+                               want_c=args.want_c)
             # Results first, then observations: both are appended only once the model is
             # complete, so the two files always agree about which models are in the run.
             with open(results_path, "a") as fh:
