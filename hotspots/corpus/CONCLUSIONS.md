@@ -129,3 +129,55 @@ and it removes the most awkward sentence in the methods.
 | 5 | Recover the 35 size-capped structures | Removes the weakest sentence in the methods |
 | 6 | [../AGGREGATION_PROPOSAL.md](../AGGREGATION_PROPOSAL.md) — **tested, hypothesis failed** | Cross-metric accumulation adds nothing; `max` stays. Read the "Measured outcome" section |
 | 7 | [../HOTSPOT_DENSITY_DESIGN.md](../HOTSPOT_DENSITY_DESIGN.md) | The successor design: a second, density-based field that can accumulate across residues. Gate is step 4 |
+
+---
+
+## 8. The field's justification is visual, and it is now measured (2026-08-05)
+
+Every accumulation test in this project asked *does a voxel cross the display threshold*. **A
+volume render never asks that question.** It integrates opacity along a view ray,
+`alpha = 1 - exp(-k * integral of concern)`, so faint concern that never crosses 0.5 can still
+composite into something you can see. Measuring accumulation in field space was the wrong test
+for a visualization claim; `corpus/alpha_accumulation.py` measures it in image space.
+
+The marker comparison is definitional rather than modelled: along a ray that never crosses the
+threshold, a MolProbity marker representation shows **nothing** — markers exist only where a
+validator flagged something. So the only question is whether the field shows something there.
+
+Measured over 46 structures, 136 views, with `k` fixed *before* seeing results so a lone
+flagged outlier reads alpha = 0.6:
+
+| | |
+|---|---:|
+| envelope rays that never cross the threshold | **18.2%** |
+| line integral, clean envelope ray | 0.19 |
+| line integral, sub-threshold ray | **2.91** |
+| line integral, ray crossing the threshold | 12.95 |
+| **contrast above background, median** | **0.383 alpha** |
+| p90 | 0.645 |
+| rays clearing the 0.05 visibility floor | **92.7%** |
+
+Robust across a 4× sweep of `k` (median contrast 0.215 → 0.597), so the conclusion does not
+rest on the calibration constant.
+
+**So the claim holds.** On 18.2% of the structure — nearly a fifth — markers show nothing and
+the field composites faint concern into a contrast roughly 7.7× the conservative visibility
+floor. That is a real capability specific to a translucent volume, and it is the one thing here
+that discrete markers structurally cannot do.
+
+**It is also the claim this project came closest to discarding on bad evidence.** It was
+reported dead twice on the strength of threshold-crossing tests that could not see it.
+
+### What this does not establish
+
+**Visible is not the same as worth seeing.** This measures the physics of compositing, not
+whether a user benefits. Two gaps remain, and the second is the important one:
+
+* *Perception.* 0.383 alpha is far above any plausible just-noticeable difference, so
+  "noticeable" is safe; "useful" is not the same claim and would need a user study.
+* *Informativeness.* Are the sub-threshold-only regions worth visiting, or is the field
+  visibly rendering noise? Partial evidence exists and it is weak: regions built only from
+  never-flagged observations carried 1.23× held-out enrichment against a 0.97× null
+  (`corpus/accumulation.py`). Real, but well below the 2.07× the threshold-crossing regions
+  manage. **The honest statement is that the field visibly shows something markers cannot, and
+  that something carries weak but non-zero independent signal.**
