@@ -4525,8 +4525,59 @@ class ControlsWindow:
         t = re.sub(r"`(.+?)`", r"<code>\1</code>", t)
         return t.replace("\n\n", "<br><br>").replace("\n", "<br>")
 
+    def _load_tutorial_data(self, tutorial_obj) -> bool:
+        """Put the tutorial's example on screen. False means the user backed out.
+
+        Asked about only when there is something to lose. On an empty scene this is
+        silent -- the common case, and a dialog there would be friction for nothing. With
+        objects already loaded it is a real choice, because a tutorial reasons about the
+        scene: its steps say things like "select the reflections", and a second set of
+        reflections makes that instruction ambiguous. Replacing is offered first for that
+        reason, but keeping the user's work is never done without asking.
+        """
+        from PySide6.QtWidgets import QMessageBox
+
+        loader = getattr(tutorial_obj, "loader", None)
+        if loader is None:
+            return True
+
+        occupied = bool(self._desktop._models or self._desktop._volumes
+                        or self._desktop._reflections)
+        if occupied:
+            box = QMessageBox(self._window)
+            box.setWindowTitle("Start tutorial")
+            box.setText(f"“{tutorial_obj.title}” loads its own example.")
+            box.setInformativeText(
+                "You have objects loaded already. Clear them first, or keep them and add "
+                "the example alongside?")
+            clear = box.addButton("Clear and load", QMessageBox.ButtonRole.AcceptRole)
+            keep = box.addButton("Keep mine", QMessageBox.ButtonRole.ActionRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(clear)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is clear:
+                self._desktop._clear_all()
+                self._desktop._emit_loaded_changed()
+            elif clicked is not keep:
+                return False
+
+        try:
+            loader(self._desktop)
+        except Exception as exc:  # a demo that computes a map can fail; keep the app up
+            QMessageBox.warning(self._window, "Could not load the tutorial's example",
+                                str(exc))
+            return False
+        return True
+
     def _start_tutorial(self, tutorial_obj) -> None:
         from PySide6.QtCore import QTimer
+
+        # The example first: a tutorial that had to ask for its data could not tell
+        # whether it had arrived (see Tutorial.loader), so it opened on a step about a
+        # structure that might not be the one on screen.
+        if not self._load_tutorial_data(tutorial_obj):
+            return
 
         self._tutorial = tutorial_obj
         self._tutorial_step = 0

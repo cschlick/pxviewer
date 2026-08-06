@@ -28,9 +28,32 @@ class Step:
 
 
 class Tutorial:
-    def __init__(self, title: str, steps: List[Step]) -> None:
+    """A walkthrough, and the data it walks through.
+
+    ``loader`` is how the tutorial gets its own example on screen: ``(desktop) -> None``,
+    run when the tutorial starts. A tutorial that had to *ask* for its data spent its first
+    step on "click Get and pick X" -- navigation, not crystallography -- and, worse, could
+    not tell whether that had happened: the step's ``done`` predicate could only ask "is a
+    model loaded?", which is already true for anyone with their own work open. Starting
+    such a tutorial skipped straight to step 2 and then described a structure that was not
+    the one on screen. Loading its own data makes the precondition true by construction.
+    """
+
+    def __init__(self, title: str, steps: List[Step],
+                 loader: Optional[Callable[[Any], None]] = None) -> None:
         self.title = title
         self.steps = steps
+        self.loader = loader
+
+
+def _load_bundled(desktop: Any, filename: str) -> None:
+    """Load one of the bundled sample structures by name."""
+    from .loader import sample_structure_path
+
+    path = sample_structure_path(filename)
+    if path is None:
+        raise FileNotFoundError("the bundled sample %s is missing" % filename)
+    desktop.load_file(str(path))
 
 
 def _active(cw: Any) -> Optional[str]:
@@ -59,10 +82,8 @@ def validation_tutorial() -> Tutorial:
         Step(
             "MolProbity **validation** flags the parts of a model that look wrong — bad "
             "rotamers, Ramachandran and C-beta outliers, backbone (CaBLAM) problems, odd "
-            "cis-peptides. Let's run it on a structure built to trip every check.\n\nOpen it: "
-            "click **Get** and pick **Validation (1TEC)**.",
-            done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._get_btn,
+            "cis-peptides.\n\n**1TEC is loaded** — a structure that trips every one of "
+            "those checks. Let's run validation on it.",
         ),
         Step(
             "Open the **Validation** tab and click **Run validation**. It runs every "
@@ -76,7 +97,7 @@ def validation_tutorial() -> Tutorial:
             "in a table to select and zoom to that residue.\n\nThat's the loop — find the "
             "outliers, see them in 3D, fix them (drag or minimize), and re-run.",
         ),
-    ])
+    ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
 
 
 def ligand_fitting_tutorial() -> Tutorial:
@@ -85,11 +106,9 @@ def ligand_fitting_tutorial() -> Tutorial:
     return Tutorial("Fit a ligand into density", [
         Step(
             "Phenix's ligand-fitting tutorial fits a flexible ligand into a difference map. "
-            "Let's do the same, straight from data.\n\nOpen the example: click **Get** and "
-            "pick **Ligand fitting (ATP into a difference map)** — a ligand-free model "
-            "plus reflections that secretly contain an ATP.",
-            done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
-            target=lambda cw: cw._get_btn,
+            "Let's do the same, straight from data.\n\n**Loaded:** a ligand-free model, "
+            "plus reflections that secretly contain an ATP. The model cannot explain that "
+            "density — which is exactly what a difference map is for.",
         ),
         Step(
             "Compute the maps: in the **Scene** list select the **reflections** object and "
@@ -118,7 +137,7 @@ def ligand_fitting_tutorial() -> Tutorial:
             "ligand-fitting loop, the same as Phenix's tutorial: difference map → place → "
             "build → fit — with no phenix and no downloaded dataset.",
         ),
-    ])
+    ], loader=lambda d: d.load_ligand_fitting_demo())
 
 
 def _minimizing(cw: Any) -> bool:
@@ -132,11 +151,8 @@ def cryo_em_refinement_tutorial() -> Tutorial:
         Step(
             "Cryo-EM refinement (phenix's `real_space_refine`) slides a model into a 3D "
             "density map — a gradient-driven minimization, not against reflections but "
-            "against the map itself.\n\nOpen the example: click **Get** and pick "
-            "**Real-space refinement (cryo-EM)**. It loads a model that sits slightly "
-            "*off* its own density, waiting to be pushed back in.",
-            done=lambda cw: cw._desktop.map_for_model() is not None,
-            target=lambda cw: cw._get_btn,
+            "against the map itself.\n\n**Loaded:** a model sitting slightly *off* its "
+            "own density, waiting to be pushed back in.",
         ),
         Step(
             "Real-space refine it: on the **Tools** tab, in **Minimize**, tick **Use map** "
@@ -153,7 +169,7 @@ def cryo_em_refinement_tutorial() -> Tutorial:
             "the map here is the target, fixed.",
             target=lambda cw: cw._minimize_map_check,
         ),
-    ])
+    ], loader=lambda d: d.load_real_space_refinement_demo())
 
 
 def _live_difference_seen(cw: Any) -> bool:
@@ -168,12 +184,9 @@ def xray_refinement_tutorial() -> Tutorial:
             "X-ray refinement judges a model against **data**, not against a map someone "
             "already made. The honest reporter is the **mFo-DFc difference map**: green where "
             "the data wants density the model does not explain, red where the model puts "
-            "atoms the data will not support.\n\nOpen the example: click **Get** and pick "
-            "**X-ray maps from reflections (1UBQ)**. It loads a model alongside "
-            "amplitudes computed from that same model, so the two start in exact agreement — "
-            "which gives us a flat difference map to break on purpose.",
-            done=lambda cw: bool(cw._desktop._models) and bool(cw._desktop._reflections),
-            target=lambda cw: cw._get_btn,
+            "atoms the data will not support.\n\n**Loaded:** a model alongside amplitudes "
+            "computed from that same model, so the two start in exact agreement — which "
+            "gives us a flat difference map to break on purpose.",
         ),
         Step(
             "Phase the data: in the **Objects** list select the **reflections**, then click "
@@ -220,7 +233,7 @@ def xray_refinement_tutorial() -> Tutorial:
             "by minimizing — then re-phase and look again.",
             target=lambda cw: cw._minimize_stop_btn,
         ),
-    ])
+    ], loader=lambda d: d.load_xray_demo())
 
 
 def load_edits_tutorial() -> Tutorial:
@@ -228,10 +241,9 @@ def load_edits_tutorial() -> Tutorial:
     return Tutorial("Load restraint edits", [
         Step(
             "Restraint **edits** — custom bonds/angles the monomer library can't know — can "
-            "be shared as a phenix PHIL file. Let's load one onto a metal site.\n\nOpen the "
-            "example: click **Get** and pick **Restraint edits (Zn site)**.",
-            done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._get_btn,
+            "be shared as a phenix PHIL file.\n\n**Loaded:** a zinc site. cctbx works out "
+            "the Zn–His bonds on its own, but not the water in the fourth coordination "
+            "position. Let's supply that one from a file.",
         ),
         Step(
             "On the **Tools** tab, in the **Restraint edits** panel (below Measure), click "
@@ -247,18 +259,17 @@ def load_edits_tutorial() -> Tutorial:
             "phenix.refine reads.\n\nNext, try **Custom restraint edits** to author one "
             "yourself.",
         ),
-    ])
+    ], loader=lambda d: _load_bundled(d, "zn_site.pdb"))
 
 
 def restraint_edits_tutorial() -> Tutorial:
     """Author a custom restraint edit end to end — the writing half of the loop."""
     return Tutorial("Custom restraint edits", [
         Step(
-            "Now let's author a restraint by hand. A metal's coordination is a good case: "
-            "cctbx guesses the Zn–His bonds, but not the water in the fourth site.\n\nOpen "
-            "the example: click **Get** and pick **Restraint edits (Zn site)**.",
-            done=lambda cw: bool(cw._desktop._models),
-            target=lambda cw: cw._get_btn,
+            "Now let's author a restraint by hand rather than read one from a file. A "
+            "metal's coordination is a good case: cctbx guesses the Zn–His bonds, but not "
+            "the water in the fourth site.\n\n**Loaded:** the same zinc site, with no "
+            "edits on it.",
         ),
         Step(
             "Turn on atom picking with the **Pick** button, then click the **zinc** and the "
@@ -281,7 +292,7 @@ def restraint_edits_tutorial() -> Tutorial:
             "(exactly the kind the Load tutorial reads), for phenix.refine.",
             target=lambda cw: cw._edit_save_btn,
         ),
-    ])
+    ], loader=lambda d: _load_bundled(d, "zn_site.pdb"))
 
 
 def all_tutorials() -> List[Tutorial]:

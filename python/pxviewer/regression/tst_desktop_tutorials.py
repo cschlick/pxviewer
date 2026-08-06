@@ -115,15 +115,16 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         assert not coach.coach_bar.isHidden()
         assert progress(app) == "Step 1 / 4"
 
-        # Step 1 targets a control, so "Show me where" is offered -- and only points.
-        assert not coach.coach_show.isHidden()
-        controls._on_coach_show_me()                  # flashes Get; loads nothing
-        assert not app._models
+        # Starting it loaded its own example, so the tutorial opens on a step about a
+        # structure it knows is there rather than asking for one.
+        assert [m["name"] for m in app._models] == ["zn_site.pdb"]
 
-        # The user loads a structure themselves, and the predicate then advances.
-        app.load_files([str(sample_structure_path())])
-        pump_until(lambda: app._models, "the structure never loaded")
+        # That first step is orientation: nothing to do but read it, so it offers Next
+        # rather than a control to be shown.
+        assert coach.coach_next.text() == "Next"
         controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 1 / 4"          # no predicate: it waits
+        controls._tutorial_next()
         assert progress(app) == "Step 2 / 4"
 
         # Step 2: selecting two atoms.
@@ -147,6 +148,40 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         assert controls._tutorial is None
 
 
+def exercise_starting_a_tutorial_loads_its_own_example():
+    """Every tutorial brings its data with it, so no step has to say "go and open this".
+
+    The step that did could not tell whether it had happened: its predicate asked "is a
+    model loaded?", which is already true for anyone with their own work open, so the
+    tutorial skipped its own setup and opened on a step describing a structure that was
+    not on screen.
+    """
+    with desktop() as app:
+        for build in tutorial.all_tutorials():
+            assert build.loader is not None, build.title
+        assert not app._models
+
+
+def exercise_a_tutorial_asks_before_disturbing_loaded_work():
+    """Only when there is something to lose. The dialog offers to clear or to add
+    alongside, and cancelling leaves both the scene and the coach untouched.
+
+    ``closing_modals`` rejects the dialog, which is the Cancel path -- so this also pins
+    that a refused dialog aborts rather than loading anything.
+    """
+    with desktop() as app:
+        controls = app._controls
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        assert [m["name"] for m in app._models] == ["1ubq.pdb"]
+
+        controls._start_tutorial(tutorial.validation_tutorial())
+        process_events()
+
+        assert [m["name"] for m in app._models] == ["1ubq.pdb"]   # untouched
+        assert controls._tutorial is None                          # and not started
+
+
 def exercise_every_tutorial_step_points_at_a_control_that_exists():
     """A dead target flashes nothing, which reads as a broken tutorial rather than a
     broken pointer. Checked across every tutorial, not just the one being walked."""
@@ -163,12 +198,14 @@ def exercise_the_validation_tutorial_advances_when_validation_runs():
     with desktop() as app:
         controls = app._controls
         controls._start_tutorial(tutorial.validation_tutorial())
+        process_events()
         assert progress(app) == "Step 1 / 3"
         assert controls._validate_btn.text() == "Run validation"    # the step-2 target
 
-        app.load_files([str(sample_structure_path("1tec.pdb"))])
-        pump_until(lambda: app._models, "the demo never loaded")
-        controls._maybe_advance_tutorial()
+        # 1TEC arrives with the tutorial: the structure the steps talk about is the one
+        # on screen, which is the whole reason the loader exists.
+        assert [m["name"] for m in app._models] == ["1tec.pdb"]
+        controls._tutorial_next()                     # orientation step
         assert progress(app) == "Step 2 / 3"
 
         # Step 2 advances once validation has cached results. Stood in for rather than
@@ -195,18 +232,18 @@ def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
 
     with desktop() as app:
         controls = app._controls
+        # Starting it loads the demo -- the shaken model and the density it belongs to.
         controls._start_tutorial(tutorial.cryo_em_refinement_tutorial())
+        process_events()
         assert progress(app) == "Step 1 / 3"
 
-        app.load_real_space_refinement_demo(shake=0.6)
-        process_events()
         assert len(app._models) == 1
         assert len(app._volumes) == 1
         gid = app._models[0]["group"]
         mmm = app.group_mmm(gid)
         assert gid is not None and mmm is not None
         assert app.map_for_model() is not None
-        controls._maybe_advance_tutorial()
+        controls._tutorial_next()                     # orientation step
         assert progress(app) == "Step 2 / 3"
 
         mmm.set_resolution(3.0)
@@ -239,14 +276,14 @@ def exercise_the_xray_tutorial_walks_the_difference_map_loop():
     with desktop() as app:
         controls = app._controls
         controls._start_tutorial(tutorial.xray_refinement_tutorial())
+        process_events()
         assert progress(app) == "Step 1 / 6"
 
-        app.load_xray_demo()
-        process_events()
+        # The model and its amplitudes come with the tutorial.
         assert len(app._models) == 1
         assert len(app._reflections) == 1
         assert app.map_for_model() is None                  # not phased yet
-        controls._maybe_advance_tutorial()
+        controls._tutorial_next()                           # orientation step
         assert progress(app) == "Step 2 / 6"
 
         mid, rid = app._models[0]["id"], app._reflections[0]["id"]
