@@ -230,10 +230,25 @@ def _worst_per_residue(events, metrics):
     Rolling up by max leaves one event per residue per channel, so the geometry channels
     accumulate *with other residues and other channels* like everything else, and a residue
     with many mildly-strained restraints no longer outranks one with a single bad outlier.
+
+    **The severity is rolled up; the footprint is not.** Keeping the worst event *and only
+    its two or three atoms* silently drops every other flagged restraint in the residue,
+    including the atoms they implicate -- and at sigma = 2 A an atom 3 A from the surviving
+    deposit reads 0.32, under the 0.5 display threshold. Measured on the corpus before this:
+    bond recall fell below 1.0 in 39% of structures (p05 0.500, min 0.200), with hit counts
+    landing on exact integer fractions of the flagged count -- 1dg8 recalled 2 of 6 flagged
+    atoms, which is three flagged bonds in one residue and only one of them drawn.
+
+    So the kept event carries the union of the atoms of every *flagged* restraint in that
+    residue. Rule 6 is untouched: the severity is still the max, never a sum, so a residue
+    dense with mild restraints still cannot outrank one with a single bad outlier. Only the
+    extent changes, and it changes to cover the atoms the channel actually implicates. Peak
+    normalisation in field.py means a wider footprint does not raise the peak -- the event
+    still tops out at its own severity.
     """
     if not metrics:
         return events
-    worst, out = {}, []
+    worst, footprint, out = {}, {}, []
     for e in events:
         residue = e.meta.get("residue")
         if e.metric not in metrics or residue is None:
@@ -242,7 +257,17 @@ def _worst_per_residue(events, metrics):
         key = (e.metric, residue)
         if key not in worst or e.severity > worst[key].severity:
             worst[key] = e
-    return out + list(worst.values())
+        if e.severity >= 1.0:
+            seen = footprint.setdefault(key, {})
+            for xyz in e.atoms_xyz:
+                seen[tuple(round(float(c), 4) for c in xyz)] = tuple(float(c) for c in xyz)
+    rolled = []
+    for key, e in worst.items():
+        pts = footprint.get(key)
+        if pts and len(pts) > len(e.atoms_xyz):
+            e = replace(e, atoms_xyz=list(pts.values()))
+        rolled.append(e)
+    return out + rolled
 
 
 def qscore_concern_events(records, resolution=None, expected_q=None,
