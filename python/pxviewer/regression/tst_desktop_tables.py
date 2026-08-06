@@ -340,6 +340,122 @@ def exercise_geometry_restraints_populate_the_tables():
         dispose(app)
 
 
+def zn_site_desktop(with_edits=True):
+    """An app with the Zn site loaded, its user-supplied edits applied, and the restraint
+    tables built -- the one shipped combination that has more than one restraint origin."""
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    app._add_model(LiveSession.from_model_file(data_path("zn_site.pdb")), "zn_site")
+    if with_edits:
+        app.load_edits(app._models[0]["id"], data_path("zn_site_edits.phil"))
+    app._controls._ensure_restraints()
+    return app
+
+
+def exercise_the_origin_filter_lists_the_origins_the_model_has():
+    """Numbered, named and counted. cctbx defines over a hundred origins; only the ones
+    with restraints behind them are offered, or nearly every entry would filter to zero."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = zn_site_desktop()
+    try:
+        combo = app._controls._origin_filter
+        labels = [combo.itemText(i) for i in range(combo.count())]
+        assert labels[0] == "All"
+        assert combo.itemData(0) is None
+
+        # The user's own restraint, named as such and reachable by its cctbx origin id.
+        edits_label = next(t for t in labels if "user-defined" in t)
+        assert edits_label.startswith("4:")
+        assert combo.itemData(labels.index(edits_label)) == 4
+
+        # A model whose restraints all come from the monomer library has nothing to
+        # choose between, so the control is disabled rather than offering one option.
+        assert combo.isEnabled()
+    finally:
+        dispose(app)
+
+
+def exercise_filtering_by_origin_isolates_the_user_supplied_restraint():
+    """The point of the whole control: one hand-written bond among dozens from the
+    library, found without reading every row."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = zn_site_desktop()
+    try:
+        controls = app._controls
+        bond = controls._restraint_tabs["bond"]["model"]
+        full = bond.rowCount()
+
+        combo = controls._origin_filter
+        combo.setCurrentIndex(combo.findData(4))          # 'edits'
+        assert bond.rowCount() == 1
+        assert bond.rowCount() < full
+
+        # And it really is the edit: 2.1 A, the distance the PHIL asked for.
+        row = bond.i_seqs_for_row(0)
+        assert len(row) == 2
+
+        combo.setCurrentIndex(combo.findData(None))       # back to All
+        assert bond.rowCount() == full
+    finally:
+        dispose(app)
+
+
+def exercise_origin_and_selection_filters_intersect():
+    """Two independent reasons to hide a restraint, so asking for both means both --
+    "the edits I made, within what I have selected" is the question worth asking."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = zn_site_desktop()
+    try:
+        controls = app._controls
+        bond = controls._restraint_tabs["bond"]["model"]
+
+        combo = controls._origin_filter
+        combo.setCurrentIndex(combo.findData(4))
+        assert bond.rowCount() == 1                   # the edit, origin-filtered only
+
+        # Selecting elsewhere removes it: origin alone is not enough to keep a row.
+        app.select_by_expression("name ND1")          # the histidines, not the Zn site
+        controls._filter_selection_check.setChecked(True)
+        assert bond.rowCount() == 0
+
+        # Selecting the chain the edit lives on brings it back, still origin-filtered --
+        # so neither filter is overriding the other.
+        app.select_by_expression("chain S")           # the Zn and its water
+        assert bond.rowCount() == 1
+
+        controls._filter_selection_check.setChecked(False)
+        assert bond.rowCount() == 1                   # origin filter alone, unchanged
+    finally:
+        dispose(app)
+
+
+def exercise_a_model_without_user_edits_still_offers_its_origins():
+    """The Zn site has metal-coordination restraints even with no PHIL loaded, so the
+    dropdown is populated but 'edits' is absent -- it lists what is there, not a fixed
+    menu."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = zn_site_desktop(with_edits=False)
+    try:
+        combo = app._controls._origin_filter
+        labels = [combo.itemText(i) for i in range(combo.count())]
+        assert not any("user-defined" in t for t in labels)
+        assert combo.findData(4) < 0
+    finally:
+        dispose(app)
+
+
 def exercise_the_shared_filter_applies_to_every_restraint_table():
     """"Show only the selection" collapses the restraint tables too, not just Atoms."""
     if not monomer_library():

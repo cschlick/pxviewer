@@ -147,6 +147,34 @@ _ROW_FUNCS: Dict[str, Callable] = {
 }
 
 
+#: Origins worth naming more helpfully than cctbx does. Everything else uses cctbx's own
+#: key verbatim, which is already descriptive ("metal coordination", "hydrogen bonds").
+#: ``edits`` earns a gloss because it is the one origin the user creates themselves, and
+#: "edits" alone does not say so.
+_ORIGIN_GLOSS = {
+    0: "covalent geometry (monomer library)",
+    4: "edits (user-defined)",
+}
+
+
+def origin_name(origin_id: int) -> str:
+    """A short description of a restraint origin, e.g. ``"edits (user-defined)"``.
+
+    Falls back to the bare number for an origin this cctbx does not know, rather than
+    raising: the id came out of a proxy, so it is real whether or not it is nameable.
+    """
+    gloss = _ORIGIN_GLOSS.get(origin_id)
+    if gloss:
+        return gloss
+    try:
+        from cctbx.geometry_restraints.linking_class import linking_class
+
+        key = linking_class().get_origin_key(origin_id)
+    except Exception:  # pragma: no cover - defensive; unknown cctbx build
+        key = None
+    return key or "origin %d" % origin_id
+
+
 class GeometryRestraints:
     """A model's geometry restraints, read straight from cctbx proxy arrays.
 
@@ -195,6 +223,32 @@ class GeometryRestraints:
 
         proxy = self._proxies(category)[index]
         return _ROW_FUNCS[category](gr, self.sites, proxy)
+
+    def origins(self, category: str) -> List[Tuple[int, str, int]]:
+        """``(origin_id, name, count)`` for each restraint origin present, id order.
+
+        Only origins actually present are returned. cctbx defines well over a hundred --
+        one per link type -- and a dropdown listing all of them, nearly every entry empty,
+        would bury the two or three that a given model actually has.
+        """
+        proxies = self._proxies(category)
+        if proxies is None or not proxies.size():
+            return []
+        counts: Dict[int, int] = {}
+        for i in range(proxies.size()):
+            oid = getattr(proxies[i], "origin_id", 0)
+            counts[oid] = counts.get(oid, 0) + 1
+        return [(oid, origin_name(oid), counts[oid]) for oid in sorted(counts)]
+
+    def indices_with_origin(self, category: str, origin_id: Optional[int]) -> Optional[List[int]]:
+        """Indices of restraints from one origin, or ``None`` for "no origin filter"."""
+        if origin_id is None:
+            return None
+        proxies = self._proxies(category)
+        if proxies is None:
+            return []
+        return [i for i in range(proxies.size())
+                if getattr(proxies[i], "origin_id", 0) == origin_id]
 
     def indices_within(self, category: str, selected) -> List[int]:
         """Indices of restraints whose atoms are all in ``selected`` (a set of i_seqs).

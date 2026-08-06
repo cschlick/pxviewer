@@ -489,6 +489,102 @@ def exercise_authoring_saving_and_loading_restraint_edits():
         assert len(app.model_edits(mid)) == 1
 
 
+def exercise_loading_a_hand_written_edits_phil():
+    """The user's own file, not one this app wrote.
+
+    The round trip above proves save and load agree with each other, which they would
+    even if both were wrong. This starts from the PHIL that ships beside ``zn_site.pdb``
+    -- authored by hand, in the format cctbx and phenix read -- so it also pins that the
+    format the rest of the world writes is the format this reads.
+    """
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: pdb_interpretation not available)")
+        return
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        print("    (skipped: no monomer library)")
+        return
+
+    with desktop() as app:
+        app.load_file(data_path("zn_site.pdb"))
+        mid = app._models[0]["id"]
+        model = app._model_entry(mid)["session"].model
+
+        def n_bonds():
+            return model.get_restraints_manager().geometry.pair_proxies(
+                ).bond_proxies.simple.size()
+
+        app._controls._ensure_restraints()
+        before = n_bonds()
+
+        assert app.load_edits(mid, data_path("zn_site_edits.phil")) == 0
+        assert len(app.model_edits(mid)) == 1
+        assert n_bonds() == before + 1        # the Zn-water bond cctbx does not add itself
+
+        # It survives into the summary the tree and Appearance pane read.
+        item = next(it for it in app._loaded_summary()["items"] if it["id"] == mid)
+        assert "bond" in item["edits"][0]["summary"]
+
+
+def exercise_a_phil_with_nothing_in_it_is_refused():
+    """A misspelled scope parses to zero edits without complaint (see tst_edits.py), so
+    this layer is what tells the user their file did nothing."""
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: pdb_interpretation not available)")
+        return
+    import os
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(data_path("zn_site.pdb"))
+        mid = app._models[0]["id"]
+
+        empty = os.path.join(directory, "nothing.phil")
+        with open(empty, "w") as fh:
+            fh.write("geometry_restraints.edit { bond { distance_ideal = 2.0 } }\n")
+
+        with raises(ValueError) as e:
+            app.load_edits(mid, empty)
+        assert "no bond/angle/dihedral edits" in str(e.value)
+        assert app.model_edits(mid) == []
+
+
+def exercise_a_phil_naming_an_atom_that_is_not_there_is_refused():
+    """Loading it must leave the model exactly as it was: a half-applied edit list is
+    one a later minimize or drag cannot build restraints from."""
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: pdb_interpretation not available)")
+        return
+    from pxviewer.geometry import monomer_library_available
+
+    if not monomer_library_available():
+        print("    (skipped: no monomer library)")
+        return
+    import os
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(data_path("zn_site.pdb"))
+        mid = app._models[0]["id"]
+        app._controls._ensure_restraints()
+
+        bad = os.path.join(directory, "typo.phil")
+        with open(bad, "w") as fh:
+            fh.write("""
+            geometry_restraints.edits {
+              bond {
+                atom_selection_1 = "chain S and resseq 1 and name ZN"
+                atom_selection_2 = "name NOSUCHATOM"
+                distance_ideal = 2.1
+                sigma = 0.05
+              }
+            }
+            """)
+
+        with raises(ValueError):
+            app.load_edits(mid, bad)
+        assert app.model_edits(mid) == []     # reverted, not left half-applied
+
+
 # -- the live difference map --------------------------------------------------
 
 

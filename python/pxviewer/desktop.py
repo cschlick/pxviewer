@@ -3497,7 +3497,8 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _build_geometry_tab(self):
-        from PySide6.QtWidgets import QCheckBox, QTabWidget, QVBoxLayout, QWidget
+        from PySide6.QtWidgets import (
+            QCheckBox, QComboBox, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget)
 
         from .geometry import CATEGORIES
 
@@ -3520,7 +3521,29 @@ class ControlsWindow:
             "atoms are all selected."
         )
         self._filter_selection_check.toggled.connect(self._on_filter_toggled)
-        layout.addWidget(self._filter_selection_check)
+
+        # Restraints from one origin only. The reason this is worth a control: a model's
+        # restraints are overwhelmingly monomer-library covalent geometry, so the handful
+        # the user added themselves through an edits PHIL -- a metal coordination bond, a
+        # covalent link the library does not know -- are otherwise a few rows lost among
+        # thousands, with nothing in the table to distinguish them.
+        self._origin_filter = QComboBox()
+        self._origin_filter.setToolTip(
+            "Show only restraints from one origin. 'edits' are the restraints supplied "
+            "in a geometry_restraints.edits PHIL file; the rest come from the monomer "
+            "library or from links cctbx detected.")
+        self._origin_filter.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._origin_filter.setMinimumContentsLength(12)
+        self._origin_filter.currentIndexChanged.connect(self._on_origin_filter_changed)
+
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(self._filter_selection_check)
+        filter_row.addStretch(1)
+        origin_label = QLabel("Origin:")
+        filter_row.addWidget(origin_label)
+        filter_row.addWidget(self._origin_filter, stretch=1)
+        layout.addLayout(filter_row)
 
         subtabs = QTabWidget()
         self._geo_subtabs = subtabs
@@ -3645,6 +3668,9 @@ class ControlsWindow:
         finally:
             self._suppress_restraint_sync = False
         self._restraints_model_id = mid
+        # Which origins exist is a property of this model, so the dropdown is rebuilt
+        # before the filter is applied.
+        self._refresh_origin_filter(geo)
         self._apply_restraint_filter()  # respect the shared filter on a fresh build
 
     def _on_restraint_link_clicked(self, category: str, index) -> None:
@@ -4696,8 +4722,54 @@ class ControlsWindow:
         self._apply_table_selection()   # the Atoms table
         self._apply_restraint_filter()  # Bonds / Angles / Dihedrals / Chirality / Planarity
 
+    def _on_origin_filter_changed(self, _index: int) -> None:
+        self._apply_restraint_filter()
+
+    def _selected_origin_id(self):
+        """The chosen origin id, or None for "all origins"."""
+        combo = getattr(self, "_origin_filter", None)
+        return combo.currentData() if combo is not None else None
+
+    def _refresh_origin_filter(self, geo) -> None:
+        """Repopulate the origin dropdown from the origins this model actually has.
+
+        Rebuilt per model rather than listed once: which origins exist is a property of
+        the structure, and an entry for an origin with no restraints behind it would
+        filter every table to nothing.
+        """
+        combo = getattr(self, "_origin_filter", None)
+        if combo is None:
+            return
+        from .geometry import CATEGORIES
+
+        present = {}
+        for cat, _label, _cols in CATEGORIES:
+            for oid, name, count in (geo.origins(cat) if geo is not None else []):
+                entry = present.setdefault(oid, [name, 0])
+                entry[1] += count
+
+        previous = combo.currentData()
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("All", None)
+            for oid in sorted(present):
+                name, count = present[oid]
+                combo.addItem(f"{oid}: {name} ({count})", oid)
+            index = combo.findData(previous)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            combo.blockSignals(blocked)
+        # Nothing to choose between when a model has one origin, which is the common case.
+        combo.setEnabled(len(present) > 1)
+
     def _apply_restraint_filter(self) -> None:
-        """Filter each built restraint table to restraints within the selection (or all)."""
+        """Filter each built restraint table by selection and by origin.
+
+        The two are independent reasons to hide a restraint, so they intersect: asking for
+        the user's own edits *within* the current selection is the question worth being
+        able to ask, and either filter alone still works.
+        """
         if self._restraints_model_id is None:
             return  # restraints not built yet — _ensure_restraints will apply on build
         geo = self._geo_cache.get(self._restraints_model_id)
@@ -4705,10 +4777,17 @@ class ControlsWindow:
             return
         on = self._filter_selection_check.isChecked()
         selected = set(self._table_selection_indices()) if on else None
+        origin_id = self._selected_origin_id()
         self._suppress_restraint_sync = True
         try:
             for cat, info in self._restraint_tabs.items():
-                info["model"].set_filter(geo.indices_within(cat, selected) if on else None)
+                keep = None
+                if on:
+                    keep = geo.indices_within(cat, selected)
+                by_origin = geo.indices_with_origin(cat, origin_id)
+                if by_origin is not None:
+                    keep = by_origin if keep is None else sorted(set(keep) & set(by_origin))
+                info["model"].set_filter(keep)
         finally:
             self._suppress_restraint_sync = False
 
