@@ -230,3 +230,47 @@ and the honest paper claims precisely that and no more:
 * it renders through occluding geometry, which per-atom colouring cannot.
 
 Nothing about accumulation. Nothing about finding what validators miss.
+
+---
+
+## 9. Measured: problems cluster with their own kind, not across kinds (2026-08-06)
+
+`corpus/clustering.py`, 46 structures. Clark-Evans ratio `R = observed mean nearest-neighbour
+distance / null mean`, where the null re-places every event on a **randomly chosen heavy atom
+of the same structure** — the control that matters, since events can only occur where atoms
+are, and a uniform-box null would report the shape of the protein as clustering.
+
+| severity | neighbour | observed | null | R | clustered in |
+|---|---|---:|---:|---:|---:|
+| flagged | any kind | 3.92 Å | 4.45 Å | **0.825** | 98% |
+| flagged | cross-family | 7.40 Å | 7.26 Å | 0.945 | 67% |
+| sub-threshold | any kind | 2.99 Å | 3.21 Å | **0.925** | 93% |
+| sub-threshold | cross-family | 4.18 Å | 4.16 Å | **0.978** | 67% |
+
+**This corrects an earlier claim in this document and in discussion.** Sub-threshold problems
+are *not* spatially random — they cluster, in 93% of structures. A back-of-envelope Poisson
+estimate suggested otherwise and was wrong; the difference is the null, since a Poisson process
+in a box does not know that atoms are unevenly distributed.
+
+### The statement that survives, and it explains everything else here
+
+> **Validation problems cluster strongly with their own kind and barely at all across kinds.**
+
+Every result in this document follows from it, quantitatively:
+
+* **Within-metric accumulation works** and the field already does it — same-kind events cluster
+  (R = 0.825 / 0.925), which is why a floppy loop renders as one region rather than three dots.
+* **Cross-metric accumulation fails** because at R = 0.978 there is nothing to accumulate. Not
+  a kernel-width problem, not a threshold problem: the arrangement a cross-metric field needs
+  does not exist in the data, so no combination rule could have produced it.
+* **Figure C's 2.07× and the sub-threshold 0.86×** fall straight out: cross-family clustering
+  is weak-but-real for flagged events (0.945) and absent for mild ones (0.978), so marked
+  regions predict other problems modestly and faint regions predict nothing.
+
+There is a design irony worth keeping. The family taxonomy — max *within*, accumulate
+*across* — is structurally right and exactly inverted from where the signal sits. The
+redundancy is within a family, where the max is correct; the accumulation is across families,
+where there is nothing to add.
+
+This also bounds any future hotspot field: **no combination rule can extract cross-metric
+coincidence that is not in the data.**
