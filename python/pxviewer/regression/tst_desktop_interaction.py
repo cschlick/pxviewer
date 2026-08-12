@@ -679,6 +679,62 @@ def exercise_declining_the_offer_leaves_the_model_alone():
         assert [u["code"] for u in app.unknown_ligands(mid)] == ["L01"]
 
 
+def exercise_minimize_offers_to_fix_a_ligand_that_blocks_it():
+    """Minimize and drag build restraints on worker threads, which cannot ask the user
+    anything -- so an unknown ligand made them fail with a line of cctbx text, and the
+    offer to do something about it existed only in the Geometry tab.
+
+    The check is free on a healthy model: it acts only when the background pre-warm has
+    already failed and recorded why. Working it out at click time would mean a full
+    interpretation pass on the GUI thread every time somebody pressed Minimize.
+    """
+    if not have("rdkit", "mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: rdkit / pdb_interpretation not available)")
+        return
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(_model_with_an_unknown_ligand(directory))
+        mid = app._models[0]["id"]
+        entry = app._model_entry(mid)
+
+        # The warm runs on its own thread and records why it could not build.
+        pump_until(lambda: "restraints_error" in entry,
+                   "the failed pre-warm was never recorded")
+        assert "Fatal problems" in entry["restraints_error"]
+
+        # closing_modals rejects the dialog, so this is the decline path: the offer was
+        # made, nothing was generated, and the recorded reason stands.
+        app._controls._offer_restraints_if_blocked(mid)
+        assert [u["code"] for u in app.unknown_ligands(mid)] == ["L01"]
+        assert "restraints_error" in entry
+
+        # Accepting it (driven directly here) clears the block.
+        assert app.generate_ligand_restraints(mid, ["L01"])
+        app._controls._offer_restraints_if_blocked(mid)
+        assert entry.get("restraints_error") is None
+        assert entry["session"].model.restraints_manager_available()
+
+
+def exercise_a_healthy_model_is_never_asked_about_ligands():
+    """The pre-flight must cost nothing on an ordinary model, or every Minimize would pay
+    for an interpretation pass to be told there is no problem."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    with desktop() as app:
+        app.load_file(data_path("zn_site.pdb"))
+        mid = app._models[0]["id"]
+        entry = app._model_entry(mid)
+        pump_until(lambda: entry["session"].model.restraints_manager_available(),
+                   "restraints never warmed")
+        assert entry.get("restraints_error") is None
+        app._controls._offer_restraints_if_blocked(mid)   # a no-op, and must not raise
+
+
 # -- the live difference map --------------------------------------------------
 
 

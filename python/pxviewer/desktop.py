@@ -2054,7 +2054,40 @@ class ControlsWindow:
             f"Placing at: {target['name']}" if target else
             "Place a ligand marker to build a ligand at it.")
 
+    def _offer_restraints_if_blocked(self, mid=None) -> None:
+        """Before an action that needs restraints, offer to fix an unknown ligand.
+
+        Minimize and drag do their restraint building on worker threads, which cannot ask
+        the user anything -- so without this the answer to "why will nothing move?" was a
+        line of cctbx text, and the offer to do something about it lived only in the
+        Geometry tab, where there was no reason to look.
+
+        Costs nothing when all is well: it acts only on a model whose *background* warm
+        already failed and recorded why (see ``DesktopApp._prewarm_restraints``). Working
+        it out here instead would mean a full interpretation pass on the GUI thread every
+        time somebody pressed Minimize.
+        """
+        mid = mid or self._desktop._active_model_id
+        entry = self._desktop._model_entry(mid) if mid else None
+        if not (entry and entry.get("restraints_error")):
+            return
+        model = getattr(entry["session"], "model", None)
+        if model is None:
+            return
+        try:
+            if model.restraints_manager_available():
+                entry.pop("restraints_error", None)   # something else built them meanwhile
+                return
+        except Exception:  # pragma: no cover - defensive
+            return
+        if self._offer_ligand_restraints(mid):
+            entry.pop("restraints_error", None)
+
     def _on_minimize(self) -> None:
+        # A model whose restraints will not build cannot be minimized, and the reason is
+        # usually a ligand with no dictionary -- fixable, and worth offering here rather
+        # than letting the run fail on a thread.
+        self._offer_restraints_if_blocked()
         try:
             self._desktop.minimize_model(use_map=self._minimize_map_check.isChecked())
         except Exception as exc:
@@ -4463,6 +4496,9 @@ class ControlsWindow:
     def _on_toggle_refine_drag(self, checked: bool) -> None:
         if checked:
             self._pick_btn.setChecked(False)
+            # Arming the drag is the moment to sort restraints out: the drag itself builds
+            # them on its own thread, where a failure can only be reported, not fixed.
+            self._offer_restraints_if_blocked()
         self._desktop.set_tug_enabled(checked)
 
     def _on_clear_selection(self) -> None:
@@ -6485,8 +6521,14 @@ class DesktopApp:
                 with self._restraints_lock:
                     if not model.restraints_manager_available():
                         edits.build_restraints(model)
-            except Exception:  # pragma: no cover - cctbx/runtime errors
-                pass  # a real failure surfaces when a drag or minimize actually needs them
+                entry.pop("restraints_error", None)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                # Recorded rather than swallowed. The warm runs on a thread and cannot ask
+                # the user anything, but a later minimize or drag can -- and asking is only
+                # cheap if it already knows a build failed, since finding out otherwise
+                # costs a full interpretation pass on the GUI thread. See
+                # ControlsWindow._offer_restraints_if_blocked.
+                entry["restraints_error"] = str(exc)
 
         threading.Thread(target=work, name="pxviewer-restraints-warm", daemon=True).start()
 
