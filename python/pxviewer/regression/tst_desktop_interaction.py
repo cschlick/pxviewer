@@ -616,6 +616,69 @@ def exercise_a_phil_naming_an_atom_that_is_not_there_is_refused():
         assert app.model_edits(mid) == []     # reverted, not left half-applied
 
 
+def _model_with_an_unknown_ligand(directory):
+    """Write a PDB whose ligand the monomer library cannot type. Returns its path."""
+    from pxviewer import ligands as ligands_mod
+    import os
+
+    model = ligands_mod.build_ligand_from_smiles("CC(=O)Oc1ccccc1C(=O)O", "AIN", (0, 0, 0))
+    hierarchy = model.get_hierarchy()
+    for group in hierarchy.atom_groups():
+        group.resname = "L01"
+    path = os.path.join(directory, "unknown_ligand.pdb")
+    with open(path, "w") as handle:
+        handle.write(hierarchy.as_pdb_string(crystal_symmetry=model.crystal_symmetry()))
+    return path
+
+
+def exercise_an_unknown_ligand_can_be_given_restraints():
+    """One unrecognised residue costs the whole model its restraints, so the app offers to
+    infer a dictionary rather than leaving minimize, drag and the Geometry tab dead."""
+    if not have("rdkit", "mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: rdkit / pdb_interpretation not available)")
+        return
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(_model_with_an_unknown_ligand(directory))
+        mid = app._models[0]["id"]
+
+        unknown = app.unknown_ligands(mid)
+        assert [u["code"] for u in unknown] == ["L01"]
+
+        made = app.generate_ligand_restraints(mid)
+        assert set(made) == {"L01"}
+        assert "CC(=O)Oc1ccccc1C(=O)O" in made["L01"] or made["L01"]   # perceived chemistry
+        assert app.unknown_ligands(mid) == []
+
+        # The model now builds, which is the thing that was impossible before.
+        model = app._model_entry(mid)["session"].model
+        model.process(make_restraints=True)
+        assert model.get_restraints_manager().geometry.pair_proxies(
+            ).bond_proxies.simple.size() > 15
+
+
+def exercise_declining_the_offer_leaves_the_model_alone():
+    """``closing_modals`` rejects the dialog, which is the Cancel path: nothing is
+    generated, and the model is left exactly as unbuildable as it was -- an inferred
+    dictionary is a guess, and a refused guess must not be applied anyway."""
+    if not have("rdkit", "mmtbx.monomer_library.pdb_interpretation"):
+        print("    (skipped: rdkit / pdb_interpretation not available)")
+        return
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    with desktop() as app, tmp_dir() as directory:
+        app.load_file(_model_with_an_unknown_ligand(directory))
+        mid = app._models[0]["id"]
+
+        assert app._controls._offer_ligand_restraints(mid) is False
+        assert [u["code"] for u in app.unknown_ligands(mid)] == ["L01"]
+
+
 # -- the live difference map --------------------------------------------------
 
 

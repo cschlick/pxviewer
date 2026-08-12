@@ -145,6 +145,146 @@ def exercise_coarse_orient_recovers_a_bad_orientation():
         "pre-search did not improve orientation: %.2f -> %.2f" % (before, after)
 
 
+# -- ligands the monomer library does not know --------------------------------
+
+
+def _unknown_ligand_model(smiles="CC(=O)Oc1ccccc1C(=O)O", code="L01", scale=1.0):
+    """A model of ``smiles`` filed under a residue name cctbx has no dictionary for.
+
+    Built rather than shipped as a file: the point is a residue the monomer library cannot
+    type, and a fixture that stopped being unknown -- because the code was added to
+    geostd -- would quietly stop testing anything.
+    """
+    import tempfile
+    import os
+
+    from pxviewer.cctbx_io import read_model
+
+    model = ligands.build_ligand_from_smiles(smiles, "AIN", (0, 0, 0))
+    hierarchy = model.get_hierarchy()
+    for group in hierarchy.atom_groups():
+        group.resname = code
+    if scale != 1.0:                     # a badly built ligand: every bond stretched
+        for atom in hierarchy.atoms():
+            atom.set_xyz(tuple(scale * np.array(atom.xyz)))
+    directory = tempfile.mkdtemp(prefix="pxviewer_unknown_")
+    path = os.path.join(directory, "unknown.pdb")
+    with open(path, "w") as handle:
+        handle.write(hierarchy.as_pdb_string(crystal_symmetry=model.crystal_symmetry()))
+    return read_model(path)
+
+
+def _restraints_ready():
+    from pxviewer.geometry import monomer_library_available
+
+    return have("rdkit", "mmtbx.monomer_library.pdb_interpretation") \
+        and monomer_library_available()
+
+
+def exercise_an_unrecognised_ligand_is_reported_with_all_of_its_atoms():
+    """cctbx flags only the atoms it could not type -- often the heavy ones, their
+    hydrogens having typed fine -- but a dictionary has to describe the whole residue, and
+    perceiving chemistry from part of a molecule fails outright. So the report widens each
+    flagged atom to its residue.
+    """
+    if not _restraints_ready():
+        print("  skipping: rdkit / monomer library not available")
+        return
+    model = _unknown_ligand_model()
+    found = ligands.unknown_ligands(model)
+    assert len(found) == 1
+    assert found[0]["code"] == "L01"
+    assert found[0]["n_atoms"] == model.get_number_of_atoms()   # all 21, not the 14 flagged
+
+
+def exercise_a_model_cctbx_understands_reports_nothing():
+    if not _restraints_ready():
+        print("  skipping: rdkit / monomer library not available")
+        return
+    from pxviewer.regression.tst_utils import data_path
+    from pxviewer.cctbx_io import read_model
+
+    assert ligands.unknown_ligands(read_model(data_path("zn_site.pdb"))) == []
+
+
+def exercise_restraints_are_read_back_out_of_the_coordinates():
+    if not _restraints_ready():
+        print("  skipping: rdkit / monomer library not available")
+        return
+    model = _unknown_ligand_model()
+    found = ligands.unknown_ligands(model)
+    cif_text, smiles = ligands.restraints_from_residue(
+        model, found[0]["i_seqs"], found[0]["code"])
+
+    from rdkit import Chem
+    assert smiles == Chem.CanonSmiles("CC(=O)Oc1ccccc1C(=O)O")   # aspirin, recovered
+    assert "comp_L01" in cif_text
+    # The header must say the SMILES was *perceived*, not supplied: a reader deciding
+    # whether to trust these restraints needs to know it is a guess.
+    assert "Perceived SMILES" in cif_text
+    assert "perceived from the modelled coordinates" in cif_text
+    assert "Source SMILES" not in cif_text
+
+
+def exercise_the_ideals_come_from_clean_geometry_not_the_model():
+    """The property that makes this worth doing at all.
+
+    A ligand needing restraints is usually one that is modelled badly. Measuring its
+    ideals off its own coordinates would restrain it to the distortion -- the restraints
+    would hold the error in place instead of pulling it out. So the ideals are measured
+    from a fresh conformer of the perceived chemistry.
+    """
+    if not _restraints_ready():
+        print("  skipping: rdkit / monomer library not available")
+        return
+    import iotbx.cif
+
+    model = _unknown_ligand_model(smiles="CCO", code="L02", scale=1.25)
+    found = ligands.unknown_ligands(model)
+    cif_text, _smiles = ligands.restraints_from_residue(
+        model, found[0]["i_seqs"], found[0]["code"])
+
+    positions = {a.name.strip(): np.array(a.xyz) for a in model.get_hierarchy().atoms()}
+    modelled = float(np.linalg.norm(positions["C1"] - positions["C2"]))
+    assert modelled > 1.8                          # stretched by a quarter, as built
+
+    block = iotbx.cif.reader(input_string=cif_text).model()["comp_L02"]
+    ideal = next(float(d) for a1, a2, d in zip(block["_chem_comp_bond.atom_id_1"],
+                                               block["_chem_comp_bond.atom_id_2"],
+                                               block["_chem_comp_bond.value_dist"])
+                 if {a1, a2} == {"C1", "C2"})
+    assert 1.45 < ideal < 1.60                     # an ordinary C-C, not the 1.89 modelled
+
+
+def exercise_a_generated_dictionary_makes_the_model_buildable():
+    """The whole point: a model that had no restraints at all now has them, and the
+    ligand stops being reported as unknown."""
+    if not _restraints_ready():
+        print("  skipping: rdkit / monomer library not available")
+        return
+    from libtbx.utils import Sorry
+
+    model = _unknown_ligand_model()
+    try:
+        model.process(make_restraints=True)
+    except Sorry:
+        pass
+    else:
+        raise AssertionError("the fixture ligand was not unknown after all")
+
+    found = ligands.unknown_ligands(model)
+    cif_text, _smiles = ligands.restraints_from_residue(
+        model, found[0]["i_seqs"], found[0]["code"])
+    ligands.apply_generated_restraints(model, {found[0]["code"]: cif_text})
+    model.process(make_restraints=True)
+
+    geometry = model.get_restraints_manager().geometry
+    assert geometry.pair_proxies().bond_proxies.simple.size() > 15
+    assert geometry.angle_proxies.size() > 15
+    # And the detector agrees, which it only can if it registers the carried dictionary.
+    assert ligands.unknown_ligands(model) == []
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

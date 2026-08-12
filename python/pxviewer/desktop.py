@@ -3663,9 +3663,23 @@ class ControlsWindow:
             try:
                 geo = geo_mod.build_geometry(session.model)
             except Exception as exc:  # a malformed model shouldn't take the app down
-                self._show_restraint_message(f"Could not build restraints:\n{exc}")
-                self._restraints_model_id = None
-                return
+                QApplication.restoreOverrideCursor()
+                # The commonest cause by far is a ligand with no dictionary, and it is one
+                # the app can do something about, so offer that before reporting a wall of
+                # cctbx text. Retried once if the user accepts.
+                if self._offer_ligand_restraints(mid):
+                    QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                    try:
+                        geo = geo_mod.build_geometry(session.model)
+                    except Exception as exc2:
+                        self._show_restraint_message(
+                            f"Could not build restraints:\n{exc2}")
+                        self._restraints_model_id = None
+                        return
+                else:
+                    self._show_restraint_message(f"Could not build restraints:\n{exc}")
+                    self._restraints_model_id = None
+                    return
             finally:
                 QApplication.restoreOverrideCursor()
             self._geo_cache[mid] = geo
@@ -4290,6 +4304,89 @@ class ControlsWindow:
             self._set_status(f"Wrote {Path(path).name}")
         except Exception as exc:
             QMessageBox.warning(self._window, "Write failed", str(exc))
+
+    def _offer_ligand_restraints(self, mid: str) -> bool:
+        """Offer to build dictionaries for a model's unrecognised ligands. True if any were.
+
+        The reason this is a prompt and not automatic: the dictionary is *inferred*. rdkit
+        reads the bonds out of the coordinates and the bond orders out of the graph, which
+        is a guess about chemistry the file never stated. A well-modelled ligand it gets
+        right; a badly modelled one it gets wrong in a way that then looks authoritative,
+        which is exactly the situation restraints are usually needed for. So the user is
+        shown the ligands, told what the source is, and asked -- one at a time, since a
+        model can carry one ligand worth guessing at and another worth fetching properly.
+        """
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import (
+            QApplication, QCheckBox, QDialog, QDialogButtonBox, QLabel, QMessageBox,
+            QVBoxLayout)
+
+        unknown = self._desktop.unknown_ligands(mid)
+        if not unknown:
+            return False
+
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Ligands without restraints")
+        layout = QVBoxLayout(dialog)
+        intro = QLabel(
+            "cctbx has no dictionary for these residues, so it will not build restraints "
+            "for <i>any</i> of this model — minimize, drag, geometry and validation are "
+            "all unavailable until they are resolved.<br><br>"
+            "pxviewer can generate one from the coordinates: rdkit works out the bonding, "
+            "and the ideal values are measured from a clean conformer of the chemistry it "
+            "perceives — <b>not</b> from the geometry as modelled. Check what it perceived "
+            "afterwards; on a poorly built ligand the guess can be wrong.")
+        intro.setWordWrap(True)
+        intro.setMaximumWidth(460)
+        layout.addWidget(intro)
+
+        boxes = {}
+        for found in unknown:
+            code = found["code"]
+            if code in boxes:
+                continue                    # one dictionary serves every copy
+            copies = sum(1 for u in unknown if u["code"] == code)
+            label = "%s — %d atoms" % (code, found["n_atoms"])
+            if copies > 1:
+                label += ", %d copies" % copies
+            else:
+                label += " (chain %s, residue %s)" % (found["chain"], found["resseq"])
+            box = QCheckBox(label)
+            box.setChecked(True)
+            boxes[code] = box
+            layout.addWidget(box)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Make restraints")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        chosen = [code for code, box in boxes.items() if box.isChecked()]
+        if not chosen:
+            return False
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            made = self._desktop.generate_ligand_restraints(mid, chosen)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self._window, "Could not make restraints", str(exc))
+            return False
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        # What rdkit decided the ligand *is*, which is the thing worth checking.
+        QMessageBox.information(
+            self._window, "Restraints made",
+            "Perceived chemistry:\n\n" + "\n".join(
+                "  %s   %s" % (code, smiles) for code, smiles in sorted(made.items()))
+            + "\n\nSave the dictionary with “Export ligand” on the model's Appearance "
+              "pane if you want it for refinement elsewhere.")
+        return True
 
     def _on_export_ligand(self, mid: str, name: str) -> None:
         from PySide6.QtWidgets import QFileDialog, QMessageBox
@@ -7952,6 +8049,74 @@ class DesktopApp:
             entry["data"].write_map(p)  # cctbx writes the map
         else:
             raise ValueError("nothing to write")
+
+    def unknown_ligands(self, mid: str) -> list:
+        """Residues in a model that cctbx cannot build restraints for.
+
+        One unrecognised ligand costs the whole model its restraints -- pdb_interpretation
+        refuses the file rather than the residue -- so minimize, drag, the Geometry tables
+        and validation are all unavailable until it is resolved.
+        """
+        from . import ligands as ligands_mod
+
+        entry = self._model_entry(mid)
+        model = entry["session"].model if entry else None
+        if model is None:
+            return []
+        try:
+            return ligands_mod.unknown_ligands(model)
+        except Exception:  # pragma: no cover - a model cctbx cannot interpret at all
+            return []
+
+    def generate_ligand_restraints(self, mid: str, codes=None) -> dict:
+        """Write monomer dictionaries for a model's unknown ligands and rebuild.
+
+        ``codes`` limits it to particular residue names; omit for all of them. Returns
+        ``{code: smiles}`` for those generated -- the perceived chemistry, which is what
+        the user needs to check, since a dictionary built from a badly modelled ligand
+        describes whatever rdkit made of it.
+
+        Failures are per ligand: one residue rdkit cannot read does not prevent the others
+        from being given restraints, and the exception for it is raised only if nothing
+        succeeded.
+        """
+        from . import edits as edits_mod
+        from . import ligands as ligands_mod
+
+        entry = self._model_entry(mid)
+        model = entry["session"].model if entry else None
+        if model is None:
+            raise ValueError("that object has no cctbx model")
+
+        wanted = set(codes) if codes is not None else None
+        generated, failures = {}, []
+        smiles_by_code = {}
+        for found in ligands_mod.unknown_ligands(model):
+            if wanted is not None and found["code"] not in wanted:
+                continue
+            if found["code"] in generated:
+                continue                    # one dictionary serves every copy of a residue
+            try:
+                cif_text, smiles = ligands_mod.restraints_from_residue(
+                    model, found["i_seqs"], found["code"])
+            except Exception as exc:
+                failures.append("%s: %s" % (found["code"], exc))
+                continue
+            generated[found["code"]] = cif_text
+            smiles_by_code[found["code"]] = smiles
+
+        if not generated:
+            raise ValueError("; ".join(failures) or "no ligands needed restraints")
+
+        ligands_mod.apply_generated_restraints(model, generated)
+        edits_mod.build_restraints(model, force=True)
+        self.bridge.restraints_changed.emit(mid)
+        if failures:
+            self._warn("Restraints made for %d ligand(s); %s"
+                       % (len(generated), "; ".join(failures)))
+        else:
+            self._status("Made restraints for " + ", ".join(sorted(generated)))
+        return smiles_by_code
 
     def save_restraints_cif(self, mid: str, path: str) -> None:
         """Write a ligand's geometry restraints as a geostd-style monomer CIF.
