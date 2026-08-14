@@ -330,8 +330,22 @@ _BUILD_LOCK = threading.Lock()
 
 
 def set_edits(model: Any, scope: Any) -> None:
-    """Carry an edits scope on ``model`` so the next restraint build applies it."""
-    setattr(model, _ATTR, scope if scope is not None else empty_edits(model))
+    """Carry an edits scope on ``model`` so the next restraint build applies it.
+
+    Refuses anything that is not one. This module used to take a list of dicts, and a
+    caller still passing that shape was not corrected -- the value was stored, ``entries``
+    found no ``bond`` attribute on a list, and the build applied nothing at all. No error,
+    no restraint, and a test that had been checking a custom bond quietly checked nothing.
+    An argument of the wrong type is worth a sentence rather than a silence.
+    """
+    if scope is None:
+        scope = empty_edits(model)
+    elif not all(hasattr(scope, kind) for kind in EDIT_FIELDS):
+        raise TypeError(
+            "edits are a cctbx geometry_restraints.edits scope, not %s -- build one with "
+            "edits_from_phil() or empty_edits() and add to it with new_entry()"
+            % type(scope).__name__)
+    setattr(model, _ATTR, scope)
 
 
 def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = False) -> None:

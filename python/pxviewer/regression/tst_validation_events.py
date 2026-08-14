@@ -160,8 +160,10 @@ def exercise_injected_geometry_keeps_host_edits():
     names = [a.name.strip() for a in ligand.get_hierarchy().atoms()]
     sels = [edits.selection_for_atom(ligand, names.index("C1")),
             edits.selection_for_atom(ligand, names.index("O1"))]
-    edits.set_edits(ligand, [{"kind": "bond", "selections": sels,
-                              "ideal": 2.4, "sigma": 0.02}])
+    scope = edits.empty_edits(ligand)
+    edits.add_entry(
+        scope, edits.new_entry(ligand, "bond", sels, ideal=2.4, sigma=0.02), "bond")
+    edits.set_edits(ligand, scope)
     edits.build_restraints(ligand, force=True)
 
     events = ve.extract_bonds(ligand,

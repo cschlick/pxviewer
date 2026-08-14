@@ -402,6 +402,30 @@ def exercise_an_edit_missing_its_ideal_value_is_refused_too():
         raise AssertionError("an edit with no ideal distance passed validation")
 
 
+def exercise_the_old_dict_shape_is_refused_rather_than_ignored():
+    """This module once took a list of dicts. A caller still passing that shape got no
+    error and no restraint: the value was stored, ``entries`` found no ``bond`` attribute
+    on a list, and the build applied nothing.
+
+    That is exactly how it escaped -- a test in another file went on asserting a custom
+    bond existed while checking nothing, and only a full-registry run found it.
+    """
+    if not have("mmtbx.monomer_library.pdb_interpretation"):
+        print("  skipping: pdb_interpretation not available")
+        return
+    from pxviewer.cctbx_io import read_model
+
+    model = read_model(data_path("zn_site.pdb"))
+    try:
+        edits.set_edits(model, [{"kind": "bond", "selections": ["name ZN", "name O"],
+                                 "ideal": 2.1, "sigma": 0.05}])
+    except TypeError as exc:
+        assert "scope" in str(exc)
+        assert "edits_from_phil" in str(exc)      # says what to do instead
+    else:
+        raise AssertionError("a list of dicts was accepted as an edits scope")
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
