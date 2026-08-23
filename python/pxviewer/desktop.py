@@ -792,13 +792,12 @@ def _geostd_source_fn(session):
     Intra-residue restraints come from that monomer's geostd file; a restraint whose
     atoms span residues is defined by a link, not a single monomer file.
     """
-    from .geometry import geostd_monomer_path, monomer_library_root
+    from .geometry import monomer_cif_path
 
     arrays = getattr(getattr(session, "_data", None), "arrays", None)
     if arrays is None:
         return lambda iseqs: ("", None)
     resname = arrays.resname
-    root = monomer_library_root()
     cache: dict = {}
 
     def source(iseqs):
@@ -807,7 +806,7 @@ def _geostd_source_fn(session):
             return ("(link)", None)  # spans residues -> a link, not one monomer file
         rn = next(iter(names))
         if rn not in cache:
-            cache[rn] = (rn, geostd_monomer_path(root, rn))
+            cache[rn] = (rn, monomer_cif_path(rn))
         return cache[rn]
 
     return source

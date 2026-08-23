@@ -46,6 +46,7 @@ core_tests = [
     "$D/regression/tst_loader.py",
     "$D/regression/tst_volume_io.py",
     "$D/regression/tst_data.py",
+    "$D/regression/tst_monomer_library.py",
     "$D/regression/tst_hydrogens.py",
     "$D/regression/tst_volume.py",
     "$D/regression/tst_volume_demos.py",

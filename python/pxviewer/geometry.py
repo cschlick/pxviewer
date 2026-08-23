@@ -25,12 +25,22 @@ MONOMER_LIBRARY_HELP = (
     "or point MMTBX_CCP4_MONOMER_LIB at a geostd checkout:\n"
     "    git clone https://github.com/phenix-project/geostd\n"
     "    export MMTBX_CCP4_MONOMER_LIB=/path/to/geostd\n\n"
-    "then reopen the model."
+    "then reopen the model.\n\n"
+    "Note that a bare geostd checkout carries no mon_lib, so the monomers that ship\n"
+    "only there (HEM among them) will not resolve. The chem_data package has both."
 )
 
 
-def _chem_data_geostd() -> Optional[str]:
-    """The geostd directory shipped by the ``chem_data`` conda package, if importable.
+#: The directories ``chem_data`` ships, in the order cctbx's own cascade searches them.
+#: Both are needed. geostd holds the bulk of the ligands (~54k), but a small CCP4-derived
+#: set lives only in mon_lib (~140, HEM among them) — and, decisively, the two ship
+#: *different* ``list/mon_lib_list.cif`` indices. Pointing cctbx at one directory makes it
+#: read that directory's index and never consult the other.
+_CHEM_DATA_SUBDIRS = ("geostd", "mon_lib")
+
+
+def _chem_data_subdir(name: str) -> Optional[str]:
+    """A directory shipped inside the importable ``chem_data`` package, or None.
 
     ``chem_data`` is a plain importable package, so this resolves regardless of the
     Python version or platform layout (no hard-coded ``site-packages`` path) — which
@@ -40,43 +50,160 @@ def _chem_data_geostd() -> Optional[str]:
         import chem_data
     except Exception:
         return None
-    path = os.path.join(os.path.dirname(chem_data.__file__), "geostd")
+    path = os.path.join(os.path.dirname(chem_data.__file__), name)
     return path if os.path.isdir(path) else None
 
 
-def monomer_library_root() -> Optional[str]:
-    """The monomer-library (geostd) directory cctbx will use, or None.
+def _is_chem_data_subdir(path: str) -> bool:
+    """Whether a path is one of chem_data's own library directories.
 
-    An explicit ``MMTBX_CCP4_MONOMER_LIB`` / ``CLIBD_MON`` wins; otherwise fall back to
-    the geostd the ``chem_data`` package ships and export ``MMTBX_CCP4_MONOMER_LIB`` so
-    cctbx's own pdb_interpretation — which reads that variable directly — finds it too.
+    A redirect naming chem_data's own geostd is not a user preference: it is what
+    pxviewer's former ``activate.d`` hook wrote, and it is precisely the value that
+    hides mon_lib. Recognising it lets an env that still has that hook self-heal
+    instead of staying half-broken until someone deletes the file.
+    """
+    try:
+        real = os.path.realpath(path)
+    except OSError:
+        return False
+    for name in _CHEM_DATA_SUBDIRS:
+        own = _chem_data_subdir(name)
+        if own and os.path.realpath(own) == real:
+            return True
+    return False
+
+
+def _explicit_monomer_library() -> Optional[str]:
+    """A monomer library the user deliberately pointed at, if it exists on disk.
+
+    Ignores a redirect that merely names chem_data's own directories (see
+    :func:`_is_chem_data_subdir`) — cctbx searches those anyway, and honouring it as an
+    override would pin the search to one of the two.
     """
     for var in ("MMTBX_CCP4_MONOMER_LIB", "CLIBD_MON"):
         path = os.environ.get(var)
-        if path and os.path.isdir(path):
+        if path and os.path.isdir(path) and not _is_chem_data_subdir(path):
             return path
-    geostd = _chem_data_geostd()
-    if geostd:
-        os.environ.setdefault("MMTBX_CCP4_MONOMER_LIB", geostd)
-        return geostd
     return None
+
+
+def _cctbx_resolves_chem_data() -> bool:
+    """Whether cctbx can reach chem_data through its own repository cascade.
+
+    ``mmtbx.monomer_library.server.find_mon_lib_file`` searches ``chem_data/geostd`` and
+    ``chem_data/mon_lib`` relative to libtbx's repository paths, which on a conda install
+    include site-packages. When that works, cctbx finds *both* directories by itself and
+    we must not set ``MMTBX_CCP4_MONOMER_LIB`` — see :func:`configure_monomer_library`.
+    """
+    try:
+        import libtbx.load_env  # noqa: F401  (populates libtbx.env)
+        import libtbx
+
+        return any(
+            libtbx.env.find_in_repositories(relative_path="chem_data/" + name)
+            for name in _CHEM_DATA_SUBDIRS
+        )
+    except Exception:
+        return False
+
+
+def monomer_library_roots() -> Tuple[str, ...]:
+    """Every monomer-library root that will be searched, in precedence order.
+
+    An explicit ``MMTBX_CCP4_MONOMER_LIB`` / ``CLIBD_MON`` wins outright and is used
+    alone, matching cctbx. Otherwise this is both directories ``chem_data`` ships.
+    """
+    explicit = _explicit_monomer_library()
+    if explicit:
+        return (explicit,)
+    return tuple(
+        path for path in (_chem_data_subdir(n) for n in _CHEM_DATA_SUBDIRS) if path
+    )
+
+
+def configure_monomer_library() -> Optional[str]:
+    """Make cctbx able to find a monomer library, and report the root in effect.
+
+    Deliberately does **not** export ``MMTBX_CCP4_MONOMER_LIB`` when cctbx can already
+    reach chem_data on its own. That variable is a single-directory redirect that
+    ``find_mon_lib_file`` consults *before* its own cascade, so exporting it pins the
+    search to one directory: with it set to geostd, cctbx loads geostd's
+    ``mon_lib_list.cif`` and HEM — which lives only in mon_lib — stops resolving, while
+    ALA and the other 54k geostd monomers keep working. The breakage is partial, which
+    is what makes it hard to spot. Leaving the variable unset lets cctbx cascade through
+    both directories, which is what it is designed to do.
+
+    A stale value (an old ``activate.d`` hook naming a Python version that no longer
+    exists) is cleared rather than left in place: ``find_mon_lib_file`` reads the raw
+    variable, so a path that fails our ``isdir`` check would still be handed to cctbx.
+    """
+    explicit = _explicit_monomer_library()
+    if explicit:
+        return explicit
+
+    # Drop any redirect that is not a real override -- a stale path, or one naming
+    # chem_data's own directories. find_mon_lib_file reads these variables raw and
+    # consults them before its cascade, so leaving one set would narrow the search.
+    for var in ("MMTBX_CCP4_MONOMER_LIB", "CLIBD_MON"):
+        if os.environ.get(var):
+            del os.environ[var]
+
+    roots = monomer_library_roots()
+    if not roots:
+        return None
+    if _cctbx_resolves_chem_data():
+        # cctbx finds both directories itself; setting the variable would only narrow it.
+        return roots[0]
+    # chem_data is importable but outside libtbx's repository paths, so the cascade
+    # cannot see it. A single-directory redirect is then better than nothing, even
+    # though it costs the monomers that live only in the other directory.
+    os.environ["MMTBX_CCP4_MONOMER_LIB"] = roots[0]
+    return roots[0]
+
+
+def monomer_library_root() -> Optional[str]:
+    """The primary monomer-library (geostd) directory, or None.
+
+    Kept for callers that want a single directory to look a file up in; use
+    :func:`monomer_library_roots` when a monomer may live in either directory.
+    """
+    roots = monomer_library_roots()
+    return roots[0] if roots else None
 
 
 def monomer_library_available() -> bool:
     """Whether cctbx can find a monomer library to build restraints from."""
-    return monomer_library_root() is not None
+    return bool(monomer_library_roots())
 
 
 def geostd_monomer_path(root: Optional[str], resname: str) -> Optional[str]:
-    """Path to a monomer's geostd CIF, or None.
+    """Path to a monomer's CIF under one library root, or None.
 
-    geostd buckets monomers by lowercased first character and names each file
-    ``data_<CODE>.cif`` (e.g. ``a/data_ALA.cif``, ``m/data_MET.cif``).
+    Both libraries bucket monomers by lowercased first character but name the files
+    differently: geostd uses ``data_<CODE>.cif`` (``a/data_ALA.cif``), mon_lib uses
+    ``<CODE>.cif`` (``h/HEM.cif``). Try both, so one root argument works for either.
     """
     if not root or not resname:
         return None
-    candidate = os.path.join(root, resname[0].lower(), f"data_{resname}.cif")
-    return candidate if os.path.isfile(candidate) else None
+    bucket = os.path.join(root, resname[0].lower())
+    for name in (f"data_{resname}.cif", f"{resname}.cif"):
+        candidate = os.path.join(bucket, name)
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def monomer_cif_path(resname: str) -> Optional[str]:
+    """Path to a monomer's CIF in whichever library root ships it, or None.
+
+    Searches every root :func:`monomer_library_roots` reports, so a monomer carried
+    only by mon_lib (HEM) is found as readily as one carried only by geostd.
+    """
+    for root in monomer_library_roots():
+        path = geostd_monomer_path(root, resname)
+        if path:
+            return path
+    return None
 
 
 def _sigma(weight: float) -> float:

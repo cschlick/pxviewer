@@ -5,8 +5,7 @@
 #
 #   conda env create -f environment.yml
 #   conda activate pxviewer
-#   ./scripts/setup_chem_data.sh                # monomer lib + validation caches
-#   conda deactivate && conda activate pxviewer # pick up the hook it wrote
+#   ./scripts/setup_chem_data.sh                # validation caches (rotamer/CaBLAM)
 #   pip install -e ./python --no-deps           # the pxviewer package itself
 #   (cd frontend && npm ci)                     # populate node_modules, once
 #   ./scripts/build_frontend.sh                 # -> frontend/build/index.js
@@ -19,7 +18,11 @@
 # 2.5.
 #
 # chem_data ships the monomer library (geostd + mon_lib) that minimization,
-# tugging and validation build restraints from. It lives on cctbx's own
+# tugging and validation build restraints from. cctbx searches BOTH directories through
+# its own repository cascade -- geostd holds the bulk, mon_lib a small CCP4-derived set
+# (HEM among them) with its own index. Do not export MMTBX_CCP4_MONOMER_LIB to point at
+# either one: it is a single-directory redirect consulted before that cascade, so it
+# hides the other half. tst_monomer_library.py guards this. It lives on cctbx's own
 # anaconda.org channel, not conda-forge — a free community channel, not
 # Anaconda's `defaults`, so no commercial ToS applies. It only carries the
 # latest build. Installing it here means the restraints data comes with the

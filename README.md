@@ -62,11 +62,19 @@ without the flag pip is free to pull PyPI wheels over conda-managed packages —
 damagingly `numpy`, which cctbx is compiled against, giving confusing ABI errors. The
 conda recipe installs the same way (`conda-recipe/build.sh`).
 
-The `chem_data` package (from cctbx's community anaconda.org channel) ships the geostd
-monomer library and the rotamer/CaBLAM validation data. The monomer library is found
-automatically (pxviewer resolves geostd straight from the importable `chem_data`
-package), so no `MMTBX_CCP4_MONOMER_LIB` hook is needed; `setup_chem_data.sh` remains
-only to build the validation caches (see below).
+The `chem_data` package (from cctbx's community anaconda.org channel) ships the monomer
+library and the rotamer/CaBLAM validation data. The monomer library is found
+automatically: cctbx cascades through both directories chem_data ships — `geostd` (the
+bulk of the monomers) and `mon_lib` (a smaller CCP4-derived set with its own index,
+carrying HEM among others) — so `setup_chem_data.sh` remains only to build the
+validation caches (see below).
+
+Do not set `MMTBX_CCP4_MONOMER_LIB` to one of those directories. It is a
+single-directory redirect that cctbx consults *before* its cascade, so pointing it at
+geostd hides every monomer that lives only in mon_lib: ALA and ~54k others keep working
+while HEM stops resolving. pxviewer ignores such a redirect on import and
+`tst_monomer_library.py` guards against it returning. An external geostd checkout is
+still honoured.
 
 ### Frontend
 

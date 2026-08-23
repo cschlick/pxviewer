@@ -2,14 +2,16 @@
 
 __version__ = "0.1.0"
 
-# Point cctbx at the monomer library shipped by the `chem_data` package (if present)
-# before any restraints are built, so minimization/validation work out of the box on a
-# conda install. Cheap and side-effect-free when chem_data is absent or the variable is
-# already set; the real logic (and env-var precedence) lives in geometry.monomer_library_root.
-from .geometry import monomer_library_root as _monomer_library_root
+# Make sure cctbx can find the monomer library shipped by the `chem_data` package before
+# any restraints are built, so minimization/validation work out of the box on a conda
+# install. Usually this sets nothing at all -- cctbx cascades through both chem_data
+# directories by itself, and an MMTBX_CCP4_MONOMER_LIB redirect would narrow it to one.
+# It clears a stale redirect and, on a layout cctbx cannot see, sets one as a fallback.
+# The reasoning lives in geometry.configure_monomer_library.
+from .geometry import configure_monomer_library as _configure_monomer_library
 
-_monomer_library_root()
-del _monomer_library_root
+_configure_monomer_library()
+del _configure_monomer_library
 
 from .api import (
     AtomArrays,
