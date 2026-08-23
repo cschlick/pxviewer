@@ -183,8 +183,17 @@ and reports a smaller enrichment against a much larger base rate. The anchor nee
 
 ## Results — 2,000-structure run, 2026-08-03
 
+> **Superseded for clash.** This run predates the clash recalibration, when MolProbity's 0.40 Å
+> cut landed at concern exactly 0.50 — the display threshold — so ~40% of flagged clashes fell
+> under it and clash recall reads 0.532. It is **1.000** on the current calibration. Three
+> further defects were fixed afterwards (see [OUTSTANDING.md](OUTSTANDING.md) items 4–6). The
+> current run is `output/figures2000b/`: nine channels, 1,828 structures, **99.99% recall** of
+> 874,978 flagged atoms. This data now lives at
+> `output/figures2000_SUPERSEDED_pre_clash_calibration/`; the rama and rota numbers below still
+> hold.
+
 `sample_2000_seed20260802.txt`, 1.0 Å output pixel, calibrated (hydrogen) clash path.
-69.0 h of compute. Data: `output/figures2000/figures.json`.
+69.0 h of compute.
 
 **Corpus.** 2,000 attempted → **1,877 ok**, 88 failed, 35 skipped for size. Every structure
 has a terminal outcome; nothing was left deferred.

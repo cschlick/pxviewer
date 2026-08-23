@@ -1,9 +1,25 @@
-# Conclusions — interpretation checkpoint, 2026-08-05
+# Conclusions — interpretation log, 2026-08-05 → 2026-08-23
 
-*What the 2,000-structure corpus run means, as opposed to what it measured. The numbers live
-in [README.md](README.md) and `output/figures2000/figures.json`; this file is the reading of
-them. It is a **checkpoint, not paper text** — written while the results are fresh so the
-reasoning survives, and expected to be revised.*
+*What the corpus runs mean, as opposed to what they measured. This file is a **running log, not
+paper text** — sections are dated and later ones supersede earlier ones. Read to the end before
+acting on anything near the top.*
+
+> ### Status of the earlier sections, as of 2026-08-23
+>
+> | § | topic | status |
+> |---|---|---|
+> | 1–2 | A and B are a faithfulness check | **Stands.** Corpus recall is now 99.99% of 874,978 flagged atoms over 1,828 structures — see §10 |
+> | 3 | precision should probably not appear | **Settled: dropped.** And for a sharper reason than prevalence — see §10 |
+> | 4 | clash calibration is a decision to make | **Settled: made.** Anchors moved to 0.30/0.40 Å; clash recall 0.532 → 1.000 |
+> | 5 | figure C is the only non-tautological figure | **Retired.** The claim did not survive measurement — see §8b and §10 |
+> | 6 | do not overclaim the corpus | **Stands**, and applies harder now |
+> | 7 | the whole thing in three sentences | **Superseded by §10** |
+> | 8, 8b | the visual justification | **Stands.** Capability real, on regions carrying nothing |
+> | 9 | problems cluster by kind, not across | **Stands**, and is now measured through space — see §10 |
+>
+> The numbers cited below §10 come from `output/figures2000b/` (recall),
+> `output/nbhd_matrix2/` (co-locality) and `output/subvis2000/` (sub-threshold).
+> **`output/figures2000/` is the superseded run** — its clash numbers predate the calibration.
 
 ---
 
@@ -274,3 +290,104 @@ where there is nothing to add.
 
 This also bounds any future hotspot field: **no combination rule can extract cross-metric
 coincidence that is not in the data.**
+
+---
+
+## 10. Through space, and below the cut (2026-08-23)
+
+Section 9 measured clustering with Clark-Evans on 46 structures. This is the same question
+asked properly — on 2,000 structures, on one axis, with a positive control — plus the two
+things that turned out to matter more.
+
+### The instrument was certified before the negatives were believed
+
+Every through-space result here is a negative or near-negative, and a negative is worth
+nothing unless the instrument would have reported a positive. So a halo was planted in real
+coordinates: random centres in 2.5% of residues, **+0.15 concern within 5 Å**, sequence-far
+only, on a background of 0.30 — a signal of exactly **1.50×**. It recovered **1.52×**, with the
+4–6 Å bin returning 1.13 rather than 1.50 because the halo stops at 5 Å and that bin is half
+outside it. Correct dilution, right amplitude. `corpus/synthetic_control.py`.
+
+Planting at 1.50× was deliberate: it is the size of the real effect. A control planted at 5×
+would have proved only that the instrument sees loud things.
+
+### Outliers are not islands — but the extent is in sequence, not space
+
+Elevation around a flagged residue is 4.7–8.3× at ±1, **1.35–2.51× at ±3**, 1.26–1.85× at ±5.
+The ±1 column proves little (φ/ψ of residue *i* uses atoms of *i±1*); ±3 is the real signal.
+
+Through space, once chain neighbours are excluded, the near bin does not fall to 1.0 — it falls
+**below** it, to 0.26–0.72. Residues packed tight against an outlier but far from it in sequence
+are slightly *better* modelled than average. What survives is 1.51–1.64× in the 4–6 Å bin, and
+only for the three backbone-conformation channels. Rotamer, Cβ and omega are flat at 1.08–1.12×.
+
+**A problem's extent is real and it is mostly an extent along the chain.** That is the shape a
+field should be depicting.
+
+### The cross-kind matrix, and a confound worth recording
+
+The metric-by-metric matrix must be measured **sequence-far**. At 2–4 Å over all neighbours it
+looked spectacular — rama→cablam 5.93, omega→ca_geom 7.59, the whole table warm — and it was
+measuring validator coupling: adjacent residues share atoms *across* channels as well as within
+them, since rama and omega read the same peptide and cablam and ca_geom are both built from Cα
+geometry. Every cell falls 3–5× once chain neighbours are excluded.
+
+Corrected, the diagonal holds (rama 1.64, ca_geom 1.56, cablam 1.51) and everything outside the
+backbone block sits at 0.8–1.2. This agrees with §9's Clark-Evans (cross-kind R = 0.978) instead
+of contradicting it, which is the check that decided it. **The backbone block is one kind
+measured three ways, not three kinds co-locating.**
+
+The rota row is the cleanest negative in the project: 0.82–1.27 across the board, own diagonal
+1.08, on the largest sample (35,620 outliers, 1,340 structures). Rotamer problems are islands.
+
+### What the field adds, and the number that nearly went in wrong
+
+The mean concern near an outlier is elevated 1.35–2.51× — and the absolute means are
+**0.03–0.11**, which would render as nothing. A mean cannot tell *every neighbour faintly warm*
+(a haze worth nothing) from *97% at zero and a few at 0.6* (a handful of clearly-drawn
+residues). Counting by band separates them, and it is the second: near a rama outlier **4.09%**
+of non-outlier neighbours carry half an outlier or more, against **1.42%** at random — 2.87×.
+ca_geom and omega reach 3.38×.
+
+Across the corpus the field draws **157,760 residues where a markup draws 81,686** — 76,074
+sub-threshold additions, a **1.93×** population. About one in five of the additions sits beside
+a flagged outlier at ~3× the background rate.
+
+**The honest counterweight belongs in the paper, not a footnote:** ~80% of what the field adds
+is nowhere near a flagged outlier. The co-locality argument justifies a fifth of the addition.
+The rest is measured but unexplained.
+
+### Why precision is dropped — a sharper reason than §3 gave
+
+§3 argued precision measures prevalence. True, but the decisive objection is different:
+Ramachandran precision of 0.162 implies the field adds **6.2×** what the markup shows, against
+**2.12×** measured by counting residues. The gap is the kernel's own width — σ ≈ 2 Å is wider
+than the 3.8 Å Cα spacing, so an isolated outlier marks its neighbours' *atoms* above 0.5 even
+when those residues carry no concern at all. Precision counts blur as an addition and would
+have overstated the field's contribution threefold. The residue count is blur-free by
+construction and carries the claim alone.
+
+### The recall figure earns its place by failing
+
+99.99% — 874,899 of 874,978 flagged outlier atoms, 1,828 structures, four of six channels
+exact. That number is not evidence for anything; the field is built from these events, so 1.000
+is the expected result. **Its value is that it broke three times.** Clash at 0.532 against
+rama's 1.000 exposed the calibration; a hydrogen check that accepted "any H present" let
+partially-hydrogenated deposits skip reduce2; and the covalent roll-up drew 8 atoms where 30
+were flagged. None would have been found by reading the code.
+
+The 79 remaining misses share one cause — the single-divisor normalisation in `field.py`, still
+open as item 1 in [OUTSTANDING.md](OUTSTANDING.md).
+
+### The statement now
+
+> **Problems cluster with their own kind, mostly along the chain. Different kinds do not
+> co-locate. What a field adds over a markup is not accumulation — it is the continuous
+> sub-threshold value of a single channel, which is real, sparse, and about twice the
+> population a threshold shows.**
+
+This closes the last route back to a predictive claim. §5 hoped figure C would show the field
+knows something it was not told; §8b showed its unique regions carry nothing (0.86×, below
+null); and the corrected matrix explains why — at 0.8–1.2 cross-kind there is nothing for a
+held-out channel to be enriched by. **No combination rule can extract cross-metric coincidence
+that is not in the data**, and none of the field's value depends on it.

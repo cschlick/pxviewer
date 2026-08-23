@@ -70,8 +70,38 @@ the display threshold (0.5) record recall (fraction of flagged outlier atoms the
 and precision (fraction of marked atoms that are flagged). Report the corpus distribution of
 recall — a violin or ECDF per channel — and name the structures where recall < 1.
 
-**Recall is the number that matters.** A field that loses a real outlier is wrong. Precision is
-reported for completeness but see figure B before drawing any conclusion from it.
+**Recall is the number that matters.** A field that loses a real outlier is wrong.
+
+> **Corpus result, 1,828 structures: 99.99% — 874,899 of 874,978 flagged outlier atoms.**
+>
+> | channel | structures | flagged atoms | recalled | exact in |
+> |---|---:|---:|---:|---:|
+> | rama | 785 | 22,875 | 100.00% | 100.0% |
+> | cablam | 1,611 | 74,223 | 100.00% | 100.0% |
+> | ca_geom | 1,254 | 22,369 | 100.00% | 100.0% |
+> | cbeta | 565 | 3,282 | 100.00% | 100.0% |
+> | rota | 1,575 | 141,338 | 99.98% | 99.4% |
+> | clash | 1,818 | 610,891 | 99.99% | 97.6% |
+>
+> The 79 lost atoms share one cause: `field.py` normalises each event by a single divisor
+> taken from its *densest* atom, so an isolated atom in an unevenly-spread footprint draws at
+> a fraction of full strength (measured at 0.31 against 0.98 for a cluster of eight with two
+> atoms 12 Å away). The channels rank by exactly that property — clash straddles two residues,
+> rotamer reaches down long Arg/Lys sidechains, and the compact-footprint channels miss nothing.
+>
+> `bond` and `angle` are excluded: rolled up per residue they are the only channels with a
+> material shortfall (below 1.0 in 9.6% and 3.6% of structures), and asking for them requires
+> restraint interpretation, which failed on 108 structures. `omega` is excluded because
+> omegalyze flags every non-trans peptide, so 2,324 ordinary cis-prolines arrive flagged and
+> the calibration scores them 0.0 on purpose; its recall is 1.000 only once those are set
+> aside, which is a judgement about what counts as a problem rather than a measurement.
+
+**Precision is not reported.** It was, and it should not be: on the corpus, Ramachandran
+precision is 0.162, which implies the field adds 6.2× what the markup shows — against 2.12×
+measured by counting residues directly. The gap is the kernel's own width. σ ≈ 2 Å is wider
+than the ~3.8 Å between adjacent Cα atoms, so an isolated outlier marks its neighbours' atoms
+above 0.5 even when those residues carry no concern at all, and precision counts that blur as
+an addition. Use the residue-level count instead: it is blur-free by construction.
 
 **Not a curve.** No ROC: positives are ~0.7% of atoms for Ramachandran, and ROC is insensitive
 to prevalence, so it reads ~0.999 for a field that is only mediocre. Measured on 1TEC:
@@ -110,12 +140,12 @@ Against outliers alone the figure grows a 23 Å tail and looks broken. Against t
 field was actually built from, **every hot voxel is within 2.7 Å of it** — which is the
 result, and it is a good one.
 
-**Why this figure and not precision.** Precision at 0.5 is 0.59 for Ramachandran, which sounds
-poor and is not: the 41% are overwhelmingly neighbours of concerning residues, because the
-σ ≈ 2 Å splat is wider than the ~3.8 Å between adjacent Cα atoms. A PR curve counts the blur
-as error and makes a correct field look mediocre. A distance histogram shows the blur sitting
-where it should, in physical units. That is the difference between defending a number and
-describing a rendering.
+**Why this figure and not precision.** Precision at 0.5 is 0.59 for Ramachandran on 1TEC (0.162
+across the corpus), which sounds poor and is not: the remainder are overwhelmingly neighbours of
+concerning residues, because the σ ≈ 2 Å splat is wider than the ~3.8 Å between adjacent Cα
+atoms. A PR curve counts the blur as error and makes a correct field look mediocre. A distance
+histogram shows the blur sitting where it should, in physical units. That is the difference
+between defending a number and describing a rendering.
 
 ---
 
@@ -126,13 +156,39 @@ highlighted it — so it is useful as a navigation aid, not merely a redraw of o
 
 **Compute.** Hold a channel out. Build the field from Ramachandran + rotamer only, sample at
 atoms, and ask what fraction of atoms above the threshold carry a **clash** outlier, against
-the base rate. Report the enrichment. Measured on 1TEC: clash outliers are 0.365% of atoms
-overall and 2.222% of atoms in the held-out hot region — a **6.1× enrichment** (n = 180 hot
-atoms). Repeat with other held-out channels; report the corpus distribution.
+the base rate. Report the enrichment against a spatially matched null. Repeat with other
+held-out channels; report the corpus distribution.
 
-**This is the only non-tautological figure of the three.** A and B measure how much the
-Gaussian destroyed — the point-spread function of our own kernel — which is worth knowing but
-is information we put in ourselves. C asks something the field was not told.
+> **Measured, and it does not support the claim. Do not quote 6.1×.**
+>
+> This section previously read "clash outliers are 0.365% of atoms overall and 2.222% in the
+> held-out hot region — a **6.1× enrichment** (n = 180 hot atoms)". That base rate reproduces
+> to four significant figures only on the **uncalibrated** `--heavy-atom-clashes` preview path,
+> which finds 5 clash events on 1TEC. On the calibrated hydrogen path — the one every result
+> in this project uses — 1TEC has 96 clash events and a base rate of 6.2843%. The 6.1× was an
+> artefact of the preview path and has been removed rather than restated.
+>
+> The corpus number, over 1,324 structures with the spatially matched null this section
+> already required, is **1.92× against a 0.98× null**. That is a real but small effect, and it
+> is not the figure this section was written to be.
+>
+> Two later measurements closed it. Regions the field marks that contain *no* flagged outlier
+> carry an enrichment of **0.86×** — below the null, so the field's unique regions carry no
+> signal. And different kinds of problem do not co-locate: the metric-by-metric neighbourhood
+> matrix is 0.8–1.2 outside the backbone block, Clark-Evans cross-kind R = 0.978, residue-level
+> Jaccard 0.000. There is little for a held-out channel to be enriched *by*.
+>
+> `corpus/figure_data.py` therefore skips this figure by default (`--no-figure-c`); pass the
+> flag's inverse to regenerate the number. **The project no longer makes a predictive claim.**
+> What replaced it is the sub-threshold argument: the field draws 76,074 residues at half an
+> outlier or worse that no markup shows, roughly doubling the population worth a look.
+
+**A and B are fidelity checks, not discoveries.** Both measure how much the Gaussian destroyed
+— the point-spread function of our own kernel — which is information we put in ourselves. That
+is worth reporting as verification and worth nothing as evidence. Figure A earns its place by
+*failing*: clash recall sat at 0.532 against Ramachandran's 1.000 and exposed a mis-calibration,
+and two further defects surfaced the same way. Corpus recall now stands at **99.99%** of
+874,978 flagged outlier atoms over 1,828 structures.
 
 **Two hazards, both serious.**
 
@@ -140,7 +196,8 @@ is information we put in ourselves. C asks something the field was not told.
 free from co-localization rather than from any real relationship. A naive label shuffle is not
 a valid null. Use a spatially matched one — resample the held-out hot volume at random
 positions within the same molecular envelope, preserving volume and shape — and report
-enrichment against *that*. Without it, 6.1× is not interpretable.
+enrichment against *that*. This is why the preview number was uninterpretable as well as wrong:
+measured against a spatially matched null the corpus figure is 1.92× against a 0.98× null.
 
 *The framing.* This is one sentence away from being a metric claim. "Our score predicts
 clashes" is exactly the reading that was removed from this project. The legitimate statement
