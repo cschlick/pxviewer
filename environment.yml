@@ -7,7 +7,13 @@
 #   conda activate pxviewer
 #   ./scripts/setup_chem_data.sh                # monomer lib + validation caches
 #   conda deactivate && conda activate pxviewer # pick up the hook it wrote
-#   pip install -e ./python                     # the pxviewer package itself
+#   pip install -e ./python --no-deps           # the pxviewer package itself
+#   (cd frontend && npm ci)                     # populate node_modules, once
+#   ./scripts/build_frontend.sh                 # -> frontend/build/index.js
+#
+# --no-deps because conda already installed every dependency; without it pip may
+# pull PyPI wheels over conda-managed ones (notably numpy, which cctbx is compiled
+# against). The conda recipe installs the same way.
 #
 # Note the numpy pin: cctbx currently supports numpy <= 2.4, so it is capped below
 # 2.5.
@@ -51,6 +57,14 @@ dependencies:
   - scipy
   - pyside6>=6.5
   - qt6-webengine
+  # nodejs: build-time only, and only for source checkouts — the conda package bundles
+  # a prebuilt frontend/build/index.js, so nodejs is deliberately absent from the
+  # recipe's run requirements. It is here because populating frontend/node_modules
+  # (`npm ci`, for molstar/react/esbuild) needs npm. Once node_modules exists,
+  # scripts/build_frontend.sh runs the vendored static esbuild binary and no longer
+  # needs node on PATH — but getting there requires npm once, and taking it from conda
+  # keeps a fresh clone to a single prerequisite instead of a system-wide node install.
+  - nodejs>=18
   - molviewspec>=1.8.0
   - msgpack-python>=1.0
   - websockets>=12.0

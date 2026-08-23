@@ -51,11 +51,17 @@ For development from a checkout:
 ```bash
 conda env create -f environment.yml   # python, cctbx-base, chem_data, PySide6, …
 conda activate pxviewer
-pip install -e ./python                # the pxviewer package itself
+pip install -e ./python --no-deps      # the pxviewer package itself
 ./scripts/setup_chem_data.sh           # (optional) build the validation caches
 ```
 
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
+
+`--no-deps` matters: every runtime dependency is already installed by conda, and
+without the flag pip is free to pull PyPI wheels over conda-managed packages — most
+damagingly `numpy`, which cctbx is compiled against, giving confusing ABI errors. The
+conda recipe installs the same way (`conda-recipe/build.sh`).
+
 The `chem_data` package (from cctbx's community anaconda.org channel) ships the geostd
 monomer library and the rotamer/CaBLAM validation data. The monomer library is found
 automatically (pxviewer resolves geostd straight from the importable `chem_data`
@@ -65,12 +71,19 @@ only to build the validation caches (see below).
 ### Frontend
 
 The conda package bundles the built frontend, so this is only for source checkouts. Build
-the Mol* bundle once (esbuild ships a static binary — no node runtime needed):
+the Mol* bundle once:
 
 ```bash
-cd frontend && npm ci          # populate node_modules (molstar, react, esbuild)
+cd frontend && npm ci                  # populate node_modules (molstar, react, esbuild)
 cd .. && ./scripts/build_frontend.sh   # -> frontend/build/index.js
 ```
+
+`npm ci` needs npm, which `environment.yml` provides (`nodejs`) — so the pxviewer env is
+the only prerequisite, with no system-wide node install. After that first `npm ci`,
+`build_frontend.sh` uses the statically-linked esbuild binary vendored under
+`frontend/node_modules`, so re-running it after editing `frontend/src/*` needs no node
+runtime. `nodejs` is build-time only and is intentionally *not* a run requirement of the
+conda package, which ships the bundle prebuilt.
 
 ### Load a model
 

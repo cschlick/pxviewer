@@ -24,7 +24,9 @@ source:
   # Do not filter by .gitignore: the pre-built frontend bundle (frontend/build/index.js)
   # is a gitignored artifact that build.sh needs. conda-build copies it implicitly; here
   # we opt in explicitly. (node_modules comes along too — a cheap local copy — and lets
-  # build.sh rebuild the bundle from source if it is ever absent.)
+  # build.sh rebuild the bundle if it is ever absent. That is a fallback for convenience
+  # only: nodejs is not a build requirement, so on a checkout that never ran `npm ci`
+  # there is nothing to rebuild from and build.sh fails with instructions.)
   - path: ..
     use_gitignore: false
 
