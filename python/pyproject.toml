@@ -34,9 +34,10 @@ console = [
     "qtconsole>=5.5",
     "ipykernel>=6.0",
 ]
+# The regression suite (pxviewer/regression/, run by `libtbx.python -m pxviewer.run_tests`)
+# needs no test runner — it is plain scripts asserting through libtbx.test_utils, which
+# ships with cctbx. websockets is here because the live-session tests import it.
 dev = [
-    "pytest>=7.0",
-    "pytest-asyncio>=0.23",
     "websockets>=12.0",
 ]
 

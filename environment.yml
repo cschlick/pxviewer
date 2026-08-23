@@ -69,8 +69,9 @@ dependencies:
   - msgpack-python>=1.0
   - websockets>=12.0
   - ipykernel>=6.0
-  - pytest>=7.0
-  - pytest-asyncio>=0.23
+  # No test runner: the regression suite is plain scripts run by
+  # `libtbx.python -m pxviewer.run_tests`, asserting through libtbx.test_utils, which
+  # comes with cctbx-base. See TESTING.md.
   - pip
   - pip:
       - qtconsole>=5.5
