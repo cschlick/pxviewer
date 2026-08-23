@@ -2,19 +2,32 @@
 
 field = gaussian_filter( deposit(events) , sigma )
 
-Deposit rule: each event spreads its severity as *total mass* over its footprint
-(severity / n_atoms at each implicated atom). This makes the field a concentration
-of severity per unit volume, with two consequences we want:
+Deposit rule: each event is normalized **per atom**, so that every atom it implicates
+reconstructs to the event's severity. The field is a concentration of severity per unit
+volume, with two consequences we want:
 
-  - size-independence: a rotamer outlier on ARG (many atoms) and on SER (few)
-    contribute the same total mass, not more for being large (old Rule 6 concern);
-  - coincidence is the signal: when several events land in one place their masses
-    add into a tall peak, which a lone event -- however severe -- cannot reach.
+  - size-independence: a rotamer outlier on ARG (many atoms) and on SER (few) each draw
+    at their own severity, not brighter for being large (Rule 6);
+  - coincidence is the signal: when several events land in one place their masses add
+    into a tall peak, which a lone event -- however severe -- cannot reach.
 
-The severity marks are anchored so 1.0 == the outlier cut, but a *convolved* field
-value is not 1.0 at the cut (convolution spreads mass). So we also report a
-reference_level: the peak a single isolated severity-1.0 point event produces.
-Contour at reference_level ~ "encloses lone outliers"; coincidence exceeds it.
+The severity marks are anchored so 1.0 == the outlier cut, and the deposit is scaled so a
+lone severity-1.0 event reconstructs to 1.0 **at each of its atoms**. Contour at
+reference_level = 1.0 to "enclose lone outliers"; coincidence exceeds it substantially
+(two coincident 1.0 events reach 1.94).
+
+**The two normalizations you might want are not simultaneously available, and this file
+chooses.** For a footprint of more than one atom the field *between* two atoms is higher
+than the field *at* either, so "every atom reads severity" and "the maximum is severity"
+cannot both hold. Enclosing lone outliers requires the first, so a lone multi-atom event
+peaks 5-9% above its severity in the interstices (measured on real footprints: rama 5.6%,
+cablam 7.0%, rota 8.2%, ca_geom 9.4%). Read "above 1.0" as coincidence with that margin in
+mind; the gap to real coincidence is far larger than the overshoot.
+
+The rejected alternative was one divisor per event, taken from its densest atom. That does
+cap the peak at severity -- but it lets the densest part of a footprint set the weight for
+all of it, so an unevenly spread event draws its isolated atoms at a fraction of severity
+(0.31 against 0.98, measured) and they fall under the 0.5 display threshold and vanish.
 
 Run under phenix python: libtbx.python hotspots/field.py [model]
 """
@@ -99,17 +112,37 @@ def compute_field(events: List[Event], spacing=1.0, sigma=2.0,
         n = len(pts)
         if n == 0 or e.severity <= 0:
             continue
-        # footprint peak of this event alone, with PEAK-normalized Gaussians on
-        # each atom: P = max over atoms of sum_b exp(-d^2 / 2 sigma^2).
+        # Normalize PER ATOM, not once for the whole event.
+        #
+        # This used to take a single divisor P = max over atoms of the footprint's self-overlap
+        # and apply it to every atom, which makes the *densest* part of the footprint set the
+        # weight for all of it. An event whose atoms are unevenly spread then draws its tight
+        # part at full severity and its isolated atoms at a fraction: measured at 0.31 against
+        # 0.98 for a cluster of eight with two atoms 12 A away. Those atoms fall under the 0.5
+        # display threshold and vanish, which was the whole of the corpus recall shortfall --
+        # 79 atoms of 874,978, ranked exactly by footprint spread (clash straddles two
+        # residues, rotamer reaches down long Arg/Lys sidechains, compact channels lost none).
+        #
+        # With s_a = sum_b exp(-d_ab^2 / 2 sigma^2) computed at each atom and w_a = severity/s_a,
+        # the reconstructed value at atom a is sum_b w_b exp(-d_ab^2/2 sigma^2), which is
+        # severity for a uniform cluster (every s_b equal), severity at an isolated atom
+        # (s = 1), and severity at both in a mixed footprint. So every atom the event implicates
+        # is drawn at the event's severity, and a lone severity-1.0 event still peaks at exactly
+        # 1.0 -- the property that lets the map be read on an absolute domain.
+        #
+        # A wider footprint therefore covers more volume at the same height rather than the same
+        # volume at a lower height. It deposits more total mass, which is correct: the mass is
+        # the extent of the problem, and Rule 6 (max, never sum, within a residue) is what stops
+        # a channel dense with restraints inflating its severity.
         if n == 1:
-            P = 1.0
+            weights = [e.severity]
         else:
-            P = max(sum(math.exp(-float(((a - b) ** 2).sum()) / two_s2)
-                        for b in pts) for a in pts)
-        # deposit so this event, in isolation, peaks at exactly e.severity
-        w = e.severity / P / ref_single
-        for a in pts:
-            _splat(grid, (a - lo) / spacing, w)
+            weights = []
+            for a in pts:
+                s = sum(math.exp(-float(((a - b) ** 2).sum()) / two_s2) for b in pts)
+                weights.append(e.severity / s)
+        for a, w in zip(pts, weights):
+            _splat(grid, (a - lo) / spacing, w / ref_single)
 
     data = gaussian_filter(grid, sigma=sig_vox, mode="constant")
 
