@@ -8,30 +8,49 @@ runs completed. Ordered by what would block or embarrass a paper submission, not
 
 ## Blocks the paper
 
-**1. `field.py` normalises each event by a single divisor set by its densest atom.** An event
-whose atoms are unevenly spread draws its tight part at full strength and its isolated atoms at
-a fraction of it — measured directly at **0.31 against 0.98** for a cluster of eight with two
-atoms placed 12 Å away. `compute_field` computes one `P = max over atoms of sum_b exp(-d²/2σ²)`
-and applies `w = severity/P` to every atom equally, so the divisor is set by the densest region
-and under-weights everything outside it.
+Nothing currently open. The single-divisor normalisation that stood here was fixed and
+verified at corpus scale on 2026-08-23; see item 1 below.
 
-This is the sole cause of every recall miss in the corpus: 79 atoms of 874,978, ranked exactly
-by footprint spread — clash straddles two residues (misses in 2.4% of structures), rotamer
-reaches down long Arg/Lys sidechains (0.6%), and the compact-footprint channels miss nothing.
-It is also why `bond` (9.6%) and `angle` (3.6%) had to be dropped from the recall figure.
+## Fixed 2026-08-23
 
-The fix is **per-atom normalisation**: `w_a = severity / S_a` with `S_a` that atom's own local
-neighbour sum. Every implicated atom then reads ≈ severity, a uniform cluster still reads
-severity rather than summing above it, and a lone concern-1.0 event still peaks at exactly 1.0.
-It touches all nine channels and every figure, so it needs its own verification run (~7 h wall
-on 6 shards) rather than being folded into anything else.
+**1. `field.py` normalised each event by a single divisor set by its densest atom. FIXED.**
+An event whose atoms were unevenly spread drew its tight part at full severity and its
+isolated atoms at a fraction — measured at **0.31 against 0.98** for a cluster of eight with
+two atoms 12 A away, which falls under the 0.5 display threshold and vanishes. Now each atom
+is divided by its *own* local overlap (`w_a = severity / s_a`), so every implicated atom
+reconstructs to the event's severity.
 
-**Decided to ship recall as-is first** — the published figure is 99.99% and states this
-limitation — so this is a field improvement, not a correction to a published number.
+Verified first on the ten worst structures — eleven channel shortfalls between 0.562 and
+0.750 all to exactly 1.000, nothing anywhere made worse — then across the corpus:
+
+| | before | after |
+|---|---|---|
+| bond below 1.0 | 9.6% of structures | **0%** |
+| angle below 1.0 | 3.6% | **0%** |
+| rota below 1.0 | 0.6% | **0%** |
+| overall recall | 99.99% | **99.9953%** (1,157,246 atoms, 1,840 structures) |
+
+**bond and angle are back in the recall figure as full members.** Eight of nine channels are
+now exact in every structure.
+
+**The trade this makes, stated because it is real.** For a footprint of more than one atom the
+field *between* two atoms is higher than the field *at* either, so "every atom reads severity"
+and "the maximum is severity" cannot both hold. Enclosing lone outliers at the 1.0 contour
+requires the first, so a lone multi-atom event now peaks 5-9% above its severity in the
+interstices (rama 5.6%, cablam 7.0%, rota 8.2%, ca_geom 9.4%). Read "above 1.0" as coincidence
+with that margin; two genuinely coincident 1.0 events reach 1.94, far above the overshoot.
+
+**2. Clash's unexplained figure-B maximum. EXPLAINED — not a defect.** The 7.80 A figure-B max
+and clash's residual recall (99.99%, exact in 97.7%) are the same thing, and it is a design
+choice: `_clash_event` deposits at the **contact point** between the two atoms, because the
+interface is where the problem physically is, while recall and figure B both measure distance
+to the flagged *atoms*. The two are about half a van der Waals overlap apart. Moving the
+deposit onto the atoms would improve both numbers and make the picture worse. Clash is now the
+only channel losing anything: 54 atoms of 1,157,246.
 
 ## Fixed 2026-08-06
 
-**2. `FIGURES.md`'s figure C anchor. FIXED — the claim is retired, not restated.** The 6.1×
+**3. `FIGURES.md`'s figure C anchor. FIXED — the claim is retired, not restated.** The 6.1×
 enrichment reproduced only on the uncalibrated `--heavy-atom-clashes` preview path (5 clash
 events on 1TEC against 96 on the calibrated path). The corpus number against the spatially
 matched null is 1.92× vs a 0.98× null over 1,324 structures.
@@ -43,20 +62,20 @@ R = 0.978, Jaccard 0.000), so there is little for a held-out channel to be enric
 `figure_data.py` skips figure C by default (`--no-figure-c`). **The project no longer makes a
 predictive claim**; the sub-threshold argument replaced it.
 
-**3. The clash calibration collided with the display threshold. FIXED.** Concern was linear to
+**4. The clash calibration collided with the display threshold. FIXED.** Concern was linear to
 `CLASH_SATURATION_OVERLAP_A = 0.80`, so MolProbity's 0.40 Å cut landed at concern exactly 0.50
 — the visibility threshold — and ~40% of flagged clashes fell under it. The anchors are now
 0.30 Å → 0, 0.40 Å → 1, matching every other channel. **Clash recall went 0.532 → 1.000**
 (median, 99.99% of atoms) with rama and rota bit-identical. `calibration_cuts()` asserts all
 eleven cuts land at 1.0.
 
-**4. `model_has_hydrogens` accepted "any H present". FIXED.** probe2 requires *both* polar and
+**5. `model_has_hydrogens` accepted "any H present". FIXED.** probe2 requires *both* polar and
 non-polar hydrogens, so a deposit carrying only some — polar-only, a few on waters, a ligand
 modelled with H in an otherwise heavy-atom protein — passed the check, skipped reduce2, and
 died inside probe2 with a message indistinguishable from a real extraction failure. The test now
 requires a C-bound and an N/O/S-bound hydrogen. 1fca went from failed to ok.
 
-**5. The covalent roll-up discarded the atoms of every non-worst flagged restraint. FIXED.**
+**6. The covalent roll-up discarded the atoms of every non-worst flagged restraint. FIXED.**
 `_worst_per_residue` kept each residue's worst bond/angle event *and only that restraint's two
 or three atoms*. Bond recall was below 1.0 in 39% of structures (p05 0.500, min 0.200), with hit
 counts on exact integer fractions of the flagged count. The severity roll-up is untouched — still
@@ -64,31 +83,33 @@ max, never sum, which is what Rule 6 is for — and only the footprint is unione
 residue's flagged restraints. Verified 0.200/0.231/0.333/0.333 → 1.000 on the four worst, with
 `angle` (the channel the roll-up protects) unchanged at 1.00–1.04×.
 
-**6. omega recall was scored against cis-proline. FIXED.** omegalyze flags every non-trans
+**7. omega recall was scored against cis-proline. FIXED.** omegalyze flags every non-trans
 peptide, so ordinary cis-prolines arrived flagged while `_omega_concern` scores them 0.0 on
 purpose. Recall read 0.000 on every structure whose only flagged peptides were cis-Pro. The
-count set aside is recorded per structure as `n_excluded` (2,324 across the corpus). **omega is
-excluded from the published recall figure anyway** — its 1.000 depends on that exclusion, which
-is a judgement about what counts as a problem rather than a measurement.
+count set aside is recorded per structure as `n_excluded` (613 across the corpus). omega now
+recalls 1.000 and is a full member of the recall figure — but **its 1.000 depends on that
+exclusion**, which is a judgement about what counts as a problem rather than a measurement, and
+the published figure says so.
 
 ## Fixed 2026-08-04
 
-**7. Rotamer events implicated backbone hydrogens. FIXED.** A hydrogen now inherits its parent
+**8. Rotamer events implicated backbone hydrogens. FIXED.** A hydrogen now inherits its parent
 heavy atom's classification via `hydrogen_parents()`. Applied to both copies of
 `validation_events.py`. Verified on 6cg7 / 9sf2 / 1kws: backbone-H implication went from 15/15
 and 1/1 to 0. Corpus figures unaffected — they are evaluated on heavy atoms only.
 
-**8. Upstream probe2 crash on a parentless atom. PATCHED LOCALLY.** Guarded in
+**9. Upstream probe2 crash on a parentless atom. PATCHED LOCALLY.** Guarded in
 `/root/phenix/modules/cctbx_project/mmtbx/programs/probe2.py`. See
 [UPSTREAM_BUGS.md](UPSTREAM_BUGS.md) — why H placement emits an unlinked atom is still open.
 
-**9. Stale `extract_rsr` docstring in the pipeline copy. FIXED.**
+**10. Stale `extract_rsr` docstring in the pipeline copy. FIXED.**
 
 ## Corpus coverage
 
-**10. 35 structures excluded by the 50,000-atom cap**, plus 124 failures on the nine-channel
-run. **108 of those failures are restraint interpretation**, which runs only because `bond` and
-`angle` were requested — excluding those two channels puts failures at ~16. The size cap biases
+**35 structures excluded by the 50,000-atom cap**, plus 124 failures on the nine-channel run.
+**106 of those failures are restraint interpretation**, which runs only because `bond` and
+`angle` were requested — excluding those two channels puts failures at ~18. Memory deferrals
+were recovered with a two-worker pass, leaving 1 of 2,000 deferred and 1,840 ok. The size cap biases
 coverage against large complexes, which is where a "where to look" overlay arguably matters
 most. Recoverable with a low-concurrency pass.
 

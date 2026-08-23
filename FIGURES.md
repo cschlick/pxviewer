@@ -72,29 +72,34 @@ recall — a violin or ECDF per channel — and name the structures where recall
 
 **Recall is the number that matters.** A field that loses a real outlier is wrong.
 
-> **Corpus result, 1,828 structures: 99.99% — 874,899 of 874,978 flagged outlier atoms.**
+> **Corpus result, 1,840 structures, all nine channels: 99.9953% — 1,157,192 of 1,157,246
+> flagged outlier atoms. Eight of the nine are exact in every structure.**
 >
 > | channel | structures | flagged atoms | recalled | exact in |
 > |---|---:|---:|---:|---:|
-> | rama | 785 | 22,875 | 100.00% | 100.0% |
-> | cablam | 1,611 | 74,223 | 100.00% | 100.0% |
-> | ca_geom | 1,254 | 22,369 | 100.00% | 100.0% |
-> | cbeta | 565 | 3,282 | 100.00% | 100.0% |
-> | rota | 1,575 | 141,338 | 99.98% | 99.4% |
-> | clash | 1,818 | 610,891 | 99.99% | 97.6% |
+> | rama | 793 | 23,555 | 100.00% | 100.0% |
+> | cablam | 1,623 | 80,559 | 100.00% | 100.0% |
+> | ca_geom | 1,265 | 24,241 | 100.00% | 100.0% |
+> | rota | 1,584 | 145,861 | 100.00% | 100.0% |
+> | cbeta | 570 | 3,337 | 100.00% | 100.0% |
+> | omega | 348 | 2,426 | 100.00% | 100.0% |
+> | bond | 1,263 | 92,633 | 100.00% | 100.0% |
+> | angle | 1,525 | 142,266 | 100.00% | 100.0% |
+> | clash | 1,830 | 642,368 | 99.99% | 97.7% |
 >
-> The 79 lost atoms share one cause: `field.py` normalises each event by a single divisor
-> taken from its *densest* atom, so an isolated atom in an unevenly-spread footprint draws at
-> a fraction of full strength (measured at 0.31 against 0.98 for a cluster of eight with two
-> atoms 12 Å away). The channels rank by exactly that property — clash straddles two residues,
-> rotamer reaches down long Arg/Lys sidechains, and the compact-footprint channels miss nothing.
+> The 54 lost atoms are all clash, and the cause is a design choice rather than a defect:
+> `_clash_event` deposits at the **contact point** between the two atoms, because the interface
+> is where the problem physically is, while recall measures distance to the flagged *atoms* —
+> about half a van der Waals overlap away. Moving the deposit onto the atoms would improve this
+> number and make the picture worse. It is the same mechanism behind clash's 7.80 Å figure-B
+> maximum, which this file previously listed as unexplained.
 >
-> `bond` and `angle` are excluded: rolled up per residue they are the only channels with a
-> material shortfall (below 1.0 in 9.6% and 3.6% of structures), and asking for them requires
-> restraint interpretation, which failed on 108 structures. `omega` is excluded because
-> omegalyze flags every non-trans peptide, so 2,324 ordinary cis-prolines arrive flagged and
-> the calibration scores them 0.0 on purpose; its recall is 1.000 only once those are set
-> aside, which is a judgement about what counts as a problem rather than a measurement.
+> Two caveats belong beside the table. **omega** recalls 1.000 only once ordinary cis-prolines
+> are set aside (613 across the corpus): omegalyze flags every non-trans peptide and the
+> calibration scores cis-Pro 0.0 on purpose, so that exclusion is a judgement about what counts
+> as a problem, not a measurement. **bond and angle** require restraint interpretation, which
+> failed on 106 structures — without those two channels total failures would be ~18 rather than
+> ~124, so their rows rest on a slightly different and non-randomly selected sample.
 
 **Precision is not reported.** It was, and it should not be: on the corpus, Ramachandran
 precision is 0.162, which implies the field adds 6.2× what the markup shows — against 2.12×
