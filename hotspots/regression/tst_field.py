@@ -150,6 +150,105 @@ def exercise_sampling_outside_the_box_is_zero():
     assert f.sample((500.0, 500.0, 500.0)) == 0.0
 
 
+# --- real footprints -----------------------------------------------------------------
+#
+# Extracted from 1UBQ via events.extract_all, so these are the shapes the field actually
+# sees rather than synthetic lattices. Values are at the production defaults
+# (sigma=2.0, spacing=1.0, severity=1.0) and are what the current code produces --
+# recorded, not derived, so a change in the deposit rule has to restate them.
+#
+# Two things these show that grid-aligned synthetic footprints hide:
+#
+#   * "every atom reconstructs to severity" is exact only for the idealized cases the
+#     rule is derived from -- a lone atom, or a cluster whose atoms all have the same
+#     self-overlap. A real footprint's atoms have differing overlaps, so an atom in a
+#     sparser part of the chain reads a weighted average of its neighbours' weights:
+#     0.72 to 0.89 here, converging to 0.77-0.93 as the grid is refined rather than to
+#     1.0. That does not weaken the fix -- the point is clearing the display threshold,
+#     and the old rule put the same atoms at 0.60 -- but the property is a limit, not
+#     an identity.
+#   * overshoot is grid-dependent, growing from ~7% at 1.0 A spacing to ~15% at 0.25 A
+#     as the peak between atoms resolves. Any figure quoted for it is only meaningful
+#     with a spacing attached.
+#
+REAL_FOOTPRINTS = {
+    "rama": [(26.335, 27.77, 3.258), (26.85, 29.021, 3.898),
+             (26.1, 29.253, 5.202), (24.865, 29.024, 5.33)],
+    "cablam": [(26.849, 29.656, 6.217), (26.235, 30.058, 7.497),
+               (27.906, 31.711, 7.264)],
+    "rota2": [(28.523, 15.82, 8.182), (28.946, 16.445, 6.967)],
+    "rota4": [(25.112, 24.88, 3.649), (25.353, 24.86, 5.134),
+              (23.93, 23.959, 5.904), (24.447, 23.984, 7.62)],
+    "rota8": [(22.085, 22.254, 16.581), (22.945, 21.951, 17.785),
+              (22.437, 22.157, 19.065), (24.272, 21.544, 17.644),
+              (23.204, 21.907, 20.192), (25.052, 21.285, 18.776),
+              (24.517, 21.47, 20.03), (25.248, 21.302, 21.191)],
+}
+
+#: name -> (peak of the field, lowest value at any of the event's own atoms).
+REAL_EXPECTED = {
+    "rama": (1.0868, 0.8483),
+    "cablam": (1.0696, 0.8524),
+    "rota2": (0.9732, 0.8943),
+    "rota4": (1.0943, 0.8308),
+    "rota8": (1.1757, 0.7172),
+}
+
+#: What the superseded whole-event divisor produced for the same footprints. Pinned so
+#: the numbers above cannot drift back toward it unnoticed. rota2 is absent: a symmetric
+#: two-atom footprint has one distinct self-overlap, so both rules agree there.
+PRE_FIX_MIN_ATOM = {
+    "rama": 0.7778, "cablam": 0.7844, "rota4": 0.7243, "rota8": 0.5988,
+}
+
+#: Recorded values are deterministic for a given footprint; this leaves room for
+#: floating-point drift while staying far inside the ~0.07-0.11 that the deposit rule
+#: moves these by.
+PINNED = 0.01
+
+
+def exercise_real_footprints_hold_their_measured_values():
+    for name, atoms in sorted(REAL_FOOTPRINTS.items()):
+        f = compute_field([Event(name, 1.0, atoms)])
+        peak_want, atom_want = REAL_EXPECTED[name]
+        peak = float(f.data.max())
+        atom = min(f.sample(a) for a in atoms)
+        assert abs(peak - peak_want) < PINNED, (
+            "%s peak %.4f, recorded %.4f" % (name, peak, peak_want))
+        assert abs(atom - atom_want) < PINNED, (
+            "%s lowest atom %.4f, recorded %.4f" % (name, atom, atom_want))
+
+
+def exercise_real_footprints_overshoot_only_modestly():
+    """The claim the absolute domain rests on: footprint shape cannot fake coincidence.
+
+    A lone event peaks a few percent above its severity between its atoms. Two
+    coincident severity-1.0 events reach 2.0. The margin is what lets a reader treat
+    "well above 1.0" as coincidence rather than as a wide footprint.
+    """
+    p = (0.0, 0.0, 0.0)
+    coincident = compute_field([Event("rama", 1.0, [p]), Event("rota", 1.0, [p])])
+    for name, atoms in sorted(REAL_FOOTPRINTS.items()):
+        peak = float(compute_field([Event(name, 1.0, atoms)]).data.max())
+        assert peak < 1.25, "%s overshoots to %.4f" % (name, peak)
+        assert peak < float(coincident.data.max()) - 0.5, (
+            "%s peaks at %.4f, close enough to coincidence to be confused with it"
+            % (name, peak))
+
+
+def exercise_real_footprints_stay_above_the_display_threshold():
+    """The recall fix, on the shapes it was made for."""
+    for name, atoms in sorted(REAL_FOOTPRINTS.items()):
+        f = compute_field([Event(name, 1.0, atoms)])
+        worst = min(f.sample(a) for a in atoms)
+        assert worst > DISPLAY_THRESHOLD, (
+            "%s has an atom at %.4f, below the display threshold" % (name, worst))
+        if name in PRE_FIX_MIN_ATOM:
+            assert worst > PRE_FIX_MIN_ATOM[name] + 0.05, (
+                "%s worst atom %.4f is back at the pre-fix %.4f"
+                % (name, worst, PRE_FIX_MIN_ATOM[name]))
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
