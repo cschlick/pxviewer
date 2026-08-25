@@ -174,6 +174,33 @@ def reported_resolution(pdb_id: str, *, timeout: float = 30.0) -> Optional[float
         return None
 
 
+def recommended_contour(emdb_number: str, *, timeout: float = 30.0) -> Optional[float]:
+    """The contour level an EMDB entry's authors recommend, or ``None``.
+
+    A cryo-EM map's useful contour is a property of that map, not a constant: pxviewer's
+    default of 1.5 sigma puts 2.5% of EMD-53478's voxels inside the surface, which draws
+    the particle envelope wrapped in a haze of solvent noise rather than anything you can
+    read. The deposited level is 3.7 sigma for the same map -- 0.57% of voxels -- and is
+    what the authors intend the map to be looked at through.
+
+    Returns the primary contour where the entry marks one, else the first. Any network or
+    schema problem is swallowed into ``None``, leaving the caller with its own default.
+    """
+    number = str(emdb_number).strip().lstrip("EMDemd-") or str(emdb_number).strip()
+    url = f"https://www.ebi.ac.uk/emdb/api/entry/EMD-{number}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            meta = json.load(response)
+        contours = ((meta.get("map") or {}).get("contour_list") or {}).get("contour") or []
+        if not contours:
+            return None
+        primary = next((c for c in contours if c.get("primary")), contours[0])
+        level = primary.get("level")
+        return float(level) if level is not None else None
+    except Exception:
+        return None
+
+
 def fetch_entry(
     *,
     entities: Iterable[str],

@@ -1,0 +1,184 @@
+"""The object list and appearance pane around a pinned local-resolution map.
+
+A resolution map is an odd object: it is pinned under the map it colours, and it is never
+drawn -- it is a colour source, not a surface. Both of those broke the panel around it in
+ways that looked like the feature was broken rather than the widgets:
+
+* nesting it under its full map pushed its checkbox past the right edge of the visibility
+  column, leaving a few pixels of it clickable and the rest cut off;
+* the appearance pane offered it Style, Colour, Opacity, Level and Clipping, all of which
+  moved when dragged and changed nothing on screen, because nothing renders this object.
+
+Both are checked here against a real window, since both are questions about geometry and
+widgets that only a laid-out tree can answer.
+"""
+
+from __future__ import absolute_import, division, print_function
+
+import os
+import sys
+
+from pxviewer.regression.tst_utils import have, process_events, skip, tmp_dir
+
+if not have("PySide6.QtWebEngineWidgets", "numpy"):
+    skip("PySide6 QtWebEngine not available")
+
+import numpy as np                                          # noqa: E402
+from PySide6.QtWidgets import (QComboBox, QSlider,          # noqa: E402
+                               QTreeWidgetItemIterator)
+
+from pxviewer import write_volume                           # noqa: E402
+from pxviewer.desktop import DesktopApp                     # noqa: E402
+from pxviewer.regression.tst_utils import dispose           # noqa: E402
+from pxviewer.volume_io import VolumeData                   # noqa: E402
+
+
+def _small_maps(work):
+    """A map and a plausible resolution field on the same grid."""
+    full_path = os.path.join(work, "full.mrc")
+    res_path = os.path.join(work, "res.mrc")
+    rng = np.random.default_rng(0)
+    write_volume((rng.random((16, 16, 16)) * 10).astype(np.float32), full_path,
+                 voxel_size=(2.0, 2.0, 2.0), origin=(0.0, 0.0, 0.0))
+    z, y, x = np.mgrid[0:16, 0:16, 0:16]
+    field = (4.0 + 0.6 * np.sqrt((x - 8) ** 2 + (y - 8) ** 2 + (z - 8) ** 2)).astype(np.float32)
+    write_volume(field, res_path, voxel_size=(2.0, 2.0, 2.0), origin=(0.0, 0.0, 0.0))
+    return full_path, res_path
+
+
+class pinned_resolution_map:
+    """A window holding a map with a resolution map pinned under it."""
+
+    def __enter__(self):
+        self._tmp = tmp_dir()
+        work = self._tmp.__enter__()
+        full_path, res_path = _small_maps(work)
+        self.app = DesktopApp(port=0)
+        self.app._webapp.start()
+        # Hiding is disabled on software WebGL, which also strips the checkboxes this file
+        # is about. Assert the hardware behaviour, which is what a real machine gets.
+        self.app._can_hide = True
+        self.app.load_file(full_path)
+        process_events()
+        self.full_vid = self.app._volumes[0]["id"]
+        self.app._pin_resolution_map(self.full_vid, VolumeData.from_map_file(res_path),
+                                     color=True)
+        process_events()
+        self.res_vid = self.app._volumes[1]["id"]
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            dispose(self.app)
+        finally:
+            self._tmp.__exit__(*exc)
+        return False
+
+
+def _rows(tree):
+    """(depth, node) for every row, in view order."""
+    out = []
+    iterator = QTreeWidgetItemIterator(tree)
+    while iterator.value():
+        node, depth = iterator.value(), 0
+        parent = node.parent()
+        while parent is not None:
+            depth += 1
+            parent = parent.parent()
+        out.append((depth, node))
+        iterator += 1
+    return out
+
+
+def exercise_a_nested_rows_checkbox_is_not_clipped():
+    """Column 0 must hold a whole checkbox at the deepest row, not just at the root.
+
+    Qt draws the tree's indentation inside column 0 while sizing ResizeToContents from the
+    items' contents alone, so every level of nesting takes an indent's worth of room away
+    from the checkbox. How much is left is style-dependent, and that is the point: on the
+    machine this was reported from, the pinned resolution map's checkbox was a few pixels
+    of sliver that was nearly impossible to click.
+
+    Note this is a guard, not a reproduction. On a Qt style whose column 0 is generous the
+    nested row still had 29 px for a 19 px indicator and nothing looked wrong, so this
+    assertion passes with or without the fix *here*; it fails wherever the column is tight
+    enough for the indent to eat the checkbox, which is the case being defended against.
+    The fix adds a full indent per level of depth, so the margin no longer depends on how
+    generous the style happens to be.
+    """
+    with pinned_resolution_map() as fixture:
+        tree = fixture.app._controls._loaded_tree
+        rows = _rows(tree)
+        depths = [d for d, _ in rows]
+        assert max(depths) >= 1, "nothing nested, so this proves nothing: %r" % (depths,)
+
+        # visualRect gives the width left *after* a row's indentation -- the space the
+        # checkbox actually gets drawn into.
+        from PySide6.QtWidgets import QStyle
+
+        indicator = tree.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, None, tree)
+        assert indicator > 0, "no checkbox metric to test against"
+        for depth, node in rows:
+            content = tree.visualRect(tree.indexFromItem(node, 0)).width()
+            assert content >= indicator, (
+                "a row at depth %d gets %d px of column 0 for a %d px checkbox "
+                "(column %d wide, indent %d)"
+                % (depth, content, indicator, tree.columnWidth(0), tree.indentation()))
+
+
+def exercise_the_resolution_map_offers_no_controls_that_do_nothing():
+    """It is never drawn, so surface controls on it are levers connected to nothing.
+
+    The reported symptom was "changing the level of the local resolution doesn't change
+    anything on the screen" -- which was true of every control in the pane.
+    """
+    with pinned_resolution_map() as fixture:
+        controls = fixture.app._controls
+
+        controls._update_appearance("volume", fixture.res_vid, force=True)
+        process_events()
+        box = controls._appearance_box
+        assert not box.findChildren(QComboBox), "resolution map still offers Style/Colour"
+        assert not box.findChildren(QSlider), "resolution map still offers Opacity/Level"
+
+        controls._update_appearance("volume", fixture.full_vid, force=True)
+        process_events()
+        box = controls._appearance_box
+        assert box.findChildren(QComboBox), "the full map lost its own controls"
+        assert box.findChildren(QSlider), "the full map lost its level/opacity"
+
+
+def exercise_the_resolution_map_says_what_it_is_and_points_somewhere_useful():
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    with pinned_resolution_map() as fixture:
+        controls = fixture.app._controls
+        controls._update_appearance("volume", fixture.res_vid, force=True)
+        process_events()
+        box = controls._appearance_box
+
+        blurb = " ".join(w.text() for w in box.findChildren(QLabel) if w.text())
+        assert "not drawn" in blurb, blurb
+        assert "Colour by local resolution" in blurb, blurb
+
+        buttons = [b for b in box.findChildren(QPushButton) if b.text().startswith("Select")]
+        assert buttons, "no way to get to the map whose controls do apply"
+        buttons[0].click()
+        process_events()
+        current = controls._loaded_tree.currentItem()
+        from PySide6.QtCore import Qt
+        assert current is not None
+        assert current.data(0, Qt.ItemDataRole.UserRole) == ("volume", fixture.full_vid)
+
+
+def run():
+    for name, fn in sorted(globals().items()):
+        if name.startswith("exercise"):
+            print("  %s" % name)
+            sys.stdout.flush()
+            fn()
+    print("OK")
+
+
+if __name__ == "__main__":
+    run()

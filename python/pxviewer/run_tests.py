@@ -95,6 +95,7 @@ gui_tests = [
     "$D/regression/tst_console.py",
     "$D/regression/tst_webapp.py",
     "$D/regression/tst_hotspots_gui.py",
+    "$D/regression/tst_localres_ui.py",
 ]
 
 #: The separable hotspots/ project. It sits beside python/ in a source checkout and is

@@ -3101,6 +3101,33 @@ class ControlsWindow:
             # moved since (the scroll wheel, or the console) without a new summary.
             live = {**it, **self._desktop.volume_appearance(vid)}
 
+            if it.get("is_resolution"):
+                # A pinned resolution map is a colour source, never a surface: it is held
+                # permanently hidden and the full map above it is what gets drawn. Offering
+                # the surface controls here was the worst kind of broken -- Style, Colour,
+                # Opacity, Level and Clipping all looked live, moved when dragged, and
+                # changed nothing on screen, because nothing renders this object. Say what
+                # it is instead, and point at the switch that does do something.
+                note = QLabel(
+                    "This map holds the local resolution in ångström and is not drawn "
+                    "itself — it colours the map it is pinned under.\n\nSelect that map "
+                    "to change what you see: its <b>Colour by local resolution</b> switch, "
+                    "and its own contour level.")
+                note.setWordWrap(True)
+                from PySide6.QtCore import Qt as _Qt
+                note.setTextFormat(_Qt.TextFormat.RichText)
+                self._appearance_layout.addWidget(note)
+                parent_entry = self._desktop._volume_entry(it.get("pinned_to"))
+                if parent_entry is not None:
+                    jump = QPushButton("Select %s" % parent_entry.get("name", "the map"))
+                    jump.setToolTip("Show that map's appearance controls, which do apply.")
+                    jump.clicked.connect(
+                        lambda _=False, pid=parent_entry["id"]: self._select_tree_object(
+                            "volume", pid))
+                    self._appearance_layout.addWidget(jump)
+                self._appearance_layout.addStretch(1)
+                return
+
             def _set_style(v, it=it):
                 it["style"] = v
                 self._safe(lambda: self._desktop.set_volume_style(vid, v))
@@ -5049,6 +5076,56 @@ class ControlsWindow:
 
     # -- loaded tree (models + volumes + groups) -------------------------
 
+    def _select_tree_object(self, kind: str, ident: str) -> None:
+        """Make the object list's current row the one for ``(kind, ident)``, if it is there."""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+
+        iterator = QTreeWidgetItemIterator(self._loaded_tree)
+        while iterator.value():
+            node = iterator.value()
+            if node.data(0, _Qt.ItemDataRole.UserRole) == (kind, ident):
+                self._loaded_tree.setCurrentItem(node)
+                return
+            iterator += 1
+
+    def _fit_checkbox_column(self) -> None:
+        """Widen the visibility column so a nested row's checkbox is not clipped.
+
+        Column 0 is ResizeToContents, and Qt measures that from the items' contents while
+        the tree's own indentation is drawn *inside* the same column. A child row therefore
+        gets its parent's width minus one indent for the checkbox: measured at 49 px for a
+        root row and 29 px for the resolution map pinned under its full map, which leaves a
+        sliver of checkbox that is nearly impossible to hit and reads as a broken widget.
+
+        Qt has no mode for "contents plus the deepest indent", so the column is set by hand
+        once the rows are in: the width contents asked for, plus an indent for every level
+        below the root that actually exists.
+        """
+        from PySide6.QtWidgets import QHeaderView, QTreeWidgetItemIterator
+
+        tree = self._loaded_tree
+        deepest = 0
+        iterator = QTreeWidgetItemIterator(tree)
+        while iterator.value():
+            node, depth = iterator.value(), 0
+            parent = node.parent()
+            while parent is not None:
+                depth += 1
+                parent = parent.parent()
+            deepest = max(deepest, depth)
+            iterator += 1
+
+        header = tree.header()
+        if not deepest:
+            # Nothing nested: let Qt size it, which is right and stays right as rows change.
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            return
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        needed = tree.columnWidth(0) + deepest * tree.indentation()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        tree.setColumnWidth(0, needed)
+
     def _fit_tree_height(self) -> None:
         """Make the object list exactly as tall as what it holds, within limits.
 
@@ -5163,6 +5240,7 @@ class ControlsWindow:
                 self._loaded_tree.setCurrentItem(active_item)
         finally:
             self._suppress_model_events = False
+        self._fit_checkbox_column()
         self._fit_tree_height()
         self._sync_table_model_combo(model_items)
         self._refresh_console_session()
@@ -8951,6 +9029,10 @@ class DesktopApp:
             # at 6.4 A or worse. None means "no answer from the API", not "failed" -- the
             # calculation falls back to cctbx's estimate, i.e. the previous behaviour.
             d_min = fetchmod.reported_resolution(pdb_id) if pdb_id else None
+            # The deposited contour, so the map opens at the level its authors intend
+            # rather than at a fixed sigma that is wrong for most cryo-EM maps.
+            emdb = emdb_number or (fetchmod.emdb_for_pdb(pdb_id) if pdb_id else None)
+            contour = fetchmod.recommended_contour(emdb) if emdb else None
             self._status("reading the maps…")
             full_map = VolumeData.from_map_file(str(paths["map"]))
             self._status("computing local resolution from half-maps… "
@@ -8962,7 +9044,9 @@ class DesktopApp:
 
             def add_on_main():
                 with self._batch_load():
-                    full_vid = self._add_volume(full_map, paths["map"].name)
+                    full_vid = self._add_volume(
+                        full_map, paths["map"].name,
+                        **({"iso": contour, "iso_kind": "absolute"} if contour else {}))
                 self._pin_resolution_map(full_vid, res, color=color)
 
             self.bridge.run_on_main.emit(add_on_main)
@@ -9111,12 +9195,17 @@ class DesktopApp:
                                          progress=self._fetch_progress())
             full_map = (VolumeData.from_map_file(str(paths["map"]))
                         if "map" in paths else None)
+            emdb = emdb_number or (fetchmod.emdb_for_pdb(pdb_id) if pdb_id else None)
+            contour = (fetchmod.recommended_contour(emdb)
+                       if (full_map is not None and emdb) else None)
 
             def add_on_main():
                 names = []
                 with self._batch_load():
                     if full_map is not None:
-                        self._add_volume(full_map, paths["map"].name)
+                        self._add_volume(
+                            full_map, paths["map"].name,
+                            **({"iso": contour, "iso_kind": "absolute"} if contour else {}))
                         names.append(paths["map"].name)
                     if "model" in paths:
                         self._load_model_file(str(paths["model"]))
