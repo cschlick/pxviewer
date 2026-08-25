@@ -96,6 +96,17 @@ gui_tests = [
     "$D/regression/tst_hotspots_gui.py",
 ]
 
+#: The separable hotspots/ project. It sits beside python/ in a source checkout and is
+#: absent from an installed package, so the group is gated on the directory existing.
+#:
+#: Its tests import nothing from pxviewer -- hotspots/README.md keeps that directory
+#: splittable back out into its own repository, and these follow the same rule, doing
+#: their own sys.path setup rather than borrowing regression/tst_utils.py. This list is
+#: therefore the single seam to delete when the split happens.
+hotspots_tests = [
+    "$D/../../hotspots/regression/tst_field.py",
+]
+
 tst_list = tuple(core_tests)
 tst_list_expected_unstable = ()
 
@@ -114,7 +125,18 @@ def _assemble():
     elif gui_tests:
         print("Skipping %d GUI tests: PySide6 QtWebEngine / websockets not available"
               % len(gui_tests))
+    if os.path.isdir(_hotspots_dir()):
+        tests += hotspots_tests
+    elif hotspots_tests:
+        print("Skipping %d hotspots tests: hotspots/ is not in this tree"
+              % len(hotspots_tests))
     return tuple(tests)
+
+
+def _hotspots_dir():
+    """The separable hotspots/ directory, two levels above the package (source checkout)."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        os.pardir, os.pardir, "hotspots")
 
 
 def run():

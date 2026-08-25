@@ -326,9 +326,24 @@ The superseded additive-severity prototype (`make_map.py`) has been removed. The
 analysis scripts remain for historical ablation and consistency work; they are not
 required for normal map generation.
 
+## Tests
+
+`regression/tst_field.py` pins the field's defining property: every atom an event
+implicates reconstructs to that event's severity, whether the footprint is a tight
+cluster, a lone atom, or a mix of both. Run it directly, from anywhere:
+
+```bash
+libtbx.python regression/tst_field.py
+```
+
+It is a plain program -- prints `OK`, exits nonzero on failure -- and imports nothing
+from pxviewer, so it survives this directory being split back out. pxviewer's suite
+picks it up through a `hotspots_tests` group in `python/pxviewer/run_tests.py` that is
+gated on this directory existing; deleting that one list is all the split requires.
+
 ## Smoke tests
 
-Check imports and syntax:
+Beyond the regression test above, to check imports and syntax:
 
 ```bash
 source /root/phenix/build/setpaths.sh

@@ -31,6 +31,13 @@ headless cctbx build will not have. `run_tests.py` assembles its list accordingl
 announces what it skipped — the same thing mmtbx does with probe. `tst_utils.skip()` is for
 the finer-grained cases inside a script.
 
+**The separable `hotspots/` directory has its own group.** `hotspots/` is meant to be
+split back out into its own repository and nothing in it imports pxviewer, so its tests
+do their own `sys.path` setup instead of using `regression/tst_utils.py`, and
+`run_tests.py` registers them in a `hotspots_tests` list gated on the directory being
+present (it is absent from an installed package). That list is the seam to delete when
+the split happens.
+
 **Tests must run from any directory.** Use `tst_utils.data_path()` rather than a path
 relative to the repository root.
 
