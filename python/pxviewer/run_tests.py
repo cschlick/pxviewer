@@ -44,6 +44,7 @@ core_tests = [
     "$D/regression/tst_api_guide.py",
     "$D/regression/tst_kinemage.py",
     "$D/regression/tst_loader.py",
+    "$D/regression/tst_fetch.py",
     "$D/regression/tst_volume_io.py",
     "$D/regression/tst_data.py",
     "$D/regression/tst_monomer_library.py",

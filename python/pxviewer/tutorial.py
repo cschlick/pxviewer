@@ -56,6 +56,40 @@ def _load_bundled(desktop: Any, filename: str) -> None:
     desktop.load_file(str(path))
 
 
+#: The worked example: p53 bound to the nucleosome, a 4.2 A cryo-EM reconstruction whose
+#: periphery is markedly softer than its core -- which is the whole point of looking at
+#: local resolution rather than the single number on the entry page. Its half-maps are
+#: deposited (many entries' are not), which is what makes the calculation possible at all.
+LOCAL_RESOLUTION_PDB_ID = "9r04"
+LOCAL_RESOLUTION_EMDB = "53478"
+
+
+def _fetch_local_resolution(desktop: Any) -> None:
+    """Start the download-and-compute for the local-resolution tutorial.
+
+    Returns as soon as the background job is running. The loader is called on the GUI
+    thread (see MainWindow._load_tutorial_data), so it must not block: this is ~160 MB of
+    map to fetch and a minute or two of computation, and doing it inline would freeze the
+    window for the duration with no way to tell that from a hang. The tutorial's first
+    step waits on :func:`_resolution_ready` instead, so the walkthrough is honest about
+    what it is waiting for.
+    """
+    desktop.fetch_and_compute_resolution(
+        pdb_id=LOCAL_RESOLUTION_PDB_ID, emdb_number=LOCAL_RESOLUTION_EMDB,
+        with_model=True, color=True, reuse_existing=True)
+
+
+def _resolution_ready(cw: Any) -> bool:
+    """Whether a computed local-resolution map is pinned under some loaded map."""
+    volumes = getattr(cw._desktop, "_volumes", {}) or {}
+    return any(entry.get("resolution_map") for entry in volumes.values())
+
+
+def _colouring_by_resolution(cw: Any) -> bool:
+    volumes = getattr(cw._desktop, "_volumes", {}) or {}
+    return any(entry.get("color_by_resolution") for entry in volumes.values())
+
+
 def _active(cw: Any) -> Optional[str]:
     return cw._desktop._active_model_id
 
@@ -295,9 +329,52 @@ def restraint_edits_tutorial() -> Tutorial:
     ], loader=lambda d: _load_bundled(d, "zn_site.pdb"))
 
 
+def local_resolution_tutorial() -> Tutorial:
+    """Colour a cryo-EM map by local resolution — where the map is trustworthy, and where
+    it is not. The one tutorial whose data is fetched rather than bundled: half-maps are
+    too large to ship, and the calculation needs them."""
+    return Tutorial("Look at local resolution", [
+        Step(
+            "A cryo-EM entry quotes **one** resolution — 4.2 Å for this one. That number "
+            "is an average over the whole reconstruction, and almost no map is uniform: a "
+            "rigid core can be far better than the quoted figure while a flexible "
+            "periphery is far worse.\n\n**Local resolution** answers the question the "
+            "single number cannot — *how much should I trust the density right here?* — "
+            "and it is the difference between building a side chain with confidence and "
+            "inventing one.",
+        ),
+        Step(
+            "This needs the two **half-maps**: independent reconstructions from half the "
+            "particles each. Where they agree out to fine detail the resolution is high; "
+            "where they diverge early it is low. cctbx computes the local half-map FSC "
+            "throughout the map and records where it falls through 0.143.\n\n"
+            "**EMD-53478 and its model 9R04 are downloading now** — about 160 MB, so give "
+            "it a moment, then a minute or two to compute. Watch the status bar.",
+            done=_resolution_ready,
+        ),
+        Step(
+            "The map is now **coloured by local resolution** rather than by a flat colour: "
+            "the resolution map is pinned underneath it, hidden, and drives the colour.\n\n"
+            "Look at the difference between the middle and the edges. The nucleosome core "
+            "is the best-ordered part; the p53 that binds it, and the DNA ends, are softer. "
+            "That variation is invisible in the single quoted number.",
+            done=_colouring_by_resolution,
+        ),
+        Step(
+            "The colouring is a switch on the map itself: open the **Loaded** panel and "
+            "look at the map's own controls, where **Colour by resolution** can be turned "
+            "off and on. With it off you are back to one colour and no idea which parts "
+            "earned it.\n\nThat's the loop: fetch the half-maps, compute once, and let the "
+            "map say where it can be believed. You can run it on your own maps from the "
+            "map menu's **Colour by local resolution**, with local files or another entry.",
+        ),
+    ], loader=_fetch_local_resolution)
+
+
 def all_tutorials() -> List[Tutorial]:
     """Every walkthrough offered, in menu order — validate, fit a ligand, then the two
     refinements (real-space into cryo-EM density, then X-ray against reflections), then the
     restraint-edits pair (reading before writing)."""
     return [validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
-            xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]
+            local_resolution_tutorial(), xray_refinement_tutorial(), load_edits_tutorial(),
+            restraint_edits_tutorial()]

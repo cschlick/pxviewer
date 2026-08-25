@@ -391,6 +391,18 @@ def local_resolution_from_half_maps(
     may each be a :class:`VolumeData` or a bare cctbx ``map_manager``; if ``full_map`` is
     omitted the average of the two halves stands in for it. The three must share a grid —
     which fetched EMDB half-maps and their full map always do.
+
+    ``d_min`` is the finest resolution correlations are computed at, and it sets the floor
+    of the result: nothing can come back finer than it. Left as None, cctbx derives it from
+    its own ``map_model_manager.resolution()`` estimate, which can be well off — on
+    EMD-53478 it estimates 7.7 A against a deposited 4.2 A, flooring every voxel at 6.4 A
+    and flattening exactly the variation the map is for. Pass the deposited resolution when
+    it is known (``fetch.reported_resolution`` looks it up).
+
+    Note that the values shift with ``d_min`` rather than merely being clipped by it — the
+    resolution shells move — so two maps are only comparable if they were computed at the
+    same ``d_min``. Measured on EMD-53478: at 4.2 A the median is 8.3 A, at 3.0 A it is
+    7.3 A. Using the deposited resolution is what makes the choice reproducible.
     """
     from iotbx.map_model_manager import map_model_manager
 

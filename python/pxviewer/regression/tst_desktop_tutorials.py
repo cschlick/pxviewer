@@ -42,6 +42,7 @@ TUTORIAL_TITLES = [
     "Validate a structure",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
+    "Look at local resolution",
     "X-ray: refine with a live difference map",
     "Load restraint edits",
     "Custom restraint edits",

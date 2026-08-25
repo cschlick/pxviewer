@@ -20,6 +20,7 @@ import os
 import sys
 import threading
 import time
+import traceback
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, List, Optional
@@ -326,6 +327,16 @@ _ACCENTS = {
     "warn": ("#b26a00", "#e3a008"),   # amber text — a message to catch the eye
     "error": ("#c0392b", "#f85149"),  # red — an invalid action / bad input
 }
+
+
+def _first_line(exc: Exception) -> str:
+    """The first line of an exception's message, for a one-line status report.
+
+    FetchError deliberately carries a multi-line explanation (url, what to try); the
+    status bar has room for the first line of it, and the rest is on stderr.
+    """
+    text = str(exc).strip() or exc.__class__.__name__
+    return text.splitlines()[0].strip()
 
 
 def _accent(widget, name: str) -> str:
@@ -5791,12 +5802,24 @@ class DesktopApp:
         indicator spinning by returning early or raising. ``label`` is what the user is told is
         happening ("Finding hotspots"), shown while it runs.
 
+        A worker that raises is reported rather than lost. Without this the traceback goes
+        to the interpreter's thread hook -- stderr, which a windowed app has no one reading
+        -- and the only thing the user sees is the busy indicator stopping, which is
+        exactly what success looks like. Long operations here are the ones most likely to
+        fail for reasons outside the app (a download, a missing library, a map that will
+        not read), so silence is the worst answer. The message is flashed via
+        :meth:`_warn`, the traceback still goes to stderr for a developer, and ``finally``
+        continues to guarantee the indicator comes down.
+
         Not for the silent background work (restraint warm-up) or the continuous interactive
         loops (tug), which the user did not ask for and should not see a spinner for.
         """
         def wrapped() -> None:
             try:
                 work()
+            except Exception as exc:
+                traceback.print_exc()
+                self._warn(f"{label} failed: {_first_line(exc)}")
             finally:
                 self._end_busy(label)
 
@@ -8856,12 +8879,51 @@ class DesktopApp:
 
         self.run_background(work, name="pxviewer-localres", label="Local resolution")
 
+    def _fetch_progress(self):
+        """A ``fetch_entry`` progress callback that narrates into the status bar.
+
+        Throttled: the callback fires per 64 KB chunk, which on a fast link is hundreds of
+        signals a second for no added information. A quarter-second floor keeps the
+        percentage moving visibly while leaving the GUI thread alone.
+        """
+        from . import fetch as fetchmod
+
+        last = [0.0]
+
+        def report(entity, stage, done, total):
+            what = fetchmod.describe(entity)
+            if stage == "downloading":
+                now = time.time()
+                if done and now - last[0] < 0.25:
+                    return
+                last[0] = now
+                if total:
+                    self._status("downloading %s… %d%% of %s"
+                                 % (what, round(100.0 * done / total),
+                                    fetchmod.format_bytes(total)))
+                else:
+                    self._status("downloading %s… %s"
+                                 % (what, fetchmod.format_bytes(done)))
+            elif stage == "decompressing":
+                self._status("decompressing %s…" % what)
+            elif stage == "cached":
+                self._status("using the %s already downloaded" % what)
+
+        return report
+
     def fetch_and_compute_resolution(self, *, pdb_id=None, emdb_number=None,
-                                     color: bool = True, work_dir=None) -> None:
+                                     color: bool = True, work_dir=None,
+                                     reuse_existing: bool = False,
+                                     with_model: bool = False) -> None:
         """Download a map and its two half-maps, then compute local resolution and pin it
         under the (loaded) full map — the fetch counterpart of :meth:`compute_resolution_map`,
         sharing the same computation and the same result. Everything but the loading runs on
         a background thread.
+
+        ``with_model`` also fetches the entry's model and loads it alongside, so a caller
+        that wants the whole picture (the local-resolution tutorial) gets it from one
+        background job rather than racing two: the second would re-resolve the same EMDB
+        number and re-download files the first is mid-way through writing.
         """
         from . import fetch as fetchmod
 
@@ -8872,15 +8934,31 @@ class DesktopApp:
 
             label = pdb_id or (f"EMD-{emdb_number}" if emdb_number else "")
             self._status(f"fetching maps for {label}…".strip())
+            entities = ["map", "half_map_1", "half_map_2"]
+            if with_model and pdb_id:
+                entities.insert(0, "model")   # the small one first, so something appears early
             paths = fetchmod.fetch_entry(
-                entities=["map", "half_map_1", "half_map_2"], work_dir=target,
-                pdb_id=pdb_id, emdb_number=emdb_number)
+                entities=entities, work_dir=target,
+                pdb_id=pdb_id, emdb_number=emdb_number,
+                progress=self._fetch_progress(), reuse_existing=reuse_existing)
+            if "model" in paths:
+                model_path = str(paths["model"])
+                self.bridge.run_on_main.emit(lambda: self.load_file(model_path))
+
+            # Use the deposited resolution as d_min when we can get it. cctbx otherwise
+            # derives d_min from its own estimate, which floors the result: on EMD-53478
+            # that estimate is 7.7 A against a deposited 4.2 A, and every voxel comes back
+            # at 6.4 A or worse. None means "no answer from the API", not "failed" -- the
+            # calculation falls back to cctbx's estimate, i.e. the previous behaviour.
+            d_min = fetchmod.reported_resolution(pdb_id) if pdb_id else None
+            self._status("reading the maps…")
             full_map = VolumeData.from_map_file(str(paths["map"]))
-            self._status("computing local resolution from half-maps…")
+            self._status("computing local resolution from half-maps… "
+                         "(a minute or two on a full-size map)")
             res = local_resolution_from_half_maps(
                 VolumeData.from_map_file(str(paths["half_map_1"])),
                 VolumeData.from_map_file(str(paths["half_map_2"])),
-                full_map)
+                full_map, d_min=d_min)
 
             def add_on_main():
                 with self._batch_load():
@@ -9029,7 +9107,8 @@ class DesktopApp:
             label = pdb_id or (f"EMD-{emdb_number}" if emdb_number else "")
             self._status(f"fetching {label}…".strip())
             paths = fetchmod.fetch_entry(entities=entities, work_dir=target,
-                                         pdb_id=pdb_id, emdb_number=emdb_number)
+                                         pdb_id=pdb_id, emdb_number=emdb_number,
+                                         progress=self._fetch_progress())
             full_map = (VolumeData.from_map_file(str(paths["map"]))
                         if "map" in paths else None)
 
