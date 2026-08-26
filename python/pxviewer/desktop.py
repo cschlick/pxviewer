@@ -515,6 +515,7 @@ def _make_bridge():
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
         ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
         volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
+        localres_shown = Signal()           # the viewport drew a localres colouring (it is usable now)
 
     return _Bridge()
 
@@ -5632,6 +5633,7 @@ class DesktopApp:
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
         # emitted from another thread it dispatches as a queued call on the GUI thread.
         self.bridge.run_on_main.connect(lambda fn: fn())
+        self.bridge.localres_shown.connect(self._on_localres_shown)
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
 
@@ -6313,6 +6315,7 @@ class DesktopApp:
             self._dummy = _dummy_session()
             self._dummy.start(host=self._host, port=0)
             self._dummy.on_volume_iso(self._on_volume_iso_changed)
+            self._dummy.on_localres_shown(self.bridge.localres_shown.emit)
             # So a ligand marker can be placed on a blank canvas (no model), where the
             # dummy is the session the viewport is connected to.
             self._dummy.on_marker(lambda position, atom: self._on_marker(position, atom))
@@ -6596,6 +6599,7 @@ class DesktopApp:
         # Volume commands ride whichever session is the control session, so contour
         # changes made in the viewport can come back on any of them.
         session.on_volume_iso(self._on_volume_iso_changed)
+        session.on_localres_shown(self.bridge.localres_shown.emit)
         session.on_tug(lambda action, atom, target, mid=mid: self._on_tug(mid, action, atom, target))
         # Markers are a scene-level thing, not this model's — but only the armed (control)
         # session's viewport reports one, so wiring every session is harmless.
@@ -9162,15 +9166,27 @@ class DesktopApp:
                         # A failed save costs the next run a recompute, nothing more.
                         self._warn(f"could not save the resolution map: {_first_line(exc)}")
 
+            added = threading.Event()
+
             def add_on_main():
-                with self._batch_load():
-                    iso_sigma = self._sigma_iso(full_map, contour)
-                    full_vid = self._add_volume(
-                        full_map, paths["map"].name,
-                        **({"iso": iso_sigma} if iso_sigma is not None else {}))
-                self._pin_resolution_map(full_vid, res, color=color)
+                try:
+                    self._status("adding the map to the viewport…")
+                    with self._batch_load():
+                        iso_sigma = self._sigma_iso(full_map, contour)
+                        full_vid = self._add_volume(
+                            full_map, paths["map"].name,
+                            **({"iso": iso_sigma} if iso_sigma is not None else {}))
+                    self._pin_resolution_map(full_vid, res, color=color)
+                finally:
+                    added.set()
 
             self.bridge.run_on_main.emit(add_on_main)
+            # Hold this worker's busy label until the main-thread add has run: returning
+            # now would drop the indicator while the add, the payload stream and the
+            # viewport's build are all still ahead -- the reported dead air. By the time
+            # the add finishes, _push_localres has opened the draw hold, which the
+            # viewport's ack releases: the indicator is continuous from click to usable.
+            added.wait(timeout=300)
 
         self.run_background(work, name="pxviewer-localres-fetch", label="Local resolution")
 
@@ -9273,6 +9289,51 @@ class DesktopApp:
             session.set_localres_downsample(entry["localres_downsample"])
         self._emit_loaded_changed()  # the pane shows the current factor
 
+    #: The one busy label spanning "payload streamed" to "the viewport has drawn it".
+    #: Streaming finishes long before the surface exists -- the payload is ~128 MB and
+    #: the client's marching cubes over it takes seconds -- and this gap was exactly the
+    #: reported dead air: model on screen at ~5s, nothing to look at until ~20s, no
+    #: indicator up in between.
+    _LOCALRES_DRAW_LABEL = "Drawing local resolution"
+
+    def _begin_localres_wait(self) -> None:
+        """Hold the busy indicator until the viewport reports the surface drawn."""
+        from PySide6.QtCore import QTimer
+
+        if getattr(self, "_localres_wait", False):
+            return  # a newer payload supersedes the old ack; one hold covers both
+        self._localres_wait = True
+        self._begin_busy(self._LOCALRES_DRAW_LABEL)
+        # Defensive: a lost ack (a viewport that died mid-build) must not wedge the
+        # indicator forever. Generous, because slow machines legitimately take a while.
+        timer = QTimer()  # parentless: DesktopApp is not a QObject; the ref below keeps it
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: self._end_localres_wait(timed_out=True))
+        timer.start(90_000)
+        self._localres_wait_timer = timer
+
+    def _end_localres_wait(self, *, timed_out: bool = False) -> None:
+        if not getattr(self, "_localres_wait", False):
+            return
+        self._localres_wait = False
+        timer = getattr(self, "_localres_wait_timer", None)
+        if timer is not None:
+            timer.stop()
+            self._localres_wait_timer = None
+        self._end_busy(self._LOCALRES_DRAW_LABEL)
+        if timed_out:
+            self._warn("the viewport did not confirm the local-resolution surface")
+
+    def _on_localres_shown(self) -> None:
+        """The viewport drew the coloured surface: it is on screen and usable now."""
+        self._end_localres_wait()
+        for entry in self._volumes:
+            if entry.get("color_by_resolution"):
+                entry["localres_drawn"] = True
+                self._status(f"{entry['name']}: local resolution ready — "
+                             "the map is coloured by it")
+        self._emit_loaded_changed()
+
     def _push_localres(self, full) -> None:
         """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
 
@@ -9296,6 +9357,8 @@ class DesktopApp:
         if session is not None:
             # Factor first: it must be in place when the payload's first build runs.
             session.set_localres_downsample(int(full.get("localres_downsample", 4)))
+            full["localres_drawn"] = False
+            self._begin_localres_wait()   # released by the viewport's localres-shown ack
             session.show_localres_grid(payload)
         self.set_volume_visible(full["id"], False)  # our surface stands in for the plain one
         full["_localres_shown"] = True

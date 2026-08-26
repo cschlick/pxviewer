@@ -228,6 +228,26 @@ def exercise_the_downsample_factor_arrives_before_the_grids():
         run_client(scenario)
 
 
+def exercise_the_viewport_can_report_the_colouring_drawn():
+    """localres-shown flows viewport -> python, releasing the app's busy hold.
+
+    Streaming the payload finishes long before the browser's build does, so "ready" is
+    the client's acknowledgement, not the send -- without it the app dropped its busy
+    indicator ~15 s before the surface existed.
+    """
+    fired = []
+    with session() as live:
+        live.on_localres_shown(lambda: fired.append(True))
+
+        async def scenario():
+            async with client(live) as ws:
+                await ws.send(json.dumps({"type": "localres-shown"}))
+                assert await eventually(lambda: fired), "the ack never reached the handler"
+
+        run_client(scenario)
+    assert fired
+
+
 def exercise_stop_cancels_sends_parked_on_a_dead_socket():
     """Closing the app must not leave broadcast tasks pending.
 

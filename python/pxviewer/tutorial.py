@@ -80,14 +80,24 @@ def _fetch_local_resolution(desktop: Any) -> None:
 
 
 def _resolution_ready(cw: Any) -> bool:
-    """Whether a computed local-resolution map is pinned under some loaded map."""
-    volumes = getattr(cw._desktop, "_volumes", {}) or {}
-    return any(entry.get("resolution_map") for entry in volumes.values())
+    """Whether a coloured-by-resolution surface is actually drawn and usable.
+
+    Gated on the viewport's own acknowledgement (``localres_drawn``), not on the map
+    being pinned: pinning happens when Python has *streamed* the payload, seconds before
+    the browser finishes building the surface, and a tutorial that advanced then was
+    describing a map that was not on screen yet.
+    """
+    # _volumes is a list of entry dicts. An earlier version called .values() on it, and
+    # the coach's defensive except around done-predicates swallowed the AttributeError --
+    # so the step never auto-advanced and nobody saw an error. Predicates fail silent by
+    # design; that makes them the one place a type mistake survives unnoticed.
+    return any(entry.get("localres_drawn")
+               for entry in getattr(cw._desktop, "_volumes", []) or [])
 
 
 def _colouring_by_resolution(cw: Any) -> bool:
-    volumes = getattr(cw._desktop, "_volumes", {}) or {}
-    return any(entry.get("color_by_resolution") for entry in volumes.values())
+    return any(entry.get("color_by_resolution")
+               for entry in getattr(cw._desktop, "_volumes", []) or [])
 
 
 def _active(cw: Any) -> Optional[str]:

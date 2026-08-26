@@ -546,6 +546,7 @@ class LiveSession:
         self._focus_surroundings = False
         self._mouse_selection_indices: List[int] = []
         self._volume_iso_handlers: List[Callable[[str, float], None]] = []
+        self._localres_shown_handlers: List[Callable[[], None]] = []
         self._tug_handlers: List[Callable[[str, int, Optional[list]], None]] = []
         self._marker_handlers: List[Callable[[list, Optional[int]], None]] = []
         self._marker_move_handlers: List[Callable[[str, list, bool], None]] = []
@@ -1257,6 +1258,16 @@ class LiveSession:
         the controls hear about it, so the slider keeps telling the truth.
         """
         self._volume_iso_handlers.append(handler)
+
+    def on_localres_shown(self, handler: Callable[[], None]) -> None:
+        """Register a callback for the viewport having *drawn* a localres colouring.
+
+        Sent by the client after the payload's surface build commits — the moment the
+        coloured map is on screen and interactive. Streaming the payload finishes long
+        before that (it is ~128 MB and the client's marching cubes over it is seconds),
+        so this is what "ready" means, not the send.
+        """
+        self._localres_shown_handlers.append(handler)
 
     def set_volume_position(self, ref: str, position: Any) -> None:
         """Broadcast a command to translate a volume by reference.
@@ -2161,6 +2172,12 @@ class LiveSession:
                         handler(ref, float(value))
                     except Exception:  # pragma: no cover - user callback errors
                         pass
+        elif etype == "localres-shown":
+            for handler in self._localres_shown_handlers:
+                try:
+                    handler()
+                except Exception:  # pragma: no cover - user callback errors
+                    pass
         elif etype == "screenshot-result":
             req_id = event.get("reqId")
             with self._pending_lock:

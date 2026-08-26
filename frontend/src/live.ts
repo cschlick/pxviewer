@@ -3248,7 +3248,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
             if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
             if (pendingHotspotVolume) { await viewer.setHotspotVolume(pendingHotspotVolume, 4); pendingHotspotVolume = null; }
-            if (pendingLocalres) { await viewer.setLocalresSurface(pendingLocalres, 4); pendingLocalres = null; }
+            if (pendingLocalres) {
+                await viewer.setLocalresSurface(pendingLocalres, 4);
+                pendingLocalres = null;
+                ws.send(JSON.stringify({ type: 'localres-shown' }));
+            }
         } else if (tag === TAG_FRAME) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -3294,8 +3298,13 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         } else if (tag === TAG_LOCALRES) {
             // The primary map surface coloured by a second grid (see viewer.setLocalresSurface).
             // Like the other volumes, only the most recent matters while the viewer is building.
-            if (viewer) await viewer.setLocalresSurface(buffer, 4);
-            else pendingLocalres = buffer;
+            if (viewer) {
+                await viewer.setLocalresSurface(buffer, 4);
+                // Only after the build commits: the payload is ~128 MB and the marching
+                // cubes over it is seconds -- the app holds its busy indicator up until
+                // this arrives, so "sent" is never mistaken for "on screen and usable".
+                ws.send(JSON.stringify({ type: 'localres-shown' }));
+            } else pendingLocalres = buffer;
         }
     };
 

@@ -304,6 +304,49 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
         assert "2×" in values, "no Downsample dropdown showing the current factor: %r" % (values,)
 
 
+def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
+    """The indicator must span "payload streamed" to "surface on screen".
+
+    The reported dead air: model visible at ~5 s, coloured map usable at ~20 s, and the
+    busy oscillator gone after ~2 s -- because the worker's busy ended when it returned,
+    and the payload's send was treated as done. Now the push opens a hold that only the
+    viewport's localres-shown ack releases, and the tutorial's "ready" predicate follows
+    the ack rather than the pinning.
+    """
+    class SilentSession:
+        def set_localres_downsample(self, factor):
+            pass
+
+        def show_localres_grid(self, payload):
+            pass
+
+        def clear_localres_grid(self):
+            pass
+
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        full = app._volume_entry(fixture.full_vid)
+        app._control_session = lambda: SilentSession()
+
+        app._push_localres(full)
+        assert app._busy_labels and "Drawing local resolution" in app._busy_labels, (
+            "no busy hold while the viewport builds: %r" % (app._busy_labels,))
+        assert not full.get("localres_drawn"), "drawn before any acknowledgement"
+
+        from pxviewer.tutorial import _resolution_ready
+
+        class CW:  # what the coach hands a done-predicate
+            _desktop = app
+        assert not _resolution_ready(CW()), "tutorial ready before the surface exists"
+
+        app.bridge.localres_shown.emit()
+        process_events()
+        assert "Drawing local resolution" not in (app._busy_labels or []), (
+            "the ack did not release the hold")
+        assert full.get("localres_drawn") is True
+        assert _resolution_ready(CW()), "tutorial not ready after the ack"
+
+
 def exercise_the_computed_resolution_map_is_saved_and_reused():
     """The minute-long computation runs once; a re-run loads the saved map from disk.
 
