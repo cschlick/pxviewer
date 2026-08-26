@@ -423,6 +423,18 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
         texts = {b.text() for b in box.findChildren(QPushButton)}
         assert "Fit to surface" in texts and "Reset" in texts, texts
 
+        # The overlay's controls live inside one checkable group whose title is the
+        # on/off switch -- not interleaved among the map's own rows, which is how they
+        # started and read as unrelated neighbours with Level stranded beneath them.
+        from PySide6.QtWidgets import QGroupBox
+        parent = spins[0].parent()
+        while parent is not None and not isinstance(parent, QGroupBox):
+            parent = parent.parent()
+        assert isinstance(parent, QGroupBox), "the colour range escaped the group"
+        assert parent.title() == "Colour by local resolution", parent.title()
+        assert parent.isCheckable(), "the group's title is not the on/off switch"
+        assert parent.isChecked() == bool(full.get("color_by_resolution"))
+
 
 def exercise_the_computed_resolution_map_is_saved_and_reused():
     """The minute-long computation runs once; a re-run loads the saved map from disk.

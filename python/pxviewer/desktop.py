@@ -3140,87 +3140,6 @@ class ControlsWindow:
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
             self._add_color_row(live.get("color"), _set_color, title="Map color")
 
-            # Colour-by-resolution: a plain on/off, present only once a resolution map has
-            # been computed and pinned under this map (via the Local resolution wizard).
-            if it.get("resolution_map"):
-                res_check = QCheckBox("Colour by local resolution")
-                res_check.setToolTip(
-                    "Colour this map's surface by the local resolution computed from its "
-                    "half-maps (blue = high resolution, red = low).")
-                res_check.setChecked(bool(it.get("color_by_resolution")))
-                res_check.toggled.connect(
-                    lambda on, it=it: (
-                        it.__setitem__("color_by_resolution", bool(on)),
-                        self._safe(lambda: self._desktop.set_color_by_resolution(vid, bool(on)))))
-                self._appearance_layout.addWidget(res_check)
-
-                # Display resolution for the coloured surface. Contouring every nth voxel
-                # is what keeps the Level slider responsive; the choice is explicit here
-                # rather than adaptive so the surface never changes detail on its own.
-                def _set_localres_ds(v, it=it):
-                    it["localres_downsample"] = v
-                    self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
-
-                add_combo("Downsample",
-                          [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
-                          int(it.get("localres_downsample") or 4), _set_localres_ds)
-
-                # The colour ramp's value range, in Angstrom: lo -> blue, hi -> red.
-                # Manual and stable on purpose (a mapping that followed the contour
-                # would re-colour a figure under its caption); Fit is the deliberate
-                # one-click version of "span what I am looking at right now".
-                from PySide6.QtWidgets import QDoubleSpinBox
-
-                lo0, hi0 = it.get("localres_domain") or (0.0, 1.0)
-                dr = QHBoxLayout()
-                lab = QLabel("Colour range")
-                lab.setMinimumWidth(80)
-                lab.setToolTip(
-                    "The resolution values the colour ramp spans: the low end draws "
-                    "blue, the high end red, values outside clamp. Fixed until you "
-                    "change it, so colours keep their meaning across contour levels.")
-                dr.addWidget(lab)
-                lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
-                lo_spin.setObjectName("localres-domain-lo")
-                hi_spin.setObjectName("localres-domain-hi")
-                for sp in (lo_spin, hi_spin):
-                    sp.setRange(0.0, 999.0)
-                    sp.setDecimals(2)
-                    sp.setSingleStep(0.1)
-                    sp.setSuffix(" Å")
-                lo_spin.setValue(float(lo0))
-                hi_spin.setValue(float(hi0))
-
-                def _apply_domain(_=None, it=it):
-                    lo_v, hi_v = lo_spin.value(), hi_spin.value()
-                    if hi_v <= lo_v:
-                        return  # half-edited state; applied once the other end moves
-                    it["localres_domain"] = (lo_v, hi_v)
-                    self._safe(lambda: self._desktop.set_localres_domain(vid, lo_v, hi_v))
-
-                lo_spin.valueChanged.connect(_apply_domain)
-                hi_spin.valueChanged.connect(_apply_domain)
-                dr.addWidget(lo_spin)
-                dr.addWidget(QLabel("–"))
-                dr.addWidget(hi_spin)
-                self._appearance_layout.addLayout(dr)
-
-                br = QHBoxLayout()
-                br.addSpacing(84)
-                fit = QPushButton("Fit to surface")
-                fit.setToolTip("Span the ramp over the resolution values inside the "
-                               "current contour — what is actually on screen.")
-                fit.clicked.connect(
-                    lambda _=False: self._safe(lambda: self._desktop.fit_localres_domain(vid)))
-                reset = QPushButton("Reset")
-                reset.setToolTip("Back to the default: percentiles of the whole map.")
-                reset.clicked.connect(
-                    lambda _=False: self._safe(lambda: self._desktop.reset_localres_domain(vid)))
-                br.addWidget(fit)
-                br.addWidget(reset)
-                br.addStretch(1)
-                self._appearance_layout.addLayout(br)
-
             def _set_opacity(v, it=it):
                 it["opacity"] = v
                 self._safe(lambda: self._desktop.set_volume_opacity(vid, v))
@@ -3252,6 +3171,96 @@ class ControlsWindow:
 
             self._add_mask_row(live.get("mask_radius"),
                                self._desktop.can_mask_volume(vid), _set_mask)
+
+            # Colour-by-resolution, as one framed unit after the map's own controls.
+            # The group's title checkbox is the on/off switch, and its contents grey out
+            # with it -- ownership is structural, where the same controls interleaved
+            # into the base rows read as unrelated neighbours. Present only once a
+            # resolution map has been computed and pinned (the Local resolution wizard).
+            if it.get("resolution_map"):
+                from PySide6.QtWidgets import QDoubleSpinBox, QGroupBox, QVBoxLayout
+
+                group = QGroupBox("Colour by local resolution")
+                group.setToolTip(
+                    "Colour this map's surface by the local resolution computed from its "
+                    "half-maps (blue = high resolution, red = low).")
+                group.setCheckable(True)
+                group.setChecked(bool(it.get("color_by_resolution")))
+                gl = QVBoxLayout(group)
+                gl.setSpacing(6)
+
+                # Downsample: contour every nth voxel of the colouring surface. Explicit
+                # rather than adaptive, so the surface never changes detail on its own.
+                dsr = QHBoxLayout()
+                ds_lab = QLabel("Downsample")
+                ds_lab.setMinimumWidth(80)
+                dsr.addWidget(ds_lab)
+                ds = QComboBox()
+                for label, value in (("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)):
+                    ds.addItem(label, value)
+                ds.setCurrentIndex(max(0, ds.findData(int(it.get("localres_downsample") or 4))))
+                ds.currentIndexChanged.connect(
+                    lambda _i, ds=ds, it=it: (
+                        it.__setitem__("localres_downsample", ds.currentData()),
+                        self._safe(lambda: self._desktop.set_localres_downsample(
+                            vid, ds.currentData()))))
+                dsr.addWidget(ds)
+                dsr.addStretch(1)
+                gl.addLayout(dsr)
+
+                # The ramp's value range: lo draws blue, hi red, fixed until changed --
+                # colours keep their meaning across contour levels, sessions and figures.
+                lo0, hi0 = it.get("localres_domain") or (0.0, 1.0)
+                rr = QHBoxLayout()
+                r_lab = QLabel("Range")
+                r_lab.setMinimumWidth(80)
+                r_lab.setToolTip(
+                    "The resolution values the colour ramp spans; values outside clamp. "
+                    "Fixed until you change it.")
+                rr.addWidget(r_lab)
+                lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
+                lo_spin.setObjectName("localres-domain-lo")
+                hi_spin.setObjectName("localres-domain-hi")
+                for sp in (lo_spin, hi_spin):
+                    sp.setRange(0.0, 999.0)
+                    sp.setDecimals(2)
+                    sp.setSingleStep(0.1)
+                    sp.setSuffix(" Å")
+                lo_spin.setValue(float(lo0))
+                hi_spin.setValue(float(hi0))
+
+                def _apply_domain(_=None, it=it):
+                    lo_v, hi_v = lo_spin.value(), hi_spin.value()
+                    if hi_v <= lo_v:
+                        return  # half-edited state; applied once the other end moves
+                    it["localres_domain"] = (lo_v, hi_v)
+                    self._safe(lambda: self._desktop.set_localres_domain(vid, lo_v, hi_v))
+
+                lo_spin.valueChanged.connect(_apply_domain)
+                hi_spin.valueChanged.connect(_apply_domain)
+                rr.addWidget(lo_spin)
+                rr.addWidget(QLabel("–"))
+                rr.addWidget(hi_spin)
+                fit = QPushButton("Fit to surface")
+                fit.setToolTip("Span the ramp over the resolution values inside the "
+                               "current contour — what is actually on screen.")
+                fit.clicked.connect(
+                    lambda _=False: self._safe(lambda: self._desktop.fit_localres_domain(vid)))
+                reset = QPushButton("Reset")
+                reset.setToolTip("Back to the default: percentiles of the whole map.")
+                reset.clicked.connect(
+                    lambda _=False: self._safe(lambda: self._desktop.reset_localres_domain(vid)))
+                rr.addWidget(fit)
+                rr.addWidget(reset)
+                rr.addStretch(1)
+                gl.addLayout(rr)
+
+                # Connected after setChecked so building the pane does not toggle it.
+                group.toggled.connect(
+                    lambda on, it=it: (
+                        it.__setitem__("color_by_resolution", bool(on)),
+                        self._safe(lambda: self._desktop.set_color_by_resolution(vid, bool(on)))))
+                self._appearance_layout.addWidget(group)
 
         # The wheel contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
