@@ -165,6 +165,41 @@ def exercise_a_reshown_volume_is_not_replayed():
         run_client(scenario)
 
 
+def exercise_stop_cancels_sends_parked_on_a_dead_socket():
+    """Closing the app must not leave broadcast tasks pending.
+
+    Broadcasts are fire-and-forget tasks, and when the app closes the embedded page goes
+    away without a clean WebSocket close -- a queued send parks on ``websocket.send``
+    forever. Before _shutdown cancelled them, loop.close() destroyed each one and asyncio
+    printed "Task was destroyed but it is pending!" per message queued at exit.
+    """
+    import time
+
+    class StallingSocket:
+        """A client whose send never completes -- the dead-page socket, distilled."""
+
+        def __init__(self):
+            self.parked = threading.Event()   # set once the send coroutine is running
+            self.cancelled = False
+
+        async def send(self, data):
+            self.parked.set()
+            try:
+                await asyncio.Event().wait()          # parks forever, like a full buffer
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    with session() as live:
+        stalled = StallingSocket()
+        live._clients.add(stalled)
+        live.set_volume_visible("vol30", False)        # queues a send that will park
+        assert stalled.parked.wait(timeout=10), "the broadcast never reached the socket"
+        time.sleep(0.05)  # let it settle onto the forever-await before stopping
+    # session() exits -> stop() -> _shutdown cancels the parked send before loop.close().
+    assert stalled.cancelled, "stop() left a parked send to be destroyed pending"
+
+
 def exercise_an_open_clip_is_not_replayed():
     """Restoring a clip that clips nothing is shader cost for no effect."""
     with session() as live:

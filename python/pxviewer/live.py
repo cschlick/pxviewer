@@ -1910,6 +1910,18 @@ class LiveSession:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
+        # Cancel what is still in flight. Broadcasts are fire-and-forget tasks
+        # (_safe_send / _safe_send_text), and when the app closes, the embedded page
+        # goes away without a clean WebSocket close -- so a queued send can be parked on
+        # ``websocket.send`` forever, waiting on a write that will never drain. Left
+        # alone, ``loop.close()`` destroys each one and asyncio prints "Task was
+        # destroyed but it is pending!" per message queued at exit. Cancelling first
+        # lets them unwind; the gather waits for that and swallows the CancelledErrors.
+        pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def _process_request(self, connection: Any, request: Any) -> Any:
         """Answer plain HTTP requests with a helpful page instead of failing the
