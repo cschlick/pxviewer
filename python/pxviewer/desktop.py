@@ -3174,7 +3174,8 @@ class ControlsWindow:
                 it["iso"] = v
                 self._safe(lambda: self._desktop.set_volume_iso(vid, v))
 
-            self._iso_row = self._add_iso_row(live.get("iso"), _set_iso)
+            self._iso_row = self._add_iso_row(live.get("iso"), _set_iso,
+                                              max_sigma=live.get("max_sigma"))
 
             def _set_clip(front, back, it=it):
                 it["clip"] = (front, back)
@@ -3519,18 +3520,32 @@ class ControlsWindow:
             " padding: 1px 5px; color: palette(dark); background: palette(midlight); }")
         return chip
 
-    def _add_iso_row(self, current, on_change):
+    def _add_iso_row(self, current, on_change, max_sigma=None):
         """Contour level: a slider to hunt with, a spinbox for the exact value.
 
         Both are wanted. The slider is how you actually find a level — you watch the map,
         not the number — and updates are live, so dragging is the point. The spinbox
         makes a level reproducible ("contour at 1.5 sigma") and reaches past the slider's
         range for maps that need it.
+
+        The slider spans this map's own range: its right end sits just above the map's
+        maximum (``max_sigma``), so sliding fully right always empties the map. A fixed
+        ceiling could not do that — cryo-EM maps carry long tails (EMD-53478 tops out
+        near 28 sigma against the old fixed 10), so full-right left most of the density
+        standing, with no way to clear it from the slider.
         """
+        import math
+
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QDoubleSpinBox, QHBoxLayout, QLabel, QSlider
 
         from .volume_io import DEFAULT_ISO_SIGMA
+
+        ceiling = _ISO_SLIDER_MAX
+        if max_sigma is not None and math.isfinite(float(max_sigma)):
+            # +0.5 so the top position is strictly above the hottest voxel; floored so a
+            # low-contrast map keeps a usable range rather than a hypersensitive one.
+            ceiling = max(6.0, math.ceil(float(max_sigma) + 0.5))
 
         value = DEFAULT_ISO_SIGMA if current is None else float(current)
         row = QHBoxLayout()
@@ -3539,7 +3554,7 @@ class ControlsWindow:
         # and in the spin box's tooltip, rather than a chip that eats space on every map.)
 
         slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setRange(0, int(round(_ISO_SLIDER_MAX / _ISO_RESOLUTION)))
+        slider.setRange(0, int(round(ceiling / _ISO_RESOLUTION)))
         slider.setValue(min(slider.maximum(), int(round(value / _ISO_RESOLUTION))))
         spin = QDoubleSpinBox()
         spin.setRange(0.0, _ISO_SPIN_MAX)
@@ -8572,9 +8587,17 @@ class DesktopApp:
         entry = self._volume_entry(vid)
         if entry is None:
             return {}
-        return {key: entry.get(key)
-                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
-                            "radius")}
+        out = {key: entry.get(key)
+               for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
+                           "radius")}
+        # The map's maximum on the sigma scale -- the level above which nothing is left.
+        # The Level slider spans up to here, so its right end genuinely empties the map.
+        try:
+            stats = entry["data"].stats()
+            out["max_sigma"] = (stats["max"] - stats["mean"]) / (stats["std"] or 1.0)
+        except Exception:  # pragma: no cover - defensive (a map with no data)
+            out["max_sigma"] = None
+        return out
 
     def set_volume_clip(self, vid: str, front: float, back: float) -> None:
         """Clip a volume to a front/rear slab (see LiveSession.set_clip)."""

@@ -864,6 +864,51 @@ def exercise_committing_a_custom_colour_does_not_reopen_the_dialog():
     assert fired == []
 
 
+def exercise_the_level_slider_reaches_past_the_hottest_voxel():
+    """Sliding fully right must empty the map, whatever the map's dynamic range.
+
+    Cryo-EM maps carry long tails: EMD-53478 tops out near 28 sigma, so under the old
+    fixed 10-sigma ceiling full-right left most of the density standing with no way to
+    clear it from the slider. The slider now spans this map's own range, its right end
+    strictly above the hottest voxel.
+    """
+    from PySide6.QtWidgets import QSlider
+
+    from pxviewer.desktop import _ISO_RESOLUTION
+
+    with desktop() as app:
+        # A long-tailed map: quiet background with one hot voxel, max far above 10 sigma.
+        data = np.zeros((12, 12, 12), dtype=np.float32)
+        data[6, 6, 6] = 100.0
+        vid = app._add_volume(VolumeData.from_numpy(data), "hot")
+        stats = app._volume_entry(vid)["data"].stats()
+        max_sigma = (stats["max"] - stats["mean"]) / stats["std"]
+        assert max_sigma > 12, "fixture is not long-tailed enough to discriminate"
+
+        controls = app._controls
+        controls._update_appearance("volume", vid, force=True)
+        process_events()
+        sliders = controls._appearance_box.findChildren(QSlider)
+        assert sliders, "no Level slider in the pane"
+        top = max(sl.maximum() * _ISO_RESOLUTION for sl in sliders)
+        assert top > max_sigma, (
+            "slider tops out at %.2f sigma below the map's %.2f -- full-right cannot "
+            "empty the map" % (top, max_sigma))
+        # Nothing survives the top position: full-right means an empty surface.
+        level = stats["mean"] + top * stats["std"]
+        remaining = int((app._volume_entry(vid)["data"].array >= level).sum())
+        assert remaining == 0, "%d voxels still visible at the slider's maximum" % remaining
+
+        # A low-contrast map keeps a sane range instead of a hypersensitive sliver.
+        flat_vid = app._add_volume(VolumeData.from_numpy(np.random.default_rng(0)
+                                                         .random((8, 8, 8))), "flat")
+        controls._update_appearance("volume", flat_vid, force=True)
+        process_events()
+        sliders = controls._appearance_box.findChildren(QSlider)
+        top = max(sl.maximum() * _ISO_RESOLUTION for sl in sliders)
+        assert 4.0 <= top <= 12.0, "flat map got an unusable slider range: %.2f" % top
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.
