@@ -215,6 +215,46 @@ def exercise_the_resolution_map_has_no_visibility_checkbox():
                 assert checkable, "the full map lost its show/hide"
 
 
+def exercise_a_level_change_takes_the_cheap_path():
+    """With colour-by-resolution on, the Level slider must not re-stream the grids.
+
+    The browser retained both grids with the first payload, so a level change is one
+    float (set_localres_iso) and a client-side re-contour -- the cost a plain map pays.
+    The full re-encode (show_localres_grid, ~128 MB for a 256^3 pair) is reserved for
+    changes that alter a grid. This was the reported "terribly slow to change contour":
+    every slider tick was paying the full re-encode and re-send.
+    """
+    class RecordingSession:
+        def __init__(self):
+            self.levels = []
+            self.grids = 0
+
+        def set_localres_iso(self, value):
+            self.levels.append(float(value))
+
+        def show_localres_grid(self, payload):
+            self.grids += 1
+
+        def clear_localres_grid(self):
+            pass
+
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        stub = RecordingSession()
+        app._control_session = lambda: stub
+
+        app.set_volume_iso(fixture.full_vid, 2.0)
+
+        assert stub.grids == 0, "a level change re-streamed the full grids"
+        assert len(stub.levels) == 1, "no light level message was sent: %r" % (stub.levels,)
+        # The wire level is absolute on the map's own scale: mean + sigma * std.
+        surface = app._display_map_data(app._volume_entry(fixture.full_vid))
+        stats = surface.stats()
+        expected = stats["mean"] + 2.0 * stats["std"]
+        assert abs(stub.levels[0] - expected) < 1e-6, (
+            "wire level %.6f, expected %.6f" % (stub.levels[0], expected))
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

@@ -965,6 +965,30 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, message)
 
+    def set_localres_iso(self, iso_level: float) -> None:
+        """Re-contour the local-resolution colouring at a new level, in place.
+
+        The full payload (:meth:`show_localres_grid`) carries two complete grids that a
+        level change does not touch, so re-sending it per slider tick moved ~128 MB to
+        deliver one float. This sends just the number: connected clients rebuild the
+        surface from the grids they retained with the first payload.
+
+        The stored replay payload's header is patched to the new level too (layout:
+        ``u32 tag; f32 isoLevel; …`` — see :func:`pxviewer.volume_io.encode_localres`),
+        so a client that connects later — every viewport reload is one — reconstructs at
+        the current level rather than the level the payload was first built at. That
+        keeps this message stateless: nothing extra to replay, no ordering against the
+        payload to get wrong. Thread-safe.
+        """
+        if self._last_localres is not None:
+            patched = bytearray(self._last_localres)
+            struct.pack_into("<f", patched, 4, float(iso_level))
+            self._last_localres = bytes(patched)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
+                {"type": "localres", "action": "level", "value": float(iso_level)}))
+
     def clear_localres_grid(self) -> None:
         """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
         self._last_localres = None

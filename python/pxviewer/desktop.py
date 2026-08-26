@@ -8475,7 +8475,15 @@ class DesktopApp:
             return
         entry["iso"] = value
         if entry.get("color_by_resolution"):
-            self._push_localres(entry)  # re-contour the coloured surface at the new level
+            # The cheap path: the browser retained both grids with the full payload, so a
+            # level change is one float over the wire and a client-side re-contour --
+            # the same work a plain map's level change costs. _push_localres (which
+            # re-encodes and re-streams ~128 MB of unchanged grids) stays for the changes
+            # that actually alter a grid: a new mask, a recomputed resolution map.
+            session = self._control_session()
+            if session is not None:
+                surface = self._display_map_data(entry)
+                session.set_localres_iso(self._absolute_iso(entry, surface))
             return
         if not entry["visible"]:
             return
@@ -9064,6 +9072,7 @@ class DesktopApp:
             contour = fetchmod.recommended_contour(emdb) if emdb else None
             self._status("reading the maps…")
             full_map = VolumeData.from_map_file(str(paths["map"]))
+
             self._status("computing local resolution from half-maps… "
                          "(a minute or two on a full-size map)")
             res = local_resolution_from_half_maps(

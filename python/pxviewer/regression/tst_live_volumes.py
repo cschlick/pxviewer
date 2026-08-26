@@ -24,7 +24,7 @@ if not have("websockets", "numpy"):
     skip("websockets / numpy not available")
 
 from pxviewer.regression.live_harness import (       # noqa: E402
-    client, eventually, next_text, run_client, session, url_for)
+    client, eventually, next_binary, next_text, run_client, session, url_for)
 
 
 # -- appearance commands ------------------------------------------------------
@@ -161,6 +161,40 @@ def exercise_a_reshown_volume_is_not_replayed():
             async with client(live) as ws:
                 message = await next_text(ws, "volume_visible")
                 assert message["ref"] == "vol22", "replayed a volume that is shown: %r" % message
+
+        run_client(scenario)
+
+
+def exercise_a_level_change_is_one_float_not_a_regrid():
+    """set_localres_iso sends the number; the grids stay where they already are.
+
+    The full localres payload is ~128 MB of grids that a level change does not touch.
+    Live clients get a small JSON message and rebuild from the grids they retained; the
+    *stored* payload's header is patched in place, so a client connecting later -- every
+    viewport reload is one -- reconstructs at the current level with no extra replay
+    state and no ordering against the payload to get wrong.
+    """
+    import struct
+
+    with session() as live:
+        # A payload shaped like encode_localres output: f32 iso, f32 lo, f32 hi, "grids".
+        payload = struct.pack("<fff", 1.5, 4.0, 14.0) + b"GRIDDATA" * 4
+        live.show_localres_grid(payload)
+        live.set_localres_iso(0.62)
+
+        async def scenario():
+            async with client(live) as ws:
+                # The replayed binary payload carries the *patched* level...
+                message = await next_binary(ws, tag=7)
+                iso, lo, hi = struct.unpack_from("<fff", message, 4)
+                assert abs(iso - 0.62) < 1e-6, "replay still carries the stale level: %r" % iso
+                assert (lo, hi) == (4.0, 14.0), "patching the level disturbed its neighbours"
+                assert message[16:] == b"GRIDDATA" * 4, "patching the level disturbed the grids"
+
+                # ...and a live change reaches a connected client as one small message.
+                live.set_localres_iso(0.7)
+                assert await next_text(ws, "localres") == {
+                    "type": "localres", "action": "level", "value": 0.7}
 
         run_client(scenario)
 

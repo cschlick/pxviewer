@@ -208,6 +208,14 @@ type HotspotVolume = typeof HotspotVolume;
 // The heavy work (marching cubes + per-vertex sampling) is done up front in the viewer and
 // the finished Shape handed to this transform, which only surfaces it into the state tree.
 
+// One decoded affine grid of the localres payload (see setLocalresSurface). Retained on
+// the viewer after the first build so a level change re-runs marching cubes locally
+// instead of round-tripping ~128 MB of unchanged grid data through the server.
+type LocalresGrid = {
+    nx: number; ny: number; nz: number;
+    origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array;
+};
+
 // Blue (lowest value on the scale) through to red (highest) — the resolution-map reading,
 // where a low value (good local resolution) is cool and a high value is hot.
 const LOCALRES_PALETTE: Color[] = [
@@ -600,6 +608,9 @@ export class LiveViewer {
     private hotspotVolume: StateObjectSelector | undefined;  // the validation-severity cloud
     private hotspotRepr: StateObjectSelector | undefined;    // its direct-volume representation
     private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
+    private localresGrids: { A: LocalresGrid; B: LocalresGrid; lo: number; hi: number } | undefined;  // retained for cheap re-levels
+    private localresIsoPending: number | undefined;  // latest requested level while a rebuild runs
+    private localresIsoBusy = false;
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
     // Declared colour positions for an imported concern field; undefined = derive from the cut.
@@ -1482,13 +1493,49 @@ export class LiveViewer {
         };
         const A = readGrid(), B = readGrid();
 
+        this.localresGrids = { A, B, lo, hi };  // kept so a level change needs no new grids
         const shape = await this.buildLocalresShape(A, B, isoLevel, lo, hi);
-        await this.clearLocalresSurface();
+        await this.swapLocalresShape(shape);
+    }
+
+    /** Replace the current localres surface object with `shape` (first build included). */
+    private async swapLocalresShape(shape: Shape<Mesh>) {
+        if (this.localresSurface && this.localresSurface.ref) {
+            const b = this.plugin.state.data.build();
+            b.delete(this.localresSurface.ref);
+            await b.commit();
+        }
         const build = this.plugin.state.data.build();
         const provider = build.toRoot().apply(LocalresSurface, { shape });
         provider.apply(ShapeRepresentation3D);
         await build.commit();
         this.localresSurface = provider.selector;
+    }
+
+    /**
+     * Re-contour the localres surface at a new level from the retained grids — the cheap
+     * path behind the Level slider. The full payload carries ~128 MB of grids that a level
+     * change leaves untouched, so the server sends just the number and the rebuild happens
+     * here. Coalescing: a rebuild in flight absorbs further requests and only the latest
+     * level is built, so dragging the slider does one rebuild per finished frame rather
+     * than queueing one per tick. No-op before the first full payload arrives.
+     */
+    async setLocalresIso(isoLevel: number) {
+        this.localresIsoPending = isoLevel;
+        if (this.localresIsoBusy) return;
+        this.localresIsoBusy = true;
+        try {
+            while (this.localresIsoPending !== undefined) {
+                const level = this.localresIsoPending;
+                this.localresIsoPending = undefined;
+                const held = this.localresGrids;
+                if (!held) return;
+                const shape = await this.buildLocalresShape(held.A, held.B, level, held.lo, held.hi);
+                await this.swapLocalresShape(shape);
+            }
+        } finally {
+            this.localresIsoBusy = false;
+        }
     }
 
     /** Marching-cubes grid A at `isoLevel`, then colour each vertex by grid B (see
@@ -1538,6 +1585,8 @@ export class LiveViewer {
             await b.commit();
         }
         this.localresSurface = undefined;
+        this.localresGrids = undefined;
+        this.localresIsoPending = undefined;
     }
 
     /** Show or hide this model's whole structure in place — a render skip (no dispose, no
@@ -2920,6 +2969,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearHotspotVolume();
             } else if (msg.type === 'localres' && viewer) {
                 if (msg.action === 'clear') await viewer.clearLocalresSurface();
+                else if (msg.action === 'level' && typeof msg.value === 'number') {
+                    await viewer.setLocalresIso(msg.value);
+                }
             } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
                 await viewer.setHotspotOpacity(msg.knee);
             } else if (msg.type === 'hotspot_anchors' && viewer) {
