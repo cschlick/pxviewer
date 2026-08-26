@@ -361,11 +361,12 @@ _ICON_BUTTON_QSS = (
     "QPushButton:checked { background-color: palette(highlight); }"
 )
 
-# macOS gives icon-only tabs a wide size hint and sprawls them across the bar (setExpanding
-# does not touch it); only a stylesheet overrides the native tab metrics. It also makes Qt
-# paint the bar itself — so paint the bar and tabs the panel color (palette(window)) to cover
-# the native grey base, rather than leaving it transparent (which shows that grey through).
-# Applied on macOS only, so the native Linux tabs are untouched.
+# macOS's native tab metrics ignore the icon-only size we want; only a stylesheet
+# overrides them. A stylesheet also makes Qt paint the bar itself — so paint the bar and
+# tabs the panel color (palette(window)) to cover the native grey base, rather than
+# leaving it transparent (which shows that grey through). With the metrics overridden,
+# setExpanding(True) distributes the tabs evenly across the bar (measured: 7 tabs share
+# a 400px bar at 57px each). Applied on macOS only, so the native Linux tabs are untouched.
 _TAB_BAR_QSS = (
     "QTabBar { background: palette(window); }"
     "QTabBar::tab { background: palette(window); border: 0; margin: 0;"
@@ -1269,8 +1270,9 @@ class ControlsWindow:
         # any width, with no scroll arrows hiding any. Document mode drops the heavy frame.
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
-        # Keep the seven icon tabs tight and left-aligned (see _TAB_BAR_QSS for the macOS case).
-        tabs.tabBar().setExpanding(False)
+        # The seven icon tabs share the full bar width evenly -- left-tight tabs left a
+        # dead grey field to the right of the last one, most of the bar at panel widths.
+        tabs.tabBar().setExpanding(True)
         if _IS_MAC:
             tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
         tabs.setIconSize(QSize(20, 20))

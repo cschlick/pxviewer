@@ -909,6 +909,19 @@ def exercise_the_level_slider_reaches_past_the_hottest_voxel():
         assert 4.0 <= top <= 12.0, "flat map got an unusable slider range: %.2f" % top
 
 
+def exercise_the_tabs_share_the_full_bar_width():
+    """Seven icon tabs span the bar edge to edge, not left-huddled beside grey space."""
+    with desktop() as app:
+        process_events()
+        bar = app._controls._tabs.tabBar()
+        count = bar.count()
+        assert count >= 7, "expected the seven main tabs, found %d" % count
+        total = sum(bar.tabRect(i).width() for i in range(count))
+        # Rounding leaves a few px; anything more is the old left-tight layout.
+        assert total >= bar.width() - count, (
+            "tabs cover %dpx of a %dpx bar -- the bar is not filled" % (total, bar.width()))
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.
