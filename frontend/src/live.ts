@@ -211,10 +211,71 @@ type HotspotVolume = typeof HotspotVolume;
 // One decoded affine grid of the localres payload (see setLocalresSurface). Retained on
 // the viewer after the first build so a level change re-runs marching cubes locally
 // instead of round-tripping ~128 MB of unchanged grid data through the server.
-type LocalresGrid = {
+export type LocalresGrid = {
     nx: number; ny: number; nz: number;
     origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array;
 };
+
+/** A 2x-per-axis decimated copy (nearest sample): 1/8 of the voxels, for drag previews. */
+export function decimateGrid(g: LocalresGrid): LocalresGrid {
+    const nx = Math.max(2, Math.ceil(g.nx / 2)), ny = Math.max(2, Math.ceil(g.ny / 2)), nz = Math.max(2, Math.ceil(g.nz / 2));
+    const values = new Float32Array(nx * ny * nz);
+    for (let i = 0; i < nx; i++) {
+        const si = Math.min(2 * i, g.nx - 1);
+        for (let j = 0; j < ny; j++) {
+            const sj = Math.min(2 * j, g.ny - 1);
+            const src = (si * g.ny + sj) * g.nz;
+            const dst = (i * ny + j) * nz;
+            for (let k = 0; k < nz; k++) {
+                values[dst + k] = g.values[src + Math.min(2 * k, g.nz - 1)];
+            }
+        }
+    }
+    const s2 = (v: Vec3) => Vec3.scale(Vec3(), v, 2);
+    return { nx, ny, nz, origin: Vec3.clone(g.origin), stepX: s2(g.stepX), stepY: s2(g.stepY), stepZ: s2(g.stepZ), values };
+}
+
+/**
+ * The sub-grid enclosing every voxel >= `level`, padded so marching cubes closes the
+ * surface inside it. Contouring only this box is what makes a level change cheap at the
+ * levels people actually look at: the surface occupies a fraction of a cryo-EM box, and
+ * marching-cubes cost scales with voxels visited, not with surface produced. The scan is
+ * one pass over the values — small next to the contouring it avoids. A level above the
+ * map's maximum returns a tiny all-below-level grid, which contours to an empty mesh.
+ */
+export function cropGrid(g: LocalresGrid, level: number, margin = 2): LocalresGrid {
+    let i0 = g.nx, i1 = -1, j0 = g.ny, j1 = -1, k0 = g.nz, k1 = -1;
+    for (let i = 0; i < g.nx; i++) {
+        for (let j = 0; j < g.ny; j++) {
+            const row = (i * g.ny + j) * g.nz;
+            for (let k = 0; k < g.nz; k++) {
+                if (g.values[row + k] >= level) {
+                    if (i < i0) i0 = i; if (i > i1) i1 = i;
+                    if (j < j0) j0 = j; if (j > j1) j1 = j;
+                    if (k < k0) k0 = k; if (k > k1) k1 = k;
+                }
+            }
+        }
+    }
+    if (i1 < 0) { i0 = 0; i1 = 1; j0 = 0; j1 = 1; k0 = 0; k1 = 1; }  // nothing above level
+    i0 = Math.max(0, i0 - margin); i1 = Math.min(g.nx - 1, i1 + margin);
+    j0 = Math.max(0, j0 - margin); j1 = Math.min(g.ny - 1, j1 + margin);
+    k0 = Math.max(0, k0 - margin); k1 = Math.min(g.nz - 1, k1 + margin);
+    const nx = i1 - i0 + 1, ny = j1 - j0 + 1, nz = k1 - k0 + 1;
+    if (nx === g.nx && ny === g.ny && nz === g.nz) return g;  // nothing to gain, skip the copy
+    const values = new Float32Array(nx * ny * nz);
+    for (let i = 0; i < nx; i++) {
+        for (let j = 0; j < ny; j++) {
+            const src = ((i + i0) * g.ny + (j + j0)) * g.nz + k0;
+            values.set(g.values.subarray(src, src + nz), (i * ny + j) * nz);
+        }
+    }
+    const origin = Vec3.clone(g.origin);
+    Vec3.scaleAndAdd(origin, origin, g.stepX, i0);
+    Vec3.scaleAndAdd(origin, origin, g.stepY, j0);
+    Vec3.scaleAndAdd(origin, origin, g.stepZ, k0);
+    return { nx, ny, nz, origin, stepX: g.stepX, stepY: g.stepY, stepZ: g.stepZ, values };
+}
 
 // Blue (lowest value on the scale) through to red (highest) — the resolution-map reading,
 // where a low value (good local resolution) is cool and a high value is hot.
@@ -608,7 +669,11 @@ export class LiveViewer {
     private hotspotVolume: StateObjectSelector | undefined;  // the validation-severity cloud
     private hotspotRepr: StateObjectSelector | undefined;    // its direct-volume representation
     private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
-    private localresGrids: { A: LocalresGrid; B: LocalresGrid; lo: number; hi: number } | undefined;  // retained for cheap re-levels
+    private localresGrids: {
+        A: LocalresGrid; B: LocalresGrid; lo: number; hi: number;
+        coarse: LocalresGrid;   // A decimated 2x, contoured during drags; full res on settle
+        lut: Color[];           // the [lo,hi] ramp sampled once, replacing a scale call per vertex
+    } | undefined;
     private localresIsoPending: number | undefined;  // latest requested level while a rebuild runs
     private localresIsoBusy = false;
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
@@ -1493,19 +1558,25 @@ export class LiveViewer {
         };
         const A = readGrid(), B = readGrid();
 
-        this.localresGrids = { A, B, lo, hi };  // kept so a level change needs no new grids
-        const shape = await this.buildLocalresShape(A, B, isoLevel, lo, hi);
+        // Kept so a level change needs no new grids. The colour ramp is sampled into a
+        // LUT here because it is fixed per payload, and the per-vertex work should be an
+        // array index, not a scale evaluation.
+        const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
+        const lut: Color[] = [];
+        for (let i = 0; i < 256; i++) lut.push(scale.color(lo + ((i + 0.5) / 256) * (hi - lo)));
+        this.localresGrids = { A, B, lo, hi, coarse: decimateGrid(A), lut };
+        const shape = await this.buildLocalresShape(A, B, isoLevel, lo, hi, lut);
         await this.swapLocalresShape(shape);
     }
 
-    /** Replace the current localres surface object with `shape` (first build included). */
+    /** Replace the current localres surface object with `shape` (first build included).
+     *  Delete and re-apply ride one state commit: each commit runs the full state-update
+     *  machinery plus a draw, and a level change was paying for two of them. */
     private async swapLocalresShape(shape: Shape<Mesh>) {
-        if (this.localresSurface && this.localresSurface.ref) {
-            const b = this.plugin.state.data.build();
-            b.delete(this.localresSurface.ref);
-            await b.commit();
-        }
         const build = this.plugin.state.data.build();
+        if (this.localresSurface && this.localresSurface.ref) {
+            build.delete(this.localresSurface.ref);
+        }
         const provider = build.toRoot().apply(LocalresSurface, { shape });
         provider.apply(ShapeRepresentation3D);
         await build.commit();
@@ -1530,8 +1601,17 @@ export class LiveViewer {
                 this.localresIsoPending = undefined;
                 const held = this.localresGrids;
                 if (!held) return;
-                const shape = await this.buildLocalresShape(held.A, held.B, level, held.lo, held.hi);
-                await this.swapLocalresShape(shape);
+                // Preview from the decimated grid: 1/8 of the voxels, so the surface
+                // tracks the slider. When no further level arrived during that build,
+                // the drag has settled -- rebuild the same level at full resolution.
+                const preview = await this.buildLocalresShape(
+                    held.coarse, held.B, level, held.lo, held.hi, held.lut);
+                await this.swapLocalresShape(preview);
+                if (this.localresIsoPending === undefined) {
+                    const fine = await this.buildLocalresShape(
+                        held.A, held.B, level, held.lo, held.hi, held.lut);
+                    await this.swapLocalresShape(fine);
+                }
             }
         } finally {
             this.localresIsoBusy = false;
@@ -1539,12 +1619,18 @@ export class LiveViewer {
     }
 
     /** Marching-cubes grid A at `isoLevel`, then colour each vertex by grid B (see
-     *  `setLocalresSurface`). Returns a ready-to-render Shape<Mesh>. */
+     *  `setLocalresSurface`). Returns a ready-to-render Shape<Mesh>.
+     *
+     *  The grid is cropped to the voxels at or above the level before contouring
+     *  (`cropGrid`): marching cubes visits every voxel it is given, and at the levels
+     *  people actually look at the surface occupies a fraction of a cryo-EM box, so the
+     *  crop is most of the speed of a level change. `lut` is the [lo, hi] ramp sampled
+     *  once; without it the colour scale was evaluated per vertex. */
     private async buildLocalresShape(
-        A: { nx: number; ny: number; nz: number; origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array },
-        B: { nx: number; ny: number; nz: number; origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array },
-        isoLevel: number, lo: number, hi: number,
+        grid: LocalresGrid, B: LocalresGrid,
+        isoLevel: number, lo: number, hi: number, lut: Color[],
     ): Promise<Shape<Mesh>> {
+        const A = cropGrid(grid, isoLevel);
         const space = Tensor.Space([A.nx, A.ny, A.nz], [0, 1, 2], Float32Array);
         const scalarField = Tensor.create(space, Tensor.Data1(A.values));
         const base = await this.plugin.runTask(computeMarchingCubesMesh({ isoLevel, scalarField }));
@@ -1560,14 +1646,16 @@ export class LiveViewer {
 
         // Per-vertex colour: give each vertex its own group id so the Shape's getColor can
         // return a distinct colour per vertex (the renderer interpolates across triangles).
-        const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
+        const span = hi - lo || 1;
         const colors = new Array<Color>(vc);
         const groups = new Float32Array(vc);
         const q = Vec3();
         for (let v = 0; v < vc; v++) {
             Vec3.set(q, verts[3 * v], verts[3 * v + 1], verts[3 * v + 2]);
             Vec3.transformMat4(q, q, aToB);
-            colors[v] = scale.color(sampleGridTrilinear(B.values, B.nx, B.ny, B.nz, q[0], q[1], q[2]));
+            const value = sampleGridTrilinear(B.values, B.nx, B.ny, B.nz, q[0], q[1], q[2]);
+            const idx = Math.min(255, Math.max(0, Math.floor(((value - lo) / span) * 256)));
+            colors[v] = lut[idx];
             groups[v] = v;
         }
         const mesh = Mesh.create(verts, base.indexBuffer.ref.value, base.normalBuffer.ref.value, groups, vc, base.triangleCount);
