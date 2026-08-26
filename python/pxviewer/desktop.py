@@ -9009,6 +9009,36 @@ class DesktopApp:
         return report
 
     @staticmethod
+    def _localres_cache_path(work_dir, emdb_number, d_min) -> "Path":
+        """Where a computed local-resolution map is saved beside its fetched inputs.
+
+        The d_min it was computed at is part of the name, because it is part of the
+        result -- the resolution shells move with it, not just the floor (measured on
+        EMD-53478: median 8.3 A at d_min 4.2, 7.3 A at 3.0). A cache that ignored d_min
+        would have kept serving results computed against cctbx's bad auto-estimate even
+        after the deposited-resolution fix, which is exactly the staleness a cache must
+        not add. "auto" marks the estimate fallback, so gaining a real d_min recomputes.
+        """
+        tag = f"{float(d_min):.2f}A" if d_min else "auto"
+        return Path(work_dir) / f"emd_{emdb_number}_local_resolution_{tag}.map"
+
+    @staticmethod
+    def _cache_is_fresh(cache_path, *input_paths) -> bool:
+        """Whether ``cache_path`` exists and is newer than every input it was built from.
+
+        A plain re-fetch overwrites the half-maps (that is its point -- a deliberate
+        refresh), and a resolution map computed from the old ones must not survive it.
+        """
+        try:
+            cache_mtime = Path(cache_path).stat().st_mtime
+        except OSError:
+            return False
+        try:
+            return all(cache_mtime >= Path(p).stat().st_mtime for p in input_paths)
+        except OSError:
+            return False
+
+    @staticmethod
     def _sigma_iso(volume, absolute_level) -> Optional[float]:
         """A deposited absolute contour as sigma on this map's own scale, or None.
 
@@ -9073,12 +9103,30 @@ class DesktopApp:
             self._status("reading the maps…")
             full_map = VolumeData.from_map_file(str(paths["map"]))
 
-            self._status("computing local resolution from half-maps… "
-                         "(a minute or two on a full-size map)")
-            res = local_resolution_from_half_maps(
-                VolumeData.from_map_file(str(paths["half_map_1"])),
-                VolumeData.from_map_file(str(paths["half_map_2"])),
-                full_map, d_min=d_min)
+            # The computed map is saved beside its inputs and reused on the next run --
+            # the calculation is deterministic for (half-maps, d_min) and takes a minute
+            # or two, which is the whole wait once the downloads are cached. Only under
+            # reuse_existing: a plain re-fetch is a deliberate refresh, and recomputes.
+            cache = (self._localres_cache_path(target, emdb, d_min)
+                     if emdb is not None else None)
+            if (reuse_existing and cache is not None and self._cache_is_fresh(
+                    cache, paths["half_map_1"], paths["half_map_2"])):
+                self._status(f"loading the local-resolution map saved earlier ({cache.name})…")
+                res = VolumeData.from_map_file(str(cache))
+            else:
+                self._status("computing local resolution from half-maps… "
+                             "(a minute or two on a full-size map)")
+                res = local_resolution_from_half_maps(
+                    VolumeData.from_map_file(str(paths["half_map_1"])),
+                    VolumeData.from_map_file(str(paths["half_map_2"])),
+                    full_map, d_min=d_min)
+                if cache is not None:
+                    try:
+                        res.write_map(str(cache))
+                        self._status(f"saved the local-resolution map to {cache}")
+                    except Exception as exc:
+                        # A failed save costs the next run a recompute, nothing more.
+                        self._warn(f"could not save the resolution map: {_first_line(exc)}")
 
             def add_on_main():
                 with self._batch_load():

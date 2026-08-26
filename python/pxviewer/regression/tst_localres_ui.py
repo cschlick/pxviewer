@@ -255,6 +255,82 @@ def exercise_a_level_change_takes_the_cheap_path():
             "wire level %.6f, expected %.6f" % (stub.levels[0], expected))
 
 
+def exercise_the_computed_resolution_map_is_saved_and_reused():
+    """The minute-long computation runs once; a re-run loads the saved map from disk.
+
+    Offline, through the real fetch_and_compute_resolution path: the "fetched" files are
+    pre-placed in the working directory and reuse_existing skips the network, which is
+    exactly the tutorial's warm re-run. The computation itself is patched and counted --
+    the cache decision is what is under test, not cctbx -- and the second run's map is
+    compared against the first, so the disk round trip (write_map -> from_map_file) is
+    proven to reproduce the grid rather than assumed to.
+
+    The cache is trusted only when newer than both half-maps: a re-download is a
+    deliberate refresh and must recompute (the mtime prong below).
+    """
+    import shutil
+    import time
+
+    from pxviewer import volume_io
+
+    with tmp_dir() as work:
+        full_path, res_path = _small_maps(work)
+        # The files fetch_entry would have produced, for a made-up entry 9999.
+        names = ["emd_9999.map", "emd_9999_half_map_1.map", "emd_9999_half_map_2.map"]
+        for name in names:
+            shutil.copy(full_path, os.path.join(work, name))
+
+        computed = []
+        real_compute = volume_io.local_resolution_from_half_maps
+
+        def fake_compute(*args, **kwargs):
+            computed.append(kwargs.get("d_min"))
+            return VolumeData.from_map_file(res_path)
+
+        volume_io.local_resolution_from_half_maps = fake_compute
+        app = DesktopApp(port=0)
+        app._webapp.start()
+        try:
+            def run_once():
+                app.fetch_and_compute_resolution(
+                    emdb_number="9999", reuse_existing=True, work_dir=work)
+                deadline = time.time() + 60
+                while time.time() < deadline and not any(
+                        v.get("resolution_map") for v in app._volumes):
+                    process_events()
+                    time.sleep(0.02)
+                process_events()
+                res_vid = next(v["id"] for v in app._volumes if v.get("is_resolution"))
+                return app._volume_entry(res_vid)["data"]
+
+            first = run_once()
+            assert len(computed) == 1, "the computation did not run on a cold start"
+            saved = [n for n in os.listdir(work) if "local_resolution" in n]
+            assert saved, "nothing was saved to the working directory: %r" % os.listdir(work)
+
+            # A fresh run must load the saved map, not recompute -- and reproduce it.
+            for v in list(app._volumes):
+                app.remove_volume(v["id"])
+            process_events()
+            second = run_once()
+            assert len(computed) == 1, "a warm re-run recomputed instead of loading the cache"
+            assert first.array.shape == second.array.shape
+            assert np.allclose(first.array, second.array), "the disk round trip changed the map"
+            assert np.allclose(first.origin, second.origin), "the disk round trip moved the map"
+
+            # Refreshed inputs invalidate: make a half-map newer than the cache.
+            cache_file = os.path.join(work, saved[0])
+            future = time.time() + 60
+            os.utime(os.path.join(work, "emd_9999_half_map_1.map"), (future, future))
+            assert not DesktopApp._cache_is_fresh(
+                cache_file, os.path.join(work, "emd_9999_half_map_1.map"),
+                os.path.join(work, "emd_9999_half_map_2.map")), (
+                "a cache older than its half-maps was still trusted")
+        finally:
+            volume_io.local_resolution_from_half_maps = real_compute
+            dispose(app)
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

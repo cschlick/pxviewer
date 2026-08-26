@@ -348,8 +348,11 @@ def local_resolution_tutorial() -> Tutorial:
             "particles each. Where they agree out to fine detail the resolution is high; "
             "where they diverge early it is low. cctbx computes the local half-map FSC "
             "throughout the map and records where it falls through 0.143.\n\n"
-            "**EMD-53478 and its model 9R04 are downloading now** — about 160 MB, so give "
-            "it a moment, then a minute or two to compute. Watch the status bar.",
+            "**EMD-53478 and its model 9R04 are downloading now** — about 160 MB into your "
+            "working directory (`~/pxviewer-data` unless you have changed it), then a minute "
+            "or two to compute. Watch the status bar.\n\nBoth are kept: re-running this "
+            "tutorial reuses the downloads *and* the computed resolution map, so the wait "
+            "is first-time only.",
             done=_resolution_ready,
         ),
         Step(
