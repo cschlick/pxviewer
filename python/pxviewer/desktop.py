@@ -6312,16 +6312,25 @@ class DesktopApp:
         """Write an MVSJ composing every volume; return its URL path (or None).
 
         Hidden volumes stay in the scene (a render skip, re-applied after the reload by
-        ``_reassert_hidden_volumes``) so a reload never rebuilds an isosurface from empty.
+        ``_reassert_hidden_volumes`` and replayed to the reloaded client by the live
+        session) so a reload never rebuilds an isosurface from empty.
+
+        A pinned local-resolution map is left out entirely. It is a colour source, never a
+        surface: it exists to colour the map above it, and drawing its own isosurface
+        produces a giant featureless blob (a smooth field contoured at its midpoint) on
+        top of the data. Keeping it out of the scene makes "never drawn" structural
+        instead of a hidden-state race the reload can lose.
+
         Only the first visible volume is focused, and only when no model is there to center."""
-        if not self._volumes:
+        drawn = [v for v in self._volumes if not v.get("is_resolution")]
+        if not drawn:
             return None
         from .volume import Volume, create_volume_view
 
         focus_first = not self._visible_model_ws()  # center a lone volume; don't fight a model
-        first_visible = next((v for v in self._volumes if v["visible"]), None)
+        first_visible = next((v for v in drawn if v["visible"]), None)
         nodes = []
-        for v in self._volumes:
+        for v in drawn:
             nodes.append(Volume(
                 url=v["map_url"], ref=v["ref"], format="map",
                 # Maps contour in sigma, which is what makes one slider range serve every
@@ -8634,6 +8643,8 @@ class DesktopApp:
         if control is None:
             return
         for entry in self._volumes:
+            if entry.get("is_resolution"):
+                continue  # never in the scene (see _write_volume_scene): nothing to hide
             if not entry["visible"]:
                 try:
                     control.set_volume_visible(entry["ref"], False)
@@ -8989,6 +9000,24 @@ class DesktopApp:
 
         return report
 
+    @staticmethod
+    def _sigma_iso(volume, absolute_level) -> Optional[float]:
+        """A deposited absolute contour as sigma on this map's own scale, or None.
+
+        Stored in sigma rather than as an absolute-kind level because the whole level
+        pipeline — the appearance slider (labelled σ), the scroll wheel, the live wire
+        protocol — speaks sigma. An absolute-kind entry fed to that pipeline reads the
+        slider's sigma numbers as absolute values: on EMD-53478 (max 0.092) a 4.5 "σ"
+        becomes an absolute 4.5, the contoured surface is empty, and the Level control
+        appears dead. Same surface either way; sigma is the representation the controls
+        already understand.
+        """
+        if absolute_level is None:
+            return None
+        stats = volume.stats()
+        std = stats["std"] or 1.0
+        return (float(absolute_level) - stats["mean"]) / std
+
     def fetch_and_compute_resolution(self, *, pdb_id=None, emdb_number=None,
                                      color: bool = True, work_dir=None,
                                      reuse_existing: bool = False,
@@ -9044,9 +9073,10 @@ class DesktopApp:
 
             def add_on_main():
                 with self._batch_load():
+                    iso_sigma = self._sigma_iso(full_map, contour)
                     full_vid = self._add_volume(
                         full_map, paths["map"].name,
-                        **({"iso": contour, "iso_kind": "absolute"} if contour else {}))
+                        **({"iso": iso_sigma} if iso_sigma is not None else {}))
                 self._pin_resolution_map(full_vid, res, color=color)
 
             self.bridge.run_on_main.emit(add_on_main)
@@ -9070,11 +9100,11 @@ class DesktopApp:
                 iso=midpoint, iso_kind="absolute")
             res_entry = self._volume_entry(res_vid)
             res_entry["is_resolution"] = True
-            res_entry["pinned_to"] = full_vid  # nests under the full map, hidden
-            # Start hidden regardless of the render-skip capability: it is a colour source,
-            # never a surface. Set the state directly (not via set_volume_visible, which is a
-            # no-op on software WebGL) so the batch-exit reload's _reassert_hidden_volumes
-            # keeps it out of the scene and the tree shows it unchecked.
+            res_entry["pinned_to"] = full_vid  # nests under the full map
+            # A colour source, never a surface: is_resolution keeps it out of the drawn
+            # scene altogether (_write_volume_scene) and out of the tree's visibility
+            # checkboxes (_loaded_summary). visible=False is kept for the paths that
+            # treat "hidden" generically (first-visible focus, render skips).
             res_entry["visible"] = False
         full["resolution_map"] = res_vid
         self._status(f"{full['name']}: local resolution ready")
@@ -9203,9 +9233,10 @@ class DesktopApp:
                 names = []
                 with self._batch_load():
                     if full_map is not None:
+                        iso_sigma = self._sigma_iso(full_map, contour)
                         self._add_volume(
                             full_map, paths["map"].name,
-                            **({"iso": contour, "iso_kind": "absolute"} if contour else {}))
+                            **({"iso": iso_sigma} if iso_sigma is not None else {}))
                         names.append(paths["map"].name)
                     if "model" in paths:
                         self._load_model_file(str(paths["model"]))
@@ -9432,7 +9463,11 @@ class DesktopApp:
              "edits": _edit_summaries(m.get("edits"))}
             for m in self._models
         ] + [
-            {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
+            # A resolution map's visible=None for the same reason as reflections below:
+            # it is never drawn (it colours the map it is pinned under), so a visibility
+            # checkbox would be a lever connected to nothing.
+            {"kind": "volume", "id": v["id"], "name": v["name"],
+             "visible": None if v.get("is_resolution") else v["visible"],
              "active": False, "group": v["group"], "style": v.get("style"),
              "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso"),
              "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),

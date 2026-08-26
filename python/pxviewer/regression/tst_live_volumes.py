@@ -1,10 +1,13 @@
 """Volume appearance, clipping and screenshots over the wire.
 
 A volume's colour, style and level are baked into the MVSJ scene, so they survive a
-reload on their own and only need a live command to avoid one. Two things are *not* in the
-scene and so have to be replayed on connect: the clip, which is recomputed from the camera
-as it moves, and the scroll target, which says which volume the wheel contours. Both went
-dead after any scene change before they were replayed.
+reload on their own and only need a live command to avoid one. Three things are *not* in
+the scene and so have to be replayed on connect: the clip, which is recomputed from the
+camera as it moves; the scroll target, which says which volume the wheel contours; and
+hidden state, which is a render skip. All three went dead after any scene change before
+they were replayed -- for hidden state that meant every viewport reload silently redrew
+every hidden map, which is how a "hidden" local-resolution map ended up on screen as a
+giant featureless blob.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -129,6 +132,35 @@ def exercise_a_clip_is_replayed_to_a_late_client():
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": "vol9", "front": 0.2, "back": 0.8,
                     "radius": 12.0}
+
+        run_client(scenario)
+
+
+def exercise_a_hidden_volume_stays_hidden_for_a_late_client():
+    """Hiding is a broadcast render skip, and a viewport reload connects a new client:
+    without replay, the reload redraws every hidden map."""
+    with session() as live:
+        live.set_volume_visible("vol20", False)                # before anyone connects
+
+        async def scenario():
+            async with client(live) as ws:
+                assert await next_text(ws, "volume_visible") == {
+                    "type": "volume_visible", "ref": "vol20", "value": False}
+
+        run_client(scenario)
+
+
+def exercise_a_reshown_volume_is_not_replayed():
+    """Visible is the scene's default; replaying it would be a no-op message per map."""
+    with session() as live:
+        live.set_volume_visible("vol21", False)
+        live.set_volume_visible("vol21", True)                 # shown again
+        live.set_volume_visible("vol22", False)                # the one that should replay
+
+        async def scenario():
+            async with client(live) as ws:
+                message = await next_text(ws, "volume_visible")
+                assert message["ref"] == "vol22", "replayed a volume that is shown: %r" % message
 
         run_client(scenario)
 

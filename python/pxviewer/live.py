@@ -480,6 +480,10 @@ class LiveSession:
         self._hotspot_knee: Optional[float] = None  # current cloud opacity knee, replayed to late clients
         self._hotspot_anchors: Optional[dict] = None  # imported colour contract, replayed to late clients
         self._last_localres: Optional[bytes] = None  # current local-resolution colouring, replayed to late clients
+        # Volume visibility (ref -> shown), replayed to late clients. Hiding is a
+        # render skip broadcast in place, but every viewport reload connects a *new*
+        # client -- without replay, each reload silently redraws every hidden map.
+        self._volume_visibility: Dict[str, bool] = {}
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -1008,7 +1012,10 @@ class LiveSession:
 
     def set_volume_visible(self, ref: str, visible: bool) -> None:
         """Show or hide a volume by reference in place (a render skip on its isosurface, no
-        reload, no dispose). The scene keeps the map; this only stops drawing it. Thread-safe."""
+        reload, no dispose). The scene keeps the map; this only stops drawing it. Recorded
+        and replayed to late clients, since a viewport reload is a new client: without the
+        replay, every reload redrew every hidden map. Thread-safe."""
+        self._volume_visibility[str(ref)] = bool(visible)
         message = json.dumps({"type": "volume_visible", "ref": str(ref), "value": bool(visible)})
         loop = self._loop
         if loop is not None:
@@ -1975,6 +1982,11 @@ class LiveSession:
                 )
             for clip in list(self._clips.values()):
                 await self._locked_send(websocket, json.dumps(clip))
+            # Only the hidden ones: visible is the scene's default, so replaying it is noise.
+            for ref, shown in list(self._volume_visibility.items()):
+                if not shown:
+                    await self._locked_send(websocket, json.dumps(
+                        {"type": "volume_visible", "ref": ref, "value": False}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})

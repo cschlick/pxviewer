@@ -171,6 +171,50 @@ def exercise_the_resolution_map_says_what_it_is_and_points_somewhere_useful():
         assert current.data(0, Qt.ItemDataRole.UserRole) == ("volume", fixture.full_vid)
 
 
+def exercise_the_resolution_map_is_not_in_the_drawn_scene():
+    """The blob, at its root: the resolution map's own isosurface must never be drawn.
+
+    It was in the MVSJ scene marked hidden, with the hide re-broadcast around each
+    reload -- but a reload connects a new client, and until visibility was replayed the
+    new client drew everything in the scene. A smooth field contoured at its midpoint is
+    a giant featureless spheroid on top of the data. Keeping the map out of the scene
+    makes "never drawn" structural rather than a race.
+    """
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        scene_path = app._write_volume_scene()
+        assert scene_path, "no scene written despite a loaded map"
+        scene = (app._webapp.volume_dir / scene_path.lstrip("/")).read_text()
+
+        full = app._volume_entry(fixture.full_vid)
+        res = app._volume_entry(fixture.res_vid)
+        assert full["map_url"] in scene, "the full map fell out of the scene"
+        assert res["map_url"] not in scene, "the resolution map is still drawn"
+        assert res["ref"] not in scene
+
+
+def exercise_the_resolution_map_has_no_visibility_checkbox():
+    """It is never drawn, so show/hide on it is a lever connected to nothing -- and its
+    checkbox was the clipped sliver users tried to click. visible=None is how the tree
+    already says "nothing drawable" for reflections; a resolution map reports the same."""
+    from PySide6.QtCore import Qt
+
+    with pinned_resolution_map() as fixture:
+        items = fixture.app._emitted_items()
+        by_id = {i["id"]: i for i in items}
+        assert by_id[fixture.res_vid]["visible"] is None
+        assert by_id[fixture.full_vid]["visible"] is not None
+
+        tree = fixture.app._controls._loaded_tree
+        for depth, node in _rows(tree):
+            kind_id = node.data(0, Qt.ItemDataRole.UserRole)
+            checkable = bool(node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+            if kind_id == ("volume", fixture.res_vid):
+                assert not checkable, "the resolution map still offers show/hide"
+            elif kind_id == ("volume", fixture.full_vid):
+                assert checkable, "the full map lost its show/hide"
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
