@@ -303,6 +303,18 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
         values = {c.currentText() for c in combos}
         assert "2×" in values, "no Downsample dropdown showing the current factor: %r" % (values,)
 
+        # Downsample is a member of the map's own display rows, not of the colouring
+        # group: it says how this map is drawn (its one consumer today is the coloured
+        # surface, but that is plumbing, not placement).
+        from PySide6.QtWidgets import QGroupBox
+        ds = next(c for c in combos if c.currentText() == "2×")
+        parent = ds.parent()
+        while parent is not None and not isinstance(parent, QGroupBox):
+            parent = parent.parent()
+        group_title = parent.title() if isinstance(parent, QGroupBox) else None
+        assert group_title != "Colour by local resolution", (
+            "Downsample is nested inside the colouring group")
+
 
 def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
     """The indicator must span "payload streamed" to "surface on screen".

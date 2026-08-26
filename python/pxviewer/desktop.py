@@ -3138,6 +3138,20 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
+            # Downsample sits with the map's own display controls, not inside the
+            # colouring group: it is a property of how this map is drawn. Today its one
+            # consumer is the colour-by-resolution surface (the plain isosurface is
+            # contoured by the viewer from the full grid), which is why it only appears
+            # once a resolution map is pinned; a future progressive-rendering mode for
+            # plain maps would claim the same row.
+            if it.get("resolution_map"):
+                def _set_localres_ds(v, it=it):
+                    it["localres_downsample"] = v
+                    self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
+
+                add_combo("Downsample",
+                          [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
+                          int(it.get("localres_downsample") or 4), _set_localres_ds)
             self._add_color_row(live.get("color"), _set_color, title="Map color")
 
             def _set_opacity(v, it=it):
@@ -3181,6 +3195,14 @@ class ControlsWindow:
                 from PySide6.QtWidgets import QDoubleSpinBox, QGroupBox, QVBoxLayout
 
                 group = QGroupBox("Colour by local resolution")
+                # A checkable group's title renders noticeably smaller than the pane's
+                # labels on some styles (macOS especially), which made the switch look
+                # like fine print. Pin it to the app's own point size and the weight the
+                # other section titles use, and size the indicator like a QCheckBox.
+                title_pt = max(group.font().pointSize(), 12)
+                group.setStyleSheet(
+                    "QGroupBox::title { font-size: %dpt; font-weight: 600; } "
+                    "QGroupBox::indicator { width: 14px; height: 14px; }" % title_pt)
                 group.setToolTip(
                     "Colour this map's surface by the local resolution computed from its "
                     "half-maps (blue = high resolution, red = low).")
@@ -3188,25 +3210,6 @@ class ControlsWindow:
                 group.setChecked(bool(it.get("color_by_resolution")))
                 gl = QVBoxLayout(group)
                 gl.setSpacing(6)
-
-                # Downsample: contour every nth voxel of the colouring surface. Explicit
-                # rather than adaptive, so the surface never changes detail on its own.
-                dsr = QHBoxLayout()
-                ds_lab = QLabel("Downsample")
-                ds_lab.setMinimumWidth(80)
-                dsr.addWidget(ds_lab)
-                ds = QComboBox()
-                for label, value in (("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)):
-                    ds.addItem(label, value)
-                ds.setCurrentIndex(max(0, ds.findData(int(it.get("localres_downsample") or 4))))
-                ds.currentIndexChanged.connect(
-                    lambda _i, ds=ds, it=it: (
-                        it.__setitem__("localres_downsample", ds.currentData()),
-                        self._safe(lambda: self._desktop.set_localres_downsample(
-                            vid, ds.currentData()))))
-                dsr.addWidget(ds)
-                dsr.addStretch(1)
-                gl.addLayout(dsr)
 
                 # The ramp's value range: lo draws blue, hi red, fixed until changed --
                 # colours keep their meaning across contour levels, sessions and figures.
