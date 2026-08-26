@@ -57,6 +57,18 @@ const check = (ok: boolean, what: string) => { if (!ok) { failures++; console.er
     check(d.stepX[0]===4 && d.stepY[1]===4 && d.stepZ[2]===4, "decimate steps not doubled");
     check(d.origin[0]===10, "decimate moved the origin");
 }
+// decimate by 4 (the default display factor) and by 1 (identity)
+{
+    const g = grid(16,16,16,(i,j,k)=> i*100+j*10+k);
+    const d = decimateGrid(g, 4);
+    check(d.nx===4 && d.ny===4 && d.nz===4, `x4 dims ${d.nx},${d.ny},${d.nz}`);
+    let same = true;
+    for (let i=0;i<4;i++) for (let j=0;j<4;j++) for (let k=0;k<4;k++)
+        if (at(d,i,j,k) !== (4*i)*100+(4*j)*10+(4*k)) same = false;
+    check(same, "x4 decimate picked wrong samples");
+    check(d.stepX[0]===8, "x4 steps not scaled by 4");
+    check(decimateGrid(g, 1) === g, "factor 1 should return the grid itself");
+}
 // No `process` here: this file is typechecked with the browser tsconfig. An uncaught
 // throw makes node exit nonzero, which is all the harness needs.
 if (failures > 0) throw new Error(`${failures} grid-helper failures`);

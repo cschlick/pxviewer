@@ -199,6 +199,35 @@ def exercise_a_level_change_is_one_float_not_a_regrid():
         run_client(scenario)
 
 
+def exercise_the_downsample_factor_arrives_before_the_grids():
+    """The factor must be in place when the payload's first build runs.
+
+    A reloading client rebuilds the coloured surface from the replayed payload the moment
+    it arrives; a factor replayed after it would rebuild at the wrong resolution first
+    and correct itself a beat later. So the replay sends the factor ahead of the payload,
+    and the client stores it even before any grids exist.
+    """
+    import struct
+
+    with session() as live:
+        live.show_localres_grid(struct.pack("<fff", 1.5, 4.0, 14.0) + b"G" * 8)
+        live.set_localres_downsample(4)
+
+        async def scenario():
+            async with client(live) as ws:
+                first = await next_text(ws, "localres")
+                assert first == {"type": "localres", "action": "downsample", "value": 4}, (
+                    "the factor did not precede the payload: %r" % (first,))
+                message = await next_binary(ws, tag=7)   # the payload follows
+                assert message[16:] == b"G" * 8
+
+                live.set_localres_downsample(2)          # a live change broadcasts too
+                assert await next_text(ws, "localres") == {
+                    "type": "localres", "action": "downsample", "value": 2}
+
+        run_client(scenario)
+
+
 def exercise_stop_cancels_sends_parked_on_a_dead_socket():
     """Closing the app must not leave broadcast tasks pending.
 

@@ -484,6 +484,10 @@ class LiveSession:
         # render skip broadcast in place, but every viewport reload connects a *new*
         # client -- without replay, each reload silently redraws every hidden map.
         self._volume_visibility: Dict[str, bool] = {}
+        # The localres display-resolution factor, replayed to late clients *before* the
+        # payload so the first build already uses it (control messages are applied ahead
+        # of the queued binary payload on the client).
+        self._localres_downsample: Optional[int] = None
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -965,6 +969,21 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, message)
 
+    def set_localres_downsample(self, factor: int) -> None:
+        """Set the localres display resolution: contour every ``factor``-th voxel.
+
+        A client-side rendering parameter -- the grids are already in the browser, which
+        rebuilds from a decimated copy. Stored and replayed (before the payload, so a
+        reloading client's first build uses it) because unlike the level it has no slot
+        in the payload header to patch. Thread-safe.
+        """
+        self._localres_downsample = max(1, int(factor))
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
+                {"type": "localres", "action": "downsample",
+                 "value": self._localres_downsample}))
+
     def set_localres_iso(self, iso_level: float) -> None:
         """Re-contour the local-resolution colouring at a new level, in place.
 
@@ -992,6 +1011,7 @@ class LiveSession:
     def clear_localres_grid(self) -> None:
         """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
         self._last_localres = None
+        self._localres_downsample = None
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
@@ -2031,6 +2051,11 @@ class LiveSession:
                 await self._locked_send(websocket, payload)
             if self._last_map_box is not None:
                 await self._locked_send(websocket, self._last_map_box)
+            if self._localres_downsample is not None:
+                # Before the payload: the factor must be in place when the grids build.
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "localres", "action": "downsample",
+                     "value": self._localres_downsample}))
             if self._last_localres is not None:
                 await self._locked_send(websocket, self._last_localres)
             if self._last_hotspot_volume is not None:

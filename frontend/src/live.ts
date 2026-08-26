@@ -216,23 +216,25 @@ export type LocalresGrid = {
     origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array;
 };
 
-/** A 2x-per-axis decimated copy (nearest sample): 1/8 of the voxels, for drag previews. */
-export function decimateGrid(g: LocalresGrid): LocalresGrid {
-    const nx = Math.max(2, Math.ceil(g.nx / 2)), ny = Math.max(2, Math.ceil(g.ny / 2)), nz = Math.max(2, Math.ceil(g.nz / 2));
+/** A factor-per-axis decimated copy (nearest sample): 1/factor^3 of the voxels. */
+export function decimateGrid(g: LocalresGrid, factor = 2): LocalresGrid {
+    const f = Math.max(1, Math.round(factor));
+    if (f === 1) return g;
+    const nx = Math.max(2, Math.ceil(g.nx / f)), ny = Math.max(2, Math.ceil(g.ny / f)), nz = Math.max(2, Math.ceil(g.nz / f));
     const values = new Float32Array(nx * ny * nz);
     for (let i = 0; i < nx; i++) {
-        const si = Math.min(2 * i, g.nx - 1);
+        const si = Math.min(f * i, g.nx - 1);
         for (let j = 0; j < ny; j++) {
-            const sj = Math.min(2 * j, g.ny - 1);
+            const sj = Math.min(f * j, g.ny - 1);
             const src = (si * g.ny + sj) * g.nz;
             const dst = (i * ny + j) * nz;
             for (let k = 0; k < nz; k++) {
-                values[dst + k] = g.values[src + Math.min(2 * k, g.nz - 1)];
+                values[dst + k] = g.values[src + Math.min(f * k, g.nz - 1)];
             }
         }
     }
-    const s2 = (v: Vec3) => Vec3.scale(Vec3(), v, 2);
-    return { nx, ny, nz, origin: Vec3.clone(g.origin), stepX: s2(g.stepX), stepY: s2(g.stepY), stepZ: s2(g.stepZ), values };
+    const sf = (v: Vec3) => Vec3.scale(Vec3(), v, f);
+    return { nx, ny, nz, origin: Vec3.clone(g.origin), stepX: sf(g.stepX), stepY: sf(g.stepY), stepZ: sf(g.stepZ), values };
 }
 
 /**
@@ -671,11 +673,19 @@ export class LiveViewer {
     private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
     private localresGrids: {
         A: LocalresGrid; B: LocalresGrid; lo: number; hi: number;
-        coarse: LocalresGrid;   // A decimated 2x, contoured during drags; full res on settle
+        levels: Map<number, LocalresGrid>;  // factor -> decimated copy of A, built lazily
         lut: Color[];           // the [lo,hi] ramp sampled once, replacing a scale call per vertex
     } | undefined;
     private localresIsoPending: number | undefined;  // latest requested level while a rebuild runs
     private localresIsoBusy = false;
+    // The user-chosen display resolution: the surface is contoured from A decimated by
+    // this factor, during drags AND at rest, with no exceptions -- an automatic drag
+    // preview at any other resolution is a surface that changes detail on its own,
+    // which is the exact behaviour the explicit setting exists to remove. Full means
+    // full: if dragging at it is slow, the remedy is the dropdown. Authoritative state
+    // lives in Python; this is applied from its messages and defaulted the same.
+    private localresFactor = 4;
+    private localresLevel: number | undefined;       // last built level, for factor changes
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
     // Declared colour positions for an imported concern field; undefined = derive from the cut.
@@ -1564,8 +1574,33 @@ export class LiveViewer {
         const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
         const lut: Color[] = [];
         for (let i = 0; i < 256; i++) lut.push(scale.color(lo + ((i + 0.5) / 256) * (hi - lo)));
-        this.localresGrids = { A, B, lo, hi, coarse: decimateGrid(A), lut };
-        const shape = await this.buildLocalresShape(A, B, isoLevel, lo, hi, lut);
+        this.localresGrids = { A, B, lo, hi, levels: new Map(), lut };
+        this.localresLevel = isoLevel;
+        const shape = await this.buildLocalresShape(
+            this.localresGridAt(this.localresFactor), B, isoLevel, lo, hi, lut);
+        await this.swapLocalresShape(shape);
+    }
+
+    /** Grid A decimated by `factor`, built on first use and cached. */
+    private localresGridAt(factor: number): LocalresGrid {
+        const held = this.localresGrids!;
+        if (factor <= 1) return held.A;
+        let grid = held.levels.get(factor);
+        if (!grid) {
+            grid = decimateGrid(held.A, factor);
+            held.levels.set(factor, grid);
+        }
+        return grid;
+    }
+
+    /** Set the display resolution (1 = full grid, n = every nth voxel) and rebuild. */
+    async setLocalresDownsample(factor: number) {
+        this.localresFactor = Math.max(1, Math.round(factor));
+        const held = this.localresGrids;
+        if (!held || this.localresLevel === undefined) return;  // stored; applied with the payload
+        const shape = await this.buildLocalresShape(
+            this.localresGridAt(this.localresFactor), held.B,
+            this.localresLevel, held.lo, held.hi, held.lut);
         await this.swapLocalresShape(shape);
     }
 
@@ -1601,17 +1636,18 @@ export class LiveViewer {
                 this.localresIsoPending = undefined;
                 const held = this.localresGrids;
                 if (!held) return;
-                // Preview from the decimated grid: 1/8 of the voxels, so the surface
-                // tracks the slider. When no further level arrived during that build,
-                // the drag has settled -- rebuild the same level at full resolution.
-                const preview = await this.buildLocalresShape(
-                    held.coarse, held.B, level, held.lo, held.hi, held.lut);
-                await this.swapLocalresShape(preview);
-                if (this.localresIsoPending === undefined) {
-                    const fine = await this.buildLocalresShape(
-                        held.A, held.B, level, held.lo, held.hi, held.lut);
-                    await this.swapLocalresShape(fine);
-                }
+                this.localresLevel = level;
+                // The chosen factor is what is drawn, dragging or not. A first cut of
+                // this kept a 2x drag preview for factor 1 "because full resolution is
+                // slow" -- and that was exactly the dynamic-detail behaviour the setting
+                // exists to remove, just confined to one factor. The pending/coalescing
+                // loop already keeps a slow drag correct (intermediate levels are
+                // dropped, the latest always builds); the dropdown is the remedy for
+                // slow, not an automatic resolution change.
+                const shape = await this.buildLocalresShape(
+                    this.localresGridAt(this.localresFactor), held.B,
+                    level, held.lo, held.hi, held.lut);
+                await this.swapLocalresShape(shape);
             }
         } finally {
             this.localresIsoBusy = false;
@@ -1675,6 +1711,7 @@ export class LiveViewer {
         this.localresSurface = undefined;
         this.localresGrids = undefined;
         this.localresIsoPending = undefined;
+        this.localresLevel = undefined;
     }
 
     /** Show or hide this model's whole structure in place — a render skip (no dispose, no
@@ -3059,6 +3096,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (msg.action === 'clear') await viewer.clearLocalresSurface();
                 else if (msg.action === 'level' && typeof msg.value === 'number') {
                     await viewer.setLocalresIso(msg.value);
+                } else if (msg.action === 'downsample' && typeof msg.value === 'number') {
+                    await viewer.setLocalresDownsample(msg.value);
                 }
             } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
                 await viewer.setHotspotOpacity(msg.knee);

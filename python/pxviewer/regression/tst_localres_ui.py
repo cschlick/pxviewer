@@ -255,6 +255,55 @@ def exercise_a_level_change_takes_the_cheap_path():
             "wire level %.6f, expected %.6f" % (stub.levels[0], expected))
 
 
+def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
+    """The coloured surface's display resolution is a user setting, not an adaptive one.
+
+    x4 by default -- 64^3 on a typical box, which re-levels instantly -- shown as a
+    Downsample dropdown on the full map's pane. What is drawn is what was asked for:
+    the settle-time rebuild at a different resolution than the drag preview visibly
+    changed the surface, which read as "it recalculates and looks bad".
+    """
+    class RecordingSession:
+        def __init__(self):
+            self.calls = []
+
+        def set_localres_downsample(self, factor):
+            self.calls.append(("factor", int(factor)))
+
+        def show_localres_grid(self, payload):
+            self.calls.append(("grids", None))
+
+        def set_localres_iso(self, value):
+            self.calls.append(("level", float(value)))
+
+        def clear_localres_grid(self):
+            pass
+
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        full = app._volume_entry(fixture.full_vid)
+        assert full.get("localres_downsample") == 4, "pinning did not default to 4x"
+
+        stub = RecordingSession()
+        app._control_session = lambda: stub
+        app._push_localres(full)
+        kinds = [k for k, _ in stub.calls]
+        assert kinds.index("factor") < kinds.index("grids"), (
+            "the factor must be sent before the grids: %r" % (stub.calls,))
+
+        app.set_localres_downsample(fixture.full_vid, 2)
+        assert full["localres_downsample"] == 2
+        assert stub.calls[-1] == ("factor", 2)
+
+        # The pane offers it, current value shown, beside the colour switch.
+        controls = app._controls
+        controls._update_appearance("volume", fixture.full_vid, force=True)
+        process_events()
+        combos = controls._appearance_box.findChildren(QComboBox)
+        values = {c.currentText() for c in combos}
+        assert "2×" in values, "no Downsample dropdown showing the current factor: %r" % (values,)
+
+
 def exercise_the_computed_resolution_map_is_saved_and_reused():
     """The minute-long computation runs once; a re-run loads the saved map from disk.
 

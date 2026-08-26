@@ -3153,6 +3153,17 @@ class ControlsWindow:
                         self._safe(lambda: self._desktop.set_color_by_resolution(vid, bool(on)))))
                 self._appearance_layout.addWidget(res_check)
 
+                # Display resolution for the coloured surface. Contouring every nth voxel
+                # is what keeps the Level slider responsive; the choice is explicit here
+                # rather than adaptive so the surface never changes detail on its own.
+                def _set_localres_ds(v, it=it):
+                    it["localres_downsample"] = v
+                    self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
+
+                add_combo("Downsample",
+                          [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
+                          int(it.get("localres_downsample") or 4), _set_localres_ds)
+
             def _set_opacity(v, it=it):
                 it["opacity"] = v
                 self._safe(lambda: self._desktop.set_volume_opacity(vid, v))
@@ -9164,6 +9175,11 @@ class DesktopApp:
             # treat "hidden" generically (first-visible focus, render skips).
             res_entry["visible"] = False
         full["resolution_map"] = res_vid
+        # Display resolution for the coloured surface: contour every nth voxel. x4 by
+        # default -- 64^3 on a typical 256^3 map, which re-levels instantly -- and the
+        # user turns it up from the map's appearance pane when zoomed in. Explicit
+        # rather than adaptive on purpose: what is drawn is what was asked for.
+        full.setdefault("localres_downsample", 4)
         self._status(f"{full['name']}: local resolution ready")
         if color:
             self.set_color_by_resolution(full_vid, True)
@@ -9222,6 +9238,18 @@ class DesktopApp:
         st = surface.stats()
         return float(st["mean"] + float(entry["iso"]) * st["std"])
 
+    def set_localres_downsample(self, full_vid: str, factor: int) -> None:
+        """Set how finely a map's colour-by-resolution surface is contoured (1 = every
+        voxel, n = every nth). A client-side rebuild from grids the browser holds."""
+        entry = self._volume_entry(full_vid)
+        if entry is None:
+            return
+        entry["localres_downsample"] = max(1, int(factor))
+        session = self._control_session()
+        if session is not None:
+            session.set_localres_downsample(entry["localres_downsample"])
+        self._emit_loaded_changed()  # the pane shows the current factor
+
     def _push_localres(self, full) -> None:
         """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
 
@@ -9243,6 +9271,8 @@ class DesktopApp:
             domain=self._localres_domain(res["data"]))
         session = self._control_session()
         if session is not None:
+            # Factor first: it must be in place when the payload's first build runs.
+            session.set_localres_downsample(int(full.get("localres_downsample", 4)))
             session.show_localres_grid(payload)
         self.set_volume_visible(full["id"], False)  # our surface stands in for the plain one
         full["_localres_shown"] = True
@@ -9529,7 +9559,8 @@ class DesktopApp:
              "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso"),
              "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),
              "resolution_map": v.get("resolution_map"),
-             "color_by_resolution": bool(v.get("color_by_resolution"))}
+             "color_by_resolution": bool(v.get("color_by_resolution")),
+             "localres_downsample": v.get("localres_downsample")}
             for v in self._volumes
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.
