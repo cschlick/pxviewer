@@ -216,6 +216,14 @@ export type LocalresGrid = {
     origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array;
 };
 
+/** The [lo, hi] colour ramp sampled into a 256-entry LUT (see buildLocalresShape). */
+function localresLut(lo: number, hi: number): Color[] {
+    const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
+    const lut: Color[] = [];
+    for (let i = 0; i < 256; i++) lut.push(scale.color(lo + ((i + 0.5) / 256) * (hi - lo)));
+    return lut;
+}
+
 /** A factor-per-axis decimated copy (nearest sample): 1/factor^3 of the voxels. */
 export function decimateGrid(g: LocalresGrid, factor = 2): LocalresGrid {
     const f = Math.max(1, Math.round(factor));
@@ -1569,15 +1577,12 @@ export class LiveViewer {
         const A = readGrid(), B = readGrid();
 
         // Kept so a level change needs no new grids. The colour ramp is sampled into a
-        // LUT here because it is fixed per payload, and the per-vertex work should be an
-        // array index, not a scale evaluation.
-        const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
-        const lut: Color[] = [];
-        for (let i = 0; i < 256; i++) lut.push(scale.color(lo + ((i + 0.5) / 256) * (hi - lo)));
-        this.localresGrids = { A, B, lo, hi, levels: new Map(), lut };
+        // LUT here so the per-vertex work is an array index, not a scale evaluation.
+        this.localresGrids = { A, B, lo, hi, levels: new Map(), lut: localresLut(lo, hi) };
         this.localresLevel = isoLevel;
         const shape = await this.buildLocalresShape(
-            this.localresGridAt(this.localresFactor), B, isoLevel, lo, hi, lut);
+            this.localresGridAt(this.localresFactor), B, isoLevel, lo, hi,
+            this.localresGrids.lut);
         await this.swapLocalresShape(shape);
     }
 
@@ -1591,6 +1596,21 @@ export class LiveViewer {
             held.levels.set(factor, grid);
         }
         return grid;
+    }
+
+    /**
+     * Re-map the colour ramp to a new [lo, hi] domain and repaint. The mapping is
+     * deliberately manual and stable -- it never follows the contour on its own, so a
+     * figure's colours mean the same thing at every threshold -- and a change is this
+     * ~60-byte message plus a local rebuild, like the level.
+     */
+    async setLocalresDomain(lo: number, hi: number) {
+        const held = this.localresGrids;
+        if (!held) return;   // the payload header carries the domain; nothing to update yet
+        held.lo = lo;
+        held.hi = hi;
+        held.lut = localresLut(lo, hi);
+        if (this.localresLevel !== undefined) await this.setLocalresIso(this.localresLevel);
     }
 
     /** Set the display resolution (1 = full grid, n = every nth voxel) and rebuild. */
@@ -3098,6 +3118,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     await viewer.setLocalresIso(msg.value);
                 } else if (msg.action === 'downsample' && typeof msg.value === 'number') {
                     await viewer.setLocalresDownsample(msg.value);
+                } else if (msg.action === 'domain'
+                        && typeof msg.lo === 'number' && typeof msg.hi === 'number') {
+                    await viewer.setLocalresDomain(msg.lo, msg.hi);
                 }
             } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
                 await viewer.setHotspotOpacity(msg.knee);

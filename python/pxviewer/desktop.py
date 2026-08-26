@@ -3165,6 +3165,62 @@ class ControlsWindow:
                           [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
                           int(it.get("localres_downsample") or 4), _set_localres_ds)
 
+                # The colour ramp's value range, in Angstrom: lo -> blue, hi -> red.
+                # Manual and stable on purpose (a mapping that followed the contour
+                # would re-colour a figure under its caption); Fit is the deliberate
+                # one-click version of "span what I am looking at right now".
+                from PySide6.QtWidgets import QDoubleSpinBox
+
+                lo0, hi0 = it.get("localres_domain") or (0.0, 1.0)
+                dr = QHBoxLayout()
+                lab = QLabel("Colour range")
+                lab.setMinimumWidth(80)
+                lab.setToolTip(
+                    "The resolution values the colour ramp spans: the low end draws "
+                    "blue, the high end red, values outside clamp. Fixed until you "
+                    "change it, so colours keep their meaning across contour levels.")
+                dr.addWidget(lab)
+                lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
+                lo_spin.setObjectName("localres-domain-lo")
+                hi_spin.setObjectName("localres-domain-hi")
+                for sp in (lo_spin, hi_spin):
+                    sp.setRange(0.0, 999.0)
+                    sp.setDecimals(2)
+                    sp.setSingleStep(0.1)
+                    sp.setSuffix(" Å")
+                lo_spin.setValue(float(lo0))
+                hi_spin.setValue(float(hi0))
+
+                def _apply_domain(_=None, it=it):
+                    lo_v, hi_v = lo_spin.value(), hi_spin.value()
+                    if hi_v <= lo_v:
+                        return  # half-edited state; applied once the other end moves
+                    it["localres_domain"] = (lo_v, hi_v)
+                    self._safe(lambda: self._desktop.set_localres_domain(vid, lo_v, hi_v))
+
+                lo_spin.valueChanged.connect(_apply_domain)
+                hi_spin.valueChanged.connect(_apply_domain)
+                dr.addWidget(lo_spin)
+                dr.addWidget(QLabel("–"))
+                dr.addWidget(hi_spin)
+                self._appearance_layout.addLayout(dr)
+
+                br = QHBoxLayout()
+                br.addSpacing(84)
+                fit = QPushButton("Fit to surface")
+                fit.setToolTip("Span the ramp over the resolution values inside the "
+                               "current contour — what is actually on screen.")
+                fit.clicked.connect(
+                    lambda _=False: self._safe(lambda: self._desktop.fit_localres_domain(vid)))
+                reset = QPushButton("Reset")
+                reset.setToolTip("Back to the default: percentiles of the whole map.")
+                reset.clicked.connect(
+                    lambda _=False: self._safe(lambda: self._desktop.reset_localres_domain(vid)))
+                br.addWidget(fit)
+                br.addWidget(reset)
+                br.addStretch(1)
+                self._appearance_layout.addLayout(br)
+
             def _set_opacity(v, it=it):
                 it["opacity"] = v
                 self._safe(lambda: self._desktop.set_volume_opacity(vid, v))
@@ -9219,6 +9275,7 @@ class DesktopApp:
         # user turns it up from the map's appearance pane when zoomed in. Explicit
         # rather than adaptive on purpose: what is drawn is what was asked for.
         full.setdefault("localres_downsample", 4)
+        full.setdefault("localres_domain", tuple(self._localres_domain(res_data)))
         self._status(f"{full['name']}: local resolution ready")
         if color:
             self.set_color_by_resolution(full_vid, True)
@@ -9334,6 +9391,60 @@ class DesktopApp:
                              "the map is coloured by it")
         self._emit_loaded_changed()
 
+    def set_localres_domain(self, full_vid: str, lo: float, hi: float) -> None:
+        """Set the colour ramp's value range (Angstrom): ``lo`` maps to blue, ``hi`` to
+        red. Manual and stable -- it never follows the contour on its own, so a figure's
+        colours keep their meaning across thresholds and sessions."""
+        entry = self._volume_entry(full_vid)
+        if entry is None:
+            return
+        lo, hi = float(lo), float(hi)
+        if not (hi > lo):
+            self._warn("the colour range needs max above min")
+            return
+        entry["localres_domain"] = (lo, hi)
+        session = self._control_session()
+        if session is not None:
+            session.set_localres_domain(lo, hi)
+        self._emit_loaded_changed()
+
+    def fit_localres_domain(self, full_vid: str) -> None:
+        """Set the colour range from what the current contour actually shows.
+
+        The full-map default spends most of the ramp on solvent-adjacent voxels no
+        realistic threshold displays -- on EMD-53478 the whole visible particle sits in
+        the blue end. This takes the 2nd-98th percentile of the resolution values inside
+        the current contour (density >= the display level), so the ramp spans the values
+        on screen. A deliberate action, never automatic: refitting on contour changes
+        would re-colour a figure under its caption.
+        """
+        entry = self._volume_entry(full_vid)
+        res = self._volume_entry(entry.get("resolution_map")) if entry else None
+        if entry is None or res is None:
+            return
+        surface = self._display_map_data(entry)
+        level = self._absolute_iso(entry, surface)
+        inside = res["data"].array[surface.array >= level]
+        inside = inside[np.isfinite(inside)]
+        inside = inside[inside != 0.0]
+        if inside.size < 100:
+            self._warn("nothing visible at this level to fit the colour range to")
+            return
+        lo, hi = float(np.percentile(inside, 2)), float(np.percentile(inside, 98))
+        if hi <= lo:
+            hi = lo + 0.1
+        self.set_localres_domain(full_vid, round(lo, 2), round(hi, 2))
+        self._status(f"colour range fitted to the visible surface: {lo:.2f}–{hi:.2f} Å")
+
+    def reset_localres_domain(self, full_vid: str) -> None:
+        """Restore the default colour range: percentiles of the whole resolution map."""
+        entry = self._volume_entry(full_vid)
+        res = self._volume_entry(entry.get("resolution_map")) if entry else None
+        if entry is None or res is None:
+            return
+        lo, hi = self._localres_domain(res["data"])
+        self.set_localres_domain(full_vid, round(lo, 2), round(hi, 2))
+
     def _push_localres(self, full) -> None:
         """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
 
@@ -9349,10 +9460,16 @@ class DesktopApp:
         from .volume_io import encode_localres
 
         surface = self._display_map_data(full)  # the same (masked) grid the browser draws
+        # The stored domain, initialised once: recomputing per push would let the colour
+        # mapping drift on its own, and a mapping that shifts under a figure between
+        # sessions or contours is exactly what the explicit Colour range control forbids.
+        domain = full.get("localres_domain")
+        if domain is None:
+            domain = self._localres_domain(res["data"])
+            full["localres_domain"] = domain
         payload = encode_localres(
             surface.map_manager, res["data"].map_manager,
-            iso_level=self._absolute_iso(full, surface),
-            domain=self._localres_domain(res["data"]))
+            iso_level=self._absolute_iso(full, surface), domain=domain)
         session = self._control_session()
         if session is not None:
             # Factor first: it must be in place when the payload's first build runs.
@@ -9646,7 +9763,8 @@ class DesktopApp:
              "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),
              "resolution_map": v.get("resolution_map"),
              "color_by_resolution": bool(v.get("color_by_resolution")),
-             "localres_downsample": v.get("localres_downsample")}
+             "localres_downsample": v.get("localres_downsample"),
+             "localres_domain": v.get("localres_domain")}
             for v in self._volumes
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.

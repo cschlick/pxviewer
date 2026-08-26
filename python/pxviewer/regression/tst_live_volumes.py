@@ -199,6 +199,29 @@ def exercise_a_level_change_is_one_float_not_a_regrid():
         run_client(scenario)
 
 
+def exercise_a_domain_change_patches_the_replay_and_broadcasts():
+    """The colour range lives beside the level in the payload header: patch and tell."""
+    import struct
+
+    with session() as live:
+        live.show_localres_grid(struct.pack("<fff", 1.5, 4.0, 14.0) + b"G" * 8)
+        live.set_localres_domain(4.2, 7.0)
+
+        async def scenario():
+            async with client(live) as ws:
+                message = await next_binary(ws, tag=7)
+                iso, lo, hi = struct.unpack_from("<fff", message, 4)
+                assert abs(iso - 1.5) < 1e-6, "the domain patch disturbed the level"
+                assert (round(lo, 2), round(hi, 2)) == (4.2, 7.0), (lo, hi)
+                assert message[16:] == b"G" * 8, "the domain patch disturbed the grids"
+
+                live.set_localres_domain(5.0, 9.0)
+                assert await next_text(ws, "localres") == {
+                    "type": "localres", "action": "domain", "lo": 5.0, "hi": 9.0}
+
+        run_client(scenario)
+
+
 def exercise_the_downsample_factor_arrives_before_the_grids():
     """The factor must be in place when the payload's first build runs.
 

@@ -1009,6 +1009,24 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
                 {"type": "localres", "action": "level", "value": float(iso_level)}))
 
+    def set_localres_domain(self, lo: float, hi: float) -> None:
+        """Re-map the localres colour ramp to ``[lo, hi]`` (Angstrom), in place.
+
+        Like the level, the domain lives in the payload header (two f32 after the
+        level), so the stored replay is byte-patched and a late client reconstructs with
+        the current mapping -- nothing extra to replay, no ordering to get wrong.
+        Connected clients get the numbers and re-map locally. Thread-safe.
+        """
+        if self._last_localres is not None:
+            patched = bytearray(self._last_localres)
+            struct.pack_into("<ff", patched, 8, float(lo), float(hi))
+            self._last_localres = bytes(patched)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
+                {"type": "localres", "action": "domain",
+                 "lo": float(lo), "hi": float(hi)}))
+
     def clear_localres_grid(self) -> None:
         """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
         self._last_localres = None

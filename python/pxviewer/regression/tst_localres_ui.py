@@ -347,6 +347,83 @@ def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
         assert _resolution_ready(CW()), "tutorial not ready after the ack"
 
 
+def exercise_the_colour_range_is_stable_until_the_user_moves_it():
+    """The mapping never drifts on its own -- that is the figure-making contract.
+
+    The domain used to be recomputed from the whole resolution map on every push, and
+    the full-map percentiles spend most of the ramp on solvent-adjacent voxels no
+    realistic contour shows: the visible particle sat entirely in the blue end. It is
+    now stored state -- initialised once at pin time, resent verbatim on every push,
+    changed only by the user's own set/fit/reset.
+    """
+    class RecordingSession:
+        def __init__(self):
+            self.domains = []
+
+        def set_localres_downsample(self, factor):
+            pass
+
+        def set_localres_domain(self, lo, hi):
+            self.domains.append((round(lo, 4), round(hi, 4)))
+
+        def show_localres_grid(self, payload):
+            pass
+
+        def clear_localres_grid(self):
+            pass
+
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        full = app._volume_entry(fixture.full_vid)
+        first = full.get("localres_domain")
+        assert first is not None, "pinning did not initialise a colour range"
+
+        stub = RecordingSession()
+        app._control_session = lambda: stub
+        app._push_localres(full)
+        app._push_localres(full)
+        assert full["localres_domain"] == first, "a push moved the colour range"
+
+        # An explicit change sticks, reaches the session, and rejects a crossed range.
+        app.set_localres_domain(fixture.full_vid, 4.2, 7.0)
+        assert full["localres_domain"] == (4.2, 7.0)
+        assert stub.domains[-1] == (4.2, 7.0)
+        app.set_localres_domain(fixture.full_vid, 9.0, 3.0)
+        assert full["localres_domain"] == (4.2, 7.0), "a crossed range was accepted"
+
+        # Fit spans what the current contour shows, matching an independent computation.
+        surface = app._display_map_data(full)
+        level = app._absolute_iso(full, surface)
+        res = app._volume_entry(fixture.res_vid)
+        inside = res["data"].array[surface.array >= level]
+        inside = inside[np.isfinite(inside)]
+        inside = inside[inside != 0.0]
+        assert inside.size >= 100, "fixture leaves too little visible to fit to"
+        app.fit_localres_domain(fixture.full_vid)
+        lo, hi = full["localres_domain"]
+        assert abs(lo - np.percentile(inside, 2)) < 0.011, (lo, np.percentile(inside, 2))
+        assert abs(hi - np.percentile(inside, 98)) < 0.011, (hi, np.percentile(inside, 98))
+
+        # Reset restores the full-map default.
+        app.reset_localres_domain(fixture.full_vid)
+        lo, hi = full["localres_domain"]
+        d_lo, d_hi = app._localres_domain(res["data"])
+        assert abs(lo - d_lo) < 0.011 and abs(hi - d_hi) < 0.011
+
+        # And the pane shows the numbers with the two buttons.
+        from PySide6.QtWidgets import QDoubleSpinBox, QPushButton
+        controls = app._controls
+        controls._update_appearance("volume", fixture.full_vid, force=True)
+        process_events()
+        box = controls._appearance_box
+        spins = [w for w in box.findChildren(QDoubleSpinBox)
+                 if w.objectName().startswith("localres-domain-")]
+        assert len(spins) == 2, "no colour-range spinboxes on the pane"
+        assert {round(sp.value(), 2) for sp in spins} == {round(lo, 2), round(hi, 2)}
+        texts = {b.text() for b in box.findChildren(QPushButton)}
+        assert "Fit to surface" in texts and "Reset" in texts, texts
+
+
 def exercise_the_computed_resolution_map_is_saved_and_reused():
     """The minute-long computation runs once; a re-run loads the saved map from disk.
 
