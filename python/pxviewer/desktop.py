@@ -3110,18 +3110,16 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_style(vid, v))
 
             def _set_color(v, it=it):
-                # "Local resolution" rides the same dropdown as the flat colours: both
-                # answer "what colours this map", so two controls for one question (a
-                # colour row AND a separate checkbox) made each look unrelated to the
-                # other. Picking it turns the colouring on; picking any colour returns
-                # to a flat surface in that colour.
-                if v == "localres":
-                    it["color_by_resolution"] = True
-                    self._safe(lambda: self._desktop.set_color_by_resolution(vid, True))
+                # Value colourings ride the same dropdown as the flat colours: both
+                # answer "what colours this map". Picking a source turns that colouring
+                # on; picking any colour returns to a flat surface in that colour.
+                if v in self._desktop._COLOR_SOURCES:
+                    it["color_source"] = v
+                    self._safe(lambda: self._desktop.set_color_source(vid, v))
                     return
-                if it.get("color_by_resolution"):
-                    it["color_by_resolution"] = False
-                    self._safe(lambda: self._desktop.set_color_by_resolution(vid, False))
+                if it.get("color_source"):
+                    it["color_source"] = None
+                    self._safe(lambda: self._desktop.set_color_source(vid, None))
                 it["color"] = v
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
@@ -3140,12 +3138,16 @@ class ControlsWindow:
                 add_combo("Downsample",
                           [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
                           int(it.get("localres_downsample") or 4), _set_localres_ds)
+            source_themes = []
+            if it.get("resolution_map"):
+                source_themes.append(("Local resolution", "localres"))
+            if self._desktop._models:
+                # Atom-derived colourings, computed from the active model on selection.
+                source_themes.append(("B-factor", "bfactor"))
+                source_themes.append(("Occupancy", "occupancy"))
             self._add_color_row(
-                "localres" if it.get("color_by_resolution") else live.get("color"),
-                _set_color,
-                themes=([("Local resolution", "localres")]
-                        if it.get("resolution_map") else None),
-                title="Map color")
+                it.get("color_source") or live.get("color"),
+                _set_color, themes=source_themes or None, title="Map color")
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -3179,13 +3181,14 @@ class ControlsWindow:
             self._add_mask_row(live.get("mask_radius"),
                                self._desktop.can_mask_volume(vid), _set_mask)
 
-            # The colouring's own settings, shown only while "Local resolution" is the
+            # The colouring's own settings, shown only while a value source is the
             # selected colouring (the Color dropdown is the switch; this panel is its
             # detail). A plain framed group -- no checkbox: selection lives above.
-            if it.get("color_by_resolution"):
+            if it.get("color_source"):
                 from PySide6.QtWidgets import QDoubleSpinBox, QGroupBox, QVBoxLayout
 
-                group = QGroupBox("Local resolution")
+                source = self._desktop._COLOR_SOURCES[it["color_source"]]
+                group = QGroupBox(source["label"])
                 gl = QVBoxLayout(group)
                 gl.setSpacing(6)
 
@@ -3206,7 +3209,7 @@ class ControlsWindow:
                     sp.setRange(0.0, 999.0)
                     sp.setDecimals(2)
                     sp.setSingleStep(0.1)
-                    sp.setSuffix(" Å")
+                    sp.setSuffix(source["unit"])
                 lo_spin.setValue(float(lo0))
                 hi_spin.setValue(float(hi0))
 
@@ -3228,7 +3231,7 @@ class ControlsWindow:
                 fit.clicked.connect(
                     lambda _=False: self._safe(lambda: self._desktop.fit_localres_domain(vid)))
                 reset = QPushButton("Reset")
-                reset.setToolTip("Back to the default: percentiles of the whole map.")
+                reset.setToolTip("Back to the default: percentiles of the whole field.")
                 reset.clicked.connect(
                     lambda _=False: self._safe(lambda: self._desktop.reset_localres_domain(vid)))
                 rr.addWidget(fit)
@@ -8718,7 +8721,7 @@ class DesktopApp:
         for entry in self._volumes:
             if entry.get("is_resolution"):
                 continue  # never in the scene (see _write_volume_scene): nothing to hide
-            if not entry["visible"] or entry.get("color_by_resolution"):
+            if not entry["visible"] or entry.get("color_source"):
                 # Hidden maps, and the parked plain contour of a coloured map -- the
                 # coloured surface represents that one, whatever the entry's own flag.
                 try:
@@ -8964,7 +8967,7 @@ class DesktopApp:
         entry["visible"] = bool(visible)
         control = self._control_session()
         if control is not None:
-            if entry.get("color_by_resolution"):
+            if entry.get("color_source"):
                 # The coloured surface is this map's representation: the one checkbox
                 # hides and shows it. The plain contour stays parked regardless.
                 control.set_localres_visible(bool(visible))
@@ -9267,19 +9270,68 @@ class DesktopApp:
         self._volumes.remove(entry)
         self._prune_group(entry.get("group"))
 
-    def set_color_by_resolution(self, full_vid: str, on: bool) -> None:
-        """Toggle colouring a full map by its pinned resolution map. A plain appearance
-        option — on streams the value-coloured surface (and hides the uniform isosurface it
-        stands in for); off restores the ordinary contour."""
+    #: The value fields a map's surface can be coloured by. "localres" comes from the
+    #: pinned resolution map; the atom-derived kinds are computed from the active model.
+    #: All three ride the same machinery end to end -- one payload of two grids, one
+    #: stored domain, one LUT -- the payload never knew it was "resolution" to begin with.
+    _COLOR_SOURCES = {
+        "localres": {"label": "Local resolution", "unit": " Å"},
+        "bfactor": {"label": "B-factor", "unit": " Å²"},
+        "occupancy": {"label": "Occupancy", "unit": ""},
+    }
+
+    def _atom_field(self, kind: str):
+        """A value grid built from the active model's atoms: each voxel carries the
+        nearest atom's B-factor or occupancy.
+
+        Nearest-atom on a 2 Å lattice over the model's bounding box (plus margin) --
+        coarse is fine, because only the values sampled at surface vertices matter and
+        B/occ are per-atom constants, not fine structure. The lattice is independent of
+        the map's grid: the viewer maps surface vertices through this grid's own affine.
+        """
+        from scipy.spatial import cKDTree
+
+        entry = self._model_entry(self._active_model_id) if self._active_model_id else None
+        model = getattr(entry["session"], "model", None) if entry else None
+        if model is None:
+            return None
+        atoms = model.get_hierarchy().atoms()
+        xyz = np.asarray(atoms.extract_xyz(), dtype=np.float64)
+        if not len(xyz):
+            return None
+        values = np.asarray(atoms.extract_b() if kind == "bfactor"
+                            else atoms.extract_occ(), dtype=np.float32)
+
+        spacing = 2.0
+        lo = np.floor((xyz.min(0) - 6.0) / spacing).astype(int)
+        hi = np.ceil((xyz.max(0) + 6.0) / spacing).astype(int)
+        nx, ny, nz = (hi - lo + 1).tolist()
+        gx, gy, gz = np.meshgrid(np.arange(nx), np.arange(ny), np.arange(nz),
+                                 indexing="ij")
+        centers = (np.stack([gx, gy, gz], axis=-1).reshape(-1, 3) + lo) * spacing
+        _dist, nearest = cKDTree(xyz).query(centers)
+        grid = values[nearest].reshape(nx, ny, nz).astype(np.float32)
+
+        from .volume_io import VolumeData
+
+        field = VolumeData.from_numpy(grid, spacing=spacing, origin=tuple(lo.tolist()),
+                                      name=kind)
+        finite = grid[np.isfinite(grid)]
+        d_lo, d_hi = float(np.percentile(finite, 2)), float(np.percentile(finite, 98))
+        if d_hi <= d_lo:
+            d_hi = d_lo + 0.1
+        return {"data": field, "domain": (round(d_lo, 2), round(d_hi, 2)),
+                "default_domain": (round(d_lo, 2), round(d_hi, 2)),
+                "model": entry["id"]}
+
+    def set_color_source(self, full_vid: str, kind) -> None:
+        """Choose what colours this map's surface: None (a flat colour), "localres",
+        "bfactor" or "occupancy". One source at a time; each keeps its own range."""
         full = self._volume_entry(full_vid)
         if full is None:
             return
-        if on:
-            if not full.get("resolution_map"):
-                raise ValueError("no resolution map computed for this map yet")
-            full["color_by_resolution"] = True
-            self._push_localres(full)
-        else:
+        if kind is None:
+            full["color_source"] = None
             full["color_by_resolution"] = False
             session = self._control_session()
             if session is not None:
@@ -9287,7 +9339,49 @@ class DesktopApp:
                 # The plain contour takes over as the map's representation, at the
                 # visibility the map already has -- the checkbox state carries across.
                 session.set_volume_visible(full["ref"], bool(full["visible"]))
+            self._emit_loaded_changed()
+            return
+
+        assert kind in self._COLOR_SOURCES, kind
+        fields = full.setdefault("color_fields", {})
+        if kind == "localres":
+            if not full.get("resolution_map"):
+                raise ValueError("no resolution map computed for this map yet")
+        elif kind not in fields or (
+                fields[kind].get("model") != self._active_model_id):
+            # Computed from the active model at selection time; picking the source
+            # again after switching models (or moving atoms) recomputes.
+            field = self._atom_field(kind)
+            if field is None:
+                self._warn(f"colour by {self._COLOR_SOURCES[kind]['label']} needs a "
+                           "loaded model")
+                return
+            fields[kind] = field
+        full["color_source"] = kind
+        full["color_by_resolution"] = (kind == "localres")
+        self._push_localres(full)
         self._emit_loaded_changed()
+
+    def _active_color_field(self, full):
+        """The active source's field dict: {"data", "domain", ...}, or None."""
+        kind = full.get("color_source")
+        if kind is None:
+            return None
+        if kind == "localres":
+            res = self._volume_entry(full.get("resolution_map"))
+            if res is None:
+                return None
+            if full.get("localres_domain") is None:
+                full["localres_domain"] = tuple(self._localres_domain(res["data"]))
+            return {"data": res["data"], "domain": full["localres_domain"],
+                    "default_domain": None}
+        return full.get("color_fields", {}).get(kind)
+
+    def set_color_by_resolution(self, full_vid: str, on: bool) -> None:
+        """Toggle colouring a full map by its pinned resolution map. A plain appearance
+        option — on streams the value-coloured surface (and hides the uniform isosurface it
+        stands in for); off restores the ordinary contour."""
+        self.set_color_source(full_vid, "localres" if on else None)
 
     @staticmethod
     def _localres_domain(color_map) -> tuple:
@@ -9364,10 +9458,11 @@ class DesktopApp:
         """The viewport drew the coloured surface: it is on screen and usable now."""
         self._end_localres_wait()
         for entry in self._volumes:
-            if entry.get("color_by_resolution"):
+            kind = entry.get("color_source")
+            if kind:
                 entry["localres_drawn"] = True
-                self._status(f"{entry['name']}: local resolution ready — "
-                             "the map is coloured by it")
+                label = self._COLOR_SOURCES[kind]["label"].lower()
+                self._status(f"{entry['name']}: coloured by {label}")
         self._emit_loaded_changed()
 
     def set_localres_domain(self, full_vid: str, lo: float, hi: float) -> None:
@@ -9381,7 +9476,11 @@ class DesktopApp:
         if not (hi > lo):
             self._warn("the colour range needs max above min")
             return
-        entry["localres_domain"] = (lo, hi)
+        kind = entry.get("color_source")
+        if kind == "localres" or kind is None:
+            entry["localres_domain"] = (lo, hi)
+        else:
+            entry.setdefault("color_fields", {}).setdefault(kind, {})["domain"] = (lo, hi)
         session = self._control_session()
         if session is not None:
             session.set_localres_domain(lo, hi)
@@ -9398,12 +9497,14 @@ class DesktopApp:
         would re-colour a figure under its caption.
         """
         entry = self._volume_entry(full_vid)
-        res = self._volume_entry(entry.get("resolution_map")) if entry else None
-        if entry is None or res is None:
+        field = self._active_color_field(entry) if entry else None
+        if entry is None or field is None:
             return
         surface = self._display_map_data(entry)
         level = self._absolute_iso(entry, surface)
-        inside = res["data"].array[surface.array >= level]
+        # The field grid need not share the map's lattice (atom fields do not): sample
+        # the field at the visible voxels' cartesian centres via its own geometry.
+        inside = self._sample_field_at_visible(field["data"], surface, level)
         inside = inside[np.isfinite(inside)]
         inside = inside[inside != 0.0]
         if inside.size < 100:
@@ -9418,11 +9519,39 @@ class DesktopApp:
     def reset_localres_domain(self, full_vid: str) -> None:
         """Restore the default colour range: percentiles of the whole resolution map."""
         entry = self._volume_entry(full_vid)
-        res = self._volume_entry(entry.get("resolution_map")) if entry else None
-        if entry is None or res is None:
+        field = self._active_color_field(entry) if entry else None
+        if entry is None or field is None:
             return
-        lo, hi = self._localres_domain(res["data"])
-        self.set_localres_domain(full_vid, round(lo, 2), round(hi, 2))
+        default = field.get("default_domain")
+        if default is None:  # localres: percentiles of the whole resolution map
+            res = self._volume_entry(entry.get("resolution_map"))
+            if res is None:
+                return
+            default = self._localres_domain(res["data"])
+        self.set_localres_domain(full_vid, round(default[0], 2), round(default[1], 2))
+
+    @staticmethod
+    def _sample_field_at_visible(field, surface, level):
+        """The field's values at the cartesian centres of visible surface voxels
+        (density >= level), nearest-voxel, finite and non-zero -- the population Fit
+        spans the ramp over."""
+        idx = np.argwhere(surface.array >= level)
+        if not len(idx):
+            return np.empty(0, dtype=np.float32)
+        s_px = np.asarray(surface.pixel_sizes, dtype=np.float64)
+        s_or = np.asarray(surface.origin, dtype=np.float64)
+        centers = (idx + s_or) * s_px
+        f_px = np.asarray(field.pixel_sizes, dtype=np.float64)
+        f_or = np.asarray(field.origin, dtype=np.float64)
+        fidx = np.rint(centers / f_px - f_or).astype(int)
+        shape = np.asarray(field.array.shape)
+        inside_box = np.all((fidx >= 0) & (fidx < shape), axis=1)
+        fidx = fidx[inside_box]
+        if not len(fidx):
+            return np.empty(0, dtype=np.float32)
+        vals = field.array[fidx[:, 0], fidx[:, 1], fidx[:, 2]]
+        vals = vals[np.isfinite(vals)]
+        return vals[vals != 0.0]
 
     def _push_localres(self, full) -> None:
         """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
@@ -9431,24 +9560,18 @@ class DesktopApp:
         the surface the browser draws changes (a new contour level, a mask), so the streamed
         surface and its stored replay stay current.
         """
-        if not full.get("color_by_resolution"):
-            return
-        res = self._volume_entry(full.get("resolution_map"))
-        if res is None:
+        field = self._active_color_field(full)
+        if field is None:
             return
         from .volume_io import encode_localres
 
         surface = self._display_map_data(full)  # the same (masked) grid the browser draws
-        # The stored domain, initialised once: recomputing per push would let the colour
-        # mapping drift on its own, and a mapping that shifts under a figure between
-        # sessions or contours is exactly what the explicit Colour range control forbids.
-        domain = full.get("localres_domain")
-        if domain is None:
-            domain = self._localres_domain(res["data"])
-            full["localres_domain"] = domain
+        # The stored domain, initialised once per source: recomputing per push would let
+        # the colour mapping drift on its own, and a mapping that shifts under a figure
+        # between sessions or contours is what the explicit Range control forbids.
         payload = encode_localres(
-            surface.map_manager, res["data"].map_manager,
-            iso_level=self._absolute_iso(full, surface), domain=domain)
+            surface.map_manager, field["data"].map_manager,
+            iso_level=self._absolute_iso(full, surface), domain=field["domain"])
         session = self._control_session()
         if session is not None:
             # Factor first: it must be in place when the payload's first build runs.
@@ -9747,7 +9870,9 @@ class DesktopApp:
              "resolution_map": v.get("resolution_map"),
              "color_by_resolution": bool(v.get("color_by_resolution")),
              "localres_downsample": v.get("localres_downsample"),
-             "localres_domain": v.get("localres_domain")}
+             "color_source": v.get("color_source"),
+             "localres_domain": (self._active_color_field(v) or {}).get(
+                 "domain", v.get("localres_domain"))}
             for v in self._volumes if not v.get("is_resolution")
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.

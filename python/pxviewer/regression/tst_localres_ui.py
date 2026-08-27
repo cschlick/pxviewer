@@ -185,6 +185,61 @@ def exercise_one_row_whose_checkbox_drives_the_visible_surface():
         assert ("plain_visible", full["ref"], True) in stub.calls, stub.calls
 
 
+def exercise_atom_colourings_ride_the_same_machinery():
+    """B-factor and occupancy are colour sources like local resolution -- same payload,
+    same stored per-source range, same dropdown. The field is a nearest-atom value grid
+    computed from the active model at selection time."""
+    from pxviewer.regression.tst_utils import data_path
+
+    class Recording(StubSession):
+        def __init__(self):
+            self.grids = 0
+            self.domains = []
+
+        def show_localres_grid(self, payload):
+            self.grids += 1
+
+        def set_localres_domain(self, lo, hi):
+            self.domains.append((round(lo, 2), round(hi, 2)))
+
+    with pinned_resolution_map() as fixture:
+        app = fixture.app
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        full = app._volume_entry(fixture.full_vid)
+        localres_domain_before = full.get("localres_domain")
+
+        stub = Recording()
+        app._control_session = lambda: stub
+
+        app.set_color_source(fixture.full_vid, "bfactor")
+        assert full["color_source"] == "bfactor"
+        assert full["color_by_resolution"] is False
+        assert stub.grids == 1, "no payload streamed for the B-factor colouring"
+        field = full["color_fields"]["bfactor"]
+        assert field["data"].array.size > 0
+        lo, hi = field["domain"]
+        assert hi > lo, "degenerate default range for B-factors"
+
+        # A range edit lands on the active source, not on localres's stored range.
+        app.set_localres_domain(fixture.full_vid, 10.0, 50.0)
+        assert full["color_fields"]["bfactor"]["domain"] == (10.0, 50.0)
+        assert full.get("localres_domain") == localres_domain_before
+
+        app.set_color_source(fixture.full_vid, "occupancy")
+        assert full["color_source"] == "occupancy"
+        assert stub.grids == 2
+        o_lo, o_hi = full["color_fields"]["occupancy"]["domain"]
+        assert o_hi > o_lo
+
+        # Back to localres through the old entry point, then off entirely.
+        app.set_color_by_resolution(fixture.full_vid, True)
+        assert full["color_source"] == "localres"
+        assert full["color_by_resolution"] is True
+        app.set_color_source(fixture.full_vid, None)
+        assert full["color_source"] is None
+
+
 def exercise_a_level_change_takes_the_cheap_path():
     """With colour-by-resolution on, the Level slider must not re-stream the grids.
 
