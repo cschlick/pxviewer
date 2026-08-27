@@ -3110,6 +3110,18 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_style(vid, v))
 
             def _set_color(v, it=it):
+                # "Local resolution" rides the same dropdown as the flat colours: both
+                # answer "what colours this map", so two controls for one question (a
+                # colour row AND a separate checkbox) made each look unrelated to the
+                # other. Picking it turns the colouring on; picking any colour returns
+                # to a flat surface in that colour.
+                if v == "localres":
+                    it["color_by_resolution"] = True
+                    self._safe(lambda: self._desktop.set_color_by_resolution(vid, True))
+                    return
+                if it.get("color_by_resolution"):
+                    it["color_by_resolution"] = False
+                    self._safe(lambda: self._desktop.set_color_by_resolution(vid, False))
                 it["color"] = v
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
@@ -3128,7 +3140,12 @@ class ControlsWindow:
                 add_combo("Downsample",
                           [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
                           int(it.get("localres_downsample") or 4), _set_localres_ds)
-            self._add_color_row(live.get("color"), _set_color, title="Map color")
+            self._add_color_row(
+                "localres" if it.get("color_by_resolution") else live.get("color"),
+                _set_color,
+                themes=([("Local resolution", "localres")]
+                        if it.get("resolution_map") else None),
+                title="Map color")
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -3162,28 +3179,13 @@ class ControlsWindow:
             self._add_mask_row(live.get("mask_radius"),
                                self._desktop.can_mask_volume(vid), _set_mask)
 
-            # Colour-by-resolution, as one framed unit after the map's own controls.
-            # The group's title checkbox is the on/off switch, and its contents grey out
-            # with it -- ownership is structural, where the same controls interleaved
-            # into the base rows read as unrelated neighbours. Present only once a
-            # resolution map has been computed and pinned (the Local resolution wizard).
-            if it.get("resolution_map"):
+            # The colouring's own settings, shown only while "Local resolution" is the
+            # selected colouring (the Color dropdown is the switch; this panel is its
+            # detail). A plain framed group -- no checkbox: selection lives above.
+            if it.get("color_by_resolution"):
                 from PySide6.QtWidgets import QDoubleSpinBox, QGroupBox, QVBoxLayout
 
-                group = QGroupBox("Colour by local resolution")
-                # A checkable group's title renders noticeably smaller than the pane's
-                # labels on some styles (macOS especially), which made the switch look
-                # like fine print. Pin it to the app's own point size and the weight the
-                # other section titles use, and size the indicator like a QCheckBox.
-                title_pt = max(group.font().pointSize(), 12)
-                group.setStyleSheet(
-                    "QGroupBox::title { font-size: %dpt; font-weight: 600; } "
-                    "QGroupBox::indicator { width: 14px; height: 14px; }" % title_pt)
-                group.setToolTip(
-                    "Colour this map's surface by the local resolution computed from its "
-                    "half-maps (blue = high resolution, red = low).")
-                group.setCheckable(True)
-                group.setChecked(bool(it.get("color_by_resolution")))
+                group = QGroupBox("Local resolution")
                 gl = QVBoxLayout(group)
                 gl.setSpacing(6)
 
@@ -3233,12 +3235,6 @@ class ControlsWindow:
                 rr.addWidget(reset)
                 rr.addStretch(1)
                 gl.addLayout(rr)
-
-                # Connected after setChecked so building the pane does not toggle it.
-                group.toggled.connect(
-                    lambda on, it=it: (
-                        it.__setitem__("color_by_resolution", bool(on)),
-                        self._safe(lambda: self._desktop.set_color_by_resolution(vid, bool(on)))))
                 self._appearance_layout.addWidget(group)
 
         # The wheel contours whatever the Level slider above is showing, so the

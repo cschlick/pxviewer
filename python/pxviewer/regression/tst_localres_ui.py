@@ -282,8 +282,8 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
         while parent is not None and not isinstance(parent, QGroupBox):
             parent = parent.parent()
         group_title = parent.title() if isinstance(parent, QGroupBox) else None
-        assert group_title != "Colour by local resolution", (
-            "Downsample is nested inside the colouring group")
+        assert group_title != "Local resolution", (
+            "Downsample is nested inside the colouring sub-panel")
 
 
 def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
@@ -405,17 +405,22 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
         texts = {b.text() for b in box.findChildren(QPushButton)}
         assert "Fit to surface" in texts and "Reset" in texts, texts
 
-        # The overlay's controls live inside one checkable group whose title is the
-        # on/off switch -- not interleaved among the map's own rows, which is how they
-        # started and read as unrelated neighbours with Level stranded beneath them.
-        from PySide6.QtWidgets import QGroupBox
+        # One question, one control: "Local resolution" is an entry in the Color
+        # dropdown (it answers "what colours this map", same as the flat colours), and
+        # the range controls live in a plain framed sub-panel shown only while it is
+        # the selected colouring. The old separate checkbox is gone.
+        from PySide6.QtWidgets import QComboBox, QGroupBox
         parent = spins[0].parent()
         while parent is not None and not isinstance(parent, QGroupBox):
             parent = parent.parent()
-        assert isinstance(parent, QGroupBox), "the colour range escaped the group"
-        assert parent.title() == "Colour by local resolution", parent.title()
-        assert parent.isCheckable(), "the group's title is not the on/off switch"
-        assert parent.isChecked() == bool(full.get("color_by_resolution"))
+        assert isinstance(parent, QGroupBox), "the colour range escaped its sub-panel"
+        assert parent.title() == "Local resolution", parent.title()
+        assert not parent.isCheckable(), "selection lives in the Color dropdown, not here"
+        color_combos = [c for c in box.findChildren(QComboBox)
+                        if c.findData("localres") >= 0]
+        assert color_combos, "the Color dropdown offers no Local resolution entry"
+        assert color_combos[0].currentData() == "localres", (
+            "colouring is on but the dropdown does not say so")
 
 
 def exercise_the_computed_resolution_map_is_saved_and_reused():
