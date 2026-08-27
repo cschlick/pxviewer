@@ -165,24 +165,68 @@ def map_model_tutorial() -> Tutorial:
     ], loader=lambda d: d.load_map_model_demo())
 
 
+def _active_model_entry(cw: Any):
+    mid = _active(cw)
+    return cw._desktop._model_entry(mid) if mid else None
+
+
+def _conformer_picked(cw: Any) -> bool:
+    entry = _active_model_entry(cw)
+    return bool(entry and entry.get("conformer"))
+
+
+def _conformer_back_to_all(cw: Any) -> bool:
+    # Meaningful because the coach only evaluates the *current* step: this one is
+    # reached by picking a conformer first, so None here is a deliberate return trip,
+    # not the untouched default.
+    entry = _active_model_entry(cw)
+    return bool(entry) and entry.get("conformer") is None
+
+
+def _coloured_by_occupancy(cw: Any) -> bool:
+    entry = _active_model_entry(cw)
+    return bool(entry and entry.get("color") == "occupancy")
+
+
 def altlocs_tutorial() -> Tutorial:
-    """Alternate conformations: one residue, several refined positions."""
+    """Alternate conformations: one residue, several refined positions. Each doing step
+    waits for the user to actually do it (the coach advances on the state changing), so
+    the walkthrough cannot run ahead of the screen."""
     return Tutorial("Alternate conformations", [
         Step(
             "**3NIR is loaded** — crambin at 0.48 Å, sharp enough that many side chains "
             "were refined in **two or more positions** (alternate conformations, "
-            "\"altlocs\"), each with its own occupancy.",
+            "\"altlocs\"), each with its own occupancy.\n\nLook closely at the side "
+            "chains: several fork into doubled atoms. Those are not errors — they are "
+            "the model saying the crystal truly holds both.",
         ),
         Step(
-            "Select the model and find the **Conformer** dropdown in its appearance "
-            "pane. **All** draws every position at once — the default, and the honest "
-            "picture — while picking **A** or **B** shows one self-consistent model at "
-            "a time.",
+            "See one at a time. In the **Objects** list above, click the **3nir.pdb** "
+            "row — its appearance controls open below. Find the **Conformer** dropdown "
+            "and pick **A** (or **B**).\n\nThe forked side chains resolve into one "
+            "self-consistent model: conformer A everywhere, plus every atom that has no "
+            "alternates.",
+            done=_conformer_picked,
         ),
         Step(
-            "The occupancies behind the split are numbers on the atoms: colour the "
-            "model **By occupancy** from its colour dropdown and the partial-occupancy "
-            "side chains stand out from the full-occupancy backbone.",
+            "Now set **Conformer** back to **All** and watch the forks return.\n\n"
+            "**All** is the honest picture — the deposited model *is* the ensemble — "
+            "and the single-letter views are for working on one conformation at a "
+            "time.",
+            done=_conformer_back_to_all,
+        ),
+        Step(
+            "The occupancies behind the split are numbers on the atoms. In the model's "
+            "**Color** dropdown (the same pane), pick **By occupancy**.\n\nThe "
+            "partial-occupancy side chains now stand apart from the full-occupancy "
+            "backbone — blue is low, red is high, and the **Range** control that "
+            "appears lets you set exactly what the ramp spans.",
+            done=_coloured_by_occupancy,
+        ),
+        Step(
+            "That's the whole skill: **Conformer** to isolate one model, **All** for "
+            "the ensemble, **By occupancy** to see how the refinement split the "
+            "density. The same controls work on any structure with alternates.",
         ),
     ], loader=lambda d: _load_bundled(d, "3nir.pdb"))
 
