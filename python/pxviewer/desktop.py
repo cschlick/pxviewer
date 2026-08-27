@@ -46,6 +46,22 @@ _CUSTOM_COLOR = "\x00custom"
 # Color a model by its per-atom fit to the map. Not a Mol* theme — the values are computed
 # by cctbx and pushed as an attribute (see qscore.py and color_model_by_qscore).
 _QSCORE_COLOR = "qscore"
+
+#: The blue->red value ramp, one definition for every user-scaled colouring: the map's
+#: colour-by-local-resolution surface uses these exact stops in the frontend
+#: (LOCALRES_PALETTE in live.ts), and the model's B-factor/occupancy colouring sends
+#: them over the attribute wire -- so "low is cool, high is hot" reads the same on a
+#: surface and on atoms, and a figure can put the two side by side on one legend.
+_VALUE_PALETTE = ["#2166ac", "#67a9cf", "#d1e5f0", "#fddbc7", "#ef8a62", "#b2182b"]
+
+#: Model colourings whose scale the user can set: per-atom properties mapped through
+#: an explicit (lo, hi) domain, exactly like the map's local-resolution range. The
+#: calibrated colourings (Q-score, hotspot severity) are deliberately absent -- their
+#: domains carry meaning and are not the user's to move.
+_MODEL_VALUE_COLORS = {
+    "bfactor": {"label": "B-factor", "unit": " Å²"},
+    "occupancy": {"label": "Occupancy", "unit": ""},
+}
 # Color a model by aggregated validation severity (see hotspots.py and the Hotspots tab).
 _HOTSPOT_COLOR = "hotspot"
 # Colors that are computed per-atom arrays rather than Mol* theme names. They travel on
@@ -139,11 +155,12 @@ _MODEL_COLOR_OPTIONS = [
     ("By secondary structure", "secondary-structure"),
     ("By residue", "residue-name"),
     ("By hydrophobicity", "hydrophobicity"),
-    # The refined per-atom numbers. Both come straight from the topology, which already
-    # carries B_iso_or_equiv and occupancy (see data._atom_site_category), so Mol* colors
-    # from them with nothing extra sent. Mol* calls the B-factor theme 'uncertainty'
-    # because it also serves pLDDT; to a crystallographer it is the B-factor.
-    ("By B-factor", "uncertainty"),
+    # The refined per-atom numbers, coloured through the attribute path rather than
+    # Mol*'s fixed 'uncertainty'/'occupancy' themes: the attribute theme takes an
+    # explicit domain and palette, which is what gives these a user-settable Range
+    # (shared with the map's local-resolution scale) where the built-in themes have
+    # a hard-wired one.
+    ("By B-factor", "bfactor"),
     ("By occupancy", "occupancy"),
     # Not a Mol* theme: computed against the map by cctbx and sent as per-atom values.
     # See DesktopApp.color_model_by_qscore.
@@ -3069,6 +3086,20 @@ class ControlsWindow:
             # just set to one color, and the swatches/wheel are the only way to say the latter.
             self._add_color_row(it.get("color"), _set_color,
                                 themes=_MODEL_COLOR_OPTIONS, title="Model color")
+            # A value colouring's scale, the same framed Range group the map's
+            # local-resolution colouring gets -- one widget, one meaning, and the same
+            # blue->red ramp on both, so a model and a map colouring can share a legend.
+            if it.get("value_domain") is not None:
+                info = _MODEL_VALUE_COLORS[it["color"]]
+                self._add_value_scale_group(
+                    info["label"], it["value_domain"], info["unit"],
+                    lambda lo_v, hi_v: self._safe(
+                        lambda: self._desktop.set_model_value_domain(mid, lo_v, hi_v)),
+                    lambda: self._safe(lambda: self._desktop.fit_model_value_domain(mid)),
+                    lambda: self._safe(lambda: self._desktop.reset_model_value_domain(mid)),
+                    fit_label="Fit to values",
+                    fit_tip="Span the ramp over the 2nd–98th percentile of this "
+                            "model's values.")
             types = it.get("types") or []
             r = QHBoxLayout()
             lab = QLabel("Show")
@@ -3181,61 +3212,21 @@ class ControlsWindow:
 
             # The colouring's own settings, shown only while "Local resolution" is the
             # selected colouring (the Color dropdown is the switch; this panel is its
-            # detail). A plain framed group -- no checkbox: selection lives above.
+            # detail). Built by the shared value-scale builder, so the map's range
+            # control is the identical widget a model's B-factor colouring gets.
             if it.get("color_by_resolution"):
-                from PySide6.QtWidgets import QDoubleSpinBox, QGroupBox, QVBoxLayout
-
-                group = QGroupBox("Local resolution")
-                gl = QVBoxLayout(group)
-                gl.setSpacing(6)
-
-                # The ramp's value range: lo draws blue, hi red, fixed until changed --
-                # colours keep their meaning across contour levels, sessions and figures.
-                lo0, hi0 = it.get("localres_domain") or (0.0, 1.0)
-                rr = QHBoxLayout()
-                r_lab = QLabel("Range")
-                r_lab.setMinimumWidth(80)
-                r_lab.setToolTip(
-                    "The resolution values the colour ramp spans; values outside clamp. "
-                    "Fixed until you change it.")
-                rr.addWidget(r_lab)
-                lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
-                lo_spin.setObjectName("localres-domain-lo")
-                hi_spin.setObjectName("localres-domain-hi")
-                for sp in (lo_spin, hi_spin):
-                    sp.setRange(0.0, 999.0)
-                    sp.setDecimals(2)
-                    sp.setSingleStep(0.1)
-                    sp.setSuffix(" Å")
-                lo_spin.setValue(float(lo0))
-                hi_spin.setValue(float(hi0))
-
-                def _apply_domain(_=None, it=it):
-                    lo_v, hi_v = lo_spin.value(), hi_spin.value()
-                    if hi_v <= lo_v:
-                        return  # half-edited state; applied once the other end moves
+                def _set_map_domain(lo_v, hi_v, it=it):
                     it["localres_domain"] = (lo_v, hi_v)
                     self._safe(lambda: self._desktop.set_localres_domain(vid, lo_v, hi_v))
 
-                lo_spin.valueChanged.connect(_apply_domain)
-                hi_spin.valueChanged.connect(_apply_domain)
-                rr.addWidget(lo_spin)
-                rr.addWidget(QLabel("–"))
-                rr.addWidget(hi_spin)
-                fit = QPushButton("Fit to surface")
-                fit.setToolTip("Span the ramp over the resolution values inside the "
-                               "current contour — what is actually on screen.")
-                fit.clicked.connect(
-                    lambda _=False: self._safe(lambda: self._desktop.fit_localres_domain(vid)))
-                reset = QPushButton("Reset")
-                reset.setToolTip("Back to the default: percentiles of the whole map.")
-                reset.clicked.connect(
-                    lambda _=False: self._safe(lambda: self._desktop.reset_localres_domain(vid)))
-                rr.addWidget(fit)
-                rr.addWidget(reset)
-                rr.addStretch(1)
-                gl.addLayout(rr)
-                self._appearance_layout.addWidget(group)
+                self._add_value_scale_group(
+                    "Local resolution", it.get("localres_domain"), " Å",
+                    _set_map_domain,
+                    lambda: self._safe(lambda: self._desktop.fit_localres_domain(vid)),
+                    lambda: self._safe(lambda: self._desktop.reset_localres_domain(vid)),
+                    fit_label="Fit to surface",
+                    fit_tip="Span the ramp over the resolution values inside the "
+                            "current contour — what is actually on screen.")
 
         # The wheel contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
@@ -3560,6 +3551,62 @@ class ControlsWindow:
             "QLabel { border: 1px solid palette(mid); border-radius: 4px;"
             " padding: 1px 5px; color: palette(dark); background: palette(midlight); }")
         return chip
+
+    def _add_value_scale_group(self, title, domain, unit, on_domain, on_fit, on_reset,
+                               fit_label="Fit to values", fit_tip=""):
+        """One framed value-scale panel: Range spins, Fit, Reset. The single control for
+        every user-scaled colouring -- the map's local-resolution surface and a model's
+        B-factor/occupancy colouring build the identical group, so a range means the
+        same thing wherever it appears (lo draws blue, hi draws red, values clamp,
+        fixed until the user moves it)."""
+        from PySide6.QtWidgets import (QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
+                                       QPushButton, QVBoxLayout)
+
+        group = QGroupBox(title)
+        gl = QVBoxLayout(group)
+        gl.setSpacing(6)
+        rr = QHBoxLayout()
+        lab = QLabel("Range")
+        lab.setMinimumWidth(80)
+        lab.setToolTip("The values the colour ramp spans; values outside clamp. "
+                       "Fixed until you change it.")
+        rr.addWidget(lab)
+        lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
+        lo_spin.setObjectName("value-domain-lo")
+        hi_spin.setObjectName("value-domain-hi")
+        for sp in (lo_spin, hi_spin):
+            sp.setRange(0.0, 9999.0)
+            sp.setDecimals(2)
+            sp.setSingleStep(0.1)
+            sp.setSuffix(unit)
+        lo0, hi0 = domain or (0.0, 1.0)
+        lo_spin.setValue(float(lo0))
+        hi_spin.setValue(float(hi0))
+
+        def _apply(_=None):
+            lo_v, hi_v = lo_spin.value(), hi_spin.value()
+            if hi_v <= lo_v:
+                return  # half-edited state; applied once the other end moves
+            on_domain(lo_v, hi_v)
+
+        lo_spin.valueChanged.connect(_apply)
+        hi_spin.valueChanged.connect(_apply)
+        rr.addWidget(lo_spin)
+        rr.addWidget(QLabel("–"))
+        rr.addWidget(hi_spin)
+        fit = QPushButton(fit_label)
+        if fit_tip:
+            fit.setToolTip(fit_tip)
+        fit.clicked.connect(lambda _=False: on_fit())
+        reset = QPushButton("Reset")
+        reset.setToolTip("Back to the default range.")
+        reset.clicked.connect(lambda _=False: on_reset())
+        rr.addWidget(fit)
+        rr.addWidget(reset)
+        rr.addStretch(1)
+        gl.addLayout(rr)
+        self._appearance_layout.addWidget(group)
+        return group
 
     def _add_iso_row(self, current, on_change, max_sigma=None):
         """Contour level: a slider to hunt with, a spinbox for the exact value.
@@ -6779,6 +6826,9 @@ class DesktopApp:
         if color == _QSCORE_COLOR:
             self.color_model_by_qscore(mid)
             return
+        if color in _MODEL_VALUE_COLORS:
+            self.color_model_by_property(mid, color)
+            return
         if color == _HOTSPOT_COLOR:
             self.color_model_by_hotspots(mid)
             return
@@ -6786,6 +6836,75 @@ class DesktopApp:
         # (and for Q-score/hotspots, to one pairing with a map), not to the entry forever.
         entry.pop("attribute", None)
         self._apply_model_rep(entry)
+
+    def color_model_by_property(self, mid: str, kind: str) -> None:
+        """Color a model by a refined per-atom number (B-factor or occupancy), through
+        the attribute path so the scale is explicit and the user's to set."""
+        entry = self._model_entry(mid)
+        model = getattr(entry["session"], "model", None) if entry else None
+        if entry is None:
+            return
+        if model is None:
+            self._warn("this model has no atoms to colour by")
+            return
+        atoms = model.get_hierarchy().atoms()
+        values = np.asarray(atoms.extract_b() if kind == "bfactor"
+                            else atoms.extract_occ(), dtype=float)
+        if kind == "occupancy":
+            default = (0.0, 1.0)   # its natural scale; percentiles of all-1.0 collapse
+        else:
+            finite = values[np.isfinite(values)]
+            lo, hi = float(np.percentile(finite, 2)), float(np.percentile(finite, 98))
+            if hi <= lo:
+                hi = lo + 0.1
+            default = (round(lo, 2), round(hi, 2))
+        previous = entry.get("attribute")
+        kept = (previous or {}).get("domain") if (previous or {}).get("name") == kind else None
+        entry["attribute"] = {
+            "name": kind, "values": values,
+            # The stored range survives re-selection; a fresh pick starts at the default.
+            "domain": kept or default, "default_domain": default,
+            "palette": _VALUE_PALETTE,
+        }
+        entry["color"] = kind
+        self._apply_model_rep(entry)
+        self._emit_loaded_changed()
+
+    def set_model_value_domain(self, mid: str, lo: float, hi: float) -> None:
+        """Set the colour scale's range for a model's value colouring -- the model-side
+        twin of :meth:`set_localres_domain`, stable until the user moves it."""
+        entry = self._model_entry(mid)
+        attribute = entry.get("attribute") if entry else None
+        if attribute is None or attribute["name"] not in _MODEL_VALUE_COLORS:
+            return
+        lo, hi = float(lo), float(hi)
+        if not (hi > lo):
+            self._warn("the colour range needs max above min")
+            return
+        attribute["domain"] = (lo, hi)
+        self._apply_model_rep(entry)
+        self._emit_loaded_changed()
+
+    def fit_model_value_domain(self, mid: str) -> None:
+        """Span the model colouring's range over the values actually present."""
+        entry = self._model_entry(mid)
+        attribute = entry.get("attribute") if entry else None
+        if attribute is None or attribute["name"] not in _MODEL_VALUE_COLORS:
+            return
+        finite = attribute["values"][np.isfinite(attribute["values"])]
+        if not finite.size:
+            return
+        lo, hi = float(np.percentile(finite, 2)), float(np.percentile(finite, 98))
+        if hi <= lo:
+            hi = lo + 0.1
+        self.set_model_value_domain(mid, round(lo, 2), round(hi, 2))
+
+    def reset_model_value_domain(self, mid: str) -> None:
+        entry = self._model_entry(mid)
+        attribute = entry.get("attribute") if entry else None
+        if attribute is None or attribute.get("default_domain") is None:
+            return
+        self.set_model_value_domain(mid, *attribute["default_domain"])
 
     def color_model_by_qscore(self, mid: str) -> None:
         """Color a model by per-atom Q-score — its fit to the map, computed by cctbx.
@@ -9732,6 +9851,10 @@ class DesktopApp:
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
              "conformers": self._conformers_of(m), "conformer": m.get("conformer"),
              "has_restraints_cif": bool(m.get("restraints_cif")),
+             "value_domain": ((m.get("attribute") or {}).get("domain")
+                              if (m.get("attribute") or {}).get("name") in _MODEL_VALUE_COLORS
+                              and m.get("color") == (m.get("attribute") or {}).get("name")
+                              else None),
              "edits": _edit_summaries(m.get("edits"))}
             for m in self._models
         ] + [

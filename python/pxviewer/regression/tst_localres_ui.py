@@ -399,7 +399,7 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
         process_events()
         box = controls._appearance_box
         spins = [w for w in box.findChildren(QDoubleSpinBox)
-                 if w.objectName().startswith("localres-domain-")]
+                 if w.objectName().startswith("value-domain-")]
         assert len(spins) == 2, "no colour-range spinboxes on the pane"
         assert {round(sp.value(), 2) for sp in spins} == {round(lo, 2), round(hi, 2)}
         texts = {b.text() for b in box.findChildren(QPushButton)}

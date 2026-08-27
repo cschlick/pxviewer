@@ -922,6 +922,59 @@ def exercise_the_tabs_share_the_full_bar_width():
             "tabs cover %dpx of a %dpx bar -- the bar is not filled" % (total, bar.width()))
 
 
+def exercise_model_value_colourings_share_the_scale_machinery():
+    """By B-factor / By occupancy colour through the attribute path with a settable
+    range -- the model-side twin of the map's local-resolution scale: same builder,
+    same blue->red ramp, a domain that is the user's and stays put.
+    """
+    from pxviewer.desktop import _VALUE_PALETTE
+    from pxviewer.regression.tst_utils import data_path
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    with desktop() as app:
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        mid = app._models[0]["id"]
+        entry = app._model_entry(mid)
+
+        app.set_model_color(mid, "bfactor")
+        process_events()
+        attribute = entry.get("attribute")
+        assert attribute is not None and attribute["name"] == "bfactor"
+        assert attribute["palette"] == _VALUE_PALETTE, "the shared ramp is not shared"
+        lo, hi = attribute["domain"]
+        assert hi > lo
+        assert len(attribute["values"]) == len(
+            entry["session"].model.get_hierarchy().atoms())
+
+        # The range is the user's: settable, refusing a crossed pair, resettable.
+        app.set_model_value_domain(mid, 5.0, 40.0)
+        assert attribute["domain"] == (5.0, 40.0)
+        app.set_model_value_domain(mid, 50.0, 5.0)
+        assert attribute["domain"] == (5.0, 40.0), "a crossed range was accepted"
+        app.reset_model_value_domain(mid)
+        assert attribute["domain"] == attribute["default_domain"]
+
+        # Re-picking the colouring keeps a user-set range rather than clobbering it.
+        app.set_model_value_domain(mid, 5.0, 40.0)
+        entry["color"] = None  # as if another colour had been picked meanwhile
+        app.set_model_color(mid, "bfactor")
+        assert entry["attribute"]["domain"] == (5.0, 40.0)
+
+        # Occupancy defaults to its natural 0-1 scale (percentiles of all-1.0 collapse).
+        app.set_model_color(mid, "occupancy")
+        assert entry["attribute"]["domain"] == (0.0, 1.0)
+
+        # The pane shows the shared Range group for the model, same as for the map.
+        controls = app._controls
+        controls._update_appearance("model", mid, force=True)
+        process_events()
+        spins = [w for w in controls._appearance_box.findChildren(QDoubleSpinBox)
+                 if w.objectName().startswith("value-domain-")]
+        assert len(spins) == 2, "no shared Range group on the model pane"
+        assert {round(sp.value(), 2) for sp in spins} == {0.0, 1.0}
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.
