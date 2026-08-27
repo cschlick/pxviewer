@@ -120,6 +120,73 @@ def _validation_ran(cw: Any) -> bool:
     return bool(entry and entry.get("validation"))
 
 
+def open_model_tutorial() -> Tutorial:
+    """The starting point: a model on screen and the three gestures that drive it."""
+    return Tutorial("Open a model", [
+        Step(
+            "**1UBQ is loaded** — ubiquitin, a small well-behaved protein and the classic "
+            "first structure.\n\nThe viewport is direct: **drag** to rotate, **scroll** to "
+            "zoom, **click** an atom to select it (its details land in the status line).",
+        ),
+        Step(
+            "How it is drawn lives in the **Scene** tab: select the model in the object "
+            "list and its appearance pane opens — representation (cartoon, sticks, …), "
+            "colouring, and which atom types are shown.\n\nColourings that map a number "
+            "(B-factor, occupancy) get a **Range** control there, so the scale is yours.",
+        ),
+        Step(
+            "That's the loop for any structure: load it (your own files, or **Fetch from "
+            "PDB / EMDB…** in this menu), look at it, style it.\n\nThe other tutorials "
+            "each start from a scene like this one and add one skill.",
+        ),
+    ], loader=lambda d: _load_bundled(d, "1ubq.pdb"))
+
+
+def map_model_tutorial() -> Tutorial:
+    """A model paired with density — the everyday working scene."""
+    return Tutorial("A model with its map", [
+        Step(
+            "**1UBQ is loaded with a map computed from it** — a stand-in for the "
+            "experimental density you would normally have. Model and map arrive paired, "
+            "so tools that need both (refinement, Q-score, tugging) know which map "
+            "belongs to which model.",
+        ),
+        Step(
+            "The map's surface is a contour: select the map in the object list and drag "
+            "**Level** — or hover the viewport and **scroll** — to move it. Higher shows "
+            "only the strongest density; the slider's right end always clears the map "
+            "entirely.",
+        ),
+        Step(
+            "The rest of the map's look lives in the same pane: opacity, surface or "
+            "mesh, clipping, and colourings — a cryo-EM map with half-maps can be "
+            "coloured by local resolution from its **Color** dropdown.",
+        ),
+    ], loader=lambda d: d.load_map_model_demo())
+
+
+def altlocs_tutorial() -> Tutorial:
+    """Alternate conformations: one residue, several refined positions."""
+    return Tutorial("Alternate conformations", [
+        Step(
+            "**3NIR is loaded** — crambin at 0.48 Å, sharp enough that many side chains "
+            "were refined in **two or more positions** (alternate conformations, "
+            "\"altlocs\"), each with its own occupancy.",
+        ),
+        Step(
+            "Select the model and find the **Conformer** dropdown in its appearance "
+            "pane. **All** draws every position at once — the default, and the honest "
+            "picture — while picking **A** or **B** shows one self-consistent model at "
+            "a time.",
+        ),
+        Step(
+            "The occupancies behind the split are numbers on the atoms: colour the "
+            "model **By occupancy** from its colour dropdown and the partial-occupancy "
+            "side chains stand out from the full-occupancy backbone.",
+        ),
+    ], loader=lambda d: _load_bundled(d, "3nir.pdb"))
+
+
 def validation_tutorial() -> Tutorial:
     """Run MolProbity validation and read the results — find what looks wrong in a model."""
     return Tutorial("Validate a structure", [
@@ -385,9 +452,12 @@ def local_resolution_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — validate, fit a ligand, then the two
-    refinements (real-space into cryo-EM density, then X-ray against reflections), then the
-    restraint-edits pair (reading before writing)."""
-    return [validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
+    """Every walkthrough offered, in menu order — looking before judging before changing:
+    the three viewing ones (open a model, a model with its map, alternate conformations),
+    then validation, then the fitting/refinement group, then the restraint-edits pair
+    (reading before writing). There is no separate examples list: every bundled example
+    is the opening scene of the tutorial that explains it."""
+    return [open_model_tutorial(), map_model_tutorial(), altlocs_tutorial(),
+            validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
             local_resolution_tutorial(), xray_refinement_tutorial(), load_edits_tutorial(),
             restraint_edits_tutorial()]

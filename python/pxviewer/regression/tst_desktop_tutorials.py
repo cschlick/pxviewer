@@ -37,8 +37,11 @@ PHASE_TIMEOUT_S = 120
 REFINE_TIMEOUT_S = 90
 FIT_TIMEOUT_S = 150
 
-#: The tutorials, in the order the Get menu offers them: loading-first, writing-second.
+#: The tutorials, in the order the Get menu offers them: looking, judging, changing.
 TUTORIAL_TITLES = [
+    "Open a model",
+    "A model with its map",
+    "Alternate conformations",
     "Validate a structure",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
@@ -374,7 +377,7 @@ def exercise_the_ligand_fitting_demo_makes_maps_and_fits_atp():
         assert app.map_for_model() is None                 # not phased yet
 
         labels = [a.text() for a in app._controls._build_get_menu().actions()]
-        assert any("Ligand fitting" in text for text in labels)
+        assert any("ligand" in text.lower() for text in labels)  # its tutorial is offered
 
         mid, rid = app._models[0]["id"], app._reflections[0]["id"]
         app.make_maps(rid, mid)
@@ -409,7 +412,7 @@ def heading_text(action):
 
 
 def exercise_help_and_the_get_menu():
-    """Help is a placeholder; remote data, examples and tutorials share the Get menu."""
+    """Help is a placeholder; remote data and the tutorials share the Get menu."""
     with desktop() as app:
         controls = app._controls
         controls._on_help()
@@ -418,11 +421,10 @@ def exercise_help_and_the_get_menu():
         actions = controls._build_get_menu().actions()
         labels = [a.text() for a in actions]
         assert any("PDB / EMDB" in text for text in labels)          # remote data
-        assert any("1UBQ" in text for text in labels)                # a sample
         assert any("restraint" in text.lower() for text in labels)   # a tutorial
 
         headings = [heading_text(a) for a in actions if heading_text(a)]
-        assert headings == ["Online", "Examples", "Tutorials"]
+        assert headings == ["Online", "Tutorials"]
 
 
 def exercise_every_menu_item_a_tutorial_names_actually_exists():
@@ -454,11 +456,16 @@ def exercise_every_menu_item_a_tutorial_names_actually_exists():
 
 
 def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
-    """Get combines online retrieval, bundled examples and guided tutorials.
+    """Get is online retrieval plus the tutorials -- and nothing else.
+
+    There is no separate examples section: every bundled example is the opening scene
+    of the tutorial that explains it, so a second list of the same data under another
+    name was two entries per thing and a reader left to guess how they differ. Wanting
+    just the data is one click: start the tutorial and close the coach.
 
     The headings are asserted through their rendered widget rather than through
     ``QAction.text()``. They used to be ``QMenu.addSection``, whose text macOS silently
-    drops -- so the menu showed two unlabelled dividers while a test reading ``.text()``
+    drops -- so the menu showed unlabelled dividers while a test reading ``.text()``
     passed happily.
     """
     with desktop() as app:
@@ -467,8 +474,8 @@ def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
 
         headings = [(i, heading_text(a)) for i, a in enumerate(actions)
                     if heading_text(a)]
-        assert [text for _i, text in headings] == ["Online", "Examples", "Tutorials"]
-        online_i, examples_i, tutorials_i = (item[0] for item in headings)
+        assert [text for _i, text in headings] == ["Online", "Tutorials"]
+        online_i, tutorials_i = (item[0] for item in headings)
         # Drawn, not merely set: an unparented label with no text renders as nothing.
         assert all(heading_text(actions[i]).strip() for i, _t in headings)
 
@@ -477,17 +484,7 @@ def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
             return [a.text() for a in block
                     if not a.isSeparator() and a.text().strip()]
 
-        assert entries(online_i + 1, examples_i) == ["Fetch from PDB / EMDB…"]
-
-        examples = entries(examples_i + 1, tutorials_i)
-        assert len(examples) == 8
-        # Named for the task, not the protein: every entry leads with what it is for, so
-        # a reader picking one does not have to already know which structure demonstrates
-        # what. The PDB code follows in parentheses for the ones that have one.
-        for expected in ("Model only", "Map + model", "Validation", "X-ray maps",
-                         "Ligand fitting", "Real-space refinement", "Restraint edits",
-                         "Alternate conformations"):
-            assert any(text.startswith(expected) for text in examples), expected
+        assert entries(online_i + 1, tutorials_i) == ["Fetch from PDB / EMDB…"]
 
         tutorials = entries(tutorials_i + 1)
         assert [t.lower() for t in tutorials] == [t.lower() for t in TUTORIAL_TITLES]

@@ -1599,27 +1599,11 @@ class ControlsWindow:
         menu.setObjectName("getMenu")
         self._add_menu_heading(menu, "Online", first=True)
         menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
-        # Named for what the example is *for*, with the structure in parentheses. A menu
-        # of protein names asks the reader to already know which one demonstrates what,
-        # and to remember a PDB code to find it again; the task is the thing they came
-        # here with.
-        self._add_menu_heading(menu, "Examples")
-        menu.addAction("Model only (1UBQ)",
-                       lambda: self._on_load_sample("1ubq.pdb"))
-        menu.addAction("Map + model (1UBQ)",
-                       self._on_run_map_model_demo)
-        menu.addAction("Validation (1TEC)",
-                       lambda: self._on_load_sample("1tec.pdb"))
-        menu.addAction("X-ray maps from reflections (1UBQ)",
-                       self._on_run_xray_demo)
-        menu.addAction("Ligand fitting (ATP into a difference map)",
-                       self._on_run_ligand_fitting_demo)
-        menu.addAction("Real-space refinement (cryo-EM)",
-                       self._on_run_real_space_refinement_demo)
-        menu.addAction("Restraint edits (Zn site)",
-                       lambda: self._on_load_sample("zn_site.pdb"))
-        menu.addAction("Alternate conformations (3NIR)",
-                       lambda: self._on_load_sample("3nir.pdb"))
+        # No separate examples list: there is no such thing here as a sample that is not
+        # a tutorial. Every bundled example exists to demonstrate something, so it is the
+        # opening scene of the tutorial that explains it -- one list, and each entry both
+        # loads the data and says what to look at. Wanting just the data is one click:
+        # start the tutorial and close the coach.
         self._add_menu_heading(menu, "Tutorials")
         for tut in tutorial.all_tutorials():
             menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))
@@ -4362,20 +4346,6 @@ class ControlsWindow:
         except Exception as exc:
             QMessageBox.warning(self._window, "Could not save picture", str(exc))
 
-    def _on_load_sample(self, filename: Optional[str] = None) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        sample = sample_structure_path(filename)
-        if sample is None:
-            QMessageBox.warning(self._window, "Sample not available", "The bundled sample file is missing.")
-            return
-        try:
-            kind = self._desktop.load_file(str(sample))
-        except Exception as exc:
-            QMessageBox.warning(self._window, "Could not load sample", str(exc))
-            return
-        self._file_label.setText(f"{sample.name}  ({kind})")
-
     def _on_pair(self) -> None:
         """Pair an unpaired model with an unpaired map, chosen explicitly."""
         from PySide6.QtWidgets import (
@@ -4601,38 +4571,6 @@ class ControlsWindow:
                 f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
             return
         self._selection_label.setText("selection cleared" if not expr.strip() else f"{n} atom(s) selected")
-
-    def _on_run_map_model_demo(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        try:
-            self._desktop.load_map_model_demo()
-        except Exception as exc:  # generating the map can fail; don't take the app down
-            QMessageBox.warning(self._window, "Map+model demo failed", str(exc))
-
-    def _on_run_xray_demo(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        try:
-            self._desktop.load_xray_demo()
-        except Exception as exc:  # computing the reflections can fail; keep the app up
-            QMessageBox.warning(self._window, "X-ray demo failed", str(exc))
-
-    def _on_run_ligand_fitting_demo(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        try:
-            self._desktop.load_ligand_fitting_demo()
-        except Exception as exc:  # building the ligand / reflections can fail; keep the app up
-            QMessageBox.warning(self._window, "Ligand-fitting demo failed", str(exc))
-
-    def _on_run_real_space_refinement_demo(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-
-        try:
-            self._desktop.load_real_space_refinement_demo()
-        except Exception as exc:  # generating the map can fail; keep the app up
-            QMessageBox.warning(self._window, "Cryo-EM demo failed", str(exc))
 
     def _on_stop_demo(self) -> None:
         self._desktop.stop_demo()
