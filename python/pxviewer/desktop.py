@@ -3104,32 +3104,6 @@ class ControlsWindow:
             # moved since (the scroll wheel, or the console) without a new summary.
             live = {**it, **self._desktop.volume_appearance(vid)}
 
-            if it.get("is_resolution"):
-                # A pinned resolution map is a colour source, never a surface: it is held
-                # permanently hidden and the full map above it is what gets drawn. Offering
-                # the surface controls here was the worst kind of broken -- Style, Colour,
-                # Opacity, Level and Clipping all looked live, moved when dragged, and
-                # changed nothing on screen, because nothing renders this object. Say what
-                # it is instead, and point at the switch that does do something.
-                note = QLabel(
-                    "This map holds the local resolution in ångström and is not drawn "
-                    "itself — it colours the map it is pinned under.\n\nSelect that map "
-                    "to change what you see: its <b>Colour by local resolution</b> switch, "
-                    "and its own contour level.")
-                note.setWordWrap(True)
-                from PySide6.QtCore import Qt as _Qt
-                note.setTextFormat(_Qt.TextFormat.RichText)
-                self._appearance_layout.addWidget(note)
-                parent_entry = self._desktop._volume_entry(it.get("pinned_to"))
-                if parent_entry is not None:
-                    jump = QPushButton("Select %s" % parent_entry.get("name", "the map"))
-                    jump.setToolTip("Show that map's appearance controls, which do apply.")
-                    jump.clicked.connect(
-                        lambda _=False, pid=parent_entry["id"]: self._select_tree_object(
-                            "volume", pid))
-                    self._appearance_layout.addWidget(jump)
-                self._appearance_layout.addStretch(1)
-                return
 
             def _set_style(v, it=it):
                 it["style"] = v
@@ -5172,19 +5146,6 @@ class ControlsWindow:
         self._set_table_model(mid)
 
     # -- loaded tree (models + volumes + groups) -------------------------
-
-    def _select_tree_object(self, kind: str, ident: str) -> None:
-        """Make the object list's current row the one for ``(kind, ident)``, if it is there."""
-        from PySide6.QtCore import Qt as _Qt
-        from PySide6.QtWidgets import QTreeWidgetItemIterator
-
-        iterator = QTreeWidgetItemIterator(self._loaded_tree)
-        while iterator.value():
-            node = iterator.value()
-            if node.data(0, _Qt.ItemDataRole.UserRole) == (kind, ident):
-                self._loaded_tree.setCurrentItem(node)
-                return
-            iterator += 1
 
     def _fit_checkbox_column(self) -> None:
         """Widen the visibility column so a nested row's checkbox is not clipped.
@@ -8761,7 +8722,9 @@ class DesktopApp:
         for entry in self._volumes:
             if entry.get("is_resolution"):
                 continue  # never in the scene (see _write_volume_scene): nothing to hide
-            if not entry["visible"]:
+            if not entry["visible"] or entry.get("color_by_resolution"):
+                # Hidden maps, and the parked plain contour of a coloured map -- the
+                # coloured surface represents that one, whatever the entry's own flag.
                 try:
                     control.set_volume_visible(entry["ref"], False)
                 except Exception:  # pragma: no cover - defensive
@@ -9005,7 +8968,12 @@ class DesktopApp:
         entry["visible"] = bool(visible)
         control = self._control_session()
         if control is not None:
-            control.set_volume_visible(entry["ref"], bool(visible))  # a render skip, in place
+            if entry.get("color_by_resolution"):
+                # The coloured surface is this map's representation: the one checkbox
+                # hides and shows it. The plain contour stays parked regardless.
+                control.set_localres_visible(bool(visible))
+            else:
+                control.set_volume_visible(entry["ref"], bool(visible))  # a render skip
         self._emit_loaded_changed()
 
     def remove_volume(self, vid: str) -> None:
@@ -9320,8 +9288,9 @@ class DesktopApp:
             session = self._control_session()
             if session is not None:
                 session.clear_localres_grid()
-            if full.pop("_localres_shown", False):
-                self.set_volume_visible(full["id"], True)
+                # The plain contour takes over as the map's representation, at the
+                # visibility the map already has -- the checkbox state carries across.
+                session.set_volume_visible(full["ref"], bool(full["visible"]))
         self._emit_loaded_changed()
 
     @staticmethod
@@ -9491,8 +9460,11 @@ class DesktopApp:
             full["localres_drawn"] = False
             self._begin_localres_wait()   # released by the viewport's localres-shown ack
             session.show_localres_grid(payload)
-        self.set_volume_visible(full["id"], False)  # our surface stands in for the plain one
-        full["_localres_shown"] = True
+            # The coloured surface *is* the map now: the plain contour steps aside at the
+            # ref level (the entry's own visible flag is the map's one checkbox and stays
+            # what the user set), and the coloured surface takes that visibility over.
+            session.set_volume_visible(full["ref"], False)
+            session.set_localres_visible(bool(full["visible"]))
 
     # -- fetch from the PDB / EMDB ---------------------------------------------
 
@@ -9767,11 +9739,12 @@ class DesktopApp:
              "edits": _edit_summaries(m.get("edits"))}
             for m in self._models
         ] + [
-            # A resolution map's visible=None for the same reason as reflections below:
-            # it is never drawn (it colours the map it is pinned under), so a visibility
-            # checkbox would be a lever connected to nothing.
-            {"kind": "volume", "id": v["id"], "name": v["name"],
-             "visible": None if v.get("is_resolution") else v["visible"],
+            # One row per map. The resolution dataset is deliberately absent: it is a
+            # colour source, not a drawable object -- its user-facing existence is the
+            # "Colour by local resolution" group on its map's pane, and its lifecycle
+            # rides its map. (It also lives on disk beside the fetched files, loadable
+            # as an ordinary map by anyone who wants to *see* it.)
+            {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
              "active": False, "group": v["group"], "style": v.get("style"),
              "color": v.get("color"), "opacity": v.get("opacity"), "iso": v.get("iso"),
              "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),
@@ -9779,7 +9752,7 @@ class DesktopApp:
              "color_by_resolution": bool(v.get("color_by_resolution")),
              "localres_downsample": v.get("localres_downsample"),
              "localres_domain": v.get("localres_domain")}
-            for v in self._volumes
+            for v in self._volumes if not v.get("is_resolution")
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.
             {"kind": "reflections", "id": r["id"], "name": r["name"], "visible": None,

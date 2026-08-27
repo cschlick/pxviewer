@@ -1,16 +1,13 @@
-"""The object list and appearance pane around a pinned local-resolution map.
+"""One map, one row, one checkbox -- the localres object model, at the window.
 
-A resolution map is an odd object: it is pinned under the map it colours, and it is never
-drawn -- it is a colour source, not a surface. Both of those broke the panel around it in
-ways that looked like the feature was broken rather than the widgets:
-
-* nesting it under its full map pushed its checkbox past the right edge of the visibility
-  column, leaving a few pixels of it clickable and the rest cut off;
-* the appearance pane offered it Style, Colour, Opacity, Level and Clipping, all of which
-  moved when dragged and changed nothing on screen, because nothing renders this object.
-
-Both are checked here against a real window, since both are questions about geometry and
-widgets that only a laid-out tree can answer.
+Colour-by-resolution is an appearance of the map, not a second object: the coloured
+surface is the same grid contoured at the same level, painted differently. The tree
+shows one row per map, its checkbox hides and shows whichever surface currently
+represents it (the coloured one while colouring is on, the plain contour otherwise),
+and the resolution dataset appears nowhere in the tree -- its user-facing existence is
+the "Colour by local resolution" group on its map's pane, and its lifecycle rides its
+map. Before this model the tree showed the map unchecked while its coloured surface was
+on screen, and checking the box drew the plain contour on top of it.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -75,6 +72,31 @@ class pinned_resolution_map:
         return False
 
 
+class StubSession:
+    """The control-session surface _push_localres and friends touch; all no-ops."""
+
+    def set_localres_downsample(self, factor):
+        pass
+
+    def set_localres_domain(self, lo, hi):
+        pass
+
+    def set_localres_iso(self, value):
+        pass
+
+    def set_localres_visible(self, visible):
+        pass
+
+    def set_volume_visible(self, ref, visible):
+        pass
+
+    def show_localres_grid(self, payload):
+        pass
+
+    def clear_localres_grid(self):
+        pass
+
+
 def _rows(tree):
     """(depth, node) for every row, in view order."""
     out = []
@@ -88,87 +110,6 @@ def _rows(tree):
         out.append((depth, node))
         iterator += 1
     return out
-
-
-def exercise_a_nested_rows_checkbox_is_not_clipped():
-    """Column 0 must hold a whole checkbox at the deepest row, not just at the root.
-
-    Qt draws the tree's indentation inside column 0 while sizing ResizeToContents from the
-    items' contents alone, so every level of nesting takes an indent's worth of room away
-    from the checkbox. How much is left is style-dependent, and that is the point: on the
-    machine this was reported from, the pinned resolution map's checkbox was a few pixels
-    of sliver that was nearly impossible to click.
-
-    Note this is a guard, not a reproduction. On a Qt style whose column 0 is generous the
-    nested row still had 29 px for a 19 px indicator and nothing looked wrong, so this
-    assertion passes with or without the fix *here*; it fails wherever the column is tight
-    enough for the indent to eat the checkbox, which is the case being defended against.
-    The fix adds a full indent per level of depth, so the margin no longer depends on how
-    generous the style happens to be.
-    """
-    with pinned_resolution_map() as fixture:
-        tree = fixture.app._controls._loaded_tree
-        rows = _rows(tree)
-        depths = [d for d, _ in rows]
-        assert max(depths) >= 1, "nothing nested, so this proves nothing: %r" % (depths,)
-
-        # visualRect gives the width left *after* a row's indentation -- the space the
-        # checkbox actually gets drawn into.
-        from PySide6.QtWidgets import QStyle
-
-        indicator = tree.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, None, tree)
-        assert indicator > 0, "no checkbox metric to test against"
-        for depth, node in rows:
-            content = tree.visualRect(tree.indexFromItem(node, 0)).width()
-            assert content >= indicator, (
-                "a row at depth %d gets %d px of column 0 for a %d px checkbox "
-                "(column %d wide, indent %d)"
-                % (depth, content, indicator, tree.columnWidth(0), tree.indentation()))
-
-
-def exercise_the_resolution_map_offers_no_controls_that_do_nothing():
-    """It is never drawn, so surface controls on it are levers connected to nothing.
-
-    The reported symptom was "changing the level of the local resolution doesn't change
-    anything on the screen" -- which was true of every control in the pane.
-    """
-    with pinned_resolution_map() as fixture:
-        controls = fixture.app._controls
-
-        controls._update_appearance("volume", fixture.res_vid, force=True)
-        process_events()
-        box = controls._appearance_box
-        assert not box.findChildren(QComboBox), "resolution map still offers Style/Colour"
-        assert not box.findChildren(QSlider), "resolution map still offers Opacity/Level"
-
-        controls._update_appearance("volume", fixture.full_vid, force=True)
-        process_events()
-        box = controls._appearance_box
-        assert box.findChildren(QComboBox), "the full map lost its own controls"
-        assert box.findChildren(QSlider), "the full map lost its level/opacity"
-
-
-def exercise_the_resolution_map_says_what_it_is_and_points_somewhere_useful():
-    from PySide6.QtWidgets import QLabel, QPushButton
-
-    with pinned_resolution_map() as fixture:
-        controls = fixture.app._controls
-        controls._update_appearance("volume", fixture.res_vid, force=True)
-        process_events()
-        box = controls._appearance_box
-
-        blurb = " ".join(w.text() for w in box.findChildren(QLabel) if w.text())
-        assert "not drawn" in blurb, blurb
-        assert "Colour by local resolution" in blurb, blurb
-
-        buttons = [b for b in box.findChildren(QPushButton) if b.text().startswith("Select")]
-        assert buttons, "no way to get to the map whose controls do apply"
-        buttons[0].click()
-        process_events()
-        current = controls._loaded_tree.currentItem()
-        from PySide6.QtCore import Qt
-        assert current is not None
-        assert current.data(0, Qt.ItemDataRole.UserRole) == ("volume", fixture.full_vid)
 
 
 def exercise_the_resolution_map_is_not_in_the_drawn_scene():
@@ -193,26 +134,55 @@ def exercise_the_resolution_map_is_not_in_the_drawn_scene():
         assert res["ref"] not in scene
 
 
-def exercise_the_resolution_map_has_no_visibility_checkbox():
-    """It is never drawn, so show/hide on it is a lever connected to nothing -- and its
-    checkbox was the clipped sliver users tried to click. visible=None is how the tree
-    already says "nothing drawable" for reflections; a resolution map reports the same."""
-    from PySide6.QtCore import Qt
+def exercise_one_row_whose_checkbox_drives_the_visible_surface():
+    """The tree shows the map once, checked while its coloured surface is on screen.
+
+    The old model showed the map unchecked (its plain contour was hidden behind the
+    coloured stand-in), so checking the box drew a second surface on top -- the reported
+    "there are actually two maps". Now the checkbox routes to whichever surface
+    represents the map, and the resolution dataset has no row at all.
+    """
+    class Recording(StubSession):
+        def __init__(self):
+            self.calls = []
+
+        def set_localres_visible(self, visible):
+            self.calls.append(("localres_visible", bool(visible)))
+
+        def set_volume_visible(self, ref, visible):
+            self.calls.append(("plain_visible", ref, bool(visible)))
 
     with pinned_resolution_map() as fixture:
-        items = fixture.app._emitted_items()
-        by_id = {i["id"]: i for i in items}
-        assert by_id[fixture.res_vid]["visible"] is None
-        assert by_id[fixture.full_vid]["visible"] is not None
+        app = fixture.app
+        full = app._volume_entry(fixture.full_vid)
 
-        tree = fixture.app._controls._loaded_tree
-        for depth, node in _rows(tree):
-            kind_id = node.data(0, Qt.ItemDataRole.UserRole)
-            checkable = bool(node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
-            if kind_id == ("volume", fixture.res_vid):
-                assert not checkable, "the resolution map still offers show/hide"
-            elif kind_id == ("volume", fixture.full_vid):
-                assert checkable, "the full map lost its show/hide"
+        rows = app._emitted_items()
+        volume_rows = [r for r in rows if r["kind"] == "volume"]
+        assert len(volume_rows) == 1, "the resolution dataset still has a tree row"
+        assert volume_rows[0]["visible"] is True, (
+            "the map reads hidden while its coloured surface is what is on screen")
+
+        stub = Recording()
+        app._control_session = lambda: stub
+
+        # The push parks the plain contour and hands its visibility to the coloured one.
+        app._push_localres(full)
+        assert ("plain_visible", full["ref"], False) in stub.calls
+        assert ("localres_visible", True) in stub.calls
+        assert full["visible"] is True, "the push flipped the map's own checkbox"
+
+        # The one checkbox drives the coloured surface while colouring is on...
+        stub.calls.clear()
+        app.set_volume_visible(fixture.full_vid, False)
+        assert stub.calls == [("localres_visible", False)], stub.calls
+        assert full["visible"] is False
+        app.set_volume_visible(fixture.full_vid, True)
+        assert ("localres_visible", True) in stub.calls
+
+        # ...and turning colouring off hands the same visibility back to the contour.
+        stub.calls.clear()
+        app.set_color_by_resolution(fixture.full_vid, False)
+        assert ("plain_visible", full["ref"], True) in stub.calls, stub.calls
 
 
 def exercise_a_level_change_takes_the_cheap_path():
@@ -224,7 +194,7 @@ def exercise_a_level_change_takes_the_cheap_path():
     changes that alter a grid. This was the reported "terribly slow to change contour":
     every slider tick was paying the full re-encode and re-send.
     """
-    class RecordingSession:
+    class RecordingSession(StubSession):
         def __init__(self):
             self.levels = []
             self.grids = 0
@@ -263,7 +233,7 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
     the settle-time rebuild at a different resolution than the drag preview visibly
     changed the surface, which read as "it recalculates and looks bad".
     """
-    class RecordingSession:
+    class RecordingSession(StubSession):
         def __init__(self):
             self.calls = []
 
@@ -325,7 +295,7 @@ def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
     viewport's localres-shown ack releases, and the tutorial's "ready" predicate follows
     the ack rather than the pinning.
     """
-    class SilentSession:
+    class SilentSession(StubSession):
         def set_localres_downsample(self, factor):
             pass
 
@@ -368,7 +338,7 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
     now stored state -- initialised once at pin time, resent verbatim on every push,
     changed only by the user's own set/fit/reset.
     """
-    class RecordingSession:
+    class RecordingSession(StubSession):
         def __init__(self):
             self.domains = []
 

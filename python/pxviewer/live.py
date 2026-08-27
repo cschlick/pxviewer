@@ -488,6 +488,9 @@ class LiveSession:
         # payload so the first build already uses it (control messages are applied ahead
         # of the queued binary payload on the client).
         self._localres_downsample: Optional[int] = None
+        # Whether the localres surface is shown; replayed (before the payload, applied
+        # after its build) so a reload keeps a hidden colouring hidden.
+        self._localres_visible: Optional[bool] = None
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -985,6 +988,15 @@ class LiveSession:
                 {"type": "localres", "action": "downsample",
                  "value": self._localres_downsample}))
 
+    def set_localres_visible(self, visible: bool) -> None:
+        """Hide or show the localres colouring in place -- a render skip, everything
+        kept, so showing again is instant. Stored and replayed. Thread-safe."""
+        self._localres_visible = bool(visible)
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
+                {"type": "localres", "action": "visible", "value": bool(visible)}))
+
     def set_localres_iso(self, iso_level: float) -> None:
         """Re-contour the local-resolution colouring at a new level, in place.
 
@@ -1031,6 +1043,7 @@ class LiveSession:
         """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
         self._last_localres = None
         self._localres_downsample = None
+        self._localres_visible = None
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
@@ -2085,6 +2098,10 @@ class LiveSession:
                 await self._locked_send(websocket, json.dumps(
                     {"type": "localres", "action": "downsample",
                      "value": self._localres_downsample}))
+            if self._localres_visible is False:
+                # Hidden is worth replaying; shown is the default.
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "localres", "action": "visible", "value": False}))
             if self._last_localres is not None:
                 await self._locked_send(websocket, self._last_localres)
             if self._last_hotspot_volume is not None:

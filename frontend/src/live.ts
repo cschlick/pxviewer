@@ -694,6 +694,7 @@ export class LiveViewer {
     // lives in Python; this is applied from its messages and defaulted the same.
     private localresFactor = 4;
     private localresLevel: number | undefined;       // last built level, for factor changes
+    private localresVisible = true;                  // the one checkbox: hide/show in place
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
     // Declared colour positions for an imported concern field; undefined = derive from the cut.
@@ -1636,6 +1637,21 @@ export class LiveViewer {
         provider.apply(ShapeRepresentation3D);
         await build.commit();
         this.localresSurface = provider.selector;
+        if (!this.localresVisible && this.localresSurface.ref) {
+            setSubtreeVisibility(this.plugin.state.data, this.localresSurface.ref, true /* hidden */);
+        }
+    }
+
+    /**
+     * Hide or show the coloured surface in place -- the map's one visibility checkbox,
+     * routed here while colour-by-resolution is on. A render skip like the plain
+     * isosurface's: the grids, level and domain all stay, so showing again is instant.
+     */
+    setLocalresVisible(visible: boolean) {
+        this.localresVisible = visible;
+        if (this.localresSurface && this.localresSurface.ref) {
+            setSubtreeVisibility(this.plugin.state.data, this.localresSurface.ref, !visible);
+        }
     }
 
     /**
@@ -3121,6 +3137,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 } else if (msg.action === 'domain'
                         && typeof msg.lo === 'number' && typeof msg.hi === 'number') {
                     await viewer.setLocalresDomain(msg.lo, msg.hi);
+                } else if (msg.action === 'visible' && typeof msg.value === 'boolean') {
+                    viewer.setLocalresVisible(msg.value);
                 }
             } else if (msg.type === 'hotspot_opacity' && viewer && typeof msg.knee === 'number') {
                 await viewer.setHotspotOpacity(msg.knee);
