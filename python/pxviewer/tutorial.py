@@ -170,6 +170,29 @@ def _active_model_entry(cw: Any):
     return cw._desktop._model_entry(mid) if mid else None
 
 
+def _rep_is_ball_and_stick(cw: Any) -> bool:
+    entry = _active_model_entry(cw)
+    reps = (entry.get("reps") or [entry.get("rep")]) if entry else []
+    return "ball-and-stick" in reps
+
+
+def _tyr29_selected(cw: Any) -> bool:
+    """Whether the selection includes TYR 29 -- however the user made it."""
+    entry = _active_model_entry(cw)
+    model = getattr(entry["session"], "model", None) if entry else None
+    if model is None:
+        return False
+    indices = cw._desktop._scene_selection.get(entry["id"]) or []
+    if not indices:
+        return False
+    atoms = model.get_hierarchy().atoms()
+    for index in indices:
+        if 0 <= index < len(atoms):
+            if atoms[index].parent().parent().resseq_as_int() == 29:
+                return True
+    return False
+
+
 def _conformer_picked(cw: Any) -> bool:
     entry = _active_model_entry(cw)
     return bool(entry and entry.get("conformer"))
@@ -189,44 +212,60 @@ def _coloured_by_occupancy(cw: Any) -> bool:
 
 
 def altlocs_tutorial() -> Tutorial:
-    """Alternate conformations: one residue, several refined positions. Each doing step
-    waits for the user to actually do it (the coach advances on the state changing), so
-    the walkthrough cannot run ahead of the screen."""
+    """Alternate conformations: one residue, several refined positions. Every doing step
+    waits for the user to actually do it, and the route deliberately passes through two
+    general tools -- the Representation dropdown and the Selection box -- before the
+    conformer machinery, so the walkthrough teaches them on the way."""
     return Tutorial("Alternate conformations", [
         Step(
             "**3NIR is loaded** — crambin at 0.48 Å, sharp enough that many side chains "
             "were refined in **two or more positions** (alternate conformations, "
-            "\"altlocs\"), each with its own occupancy.\n\nLook closely at the side "
-            "chains: several fork into doubled atoms. Those are not errors — they are "
-            "the model saying the crystal truly holds both.",
+            "\"altlocs\"), each with its own occupancy.\n\nYou will not see them yet: "
+            "the cartoon abstracts side chains away. Let's fix that first.",
         ),
         Step(
-            "See one at a time. In the **Objects** list above, click the **3nir.pdb** "
-            "row — its appearance controls open below. Find the **Conformer** dropdown "
-            "and pick **A** (or **B**).\n\nThe forked side chains resolve into one "
-            "self-consistent model: conformer A everywhere, plus every atom that has no "
-            "alternates.",
+            "In the **Objects** list, click the **3nir.pdb** row — its appearance "
+            "controls open below. Set **Representation** to **Ball & stick**.\n\n"
+            "Now every atom is drawn, and the doubled side chains are visible — though "
+            "at whole-structure scale they read as fuzz. Let's zoom in on one.",
+            done=_rep_is_ball_and_stick,
+        ),
+        Step(
+            "Type `resseq 29` into the **Selection** box below the object list and "
+            "press **Enter** (or the arrow button). That is cctbx's selection language — "
+            "the same strings Phenix uses — and it selects **tyrosine 29**, which was "
+            "refined in **three** positions.\n\nThe selected atoms highlight in the "
+            "viewport; zoom in on them.",
+            done=_tyr29_selected,
+            target=lambda cw: cw._select_expr,
+        ),
+        Step(
+            "Look at the highlighted tyrosine: **three complete side-chain positions**, "
+            "labelled A, B and C in the model. Now isolate one: in the model's "
+            "appearance pane, set the **Conformer** dropdown to **A** (or B, or C).\n\n"
+            "The ring settles into a single position — one self-consistent model.",
             done=_conformer_picked,
         ),
         Step(
-            "Now set **Conformer** back to **All** and watch the forks return.\n\n"
-            "**All** is the honest picture — the deposited model *is* the ensemble — "
-            "and the single-letter views are for working on one conformation at a "
-            "time.",
+            "Set **Conformer** back to **All** and watch the three positions return."
+            "\n\n**All** is the honest picture — the deposited model *is* the "
+            "ensemble — and the single-letter views are for working on one conformation "
+            "at a time.",
             done=_conformer_back_to_all,
         ),
         Step(
             "The occupancies behind the split are numbers on the atoms. In the model's "
-            "**Color** dropdown (the same pane), pick **By occupancy**.\n\nThe "
-            "partial-occupancy side chains now stand apart from the full-occupancy "
-            "backbone — blue is low, red is high, and the **Range** control that "
-            "appears lets you set exactly what the ramp spans.",
+            "**Color** dropdown, pick **By occupancy**.\n\nTyr 29's three rings each "
+            "hold a fraction of an atom's worth of electrons, and now they stand apart "
+            "from the full-occupancy backbone — blue is low, red is high, and the "
+            "**Range** control that appears lets you set what the ramp spans.",
             done=_coloured_by_occupancy,
         ),
         Step(
-            "That's the whole skill: **Conformer** to isolate one model, **All** for "
-            "the ensemble, **By occupancy** to see how the refinement split the "
-            "density. The same controls work on any structure with alternates.",
+            "That's the whole skill — and two tools you will reuse everywhere: "
+            "**Representation** to choose what is drawn, the **Selection** box to name "
+            "atoms precisely, **Conformer** to isolate one model, and **By occupancy** "
+            "to see how the refinement split the density.",
         ),
     ], loader=lambda d: _load_bundled(d, "3nir.pdb"))
 
