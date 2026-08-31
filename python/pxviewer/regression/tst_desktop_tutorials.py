@@ -244,6 +244,45 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
         assert progress(app) == "Step 6 / 6"
 
 
+def exercise_a_single_residue_selection_gets_the_oriented_framing():
+    """Typing one residue frames it the standard way -- N left, C right, side chain up
+    -- via the same orientation the space-bar navigation uses. Anything that is not
+    exactly one amino acid falls back to the plain centre-and-frame focus."""
+    import numpy as np
+
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        process_events()
+        entry = app._model_entry(app._active_model_id)
+        session = entry["session"]
+
+        calls = []
+        session.orient_camera = lambda *a: calls.append(("orient", a))
+        session.focus = lambda atoms: calls.append(("focus", list(atoms)))
+
+        app.select_by_expression("resseq 29")
+        assert calls and calls[-1][0] == "orient", calls[-1][0]
+        target, up, direction, radius = calls[-1][1]
+        # The vectors are a real frame: unit, orthogonal, aimed at the residue.
+        assert abs(np.linalg.norm(up) - 1.0) < 1e-6
+        assert abs(np.linalg.norm(direction) - 1.0) < 1e-6
+        assert abs(np.dot(up, direction)) < 1e-6
+        assert radius > 0
+        atoms = session.model.get_hierarchy().atoms()
+        # Tyr 29 carries three altloc copies of every atom, so there are three CAs;
+        # the orientation anchors on one of them (whichever the name map kept).
+        cas = [np.array(a.xyz) for a in atoms
+               if a.parent().parent().resseq_as_int() == 29 and a.name.strip() == "CA"]
+        assert cas and min(np.linalg.norm(np.array(target) - ca) for ca in cas) < 1e-6, (
+            "not aimed at any of the residue's CA positions")
+
+        # Many residues: plain focus. A partial residue without its backbone: plain focus.
+        app.select_by_expression("resseq 5:14")
+        assert calls[-1][0] == "focus"
+        app.select_by_expression("resseq 29 and name CB")
+        assert calls[-1][0] == "focus", "a backbone-less fragment cannot be oriented"
+
+
 def exercise_the_validation_tutorial_advances_when_validation_runs():
     """Load the demo, run validation, read the results."""
     with desktop() as app:

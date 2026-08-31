@@ -232,8 +232,10 @@ def altlocs_tutorial() -> Tutorial:
             "Type `resseq 29` into the **Selection** box below the object list and "
             "press **Enter** (or the arrow button). That is cctbx's selection language — "
             "the same strings Phenix uses — and it selects **tyrosine 29**, which was "
-            "refined in **three** positions.\n\nThe camera moves to the selected "
-            "atoms (the **Focus on selection** box below controls that).",
+            "refined in **three** positions.\n\nThe camera moves to it and frames it "
+            "the standard way — backbone **N on the left, C on the right, side chain "
+            "up** — so every residue you select reads the same. (The **Focus on "
+            "selection** box below turns the moving off.)",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
         ),

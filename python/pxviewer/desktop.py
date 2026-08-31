@@ -10554,6 +10554,23 @@ class DesktopApp:
         return index
 
     @staticmethod
+    def _is_single_residue(model, atom_indices) -> bool:
+        """Whether every index belongs to one residue group (altloc copies included)."""
+        if model is None or not atom_indices:
+            return False
+        atoms = model.get_hierarchy().atoms()
+        keys = set()
+        for i in atom_indices:
+            if not (0 <= i < len(atoms)):
+                return False
+            residue_group = atoms[i].parent().parent()
+            chain = residue_group.parent()
+            keys.add((chain.id, residue_group.resseq, residue_group.icode))
+            if len(keys) > 1:
+                return False
+        return True
+
+    @staticmethod
     def _residue_orientation(model, atom_indices):
         """Camera ``(target, up, direction, radius)`` that shows the residue with its
         N->C backbone left-to-right and side chain up, or ``None`` when the backbone
@@ -10743,7 +10760,23 @@ class DesktopApp:
             # Aim the camera at what was just named. On by default: a typed selection
             # is a statement of intent ("show me resseq 29"), unlike a viewport click,
             # which happens where the camera already is and is never auto-focused.
-            session.focus(list(sel))
+            #
+            # A selection that is exactly one amino acid gets the oriented framing the
+            # space-bar navigation already uses -- N to the left, C to the right, side
+            # chain up -- instead of Mol*'s default (which keeps whatever direction the
+            # camera happened to have). A residue always reads the same way on screen,
+            # which is the point of orienting at all. Anything else (many residues, a
+            # partial residue without its backbone, a ligand) falls back to the plain
+            # centre-and-frame focus; heuristics for those are a separate question.
+            indices = list(sel)
+            oriented = False
+            if self._is_single_residue(session.model, indices):
+                orientation = self._residue_orientation(session.model, indices)
+                if orientation is not None:
+                    session.orient_camera(*orientation)
+                    oriented = True
+            if not oriented:
+                session.focus(indices)
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
         return len(sel)
 
