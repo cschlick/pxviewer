@@ -1422,6 +1422,7 @@ class ControlsWindow:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QButtonGroup,
+            QCheckBox,
             QGridLayout,
             QGroupBox,
             QHBoxLayout,
@@ -1552,6 +1553,22 @@ class ControlsWindow:
         self._clear_btn.clicked.connect(self._on_clear_selection)
         sel_row.addWidget(self._clear_btn)
         sl.addLayout(sel_row)
+
+        # Whether applying a typed selection also aims the camera at it. On by default:
+        # typing "resseq 29" is a statement of intent, and a selection that highlights
+        # something off-screen looks like nothing happened. Lives here rather than in
+        # Settings -- the option belongs beside the control it modifies. (Viewport picks
+        # are never auto-focused; the camera is already where the user is clicking.)
+        self._focus_on_select = QCheckBox("Focus on selection")
+        self._focus_on_select.setToolTip(
+            "Aim the camera at the atoms a typed selection matches.")
+        self._focus_on_select.setChecked(
+            str(self._desktop._settings.value("selection/focus_on_apply", "true")).lower()
+            != "false")
+        self._focus_on_select.toggled.connect(
+            lambda on: self._desktop._settings.setValue(
+                "selection/focus_on_apply", "true" if on else "false"))
+        sl.addWidget(self._focus_on_select)
 
         sl.addWidget(QLabel("Selected:"))
         self._selection_label = QLabel("None")
@@ -4565,7 +4582,8 @@ class ControlsWindow:
     def _run_selection(self, expr: str) -> None:
         self._select_expr.setText(expr)
         try:
-            n = self._desktop.select_by_expression(expr)
+            n = self._desktop.select_by_expression(
+                expr, focus=self._focus_on_select.isChecked())
         except Exception as exc:  # invalid syntax / no model
             self._selection_label.setText(
                 f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
@@ -10699,7 +10717,7 @@ class DesktopApp:
             except Exception:  # pragma: no cover - defensive
                 pass
 
-    def select_by_expression(self, text: str) -> int:
+    def select_by_expression(self, text: str, *, focus: bool = True) -> int:
         """Resolve a cctbx/Phenix selection string on the active model and select it.
 
         cctbx's own atom-selection machinery turns the string into atom indices
@@ -10721,6 +10739,11 @@ class DesktopApp:
             return 0
         sel = session.select_by(selection=text)  # cctbx; raises on invalid syntax
         session.highlight(sel)                    # show it in the viewer
+        if focus and len(sel):
+            # Aim the camera at what was just named. On by default: a typed selection
+            # is a statement of intent ("show me resseq 29"), unlike a viewport click,
+            # which happens where the camera already is and is never auto-focused.
+            session.focus(list(sel))
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
         return len(sel)
 

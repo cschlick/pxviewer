@@ -200,49 +200,48 @@ def exercise_every_tutorial_step_points_at_a_control_that_exists():
 def exercise_the_altlocs_tutorial_follows_the_users_hands():
     """Five doing steps, each waiting for the actual state change -- and the route
     passes through Representation and the Selection box before the conformer
-    machinery, so two general tools are taught on the way. The coach cannot run
-    ahead of the screen, and (step 5's predicate being None-valued state) cannot
-    skip past steps either."""
+    machinery, so two general tools are taught on the way. The very first message
+    already asks for the Ball & stick switch (a leading page-turn step felt
+    sluggish), so there is no unconditional Next anywhere before the work."""
     with desktop() as app:
         controls = app._controls
         controls._start_tutorial(tutorial.altlocs_tutorial())
         process_events()
         assert [m["name"] for m in app._models] == ["3nir.pdb"]
-        assert progress(app) == "Step 1 / 7"
-
-        controls._tutorial_next()                     # orientation step
-        assert progress(app) == "Step 2 / 7"
+        assert progress(app) == "Step 1 / 6"
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 2 / 7", "advanced without the user doing anything"
+        assert progress(app) == "Step 1 / 6", "advanced without the user doing anything"
 
         mid = app._active_model_id
         app.set_model_representation(mid, "ball-and-stick")
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 7"
+        assert progress(app) == "Step 2 / 6"
         # The selection step points at a control that exists from startup.
-        assert tutorial.altlocs_tutorial().steps[2].target(controls) is not None
+        assert tutorial.altlocs_tutorial().steps[1].target(controls) is not None
+        # Focus-on-selection is the pane's default, which is what the step relies on.
+        assert controls._focus_on_select.isChecked()
 
         # A selection elsewhere is not enough: the predicate wants the example residue.
         app.select_by_expression("resseq 5")
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 7", "any selection satisfied the residue step"
+        assert progress(app) == "Step 2 / 6", "any selection satisfied the residue step"
 
         count = app.select_by_expression("resseq 29")
         assert count > 0, "the example residue selected nothing"
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 4 / 7"
+        assert progress(app) == "Step 3 / 6"
 
         app.set_model_conformer(mid, "A")
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 5 / 7"
+        assert progress(app) == "Step 4 / 6"
 
         app.set_model_conformer(mid, None)
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 6 / 7"
+        assert progress(app) == "Step 5 / 6"
 
         app.set_model_color(mid, "occupancy")
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 7 / 7"
+        assert progress(app) == "Step 6 / 6"
 
 
 def exercise_the_validation_tutorial_advances_when_validation_runs():

@@ -220,22 +220,20 @@ def altlocs_tutorial() -> Tutorial:
         Step(
             "**3NIR is loaded** — crambin at 0.48 Å, sharp enough that many side chains "
             "were refined in **two or more positions** (alternate conformations, "
-            "\"altlocs\"), each with its own occupancy.\n\nYou will not see them yet: "
-            "the cartoon abstracts side chains away. Let's fix that first.",
-        ),
-        Step(
-            "In the **Objects** list, click the **3nir.pdb** row — its appearance "
-            "controls open below. Set **Representation** to **Ball & stick**.\n\n"
-            "Now every atom is drawn, and the doubled side chains are visible — though "
-            "at whole-structure scale they read as fuzz. Let's zoom in on one.",
+            "\"altlocs\"), each with its own occupancy. You will not see them yet: the "
+            "cartoon abstracts side chains away.\n\nSo, first thing: in the **Objects** "
+            "list, click the **3nir.pdb** row — its appearance controls open below — and "
+            "set **Representation** to **Ball & stick**. Every atom is drawn, and the "
+            "doubled side chains appear (as fuzz, at this scale — next we zoom in on "
+            "one).",
             done=_rep_is_ball_and_stick,
         ),
         Step(
             "Type `resseq 29` into the **Selection** box below the object list and "
             "press **Enter** (or the arrow button). That is cctbx's selection language — "
             "the same strings Phenix uses — and it selects **tyrosine 29**, which was "
-            "refined in **three** positions.\n\nThe selected atoms highlight in the "
-            "viewport; zoom in on them.",
+            "refined in **three** positions.\n\nThe camera moves to the selected "
+            "atoms (the **Focus on selection** box below controls that).",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
         ),
