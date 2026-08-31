@@ -276,11 +276,22 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         assert cas and min(np.linalg.norm(np.array(target) - ca) for ca in cas) < 1e-6, (
             "not aimed at any of the residue's CA positions")
 
-        # Many residues: plain focus. A partial residue without its backbone: plain focus.
+        # Everything else frames by its principal axes: a residue range reads with the
+        # chain running left-to-right (first selected atom leftward of the last)...
         app.select_by_expression("resseq 5:14")
-        assert calls[-1][0] == "focus"
-        app.select_by_expression("resseq 29 and name CB")
-        assert calls[-1][0] == "focus", "a backbone-less fragment cannot be oriented"
+        assert calls[-1][0] == "orient", "a multi-residue selection was not framed"
+        target, up, direction, radius = calls[-1][1]
+        assert abs(np.dot(up, direction)) < 1e-6
+        span_atoms = [np.array(a.xyz) for a in atoms
+                      if 5 <= a.parent().parent().resseq_as_int() <= 14]
+        right = np.cross(np.asarray(direction), np.asarray(up))
+        right = right / np.linalg.norm(right)
+        chain_span = span_atoms[-1] - span_atoms[0]
+        assert np.dot(right, chain_span) > 0, "the chain does not run left-to-right"
+
+        # ...while a shape with no frame at all keeps the plain centre-and-frame focus.
+        app.select_by_expression("resseq 5 and name CA")
+        assert calls[-1][0] == "focus", "a lone atom cannot be oriented"
 
 
 def exercise_the_validation_tutorial_advances_when_validation_runs():

@@ -10571,6 +10571,49 @@ class DesktopApp:
         return True
 
     @staticmethod
+    def _principal_axes_orientation(model, atom_indices):
+        """Camera ``(target, up, direction, radius)`` framing a selection by its
+        principal axes: longest axis left-to-right, second axis up. Or ``None`` when
+        the shape does not define a frame (fewer than three atoms, or a straight line).
+
+        The generic answer for everything that is not a single amino acid -- a ligand
+        reads along its length, a helix lies down its axis, a sheet turns face-on --
+        close enough to the per-shape heuristics that they are not worth their code.
+
+        Eigenvectors carry an arbitrary sign, so both axes get a deterministic one:
+        ``right`` points with the selection's index order (first atom left, last atom
+        right -- for a polymer that is N-terminus to C-terminus, matching the
+        single-residue convention), ``up`` by its largest component, so re-selecting
+        the same atoms always lands the same view.
+        """
+        atoms = model.get_hierarchy().atoms()
+        xyz = np.array([atoms[i].xyz for i in atom_indices
+                        if 0 <= i < len(atoms)], dtype=float)
+        if len(xyz) < 3:
+            return None
+        centroid = xyz.mean(axis=0)
+        centred = xyz - centroid
+        eigenvalues, eigenvectors = np.linalg.eigh(centred.T @ centred)
+        if eigenvalues[1] < 1e-6 * max(eigenvalues[2], 1.0):
+            return None  # collinear: no second axis to hang "up" on
+        right = eigenvectors[:, 2]
+        up = eigenvectors[:, 1]
+        span = xyz[-1] - xyz[0]
+        if abs(np.dot(right, span)) > 1e-6:
+            right = right * np.sign(np.dot(right, span))
+        elif right[np.argmax(np.abs(right))] < 0:
+            right = -right
+        if up[np.argmax(np.abs(up))] < 0:
+            up = -up
+        direction = np.cross(up, right)
+        norm = np.linalg.norm(direction)
+        if norm < 1e-6:
+            return None
+        direction = direction / norm
+        radius = max(float(np.linalg.norm(centred, axis=1).max()) + 2.0, 4.0)
+        return centroid, up, direction, radius
+
+    @staticmethod
     def _residue_orientation(model, atom_indices):
         """Camera ``(target, up, direction, radius)`` that shows the residue with its
         N->C backbone left-to-right and side chain up, or ``None`` when the backbone
@@ -10769,13 +10812,17 @@ class DesktopApp:
             # partial residue without its backbone, a ligand) falls back to the plain
             # centre-and-frame focus; heuristics for those are a separate question.
             indices = list(sel)
-            oriented = False
+            orientation = None
             if self._is_single_residue(session.model, indices):
                 orientation = self._residue_orientation(session.model, indices)
-                if orientation is not None:
-                    session.orient_camera(*orientation)
-                    oriented = True
-            if not oriented:
+            if orientation is None:
+                # Everything else -- many residues, a ligand, a backbone-less fragment
+                # -- frames by its principal axes; only shapes with no frame at all
+                # (a lone atom, a straight line) fall back to the plain focus.
+                orientation = self._principal_axes_orientation(session.model, indices)
+            if orientation is not None:
+                session.orient_camera(*orientation)
+            else:
                 session.focus(indices)
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
         return len(sel)
