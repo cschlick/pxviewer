@@ -1114,8 +1114,16 @@ export class LiveViewer {
             const fov = camera.state.fov;
             const { width, height } = camera.viewport;
             const aspect = width > 0 && height > 0 ? width / height : 1;
-            const fill = 0.95;   // fraction of the frame the selection spans
-            const halfTan = Math.tan(fov / 2);
+            const fill = 0.9;    // fraction of the frame the selection spans
+            // Calibrated against rendered pixels, not against the state. Measured with
+            // screenshots at known camera distances (2026-08-31, scripts/dev_snap.py):
+            // the render's effective half-angle tangent is ~1.0 -- as if the vertical
+            // fov were ~90 deg -- while state.fov reads 45 deg and the projection code
+            // looks standard. Mechanism unidentified; the factor is what the screen
+            // does. If framing ever drifts (a Mol* upgrade), recalibrate the same way:
+            // orient at a known distance, screenshot, measure the fraction spanned.
+            const FOV_CALIBRATION = 2.42;
+            const halfTan = Math.tan(fov / 2) * FOV_CALIBRATION;
             const distance = Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5);
             const snapshot = camera.getInvariantFocus(t, Math.max(rz, 1.0), u, d);
             const position = Vec3();
