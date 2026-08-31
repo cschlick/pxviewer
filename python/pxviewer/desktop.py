@@ -10571,6 +10571,21 @@ class DesktopApp:
         return True
 
     @staticmethod
+    def _frame_extents(xyz, target, up, direction):
+        """Half-extents of ``xyz`` about ``target`` along the frame's right/up/view axes,
+        padded for atom radii. What the viewer needs to fill the frame with the
+        selection (rx, ry) and to clip a slab that just contains it (rz) -- one number
+        (a bounding-sphere radius) cannot say both for anything elongated.
+        """
+        right = np.cross(np.asarray(direction), np.asarray(up))
+        centred = np.asarray(xyz, dtype=float) - np.asarray(target, dtype=float)
+        pad = 1.8  # ~an atom's drawn radius, so spheres are not cut mid-surface
+        rx = float(np.abs(centred @ right).max()) + pad
+        ry = float(np.abs(centred @ np.asarray(up)).max()) + pad
+        rz = float(np.abs(centred @ np.asarray(direction)).max()) + pad
+        return (max(rx, 2.0), max(ry, 2.0), max(rz, 2.0))
+
+    @staticmethod
     def _principal_axes_orientation(model, atom_indices):
         """Camera ``(target, up, direction, radius)`` framing a selection by its
         principal axes: longest axis left-to-right, second axis up. Or ``None`` when
@@ -10611,7 +10626,8 @@ class DesktopApp:
             return None
         direction = direction / norm
         radius = max(float(np.linalg.norm(centred, axis=1).max()) + 2.0, 4.0)
-        return centroid, up, direction, radius
+        extents = DesktopApp._frame_extents(xyz, centroid, up, direction)
+        return centroid, up, direction, radius, extents
 
     @staticmethod
     def _residue_orientation(model, atom_indices):
@@ -10652,7 +10668,8 @@ class DesktopApp:
             return None
         direction /= dn
         radius = max(float(max(np.linalg.norm(v - ca) for v in named.values())) + 2.0, 4.0)
-        return ca, up, direction, radius
+        extents = DesktopApp._frame_extents(list(named.values()), ca, up, direction)
+        return ca, up, direction, radius, extents
 
     def focus_residue(self, chain: str, resid: str) -> None:
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode

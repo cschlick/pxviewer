@@ -262,7 +262,8 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
 
         app.select_by_expression("resseq 29")
         assert calls and calls[-1][0] == "orient", calls[-1][0]
-        target, up, direction, radius = calls[-1][1]
+        target, up, direction, radius, extents = calls[-1][1]
+        assert all(e >= 2.0 for e in extents), extents
         # The vectors are a real frame: unit, orthogonal, aimed at the residue.
         assert abs(np.linalg.norm(up) - 1.0) < 1e-6
         assert abs(np.linalg.norm(direction) - 1.0) < 1e-6
@@ -280,8 +281,12 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         # chain running left-to-right (first selected atom leftward of the last)...
         app.select_by_expression("resseq 5:14")
         assert calls[-1][0] == "orient", "a multi-residue selection was not framed"
-        target, up, direction, radius = calls[-1][1]
+        target, up, direction, radius, extents = calls[-1][1]
         assert abs(np.dot(up, direction)) < 1e-6
+        # Ten residues of chain run mostly along the long (right) axis: the width the
+        # camera must frame dwarfs the slab depth, which is the number pair a single
+        # bounding radius could not express.
+        assert extents[0] > extents[2], extents
         span_atoms = [np.array(a.xyz) for a in atoms
                       if 5 <= a.parent().parent().resseq_as_int() <= 14]
         right = np.cross(np.asarray(direction), np.asarray(up))

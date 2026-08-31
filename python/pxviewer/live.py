@@ -1685,18 +1685,26 @@ class LiveSession:
         self._send_control({"type": "focus", "atoms": _encode_index_set(sel.indices)})
         return sel
 
-    def orient_camera(self, target: Any, up: Any, direction: Any, radius: float) -> None:
+    def orient_camera(self, target: Any, up: Any, direction: Any, radius: float,
+                      extents: Any = None) -> None:
         """Aim the camera at ``target`` with an explicit orientation. ``up`` is
         screen-up, ``direction`` is the view axis (eye -> target), ``radius`` frames
-        the view. Thread-safe. Used to show a residue N->C left-to-right, side chain up.
+        the view. ``extents`` (rx, ry, rz half-extents along screen-right/up/the view
+        axis) lets the viewer fill the frame with the selection and clip a slab that
+        just contains it -- the camera math needs the viewer's own fov and aspect, so
+        the numbers travel and the trigonometry stays client-side. Thread-safe.
+        Used to show a residue N->C left-to-right, side chain up.
         """
-        self._send_control({
+        message = {
             "type": "orient",
             "target": [float(c) for c in target],
             "up": [float(c) for c in up],
             "direction": [float(c) for c in direction],
             "radius": float(radius),
-        })
+        }
+        if extents is not None:
+            message["extents"] = [float(c) for c in extents]
+        self._send_control(message)
 
     def clear_selection(self) -> None:
         """Clear any highlighted selection in the viewer. Thread-safe."""

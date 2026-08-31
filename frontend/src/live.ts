@@ -1094,18 +1094,41 @@ export class LiveViewer {
      * `direction` is the view axis (eye -> target). Used to frame a residue with its
      * N->C backbone left-to-right and side chain up.
      */
-    orient(target: number[], up: number[], direction: number[], radius: number) {
+    orient(target: number[], up: number[], direction: number[], radius: number,
+           extents?: number[]) {
         const camera = this.plugin.canvas3d?.camera;
         if (!camera) return;
+        const t = Vec3.create(target[0], target[1], target[2]);
+        const u = Vec3.create(up[0], up[1], up[2]);
+        const d = Vec3.create(direction[0], direction[1], direction[2]);
+        if (extents && extents.length === 3) {
+            // Fill the frame with the selection, and clip a slab that just contains it.
+            // The camera's near/far planes derive from state.radius (near = distance -
+            // radius, far = distance + radius with clipFar), so a bounding-sphere radius
+            // conflates two different numbers: how far back the camera must sit, and how
+            // deep the visible slab is. With the half-extents split out, distance comes
+            // from the on-screen axes against this viewport's own fov and aspect, and
+            // radius carries only the depth -- which is what makes the slab hug the
+            // selection and cut away what sits in front of and behind it.
+            const [rx, ry, rz] = extents;
+            const fov = camera.state.fov;
+            const { width, height } = camera.viewport;
+            const aspect = width > 0 && height > 0 ? width / height : 1;
+            const fill = 0.85;   // fraction of the frame the selection spans
+            const halfTan = Math.tan(fov / 2);
+            const distance = Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5);
+            const snapshot = camera.getInvariantFocus(t, Math.max(rz, 1.0), u, d);
+            const position = Vec3();
+            Vec3.scale(position, d, distance);
+            Vec3.sub(position, t, position);
+            snapshot.position = position;
+            camera.setState(snapshot, 250);
+            return;
+        }
         // getInvariantFocus sets up/dir absolutely; camera.focus() instead runs them
         // through matchDirection (flips to stay near the current view), which would
         // not honor the requested orientation.
-        const snapshot = camera.getInvariantFocus(
-            Vec3.create(target[0], target[1], target[2]),
-            radius,
-            Vec3.create(up[0], up[1], up[2]),
-            Vec3.create(direction[0], direction[1], direction[2]),
-        );
+        const snapshot = camera.getInvariantFocus(t, radius, u, d);
         camera.setState(snapshot, 250);
     }
 
@@ -3205,7 +3228,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'orient' && viewer) {
-                viewer.orient(msg.target, msg.up, msg.direction, msg.radius);
+                viewer.orient(msg.target, msg.up, msg.direction, msg.radius, msg.extents);
             } else if (msg.type === 'markup' && viewer) {
                 await viewer.setMarkup(msg.channel, msg.primitives ?? []);
             } else if (msg.type === 'representations' && viewer) {
