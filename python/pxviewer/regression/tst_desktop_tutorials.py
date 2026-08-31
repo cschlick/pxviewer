@@ -270,12 +270,13 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         assert abs(np.dot(up, direction)) < 1e-6
         assert radius > 0
         atoms = session.model.get_hierarchy().atoms()
-        # Tyr 29 carries three altloc copies of every atom, so there are three CAs;
-        # the orientation anchors on one of them (whichever the name map kept).
-        cas = [np.array(a.xyz) for a in atoms
-               if a.parent().parent().resseq_as_int() == 29 and a.name.strip() == "CA"]
-        assert cas and min(np.linalg.norm(np.array(target) - ca) for ca in cas) < 1e-6, (
-            "not aimed at any of the residue's CA positions")
+        # Centred on the selection's mass, not on CA: with the side chain as "up", CA
+        # sits at the bottom of the picture, and a CA-centred view rides high by half a
+        # side chain. The camera target must be the middle of what is shown.
+        sel_xyz = np.array([a.xyz for a in atoms
+                            if a.parent().parent().resseq_as_int() == 29])
+        assert np.linalg.norm(np.array(target) - sel_xyz.mean(axis=0)) < 1e-6, (
+            "not centred on the selection's centre of mass")
 
         # Everything else frames by its principal axes: a residue range reads with the
         # chain running left-to-right (first selected atom leftward of the last)...

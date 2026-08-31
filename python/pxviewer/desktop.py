@@ -10579,10 +10579,15 @@ class DesktopApp:
         """
         right = np.cross(np.asarray(direction), np.asarray(up))
         centred = np.asarray(xyz, dtype=float) - np.asarray(target, dtype=float)
-        pad = 1.8  # ~an atom's drawn radius, so spheres are not cut mid-surface
-        rx = float(np.abs(centred @ right).max()) + pad
-        ry = float(np.abs(centred @ np.asarray(up)).max()) + pad
-        rz = float(np.abs(centred @ np.asarray(direction)).max()) + pad
+        # Two pads for two jobs. The framing pad is slim -- it only keeps drawn atoms
+        # off the very edge, and generous margin here is exactly "not zoomed enough"
+        # (1.8 A per side around a ~6 A residue was a third of the frame). The clip pad
+        # stays big enough that no sphere is sliced mid-surface by the near/far planes.
+        frame_pad = 0.8
+        clip_pad = 1.5
+        rx = float(np.abs(centred @ right).max()) + frame_pad
+        ry = float(np.abs(centred @ np.asarray(up)).max()) + frame_pad
+        rz = float(np.abs(centred @ np.asarray(direction)).max()) + clip_pad
         return (max(rx, 2.0), max(ry, 2.0), max(rz, 2.0))
 
     @staticmethod
@@ -10667,9 +10672,17 @@ class DesktopApp:
         if dn < 1e-6:
             return None
         direction /= dn
-        radius = max(float(max(np.linalg.norm(v - ca) for v in named.values())) + 2.0, 4.0)
-        extents = DesktopApp._frame_extents(list(named.values()), ca, up, direction)
-        return ca, up, direction, radius, extents
+        # Centre on the selection's mass, not on CA: the frame's "up" is the side
+        # chain, so CA sits at the *bottom* of the picture, and a CA-centred view rides
+        # high by half a side chain (a tyrosine's worth, at full zoom). CA still
+        # anchors the axes -- only the camera target moves to the middle of what is
+        # actually shown.
+        xyz = np.array([atoms[i].xyz for i in atom_indices
+                        if 0 <= i < len(atoms)], dtype=float)
+        com = xyz.mean(axis=0)
+        radius = max(float(np.linalg.norm(xyz - com, axis=1).max()) + 2.0, 4.0)
+        extents = DesktopApp._frame_extents(xyz, com, up, direction)
+        return com, up, direction, radius, extents
 
     def focus_residue(self, chain: str, resid: str) -> None:
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode

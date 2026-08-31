@@ -1114,7 +1114,7 @@ export class LiveViewer {
             const fov = camera.state.fov;
             const { width, height } = camera.viewport;
             const aspect = width > 0 && height > 0 ? width / height : 1;
-            const fill = 0.85;   // fraction of the frame the selection spans
+            const fill = 0.95;   // fraction of the frame the selection spans
             const halfTan = Math.tan(fov / 2);
             const distance = Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5);
             const snapshot = camera.getInvariantFocus(t, Math.max(rz, 1.0), u, d);
