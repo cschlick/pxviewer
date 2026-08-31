@@ -1154,6 +1154,21 @@ class LiveSession:
             return None
         return base64.b64decode(uri.split(",", 1)[1])
 
+    def camera_state(self, *, timeout: float = 5.0) -> Optional[dict]:
+        """The viewer's applied camera state (target/position/up/radius/near/far/fov/
+        viewport), asked of the browser. Diagnostic: what the camera actually holds,
+        as opposed to what was sent -- the difference is where orientation bugs live.
+        Blocks; call off the GUI thread. None if no viewer answers."""
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "state": None, "error": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        self._send_control({"type": "camera-state", "reqId": req_id})
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        return slot["state"] if answered else None
+
     def background_color(self, *, timeout: float = 5.0) -> Optional[str]:
         """The viewport's background color as ``#rrggbb``, asked of the browser (None if no
         viewer answers in time).
@@ -2221,6 +2236,13 @@ class LiveSession:
                     handler()
                 except Exception:  # pragma: no cover - user callback errors
                     pass
+        elif etype == "camera-state-result":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                slot["state"] = event.get("state")
+                slot["event"].set()
         elif etype == "screenshot-result":
             req_id = event.get("reqId")
             with self._pending_lock:

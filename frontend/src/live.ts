@@ -3181,6 +3181,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'camera-state') {
+                // Diagnostic readback: the state the camera actually holds, as opposed
+                // to what a command sent -- the gap between the two is where
+                // orientation bugs live.
+                const cam = plugin.canvas3d?.camera;
+                const state = cam ? {
+                    target: Array.from(cam.state.target), position: Array.from(cam.state.position),
+                    up: Array.from(cam.state.up), radius: cam.state.radius,
+                    near: cam.near, far: cam.far, fov: cam.state.fov,
+                    viewport: { width: cam.viewport.width, height: cam.viewport.height },
+                } : null;
+                ws.send(JSON.stringify({ type: 'camera-state-result', reqId: msg.reqId, state }));
             } else if (msg.type === 'screenshot') {
                 // The scene only exists here, so the picture is taken here and sent
                 // back — which works for a remote viewer as much as the desktop one.

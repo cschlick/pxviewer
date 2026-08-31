@@ -259,10 +259,13 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         calls = []
         session.orient_camera = lambda *a: calls.append(("orient", a))
         session.focus = lambda atoms: calls.append(("focus", list(atoms)))
+        session.set_clip = lambda front, back, radius=None, ref=None: calls.append(
+            ("clip", front, back, radius))
 
         app.select_by_expression("resseq 29")
-        assert calls and calls[-1][0] == "orient", calls[-1][0]
-        target, up, direction, radius, extents = calls[-1][1]
+        orients = [c for c in calls if c[0] == "orient"]
+        assert orients, [c[0] for c in calls]
+        target, up, direction, radius, extents = orients[-1][1]
         assert all(e >= 2.0 for e in extents), extents
         # The vectors are a real frame: unit, orthogonal, aimed at the residue.
         assert abs(np.linalg.norm(up) - 1.0) < 1e-6
@@ -281,8 +284,9 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         # Everything else frames by its principal axes: a residue range reads with the
         # chain running left-to-right (first selected atom leftward of the last)...
         app.select_by_expression("resseq 5:14")
-        assert calls[-1][0] == "orient", "a multi-residue selection was not framed"
-        target, up, direction, radius, extents = calls[-1][1]
+        orients = [c for c in calls if c[0] == "orient"]
+        assert len(orients) >= 2, "a multi-residue selection was not framed"
+        target, up, direction, radius, extents = orients[-1][1]
         assert abs(np.dot(up, direction)) < 1e-6
         # Ten residues of chain run mostly along the long (right) axis: the width the
         # camera must frame dwarfs the slab depth, which is the number pair a single
@@ -295,9 +299,22 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         chain_span = span_atoms[-1] - span_atoms[0]
         assert np.dot(right, chain_span) > 0, "the chain does not run left-to-right"
 
+        # Every focused selection gets the camera-following isolation sphere: sized to
+        # the selection plus context, and lifted again when the selection is cleared.
+        clips = [c for c in calls if c[0] == "clip"]
+        assert clips and clips[-1][3] is not None and clips[-1][3] > 4.0, clips[-1:]
+        assert (clips[-1][1], clips[-1][2]) == (0.0, 1.0), "the slab handles moved"
+
         # ...while a shape with no frame at all keeps the plain centre-and-frame focus.
         app.select_by_expression("resseq 5 and name CA")
-        assert calls[-1][0] == "focus", "a lone atom cannot be oriented"
+        focus_calls = [c for c in calls if c[0] == "focus"]
+        assert focus_calls, "a lone atom cannot be oriented"
+        assert calls[-1] == ("clip", 0.0, 1.0, calls[-1][3]) and calls[-1][3] >= 4.0, (
+            "even a plain focus should isolate the neighbourhood")
+
+        app.select_by_expression("")
+        assert calls[-1] == ("clip", 0.0, 1.0, None), (
+            "clearing the selection must lift the isolation sphere")
 
 
 def exercise_the_validation_tutorial_advances_when_validation_runs():
