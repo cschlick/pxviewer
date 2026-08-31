@@ -1114,7 +1114,14 @@ export class LiveViewer {
             const fov = camera.state.fov;
             const { width, height } = camera.viewport;
             const aspect = width > 0 && height > 0 ? width / height : 1;
-            const fill = 0.9;    // fraction of the frame the selection spans
+            // Fraction of the frame the selection spans. Deliberately well shy of
+            // full: the frame is centred on the selection's mass, and a residue is
+            // asymmetric about it (the backbone reaches further from the COM than the
+            // ring fan), so nominal 0.9 and even 0.75 cropped backbone atoms at the
+            // bottom -- verified with rendered screenshots either way. 0.62 keeps the
+            // whole residue in frame with margin, and a framing that sometimes crops
+            // its subject is worse than one that always leaves room.
+            const fill = 0.62;
             // Calibrated against rendered pixels, not against the state. Measured with
             // screenshots at known camera distances (2026-08-31, scripts/dev_snap.py):
             // the render's effective half-angle tangent is ~1.0 -- as if the vertical
