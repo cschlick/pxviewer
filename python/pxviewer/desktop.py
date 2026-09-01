@@ -4804,6 +4804,7 @@ class ControlsWindow:
 
         self._tutorial = tutorial_obj
         self._tutorial_step = 0
+        self._fix_coach_height(tutorial_obj)
         self._desktop._viewport.coach_bar.setVisible(True)
         if self._tutorial_timer is None:
             self._tutorial_timer = QTimer(self._window)
@@ -4811,6 +4812,23 @@ class ControlsWindow:
             self._tutorial_timer.timeout.connect(self._maybe_advance_tutorial)
         self._tutorial_timer.start()
         self._show_tutorial_step()
+
+    def _fix_coach_height(self, tutorial_obj) -> None:
+        """Reserve the tallest step's text height up front, so the coach pane keeps one
+        height for the whole tutorial instead of resizing -- and jiggling the viewer
+        above it -- on every Next. Measured once at start against the current window
+        width; a mid-tutorial window resize re-flows text but does not re-reserve.
+        """
+        vp = self._desktop._viewport
+        label = vp.coach_text
+        # The bar is still hidden, so its own geometry is stale; the pane spans the
+        # viewport window minus the layout's 14px side margins.
+        width = max(vp.coach_bar.parentWidget().width() - 28, 200)
+        tallest = 0
+        for step in tutorial_obj.steps:
+            label.setText(self._coach_markup(step.text))
+            tallest = max(tallest, label.heightForWidth(width))
+        label.setMinimumHeight(tallest)
 
     def _show_tutorial_step(self) -> None:
         self._stop_highlight()  # clear any flash from the previous step
@@ -4865,6 +4883,7 @@ class ControlsWindow:
             self._tutorial_timer.stop()
         self._stop_highlight()
         self._desktop._viewport.coach_bar.setVisible(False)
+        self._desktop._viewport.coach_text.setMinimumHeight(0)  # release the reserve
         self._set_status("Tutorial complete — nicely done." if finished else "Tutorial closed.")
 
     def _on_coach_show_me(self) -> None:

@@ -197,6 +197,34 @@ def exercise_every_tutorial_step_points_at_a_control_that_exists():
                     assert step.target(controls) is not None, (build.title, i)
 
 
+def exercise_the_coach_pane_keeps_one_height_for_the_whole_tutorial():
+    """The tallest step's height is reserved at start, so Next never resizes the pane
+    (which jiggled the viewer above it on every step)."""
+    with desktop() as app:
+        controls = app._controls
+        vp = app._viewport
+        controls._start_tutorial(tutorial.altlocs_tutorial())
+        process_events()
+
+        label = vp.coach_text
+        reserved = label.minimumHeight()
+        width = max(vp.coach_bar.parentWidget().width() - 28, 200)
+        # Every step fits inside the reserve: stepping cannot grow the label.
+        heights = []
+        for i in range(len(tutorial.altlocs_tutorial().steps)):
+            controls._tutorial_step = i
+            controls._show_tutorial_step()
+            process_events()
+            assert label.heightForWidth(width) <= reserved, (
+                "step %d needs %d but only %d is reserved"
+                % (i, label.heightForWidth(width), reserved))
+            heights.append(vp.coach_bar.height())
+        assert len(set(heights)) == 1, "the pane changed height across steps: %r" % heights
+
+        controls._tutorial_exit()
+        assert label.minimumHeight() == 0, "the reserve outlived the tutorial"
+
+
 def exercise_the_altlocs_tutorial_follows_the_users_hands():
     """Five doing steps, each waiting for the actual state change -- and the route
     passes through Representation and the Selection box before the conformer

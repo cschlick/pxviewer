@@ -124,22 +124,19 @@ def open_model_tutorial() -> Tutorial:
     """The starting point: a model on screen and the three gestures that drive it."""
     return Tutorial("Open a model", [
         Step(
-            "**1UBQ is loaded** — ubiquitin, a small well-behaved protein and the classic "
-            "first structure.\n\nThe viewport is direct: **drag** to rotate, **scroll** to "
+            "**1UBQ**, ubiquitin, is loaded into the Mol* viewport.\n\n"
+            "The viewport enables: **drag** to rotate, **scroll** to "
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
-            "How it is drawn lives in the **Appearance** pane on the right: click the "
-            "model's row in the **Objects** list above it, and the pane fills with its "
-            "controls — representation (cartoon, sticks, …), colouring, and which atom "
-            "types are shown.\n\nColourings that map a number (B-factor, occupancy) "
-            "get a **Range** control there, so the scale is yours.",
+            "The model appears a row in the **Objects** list. This is where a model is made active, and hidden/shown. "
+            "How it is drawn lives in the **Appearance** pane on the right:"
+            "you can customize the visual representation or the coloring for example.",
         ),
         Step(
-            "That's the loop for any structure: load it (the **Open** button holds both "
-            "**Open file(s)…** and **Fetch from PDB / EMDB…**), look at it, style it."
-            "\n\nThe other tutorials each start from a scene like this one and add one "
-            "skill.",
+            "To load a model yourself use the **Open** button to either: "
+            "**Open file(s)…** and **Fetch from PDB / EMDB…**)"
+            "\n\nEach tutorial, however, will also load their data automatically.",
         ),
     ], loader=lambda d: _load_bundled(d, "1ubq.pdb"))
 
