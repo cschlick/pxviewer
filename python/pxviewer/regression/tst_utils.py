@@ -59,6 +59,27 @@ def tmp_dir(suffix=""):
         shutil.rmtree(path, ignore_errors=True)
 
 
+# Point the app's persistence at a throwaway directory, at import time so it precedes
+# any DesktopApp. Without this, tests and dev probes share the user's live preference
+# domain (com.pxviewer.pxviewer): anything that clicks a persisted control -- the GUI
+# fuzzer above all -- silently rewrites the user's real settings, and the user's
+# running app can overwrite them back on quit. Done with the app's own
+# PXVIEWER_SETTINGS_DIR override: the pure-Qt redirects do not work here (macOS's
+# native format ignores QSettings.setPath, and the (org, app) constructor ignores
+# setDefaultFormat -- both verified empirically).
+def _isolate_qsettings():
+    import tempfile
+
+    scratch = os.environ.get("PXVIEWER_SETTINGS_DIR")
+    if not scratch:
+        scratch = tempfile.mkdtemp(prefix="pxviewer-test-settings-")
+        os.environ["PXVIEWER_SETTINGS_DIR"] = scratch
+    return scratch
+
+
+TEST_SETTINGS_DIR = _isolate_qsettings()
+
+
 def qt_application():
     """The process-wide QApplication, created once.
 

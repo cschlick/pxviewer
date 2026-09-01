@@ -5545,7 +5545,17 @@ class DesktopApp:
         from PySide6.QtCore import QSettings
         from . import fetch as _fetch
 
-        self._settings = QSettings("pxviewer", "pxviewer")
+        # PXVIEWER_SETTINGS_DIR redirects persistence into a plain ini file there --
+        # the test harness sets it to a throwaway directory so tests and dev probes
+        # never touch the user's live preference domain. (An env override rather than
+        # QSettings.setPath because macOS's native format ignores setPath, and the
+        # (org, app) constructor ignores setDefaultFormat -- both verified.)
+        settings_dir = os.environ.get("PXVIEWER_SETTINGS_DIR")
+        if settings_dir:
+            self._settings = QSettings(os.path.join(settings_dir, "pxviewer.ini"),
+                                       QSettings.Format.IniFormat)
+        else:
+            self._settings = QSettings("pxviewer", "pxviewer")
         self._work_dir = Path(
             self._settings.value("work_dir", str(_fetch.default_work_dir())))
         try:

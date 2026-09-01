@@ -975,6 +975,22 @@ def exercise_model_value_colourings_share_the_scale_machinery():
         assert {round(sp.value(), 2) for sp in spins} == {0.0, 1.0}
 
 
+def exercise_tests_never_touch_the_users_settings():
+    """The app's persistence lands in the harness's throwaway directory, not in the
+    user's live preference domain -- test runs used to fight the user's real settings
+    (the GUI fuzzer toggling a persisted checkbox rewrote it on disk)."""
+    from pxviewer.regression.tst_utils import TEST_SETTINGS_DIR
+
+    with desktop() as app:
+        path = app._settings.fileName()
+        assert path.startswith(TEST_SETTINGS_DIR), path
+        assert "Library/Preferences" not in path, path
+        app._settings.setValue("test/sentinel", "yes")
+        app._settings.sync()
+        import os
+        assert os.path.exists(path), "the isolated settings file was never written"
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.
