@@ -1480,11 +1480,11 @@ class ControlsWindow:
 
         self._open_btn = _icon_button(
             "folder-open", "Open",
-            "Open a structure or map — models via cctbx, maps as .mrc/.map/.ccp4",
-            self._on_open_file)
+            "Open a structure or map — local files, or fetched from the PDB / EMDB")
+        self._open_btn.setMenu(self._build_open_menu())
         self._get_btn = _icon_button(
-            "blocks", "Get",
-            "Get data from PDB or EMDB, open a bundled example, or start a tutorial")
+            "graduation-cap", "Tutorials",
+            "Guided tutorials — each loads its own example and walks one skill")
         self._get_btn.setMenu(self._build_get_menu())
         self._write_btn = _icon_button(
             "save", "Save", "Save the focused object to disk — model coordinates, or a map",
@@ -1614,47 +1614,23 @@ class ControlsWindow:
 
         menu = QMenu(self._window)
         menu.setObjectName("getMenu")
-        self._add_menu_heading(menu, "Online", first=True)
-        menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
-        # No separate examples list: there is no such thing here as a sample that is not
-        # a tutorial. Every bundled example exists to demonstrate something, so it is the
-        # opening scene of the tutorial that explains it -- one list, and each entry both
-        # loads the data and says what to look at. Wanting just the data is one click:
-        # start the tutorial and close the coach.
-        self._add_menu_heading(menu, "Tutorials")
+        # Tutorials, and nothing else: fetching lives under Open with the other ways of
+        # getting data on screen (where a reader looks for it), and there is no separate
+        # examples list -- every bundled example is the opening scene of the tutorial
+        # that explains it. One list, no headings to explain.
         for tut in tutorial.all_tutorials():
             menu.addAction(tut.title, lambda _c=False, t=tut: self._start_tutorial(t))
         return menu
 
-    def _add_menu_heading(self, menu, text: str, *, first: bool = False):
-        """Add a real, visible section heading to a popup menu.
+    def _build_open_menu(self):
+        """The two ways data gets on screen: a local file, or an entry fetched live."""
+        from PySide6.QtWidgets import QMenu
 
-        Not ``QMenu.addSection``: on macOS the style draws the separator and silently drops
-        the label, so the headings were invisible here even though the QAction carried the
-        text (which is why a test asserting on the text still passed). A QWidgetAction owns
-        its own QLabel, so what is written is what is drawn, on every platform.
-
-        Returns the action, and takes ``first`` to skip the divider above the top heading.
-        """
-        from PySide6.QtCore import Qt
-        from PySide6.QtGui import QFont
-        from PySide6.QtWidgets import QLabel, QWidgetAction
-
-        if not first:
-            menu.addSeparator()
-        label = QLabel(text)
-        font = QFont(label.font())
-        font.setBold(True)
-        # Headings label the groups; they must not compete with the items they head.
-        font.setPointSizeF(max(9.0, font.pointSizeF() - 1.0))
-        label.setFont(font)
-        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        label.setStyleSheet("color: palette(placeholder-text); padding: 6px 12px 2px 12px;")
-        holder = QWidgetAction(menu)
-        holder.setDefaultWidget(label)
-        holder.setEnabled(False)  # a heading is not a target
-        menu.addAction(holder)
-        return holder
+        menu = QMenu(self._window)
+        menu.setObjectName("openMenu")
+        menu.addAction("Open file(s)…", self._on_open_file)
+        menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
+        return menu
 
     def _build_tools_tab(self):
         """Geometry-focused tools: measure from the selection. (Clash/contact analysis

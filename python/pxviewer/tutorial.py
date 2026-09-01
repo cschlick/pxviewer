@@ -135,9 +135,10 @@ def open_model_tutorial() -> Tutorial:
             "(B-factor, occupancy) get a **Range** control there, so the scale is yours.",
         ),
         Step(
-            "That's the loop for any structure: load it (your own files, or **Fetch from "
-            "PDB / EMDB…** in this menu), look at it, style it.\n\nThe other tutorials "
-            "each start from a scene like this one and add one skill.",
+            "That's the loop for any structure: load it (the **Open** button holds both "
+            "**Open file(s)…** and **Fetch from PDB / EMDB…**), look at it, style it."
+            "\n\nThe other tutorials each start from a scene like this one and add one "
+            "skill.",
         ),
     ], loader=lambda d: _load_bundled(d, "1ubq.pdb"))
 
