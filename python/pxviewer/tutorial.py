@@ -129,10 +129,11 @@ def open_model_tutorial() -> Tutorial:
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
-            "How it is drawn lives in the **Scene** tab: select the model in the object "
-            "list and its appearance pane opens — representation (cartoon, sticks, …), "
-            "colouring, and which atom types are shown.\n\nColourings that map a number "
-            "(B-factor, occupancy) get a **Range** control there, so the scale is yours.",
+            "How it is drawn lives in the **Appearance** pane on the right: click the "
+            "model's row in the **Objects** list above it, and the pane fills with its "
+            "controls — representation (cartoon, sticks, …), colouring, and which atom "
+            "types are shown.\n\nColourings that map a number (B-factor, occupancy) "
+            "get a **Range** control there, so the scale is yours.",
         ),
         Step(
             "That's the loop for any structure: load it (the **Open** button holds both "
@@ -306,7 +307,7 @@ def ligand_fitting_tutorial() -> Tutorial:
             "density — which is exactly what a difference map is for.",
         ),
         Step(
-            "Compute the maps: in the **Scene** list select the **reflections** object and "
+            "Compute the maps: in the **Objects** list select the **reflections** object and "
             "click **Make maps** in its panel. That phases the data against the model — and "
             "the **mFo-DFc** difference map lights up a green blob where the model is missing "
             "atoms: the ATP.",

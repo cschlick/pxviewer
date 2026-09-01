@@ -1482,10 +1482,17 @@ class ControlsWindow:
             "folder-open", "Open",
             "Open a structure or map — local files, or fetched from the PDB / EMDB")
         self._open_btn.setMenu(self._build_open_menu())
+        # No menu-indicator dot: at icon-button size it reads as a smudge next to the
+        # glyph, and the tooltip already says a menu opens.
+        for _menu_btn in (self._open_btn,):
+            _menu_btn.setStyleSheet(_menu_btn.styleSheet()
+                                    + " QPushButton::menu-indicator { image: none; width: 0px; }")
         self._get_btn = _icon_button(
             "graduation-cap", "Tutorials",
             "Guided tutorials — each loads its own example and walks one skill")
         self._get_btn.setMenu(self._build_get_menu())
+        self._get_btn.setStyleSheet(self._get_btn.styleSheet()
+                                    + " QPushButton::menu-indicator { image: none; width: 0px; }")
         self._write_btn = _icon_button(
             "save", "Save", "Save the focused object to disk — model coordinates, or a map",
             self._on_write_object)
