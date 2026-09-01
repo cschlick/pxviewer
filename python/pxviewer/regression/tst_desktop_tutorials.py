@@ -285,14 +285,29 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         session = entry["session"]
 
         calls = []
-        session.orient_camera = lambda *a: calls.append(("orient", a))
+        session.orient_camera = lambda *a, **k: calls.append(("orient", a, k))
         session.focus = lambda atoms: calls.append(("focus", list(atoms)))
         session.set_clip = lambda front, back, radius=None, ref=None: calls.append(
             ("clip", front, back, radius))
 
+        # The Selection pane's two behaviour switches, both defaulting on, both routed:
+        # unchecking Clip to selection frames and orients identically but asks the
+        # viewer to leave the scene unclipped.
+        controls = app._controls
+        assert controls._focus_on_select.isChecked()
+        assert controls._clip_on_select.isChecked()
+        controls._clip_on_select.setChecked(False)
+        controls._run_selection("resseq 29")
+        unclipped = [c for c in calls if c[0] == "orient"]
+        assert unclipped and unclipped[-1][2].get("clip") is False, (
+            "the Clip to selection checkbox did not route")
+        controls._clip_on_select.setChecked(True)
+        calls.clear()
+
         app.select_by_expression("resseq 29")
         orients = [c for c in calls if c[0] == "orient"]
         assert orients, [c[0] for c in calls]
+        assert orients[-1][2].get("clip", True) is True, "default apply should clip"
         target, up, direction, radius, extents = orients[-1][1]
         assert all(e >= 2.0 for e in extents), extents
         # The vectors are a real frame: unit, orthogonal, aimed at the residue.

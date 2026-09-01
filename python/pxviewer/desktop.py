@@ -1577,6 +1577,22 @@ class ControlsWindow:
                 "selection/focus_on_apply", "true" if on else "false"))
         sl.addWidget(self._focus_on_select)
 
+        # Whether the focus also clips a slab around the selection. On by default --
+        # the slab is what isolates the named atoms from everything in front of and
+        # behind them -- but sometimes the surroundings are the point, so it is a
+        # choice, made where the behaviour happens.
+        self._clip_on_select = QCheckBox("Clip to selection")
+        self._clip_on_select.setToolTip(
+            "Clip the view to a slab that just contains the selected atoms; "
+            "uncheck to keep the whole scene visible around them.")
+        self._clip_on_select.setChecked(
+            str(self._desktop._settings.value("selection/clip_on_apply", "true")).lower()
+            != "false")
+        self._clip_on_select.toggled.connect(
+            lambda on: self._desktop._settings.setValue(
+                "selection/clip_on_apply", "true" if on else "false"))
+        sl.addWidget(self._clip_on_select)
+
         sl.addWidget(QLabel("Selected:"))
         self._selection_label = QLabel("None")
         self._selection_label.setWordWrap(True)
@@ -4566,7 +4582,8 @@ class ControlsWindow:
         self._select_expr.setText(expr)
         try:
             n = self._desktop.select_by_expression(
-                expr, focus=self._focus_on_select.isChecked())
+                expr, focus=self._focus_on_select.isChecked(),
+                clip=self._clip_on_select.isChecked())
         except Exception as exc:  # invalid syntax / no model
             self._selection_label.setText(
                 f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
@@ -10819,7 +10836,8 @@ class DesktopApp:
             except Exception:  # pragma: no cover - defensive
                 pass
 
-    def select_by_expression(self, text: str, *, focus: bool = True) -> int:
+    def select_by_expression(self, text: str, *, focus: bool = True,
+                             clip: bool = True) -> int:
         """Resolve a cctbx/Phenix selection string on the active model and select it.
 
         cctbx's own atom-selection machinery turns the string into atom indices
@@ -10867,7 +10885,7 @@ class DesktopApp:
                 # (a lone atom, a straight line) fall back to the plain focus.
                 orientation = self._principal_axes_orientation(session.model, indices)
             if orientation is not None:
-                session.orient_camera(*orientation)
+                session.orient_camera(*orientation, clip=clip)
                 centre = np.asarray(orientation[0], dtype=float)
             else:
                 session.focus(indices)

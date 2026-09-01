@@ -1095,7 +1095,7 @@ export class LiveViewer {
      * N->C backbone left-to-right and side chain up.
      */
     orient(target: number[], up: number[], direction: number[], radius: number,
-           extents?: number[]) {
+           extents?: number[], clip: boolean = true) {
         const camera = this.plugin.canvas3d?.camera;
         if (!camera) return;
         const t = Vec3.create(target[0], target[1], target[2]);
@@ -1132,7 +1132,12 @@ export class LiveViewer {
             const FOV_CALIBRATION = 2.42;
             const halfTan = Math.tan(fov / 2) * FOV_CALIBRATION;
             const distance = Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5);
-            const snapshot = camera.getInvariantFocus(t, Math.max(rz, 1.0), u, d);
+            // The slab: state.radius drives the near/far planes, so rz clips the view
+            // to just the selection's depth. With clipping off, the scene's own radius
+            // keeps everything visible while framing and orientation stay identical.
+            const slab = clip ? Math.max(rz, 1.0)
+                              : Math.max(camera.state.radiusMax || 0, rz, 1.0);
+            const snapshot = camera.getInvariantFocus(t, slab, u, d);
             const position = Vec3();
             Vec3.scale(position, d, distance);
             Vec3.sub(position, t, position);
@@ -3255,7 +3260,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'focus' && viewer) {
                 viewer.focusIndices(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'orient' && viewer) {
-                viewer.orient(msg.target, msg.up, msg.direction, msg.radius, msg.extents);
+                viewer.orient(msg.target, msg.up, msg.direction, msg.radius, msg.extents,
+                              msg.clip !== false);
             } else if (msg.type === 'markup' && viewer) {
                 await viewer.setMarkup(msg.channel, msg.primitives ?? []);
             } else if (msg.type === 'representations' && viewer) {

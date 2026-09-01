@@ -1701,7 +1701,7 @@ class LiveSession:
         return sel
 
     def orient_camera(self, target: Any, up: Any, direction: Any, radius: float,
-                      extents: Any = None) -> None:
+                      extents: Any = None, clip: bool = True) -> None:
         """Aim the camera at ``target`` with an explicit orientation. ``up`` is
         screen-up, ``direction`` is the view axis (eye -> target), ``radius`` frames
         the view. ``extents`` (rx, ry, rz half-extents along screen-right/up/the view
@@ -1719,6 +1719,8 @@ class LiveSession:
         }
         if extents is not None:
             message["extents"] = [float(c) for c in extents]
+        if not clip:
+            message["clip"] = False  # frame and orient, but leave the scene unclipped
         self._send_control(message)
 
     def clear_selection(self) -> None:
