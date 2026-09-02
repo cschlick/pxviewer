@@ -3157,20 +3157,17 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
-            # Downsample sits with the map's own display controls, not inside the
-            # colouring group: it is a property of how this map is drawn. Today its one
-            # consumer is the colour-by-resolution surface (the plain isosurface is
-            # contoured by the viewer from the full grid), which is why it only appears
-            # once a resolution map is pinned; a future progressive-rendering mode for
-            # plain maps would claim the same row.
-            if it.get("resolution_map"):
-                def _set_localres_ds(v, it=it):
-                    it["localres_downsample"] = v
-                    self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
+            # Downsample is a property of how any map is drawn: the plain isosurface
+            # redraws from an on-lattice decimated copy, and the colour-by-resolution
+            # surface (when active) rebuilds from its held grids at the same factor.
+            # Plain maps default to Full; the localres wizard defaults its map to 4x.
+            def _set_localres_ds(v, it=it):
+                it["localres_downsample"] = v
+                self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
 
-                add_combo("Downsample",
-                          [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
-                          int(it.get("localres_downsample") or 4), _set_localres_ds)
+            add_combo("Downsample",
+                      [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
+                      int(it.get("localres_downsample") or 1), _set_localres_ds)
             self._add_color_row(
                 "localres" if it.get("color_by_resolution") else live.get("color"),
                 _set_color,
@@ -6419,8 +6416,10 @@ class DesktopApp:
         first_visible = next((v for v in drawn if v["visible"]), None)
         nodes = []
         for v in drawn:
+            factor = int(v.get("localres_downsample") or 1)
+            url = (v.get("downsample_urls") or {}).get(factor, v["map_url"])
             nodes.append(Volume(
-                url=v["map_url"], ref=v["ref"], format="map",
+                url=url, ref=v["ref"], format="map",
                 # Maps contour in sigma, which is what makes one slider range serve every
                 # map. A severity field is the exception: its levels are calibrated (1.0 *is*
                 # the outlier cut), so it must contour on the absolute value or the level
@@ -9418,15 +9417,37 @@ class DesktopApp:
         return float(st["mean"] + float(entry["iso"]) * st["std"])
 
     def set_localres_downsample(self, full_vid: str, factor: int) -> None:
-        """Set how finely a map's colour-by-resolution surface is contoured (1 = every
-        voxel, n = every nth). A client-side rebuild from grids the browser holds."""
+        """Set a map's display downsampling: draw every nth voxel (1 = full grid).
+
+        Generic, not a localres setting (the key name is the wire protocol's history):
+        the plain isosurface redraws from an exactly on-lattice decimated copy served
+        beside the full map, and the colour-by-resolution surface rebuilds client-side
+        from the grids the browser already holds. One dropdown, both surfaces.
+        """
         entry = self._volume_entry(full_vid)
         if entry is None:
             return
-        entry["localres_downsample"] = max(1, int(factor))
+        factor = max(1, int(factor))
+        entry["localres_downsample"] = factor
         session = self._control_session()
         if session is not None:
-            session.set_localres_downsample(entry["localres_downsample"])
+            session.set_localres_downsample(factor)   # the coloured surface's path
+        if factor > 1:
+            urls = entry.setdefault("downsample_urls", {})
+            if factor not in urls:
+                from .volume_io import VolumeData
+
+                vols_dir = self._webapp.volume_dir / "vols"
+                # Decimate the display copy (already in the working frame), so the
+                # coarse map lands exactly where the full one draws.
+                shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
+                name = f"{entry['id']}.d{factor}.map"
+                shown.decimated(factor).write_map(str(vols_dir / name))
+                urls[factor] = f"{self._webapp.url}vols/{name}"
+        if not entry.get("color_by_resolution"):
+            # The plain surface is what is on screen: swap the scene to the coarser
+            # (or full) file. Parked-plain maps pick the right file up on any reload.
+            self._reload_viewport()
         self._emit_loaded_changed()  # the pane shows the current factor
 
     #: The one busy label spanning "payload streamed" to "the viewport has drawn it".

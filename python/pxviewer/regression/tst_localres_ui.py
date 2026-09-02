@@ -423,6 +423,59 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
             "colouring is on but the dropdown does not say so")
 
 
+def exercise_downsample_is_a_generic_map_tool():
+    """Every map gets the Downsample row (Full by default), and picking a factor swaps
+    the drawn scene to an exactly on-lattice decimated copy -- not a localres-only
+    control that vanishes for ordinary maps, which is how it first shipped.
+    """
+    with tmp_dir() as work:
+        full_path, _ = _small_maps(work)
+        app = DesktopApp(port=0)
+        app._webapp.start()
+        try:
+            app.load_file(full_path)
+            process_events()
+            vid = app._volumes[0]["id"]
+            entry = app._volume_entry(vid)
+            assert entry.get("resolution_map") is None, "fixture grew a resolution map"
+
+            # The pane offers the row for a plain map, defaulting to Full.
+            controls = app._controls
+            controls._update_appearance("volume", vid, force=True)
+            process_events()
+            from PySide6.QtWidgets import QComboBox
+            combos = controls._appearance_box.findChildren(QComboBox)
+            ds = [c for c in combos if c.findData(4) >= 0 and c.findData(1) >= 0]
+            assert ds, "no Downsample dropdown on a plain map"
+            assert ds[0].currentData() == 1, "a plain map should default to Full"
+
+            # Picking 2x writes the decimated copy and the scene draws it...
+            app.set_localres_downsample(vid, 2)
+            dec = app._webapp.volume_dir / "vols" / f"{vid}.d2.map"
+            assert dec.is_file(), "no decimated display copy written"
+            scene_path = app._write_volume_scene()
+            scene = (app._webapp.volume_dir / scene_path.lstrip("/")).read_text()
+            assert f"{vid}.d2.map" in scene, "the scene still draws the full grid"
+
+            # ...exactly on-lattice: half the voxels per axis, doubled spacing, and the
+            # kept values equal to the source at the sampled positions.
+            shown = VolumeData.from_map_file(
+                str(app._webapp.volume_dir / "vols" / f"{vid}.map"))
+            coarse = VolumeData.from_map_file(str(dec))
+            assert coarse.array.shape == tuple((n + 1) // 2 for n in shown.array.shape)
+            assert np.allclose(coarse.pixel_sizes,
+                               [p * 2 for p in shown.pixel_sizes])
+            assert np.allclose(coarse.array, shown.array[::2, ::2, ::2])
+
+            # Back to Full restores the original file in the scene.
+            app.set_localres_downsample(vid, 1)
+            scene_path = app._write_volume_scene()
+            scene = (app._webapp.volume_dir / scene_path.lstrip("/")).read_text()
+            assert f"{vid}.d2.map" not in scene and f"{vid}.map" in scene
+        finally:
+            dispose(app)
+
+
 def exercise_the_computed_resolution_map_is_saved_and_reused():
     """The minute-long computation runs once; a re-run loads the saved map from disk.
 

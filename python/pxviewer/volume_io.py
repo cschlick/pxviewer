@@ -137,6 +137,29 @@ class VolumeData:
     def space_group(self) -> str:
         return self.map_manager.crystal_symmetry().space_group().type().lookup_symbol()
 
+    def decimated(self, factor: int) -> "VolumeData":
+        """A copy sampling every ``factor``-th voxel per axis, exactly on-lattice.
+
+        The slice start is phase-shifted per axis (``s = -origin mod factor``) so every
+        sampled point sits on a whole-voxel position of the coarser grid: the decimated
+        map's cartesian origin is ``(origin + s) * pixel`` with spacing ``pixel * factor``,
+        which places each kept value at exactly the position it had in the source. A
+        naive ``[::f]`` from a shifted origin would need a fractional grid origin and
+        drift the map against its model by up to a voxel.
+        """
+        f = max(1, int(factor))
+        if f == 1:
+            return self
+        arr = self.array
+        origin = self.origin
+        starts = [(-int(o)) % f for o in origin]
+        sliced = np.ascontiguousarray(
+            arr[starts[0]::f, starts[1]::f, starts[2]::f]).astype(np.float32)
+        spacing = tuple(p * f for p in self.pixel_sizes)
+        new_origin = tuple((int(o) + s) // f for o, s in zip(origin, starts))
+        return VolumeData.from_numpy(sliced, spacing=spacing, origin=new_origin,
+                                     name=f"{self.name} (1/{f})")
+
     def stats(self) -> dict:
         """Basic grid statistics (min/max/mean/std) — forces the numpy copy."""
         a = self.array
