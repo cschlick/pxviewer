@@ -28,7 +28,7 @@ QAPP = qt_application()
 from PySide6.QtCore import Qt                        # noqa: E402
 from PySide6.QtGui import QColor, QPalette           # noqa: E402
 from PySide6.QtWidgets import (                      # noqa: E402
-    QApplication, QComboBox, QLabel, QPushButton, QRadioButton)
+    QApplication, QComboBox, QLabel, QPushButton)
 
 from pxviewer.desktop import (                       # noqa: E402
     _CUSTOM_COLOR, _MODEL_REP_OPTIONS, _TREE_MAX_HEIGHT, _TREE_MIN_HEIGHT,
@@ -297,14 +297,13 @@ def exercise_hiding_a_map_is_a_render_skip_not_a_reload():
 
 def exercise_software_pins_a_model_and_says_why_on_click():
     """On software WebGL touching a model's render state segfaults, so models are pinned
-    like maps: the checkbox is not checkable and the setter refuses *silently* -- an
-    internal caller, add-hydrogens, hides the H-less original and must not warn -- while
-    a click on the check column flashes the reason."""
+    like maps: the eye does not toggle and the setter refuses *silently* -- an internal
+    caller, add-hydrogens, hides the H-less original and must not warn -- while a click
+    on the eye column flashes the reason."""
     with desktop(can_hide=False) as app:              # software
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         session = app.session_for(a)
         node = node_for(app, "model", a)
-        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
         warned = []
         app.bridge.status_warned.connect(warned.append)
@@ -315,20 +314,21 @@ def exercise_software_pins_a_model_and_says_why_on_click():
         assert warned == []                               # and silent
 
         app._controls._on_tree_item_clicked(node, 0)
+        process_events()                                  # a real toggle would land now
         assert warned and "hardware WebGL" in warned[-1]
+        assert app._model_entry(a)["visible"] is True     # the eye did not toggle
         assert session._structure_visible is not False    # saying why touches nothing
 
 
 def exercise_software_pins_a_map_and_says_why_on_click():
-    """Hiding a map's isosurface segfaults on software WebGL, so the checkbox is not
-    checkable. Not a dead control though: clicking it flashes the reason, which is a pure
-    status message. A click off the check column says nothing."""
+    """Hiding a map's isosurface segfaults on software WebGL, so the eye does not toggle.
+    Not a dead control though: clicking it flashes the reason, which is a pure status
+    message. A click off the eye column says nothing."""
     with desktop(can_hide=False) as app:
         app._add_model(Recording_session.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         session = app._control_session()
         vid = blob(app, "map")
         node = node_for(app, "volume", vid)
-        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
 
         warned = []
         app.bridge.status_warned.connect(warned.append)
@@ -336,45 +336,47 @@ def exercise_software_pins_a_map_and_says_why_on_click():
         session.volume_commands = []
 
         app._controls._on_tree_item_clicked(node, 0)
+        process_events()                                  # a real toggle would land now
         assert warned and "hardware WebGL" in warned[-1]
         assert session.volume_commands == []              # nothing touched the scene
         assert app._scene_counter == before               # and nothing recomposed it
         assert app._volume_entry(vid)["visible"] is True  # still pinned visible
 
         warned[:] = []
-        app._controls._on_tree_item_clicked(node, 2)      # the name column
+        app._controls._on_tree_item_clicked(node, 1)      # the name column
         assert warned == []
 
 
-def exercise_a_visibility_box_never_rebuilds_the_tree_inside_the_signal():
-    """A visibility checkbox must never rebuild the object tree from inside
-    ``itemChanged``.
+def exercise_an_eye_click_never_rebuilds_the_tree_inside_the_signal():
+    """An eye click must never rebuild the object tree from inside ``itemClicked``.
 
-    Qt emits ``itemChanged`` synchronously from inside ``QTreeWidgetItem::setData``,
-    which it is running from the tree's own mouse-release stack. Rebuilding there reaches
-    ``QTreeWidget.clear()``, destroying the very item whose ``setData`` is still on the
-    stack; Qt keeps using that freed item as the stack unwinds and the process dies with
-    SIGSEGV.
+    Applying the toggle inside the signal reaches ``QTreeWidget.clear()``, destroying the
+    very item Qt is still delivering this click through; Qt keeps using that freed item as
+    the stack unwinds and the process dies with SIGSEGV.
 
     That -- not the GPU -- is what every past "hiding segfaults" crash was: three
     unrelated hide mechanisms all crashed with one identical Qt backtrace, on software
     *and* hardware WebGL. So the toggle is applied one event-loop turn later.
 
-    Reading the item after the signal is the check. If the tree had been cleared the item
-    would be freed, and touching it is exactly the crash being guarded against.
+    Reading the item after the handler is the check. If the tree had been cleared the
+    item would be freed, and touching it is exactly the crash being guarded against.
     """
     with desktop(can_hide=True) as app:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")  # keeps the page alive
         item = node_for(app, "model", a)
 
-        item.setCheckState(0, Qt.CheckState.Unchecked)   # emits itemChanged synchronously
+        app._controls._on_tree_item_clicked(item, 0)     # hide, from the click handler
 
-        assert item.text(2) == "A"                       # still alive and usable
+        assert item.text(1) == "A"                       # still alive and usable
         assert app._model_entry(a)["visible"]            # deferred, so not applied yet
 
         process_events()
         assert not app._model_entry(a)["visible"]        # applied on the next turn
+
+        app._controls._on_tree_item_clicked(node_for(app, "model", a), 0)
+        process_events()
+        assert app._model_entry(a)["visible"]            # and the eye toggles back
 
 
 # -- the appearance pane ------------------------------------------------------
@@ -424,8 +426,8 @@ def exercise_hiding_an_object_does_not_rebuild_the_appearance_pane():
 
 
 def exercise_the_appearance_pane_follows_the_active_model():
-    """Activating a model by its radio re-points the pane at it, so the dropdowns edit
-    that model rather than the previously focused one."""
+    """Activating a model by clicking its row re-points the pane at it, so the dropdowns
+    edit that model rather than the previously focused one."""
     with desktop() as app:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
@@ -434,10 +436,8 @@ def exercise_the_appearance_pane_follows_the_active_model():
         app.set_model_representation(a, "cartoon")
         b_rep = app._model_entry(b)["rep"]
 
-        radios = dict((r.property("mid"), r)
-                      for r in app._controls._loaded_tree.findChildren(QRadioButton))
-        app._controls._on_active_radio(radios[a])
-        process_events()                     # deferred off the click signal
+        app._controls._loaded_tree.setCurrentItem(node_for(app, "model", a))
+        process_events()                     # activation is deferred off the signal
 
         assert app._active_model_id == a
         assert app._controls._focused == ("model", a)
@@ -460,26 +460,58 @@ def exercise_a_new_model_takes_the_appearance_pane():
         assert app._controls._focused == ("model", b)
 
 
-def exercise_the_active_model_radio():
-    """One radio per model row, marking the active one and activating on click."""
+def exercise_the_current_row_is_the_active_model():
+    """One current object, not two: the highlighted row is the active model (no separate
+    radio to decode), the active row's name is bold, and clicking another model's row
+    switches both together."""
     with desktop() as app:
         a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
         b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
         assert app._active_model_id == b
 
         tree = app._controls._loaded_tree
-        radios = dict((r.property("mid"), r) for r in tree.findChildren(QRadioButton))
-        assert set(radios) == {a, b}
-        assert radios[b].isChecked() and not radios[a].isChecked()
+        assert tree.columnCount() == 2                   # [eye] [name] — no radio column
+        current = tree.currentItem()
+        assert current.data(0, Qt.ItemDataRole.UserRole) == ("model", b)
+        assert node_for(app, "model", b).font(1).bold()
+        assert not node_for(app, "model", a).font(1).bold()
 
-        # Activation is deferred one turn: the rebuild it triggers deletes the radio that
+        # Activation is deferred one turn: the rebuild it triggers deletes the item that
         # is still delivering this click, so it must not run inside the signal.
-        app._controls._on_active_radio(radios[a])
+        tree.setCurrentItem(node_for(app, "model", a))
         process_events()
         assert app._active_model_id == a
 
-        radios = dict((r.property("mid"), r) for r in tree.findChildren(QRadioButton))
-        assert radios[a].isChecked() and not radios[b].isChecked()
+        assert node_for(app, "model", a).font(1).bold()
+        assert not node_for(app, "model", b).font(1).bold()
+        assert tree.currentItem().data(0, Qt.ItemDataRole.UserRole) == ("model", a)
+
+
+def exercise_a_viewport_pick_points_the_panel_at_the_owning_model():
+    """The missing sync direction: picking atoms in one model highlights that model's row
+    and makes it active, so the Appearance pane and atoms table follow the user's
+    attention instead of staying wherever they were."""
+    with desktop() as app:
+        a = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        b = app._add_model(LiveSession.from_sites([[5, 0, 0], [6, 0, 0]]), "B")
+        assert app._active_model_id == b
+        tree = app._controls._loaded_tree
+
+        app._controls._on_scene_selection_changed({a: [0]})
+        process_events()                     # activation is deferred off the row change
+        assert tree.currentItem().data(0, Qt.ItemDataRole.UserRole) == ("model", a)
+        assert app._active_model_id == a
+        assert app._controls._focused == ("model", a)
+
+        # A selection spanning several models names no single owner: nothing moves.
+        app._controls._on_scene_selection_changed({a: [0], b: [1]})
+        process_events()
+        assert app._active_model_id == a
+
+        # Clearing the selection leaves the panel where it is too.
+        app._controls._on_scene_selection_changed({})
+        process_events()
+        assert app._active_model_id == a
 
 
 def exercise_rebuilding_the_appearance_pane_spawns_no_stray_windows():

@@ -351,11 +351,11 @@ def exercise_a_standalone_object_is_not_indented_like_a_group_member():
         tree = app._controls._loaded_tree
         roots = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
         group = next(r for r in roots if r.childCount())
-        loose = next(r for r in roots if not r.childCount() and r.text(2))
+        loose = next(r for r in roots if not r.childCount() and r.text(1))
 
-        assert group.child(0).text(2).startswith(_GROUP_MEMBER_INDENT)
-        assert not loose.text(2).startswith(" ")
-        assert loose.text(2).startswith("loose")
+        assert group.child(0).text(1).startswith(_GROUP_MEMBER_INDENT)
+        assert not loose.text(1).startswith(" ")
+        assert loose.text(1).startswith("loose")
 
 
 # -- aligning a pair the density disagrees with -------------------------------

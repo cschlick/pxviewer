@@ -1421,7 +1421,6 @@ class ControlsWindow:
         """Home: open files, the object list, appearance of the focused object, selection."""
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
-            QButtonGroup,
             QCheckBox,
             QGridLayout,
             QGroupBox,
@@ -1452,20 +1451,19 @@ class ControlsWindow:
         # pushes the rest of the pane into a scrollbar. On a 13" screen that space is the
         # difference between the pane fitting and not.
         self._loaded_tree.setMinimumHeight(_TREE_MIN_HEIGHT)
-        # Columns: [visible] [active] [name]. Toggles on the left; name last, elides.
-        self._loaded_tree.setColumnCount(3)
+        # Columns: [eye] [name]. One affordance each: the eye shows/hides the object,
+        # clicking anywhere on a row makes it the current object (the highlight) — the
+        # Appearance pane edits the current object, and a current *model* is also the
+        # active one (selection box, atoms table, geometry). No third control: the old
+        # active-model radio duplicated the highlight and just added a thing to decode.
+        self._loaded_tree.setColumnCount(2)
         self._loaded_tree.setHeaderHidden(True)
         header = self._loaded_tree.header()
         header.setStretchLastSection(True)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._loaded_tree.itemChanged.connect(self._on_tree_item_changed)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         self._loaded_tree.itemClicked.connect(self._on_tree_item_clicked)
-        self._active_group = QButtonGroup(self._window)  # exclusive active-model radios
-        self._active_group.setExclusive(True)
-        self._active_group.buttonClicked.connect(self._on_active_radio)
         ol.addWidget(self._loaded_tree, stretch=1)
 
         # -- Actions on the objects: a compact icon toolbar -----------------
@@ -2977,6 +2975,9 @@ class ControlsWindow:
         self._focused = (kind, ident) if it else (None, None)
         self._iso_row = None  # rebuilt below only when a volume is focused
         if it is None:
+            # Reset the title too: leaving the old object's name over an empty-state hint
+            # made the pane look like it was still editing something.
+            self._appearance_box.setTitle("Appearance")
             hint = QLabel("Select an object above to edit how it looks.")
             hint.setStyleSheet("color: palette(placeholder-text);")
             self._appearance_layout.addWidget(hint)
@@ -4997,8 +4998,32 @@ class ControlsWindow:
         self._hide_sel_btn.setEnabled(total > 0)
         self._show_sel_btn.setEnabled(total > 0)
         self._selection_label.setText(self._desktop.selection_description(self._scene_selection))
+        # Viewer -> Objects list: the selection lives in exactly one model, so make that
+        # model's row current (which also makes it the active model). This is the missing
+        # direction — picking atoms used to leave the panel pointing wherever it was, so
+        # the Appearance pane and atoms table acted on an object the user had stopped
+        # thinking about. A selection spanning several models (or none) moves nothing.
+        owners = [mid for mid, indices in self._scene_selection.items() if indices]
+        if len(owners) == 1:
+            self._set_current_tree_row("model", owners[0])
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
+
+    def _set_current_tree_row(self, kind: str, ident: str) -> None:
+        """Point the object list's highlight at (kind, ident), if it has a row."""
+        from PySide6.QtCore import Qt
+
+        tree = self._loaded_tree
+        current = tree.currentItem()
+        if current is not None and current.data(0, Qt.ItemDataRole.UserRole) == (kind, ident):
+            return
+        stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+        while stack:
+            node = stack.pop()
+            if node.data(0, Qt.ItemDataRole.UserRole) == (kind, ident):
+                tree.setCurrentItem(node)  # _on_tree_current_changed does the rest
+                return
+            stack.extend(node.child(i) for i in range(node.childCount()))
 
     @contextmanager
     def _table_sync_suppressed(self):
@@ -5163,7 +5188,7 @@ class ControlsWindow:
     # -- loaded tree (models + volumes + groups) -------------------------
 
     def _fit_checkbox_column(self) -> None:
-        """Widen the visibility column so a nested row's checkbox is not clipped.
+        """Widen the visibility column so a nested row's eye icon is not clipped.
 
         Column 0 is ResizeToContents, and Qt measures that from the items' contents while
         the tree's own indentation is drawn *inside* the same column. A child row therefore
@@ -5220,7 +5245,7 @@ class ControlsWindow:
 
     def _on_loaded_changed(self, summary) -> None:
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QRadioButton, QTreeWidgetItem
+        from PySide6.QtWidgets import QTreeWidgetItem
 
         groups = {g["id"]: g for g in summary.get("groups", [])}
         items = summary.get("items", [])
@@ -5231,8 +5256,6 @@ class ControlsWindow:
         self._suppress_model_events = True
         try:
             self._loaded_tree.clear()
-            for button in self._active_group.buttons():
-                self._active_group.removeButton(button)  # radios are rebuilt below
             group_nodes: dict = {}
             active_item = None
             # Group parent nodes first (plain headers — membership is from cctbx).
@@ -5254,6 +5277,18 @@ class ControlsWindow:
                     node.setFont(0, font)
                     node.setExpanded(True)
                     group_nodes[gid] = node
+            # Eye / eye-off, tinted like the surrounding text (dimmed when hidden), so the
+            # column reads as "visibility" without a legend — a checkbox only said
+            # "enabled at something".
+            from PySide6.QtGui import QPalette
+
+            palette = self._loaded_tree.palette()
+            eye_shown = _line_icon(
+                "eye", palette.color(QPalette.ColorRole.Text), size=16)
+            eye_hidden = _line_icon(
+                "eye-off",
+                palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text),
+                size=16)
             vol_nodes: dict = {}  # vid -> node, so a pinned map can nest under its full map
             for it in items:
                 # A resolution map pinned to a full map nests under that map's node (the
@@ -5265,38 +5300,32 @@ class ControlsWindow:
                     parent = group_nodes.get(it["group"], self._loaded_tree)
                 elif isinstance(parent, QTreeWidgetItem):
                     parent.setExpanded(True)
-                # [visible check] col 0, [active radio] col 1, [name] col 2 (elides).
+                # [eye] col 0, [name] col 1 (elides).
                 node = QTreeWidgetItem(parent)
                 if it["kind"] == "volume":
                     vol_nodes[it["id"]] = node
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 if it["visible"] is None:
-                    # Reflections: nothing drawable, so nothing to show or hide.
-                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    pass  # reflections: nothing drawable, so no eye to click
                 elif it["kind"] in ("model", "volume") and not self._desktop._can_hide:
                     # Hiding is disabled on software WebGL (this VM's SwiftShader). The
                     # original reason — "hiding segfaults the software renderer" — turned out
-                    # to be a misread of the object-tree use-after-free fixed in
-                    # _on_tree_item_changed, which crashed on every renderer because no
-                    # renderer was involved. The block stays only because software rendering
-                    # has not been re-tested since; it is likely safe to lift. Not a dead
-                    # control: a click flashes why (see _on_tree_item_clicked).
-                    node.setFlags(node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-                    node.setCheckState(0, Qt.CheckState.Checked)
+                    # to be a misread of the object-tree use-after-free (the tree rebuilding
+                    # itself from inside its own item signal), which crashed on every
+                    # renderer because no renderer was involved. The block stays only
+                    # because software rendering has not been re-tested since; it is likely
+                    # safe to lift. Not a dead control: a click flashes why
+                    # (see _on_tree_item_clicked).
+                    if eye_shown:
+                        node.setIcon(0, eye_shown)
                     node.setToolTip(0, "Hiding needs hardware WebGL "
                                        "(not available on software rendering)")
                 else:
-                    node.setFlags(node.flags() | Qt.ItemFlag.ItemIsUserCheckable)
-                    node.setToolTip(0, "Visible")
-                    node.setCheckState(
-                        0, Qt.CheckState.Checked if it["visible"] else Qt.CheckState.Unchecked)
-                if it["kind"] == "model":
-                    radio = QRadioButton()
-                    radio.setToolTip("Active model — drives the atoms table, geometry and selection.")
-                    radio.setProperty("mid", it["id"])
-                    self._active_group.addButton(radio)
-                    radio.setChecked(bool(it.get("active")))  # won't fire buttonClicked
-                    self._loaded_tree.setItemWidget(node, 1, radio)
+                    icon = eye_shown if it["visible"] else eye_hidden
+                    if icon:
+                        node.setIcon(0, icon)
+                    node.setToolTip(0, "Shown — click the eye to hide" if it["visible"]
+                                    else "Hidden — click the eye to show")
                 # No marker suffix: its name ("Ligand marker N") already says what it is.
                 suffix = {"volume": "   [map]", "reflections": "   [data]"}
                 # Indent a group member's name by hand. Qt applies tree indentation to
@@ -5305,8 +5334,21 @@ class ControlsWindow:
                 # standing alone, which made every object look like a group member. Indent
                 # the name to match, and an object at the root reads as standing alone.
                 indent = _GROUP_MEMBER_INDENT if (it["group"] or it.get("pinned_to")) else ""
-                node.setText(2, indent + it["name"] + suffix.get(it["kind"], ""))
-                node.setToolTip(2, it["name"])  # full name on hover when elided
+                node.setText(1, indent + it["name"] + suffix.get(it["kind"], ""))
+                node.setToolTip(1, it["name"])  # full name on hover when elided
+                if it["kind"] == "model":
+                    # The active model is the last model row you touched; the selection
+                    # box, atoms table and geometry act on it. Bold — a foreground accent
+                    # would vanish against the row-highlight background when the active
+                    # row is also the current one, which it usually is.
+                    node.setToolTip(1, it["name"] + (
+                        "\nActive model — the selection box, atoms table and geometry "
+                        "act on it." if it.get("active")
+                        else "\nClick to make this the active model."))
+                    if it.get("active"):
+                        font = node.font(1)
+                        font.setBold(True)
+                        node.setFont(1, font)
                 if it.get("active"):
                     active_item = node
             if active_item is not None:
@@ -5322,7 +5364,7 @@ class ControlsWindow:
         self._update_pair_button()
         # Point the Appearance pane at the focused object. Focusing a model activates
         # it, so a focused *model* must always be the active one — if the active model
-        # changed underneath us (a new model, a radio click, hydrogenate+analyze),
+        # changed underneath us (a new model, a row click, hydrogenate+analyze),
         # follow it. A focused volume is left alone while it still exists.
         kind, ident = self._focused
         active = next((m for m in model_items if m["active"]), None)
@@ -5348,7 +5390,7 @@ class ControlsWindow:
         if kind == "model":
             # Activating rebuilds the tree, and this signal runs inside the tree's own
             # selection handling — rebuilding here would free the item Qt is still using
-            # (see _on_tree_item_changed). Defer past the signal.
+            # (see _on_tree_item_clicked). Defer past the signal.
             QTimer.singleShot(0, lambda: self._desktop.set_active_model(ident))
 
     def _make_type_combo(self, mid, types, hidden, *, interactions=False):
@@ -5392,31 +5434,8 @@ class ControlsWindow:
             self._suppress_table_model_combo = False
         self._set_table_model(target)
 
-    def _on_tree_item_changed(self, item, _column=0) -> None:
-        """A visibility box was toggled -> apply it, but never from inside this signal.
-
-        ``itemChanged`` is emitted *synchronously* from inside ``QTreeWidgetItem::setData``,
-        which Qt is running from the tree's own mouse-release/edit stack. Applying the change
-        here would run ``_emit_loaded_changed`` -> ``_on_loaded_changed`` -> ``tree.clear()``,
-        destroying the very item whose ``setData`` is on the stack; Qt then keeps using that
-        freed item as the stack unwinds and the process dies with SIGSEGV. That — not the
-        GPU — is what every past "hiding segfaults" report actually was, which is why it
-        reproduced identically on software and hardware WebGL and on three unrelated hide
-        mechanisms.
-
-        So read the plain values off the item now and do the work on the next event-loop
-        turn, once Qt has finished with the item. Nothing here may touch the tree.
-        """
-        from PySide6.QtCore import Qt, QTimer
-
-        if self._suppress_model_events:
-            return
-        kind, ident = item.data(0, Qt.ItemDataRole.UserRole)
-        visible = item.checkState(0) == Qt.CheckState.Checked
-        QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
-
     def _apply_visibility(self, kind: str, ident: str, visible: bool) -> None:
-        """Apply a visibility toggle, off the tree's signal stack (see above)."""
+        """Apply a visibility toggle, off the tree's signal stack (see below)."""
         if kind == "model":
             self._desktop.set_model_visible(ident, visible)
         elif kind == "volume":
@@ -5426,35 +5445,34 @@ class ControlsWindow:
         # reflections have no visibility to change
 
     def _on_tree_item_clicked(self, item, column: int) -> None:
-        """A model's or map's visibility box is non-checkable on software (hiding either
-        segfaults the renderer), so a click there does nothing — say why. Only the check
-        column, and only a pure status flash: no viewer message, so it cannot itself
-        crash."""
-        from PySide6.QtCore import Qt
+        """A click on the eye column shows/hides the object — applied on the *next*
+        event-loop turn, never inside this signal. Applying here would run
+        ``_emit_loaded_changed`` -> ``_on_loaded_changed`` -> ``tree.clear()``, destroying
+        the very item Qt is still delivering this click through; Qt then keeps using the
+        freed item as the stack unwinds and the process dies with SIGSEGV. That — not the
+        GPU — is what every past "hiding segfaults" report actually was, which is why it
+        reproduced identically on software and hardware WebGL.
 
-        if column != 0:
+        On software WebGL hiding models and maps is refused (see _on_loaded_changed), so
+        there the eye is not a dead control: a click flashes why, as a pure status flash —
+        no viewer message, so it cannot itself crash."""
+        from PySide6.QtCore import Qt, QTimer
+
+        if column != 0 or self._suppress_model_events:
             return
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
-        kind, _ident = data
-        if kind in ("model", "volume") and not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+        kind, ident = data
+        it = self._find_item(kind, ident)
+        if it is None or it.get("visible") is None:
+            return  # group header, or reflections: nothing drawable to toggle
+        if kind in ("model", "volume") and not self._desktop._can_hide:
             self._desktop._warn("Hiding needs hardware WebGL — not available on software "
                                 "rendering.")
-
-    def _on_active_radio(self, button) -> None:
-        """A model's active radio was clicked -> make it the active model."""
-        from PySide6.QtCore import QTimer
-
-        if self._suppress_model_events:
             return
-        mid = button.property("mid")
-        if mid:
-            # set_active_model refreshes the Loaded tree; _on_loaded_changed then points
-            # Appearance at the newly active model (a focused model tracks the active one).
-            # The radio lives *in* the tree (setItemWidget), so that refresh deletes this
-            # very button while it is still delivering its own click — defer past it.
-            QTimer.singleShot(0, lambda: self._desktop.set_active_model(mid))
+        visible = not it["visible"]
+        QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt
@@ -8915,7 +8933,7 @@ class DesktopApp:
         app's WebGL survives; an in-place change segfaults it". That was a misdiagnosis. The
         segfault was never in the renderer — it was a use-after-free in the *object tree*,
         which rebuilt itself from inside ``QTreeWidgetItem::setData`` and freed the item Qt
-        was still using (see ``ControlsWindow._on_tree_item_changed``). Three unrelated hide
+        was still using (see ``ControlsWindow._on_tree_item_clicked``). Three unrelated hide
         mechanisms crashed with one identical Qt backtrace, on software and hardware alike,
         which is the tell that no GPU was involved.
 

@@ -33,7 +33,7 @@ QAPP = qt_application()
 from PySide6.QtCore import QEvent, QPointF, Qt      # noqa: E402
 from PySide6.QtGui import QMouseEvent               # noqa: E402
 from PySide6.QtWidgets import (                     # noqa: E402
-    QApplication, QCheckBox, QComboBox, QRadioButton, QTableWidget)
+    QApplication, QCheckBox, QComboBox, QTableWidget)
 
 from pxviewer.desktop import DesktopApp, _make_checkable_combo    # noqa: E402
 from pxviewer.live import LiveSession               # noqa: E402
@@ -1131,14 +1131,14 @@ def exercise_hide_structure_types():
         assert not any(box.text() == "Computed interactions"
                        for box in controls._appearance_box.findChildren(QCheckBox))
 
-        # Tree row layout: visible check in column 0, active radio in 1, name in 2.
+        # Tree row layout: visibility eye in column 0, name in 1. No widgets in the row.
         tree = controls._loaded_tree
         first = tree.topLevelItem(0)
-        assert tree.columnCount() == 3
-        assert first.checkState(0) in (Qt.CheckState.Checked, Qt.CheckState.Unchecked)
-        assert isinstance(tree.itemWidget(first, 1), QRadioButton)
+        assert tree.columnCount() == 2
+        assert not first.icon(0).isNull()               # the eye
+        assert tree.itemWidget(first, 1) is None
         assert first.text(0) == ""
-        assert "1ubq" in first.text(2)
+        assert "1ubq" in first.text(1)
 
 
 def exercise_a_checkable_combo_requires_a_click_inside_the_popup():
