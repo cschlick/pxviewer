@@ -1025,8 +1025,9 @@ def exercise_residue_orientation_and_space_navigation():
         model = app._model_entry(mid)["session"].model
         index = app._build_residue_index(model)
 
-        _target, up, direction, _radius = app._residue_orientation(
+        _target, up, direction, _radius, extents = app._residue_orientation(
             model, index[("A", "13")])
+        assert len(extents) == 3 and all(e > 0 for e in extents)
         assert approx_equal(float(np.linalg.norm(up)), 1.0, eps=1e-6)
         assert approx_equal(float(np.linalg.norm(direction)), 1.0, eps=1e-6)
         assert abs(float(np.dot(up, direction))) < 1e-6         # orthonormal

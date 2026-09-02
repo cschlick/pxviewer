@@ -171,11 +171,17 @@ def exercise_a_contour_changed_in_the_viewport_is_not_echoed_back():
 def exercise_volume_colour_swatches_and_a_custom_picker():
     """Colours are swatches rather than names, with a picker for anything off the preset
     list -- the wire takes any hex Mol* can decode."""
+    def colour_combo(controls):
+        # Found by content, not position: the pane's combo order has already shifted
+        # once (Downsample moved in) and silently stranded a positional lookup.
+        return next(c for c in controls._appearance_box.findChildren(QComboBox)
+                    if c.itemData(0) == _VOLUME_COLORS[0])
+
     with desktop() as app:
         vid = blob(app)
         controls = app._controls
         controls._update_appearance("volume", vid)
-        combo = controls._appearance_box.findChildren(QComboBox)[1]     # after Style
+        combo = colour_combo(controls)
 
         assert [combo.itemData(i) for i in range(len(_VOLUME_COLORS))] == _VOLUME_COLORS
         assert all(not combo.itemIcon(i).isNull() for i in range(len(_VOLUME_COLORS)))
@@ -187,8 +193,8 @@ def exercise_volume_colour_swatches_and_a_custom_picker():
         # A picked colour is a hex string, and joins the list so it stays selected.
         app.set_volume_color(vid, "#3fa9f5")
         controls._update_appearance("volume", vid)
-        combo = controls._appearance_box.findChildren(QComboBox)[1]
-        assert combo.currentData() == "#3fa9f5"
+        combo = next(c for c in controls._appearance_box.findChildren(QComboBox)
+                     if c.currentData() == "#3fa9f5")
         assert not combo.itemIcon(combo.currentIndex()).isNull()
 
 
