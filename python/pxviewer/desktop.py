@@ -1598,6 +1598,7 @@ class ControlsWindow:
         sel_row.addWidget(self._pick_btn)
 
         self._select_expr = QLineEdit()
+        self._select_expr_model = None  # which model the box text describes (see _run_selection)
         self._select_expr.setPlaceholderText("selection, e.g. chain A and resseq 5:14")
         self._select_expr.setToolTip("A cctbx / Phenix selection string on the active model.")
         self._select_expr.returnPressed.connect(self._on_select_expression)
@@ -4653,6 +4654,10 @@ class ControlsWindow:
             self._selection_label.setText(
                 f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
             return
+        # Which model the box text describes — so removing that model can clear it
+        # (a leftover expression about a gone model reads as a live selection).
+        self._select_expr_model = (
+            self._desktop._active_model_id if expr.strip() else None)
         self._selection_label.setText("selection cleared" if not expr.strip() else f"{n} atom(s) selected")
 
     def _on_stop_demo(self) -> None:
@@ -5126,6 +5131,7 @@ class ControlsWindow:
         # would lie, so the box follows.
         if expression is not None:
             self._select_expr.setText(expression)
+            self._select_expr_model = mid if expression else None
 
     def _set_current_tree_row(self, kind: str, ident: str) -> None:
         """Point the object list's highlight at (kind, ident), if it has a row."""
@@ -5496,6 +5502,15 @@ class ControlsWindow:
         self._update_appearance(kind, ident)
         self._update_ligand_panel()  # markers/maps may have changed
         self._refresh_edits_list()   # active model or its edits may have changed
+        # The selection box describes one model's selection; when that model was
+        # removed, the text would read as a live selection of nothing. Clear it and
+        # let the label state what is actually selected now.
+        if (self._select_expr_model is not None
+                and self._select_expr_model not in {m["id"] for m in model_items}):
+            self._select_expr_model = None
+            self._select_expr.setText("")
+            self._selection_label.setText(
+                self._desktop.selection_description(self._scene_selection))
 
     def _on_tree_current_changed(self, current, _previous) -> None:
         if self._suppress_model_events or current is None:
@@ -5621,6 +5636,7 @@ class ControlsWindow:
                     f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
                 return
             self._select_expr.setText("all")
+            self._select_expr_model = mid
             self._selection_label.setText(f"{n} atom(s) selected")
         QTimer.singleShot(0, _select_object)     # off the event, like every tree action
 

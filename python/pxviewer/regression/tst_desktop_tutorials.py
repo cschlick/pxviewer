@@ -342,6 +342,32 @@ def exercise_double_clicking_a_model_row_selects_the_whole_model():
         assert app._model_entry(first)["visible"], "the two toggles should cancel out"
 
 
+def exercise_removing_a_model_clears_its_selection_text():
+    """The selection box describes one model's selection. Removing that model (the
+    trash can) clears the text — a leftover expression about a gone model reads as a
+    live selection of nothing. Removing an unrelated model leaves it alone."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        process_events()
+        first = app._active_model_id
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        second = app._active_model_id
+        controls = app._controls
+
+        controls._run_selection("resseq 29")          # applies to the active model
+        assert controls._select_expr.text() == "resseq 29"
+
+        app.remove_model(first)                       # unrelated model: text stays
+        process_events()
+        assert controls._select_expr.text() == "resseq 29"
+
+        app.remove_model(second)                      # the model the text described
+        process_events()
+        assert controls._select_expr.text() == ""
+        assert controls._selection_label.text() == "None"
+
+
 def exercise_a_click_and_a_typed_selection_are_one_pipeline():
     """The unification: with no click mode armed, a viewport atom click selects the
     clicked residue through exactly the pipeline a typed selection takes — oriented
