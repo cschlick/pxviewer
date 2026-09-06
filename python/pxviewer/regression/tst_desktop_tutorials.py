@@ -273,13 +273,15 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
 
 
 def exercise_double_clicking_a_model_row_selects_the_whole_model():
-    """Two quick clicks on a model's name select the whole model — also on a NON-active
-    row, where the first click activates the model and rebuilds the tree between the
-    clicks. Detection is by row identity and clock, so the rebuild that destroys the
-    clicked item does not reset the gesture (Qt's own itemDoubleClicked did, and a
-    double-click on a non-active model took three clicks). Never on the eye column —
-    clicks there stay visibility toggles."""
+    """One double-click gesture on a model's name selects the whole model — also on a
+    NON-active row, where the first click activates the model and REBUILDS the tree
+    mid-gesture. Real mouse events on purpose: the rebuild makes Qt swallow its own
+    item signals for the rest of the gesture (mouseDoubleClickEvent requires its
+    remembered pressed index to still match), which is why the double-click is caught
+    by a raw viewport event filter — a handler-level test would pass with the broken
+    signal route. Never on the eye column: clicks there stay visibility toggles."""
     from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
 
     with desktop() as app:
         app.load_file(data_path("3nir.pdb"))
@@ -287,39 +289,46 @@ def exercise_double_clicking_a_model_row_selects_the_whole_model():
         first = app._active_model_id
         app.load_file(data_path("1ubq.pdb"))
         process_events()
-        assert app._active_model_id != first          # the second load is active
+        second = app._active_model_id
+        assert second != first                        # the second load is active
         controls = app._controls
         tree = controls._loaded_tree
 
-        def node_of(mid):
+        def rect_center(mid, col=1):
             for i in range(tree.topLevelItemCount()):
-                n = tree.topLevelItem(i)
-                if n.data(0, Qt.ItemDataRole.UserRole) == ("model", mid):
-                    return n
+                node = tree.topLevelItem(i)
+                if node.data(0, Qt.ItemDataRole.UserRole) == ("model", mid):
+                    return tree.visualRect(tree.indexFromItem(node, col)).center()
             raise AssertionError("no row for %s" % mid)
 
-        def click_name_row(mid):
-            node = node_of(mid)                       # re-found: rebuilds swap the items
-            tree.setCurrentItem(node)                 # what a real click also does
-            controls._on_tree_item_clicked(node, 1)
+        # The plain case: a double-click gesture on the row that is already active.
+        pos = rect_center(second)
+        QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+        QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+        process_events()
+        assert controls._select_expr.text() == "all"
+        n = app.session_for(second).model.get_hierarchy().atoms_size()
+        assert len(app._scene_selection.get(second, [])) == n
 
-        # One double-click gesture on the non-active model, the tree rebuilding
-        # in between the two clicks.
-        click_name_row(first)
+        # One gesture on the non-active model, the tree rebuilding between the clicks.
+        app.select_by_expression("")
+        QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton,
+                         pos=rect_center(first))
         process_events()                              # deferred activation + rebuild
-        click_name_row(first)
+        QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton,
+                          pos=rect_center(first))    # re-found: the rebuild moved it
         process_events()
         assert app._active_model_id == first
         assert controls._select_expr.text() == "all"
-        n_atoms = app.session_for(first).model.get_hierarchy().atoms_size()
-        assert len(app._scene_selection.get(first, [])) == n_atoms, (
-            "the whole model should be selected")
+        n = app.session_for(first).model.get_hierarchy().atoms_size()
+        assert len(app._scene_selection.get(first, [])) == n, (
+            "the whole model should be selected in one gesture")
 
-        # The eye column never selects: two quick clicks there are two toggles.
+        # The eye column never selects: a double-click there is two toggles.
         app.select_by_expression("")
-        controls._on_tree_item_clicked(node_of(first), 0)
-        process_events()
-        controls._on_tree_item_clicked(node_of(first), 0)
+        pos = rect_center(first, col=0)
+        QTest.mouseClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=pos)
+        QTest.mouseDClick(tree.viewport(), Qt.MouseButton.LeftButton, pos=pos)
         process_events()
         assert not app._scene_selection.get(first), (
             "an eye-column double-click must not select")
