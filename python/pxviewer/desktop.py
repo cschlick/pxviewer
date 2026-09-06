@@ -1464,7 +1464,7 @@ class ControlsWindow:
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         self._loaded_tree.itemClicked.connect(self._on_tree_item_clicked)
-        self._loaded_tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
+        self._tree_last_click = None  # ((kind, ident), monotonic) — double-click detection
         ol.addWidget(self._loaded_tree, stretch=1)
 
         # -- Actions on the objects: a compact icon toolbar -----------------
@@ -5460,13 +5460,33 @@ class ControlsWindow:
         there the eye is not a dead control: a click flashes why, as a pure status flash —
         no viewer message, so it cannot itself crash."""
         from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtWidgets import QApplication
 
-        if column != 0 or self._suppress_model_events:
+        if self._suppress_model_events:
             return
         data = item.data(0, Qt.ItemDataRole.UserRole)
         if not data:
             return
         kind, ident = data
+        if column != 0:
+            # Two clicks on the same model row within the double-click interval select
+            # the whole model — which, with the Selection pane's focus behaviour, also
+            # centres and frames it. Detected here by identity and clock rather than
+            # Qt's itemDoubleClicked: the first click on a non-active model activates
+            # it, which rebuilds the tree and destroys the clicked item mid-gesture, so
+            # Qt's own detection resets and a "double-click" took three clicks. The
+            # (kind, ident) pair survives the rebuild; the item does not.
+            now = time.monotonic()
+            last, self._tree_last_click = self._tree_last_click, ((kind, ident), now)
+            if (kind == "model" and last is not None and last[0] == (kind, ident)
+                    and now - last[1] <= QApplication.doubleClickInterval() / 1000.0):
+                self._tree_last_click = None
+
+                def _select_all(mid=ident):
+                    self._desktop.set_active_model(mid)  # no-op when the click did it
+                    self._run_selection("all")     # honours the Focus/Clip checkboxes
+                QTimer.singleShot(0, _select_all)  # off the signal, like every tree action
+            return
         it = self._find_item(kind, ident)
         if it is None or it.get("visible") is None:
             return  # group header, or reflections: nothing drawable to toggle
@@ -5476,30 +5496,6 @@ class ControlsWindow:
             return
         visible = not it["visible"]
         QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
-
-    def _on_tree_item_double_clicked(self, item, column: int) -> None:
-        """Double-clicking a model's name selects the whole model — which, with the
-        Selection pane's focus behaviour, also centres and frames it.
-
-        Not on the eye column: a double-click there is two visibility toggles, not a
-        select-all. Deferred off the signal for the same reason as every other tree
-        action — selecting rebuilds panes, and this runs inside the tree's own click
-        delivery."""
-        from PySide6.QtCore import Qt, QTimer
-
-        if column == 0 or self._suppress_model_events:
-            return
-        data = item.data(0, Qt.ItemDataRole.UserRole)
-        if not data:
-            return
-        kind, ident = data
-        if kind != "model":
-            return
-
-        def _select_all(mid=ident):
-            self._desktop.set_active_model(mid)  # a no-op when the click already did it
-            self._run_selection("all")           # honours the Focus/Clip checkboxes
-        QTimer.singleShot(0, _select_all)
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt

@@ -1131,7 +1131,15 @@ export class LiveViewer {
             // orient at a known distance, screenshot, measure the fraction spanned.
             const FOV_CALIBRATION = 2.42;
             const halfTan = Math.tan(fov / 2) * FOV_CALIBRATION;
-            const distance = Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5);
+            // The rx/ry terms fit the selection at the *target's* depth, but the
+            // selection is rz deep: an atom on the near face sits at distance - rz and
+            // projects larger by distance/(distance - rz). For a residue (rz ~ 3 A)
+            // the fill margin absorbed that; for a whole model (rz ~ 20 A) the near
+            // face spilled well off screen. Adding rz fits the worst case -- a
+            // full-width atom on the near face -- exactly, so the entire selection
+            // stays in frame whatever its depth.
+            const distance =
+                Math.max(ry / (fill * halfTan), rx / (fill * halfTan * aspect), 5) + rz;
             // The slab: state.radius drives the near/far planes, so rz clips the view
             // to just the selection's depth. With clipping off, the scene's own radius
             // keeps everything visible while framing and orientation stay identical.

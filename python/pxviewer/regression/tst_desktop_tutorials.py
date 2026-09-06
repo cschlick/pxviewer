@@ -273,28 +273,57 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
 
 
 def exercise_double_clicking_a_model_row_selects_the_whole_model():
-    """A double-click on a model's name selects the whole model, which (with the focus
-    behaviour on) also centres and frames it. Not on the eye column — a double-click
-    there is two visibility toggles, never a select-all."""
+    """Two quick clicks on a model's name select the whole model — also on a NON-active
+    row, where the first click activates the model and rebuilds the tree between the
+    clicks. Detection is by row identity and clock, so the rebuild that destroys the
+    clicked item does not reset the gesture (Qt's own itemDoubleClicked did, and a
+    double-click on a non-active model took three clicks). Never on the eye column —
+    clicks there stay visibility toggles."""
+    from PySide6.QtCore import Qt
+
     with desktop() as app:
         app.load_file(data_path("3nir.pdb"))
         process_events()
-        controls = app._controls
-        mid = app._active_model_id
-        node = controls._loaded_tree.topLevelItem(0)
-
-        controls._on_tree_item_double_clicked(node, 1)   # the name column
+        first = app._active_model_id
+        app.load_file(data_path("1ubq.pdb"))
         process_events()
+        assert app._active_model_id != first          # the second load is active
+        controls = app._controls
+        tree = controls._loaded_tree
+
+        def node_of(mid):
+            for i in range(tree.topLevelItemCount()):
+                n = tree.topLevelItem(i)
+                if n.data(0, Qt.ItemDataRole.UserRole) == ("model", mid):
+                    return n
+            raise AssertionError("no row for %s" % mid)
+
+        def click_name_row(mid):
+            node = node_of(mid)                       # re-found: rebuilds swap the items
+            tree.setCurrentItem(node)                 # what a real click also does
+            controls._on_tree_item_clicked(node, 1)
+
+        # One double-click gesture on the non-active model, the tree rebuilding
+        # in between the two clicks.
+        click_name_row(first)
+        process_events()                              # deferred activation + rebuild
+        click_name_row(first)
+        process_events()
+        assert app._active_model_id == first
         assert controls._select_expr.text() == "all"
-        n_atoms = app.session_for(mid).model.get_hierarchy().atoms_size()
-        assert len(app._scene_selection.get(mid, [])) == n_atoms, (
+        n_atoms = app.session_for(first).model.get_hierarchy().atoms_size()
+        assert len(app._scene_selection.get(first, [])) == n_atoms, (
             "the whole model should be selected")
 
+        # The eye column never selects: two quick clicks there are two toggles.
         app.select_by_expression("")
-        controls._on_tree_item_double_clicked(node, 0)   # the eye column
+        controls._on_tree_item_clicked(node_of(first), 0)
         process_events()
-        assert not app._scene_selection.get(mid), (
+        controls._on_tree_item_clicked(node_of(first), 0)
+        process_events()
+        assert not app._scene_selection.get(first), (
             "an eye-column double-click must not select")
+        assert app._model_entry(first)["visible"], "the two toggles should cancel out"
 
 
 def exercise_a_single_residue_selection_gets_the_oriented_framing():
