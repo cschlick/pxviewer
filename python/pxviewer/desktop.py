@@ -7926,23 +7926,31 @@ class DesktopApp:
                                        and v.get("negative_color")), None)
                     colors = ((diff_entry["color"], diff_entry["negative_color"])
                               if diff_entry else None)
+                    # The window contours at the SAME level as the difference map it
+                    # stands in for — both are sigma-scaled, so the slider means one
+                    # thing. A hardcoded 3.0 disagreed the moment the user moved it.
+                    level = float(diff_entry["iso"]) if diff_entry else 3.0
                     session.show_map_box(
-                        box, level=3.0, colors=colors,
+                        box, level=level, colors=colors,
                         style=diff_entry.get("style") if diff_entry else None)
                     self._diff_boxes += 1
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 self._status(f"live difference map failed: {exc}")
                 self._diff_ctx = None  # stop hammering a failing recompute for this drag
 
-    def _clear_live_diff(self) -> None:
-        """Stop streaming the live difference map and remove the window from the viewport."""
+    def _stop_live_diff(self) -> None:
+        """Stop streaming the live window; a standing window stays on screen."""
         self._diff_ctx = None
         self._diff_atom = None
         self._diff_gen += 1  # invalidate any recompute still in flight
-        session = self._tug_session
-        if session is not None:
+
+    def _clear_live_diff(self) -> None:
+        """Stop streaming the live difference map and remove the window from the viewport."""
+        self._stop_live_diff()
+        for entry in self._models:
+            # Any session may have shown (and would replay) the window; clear them all.
             try:
-                session.clear_map_box()
+                entry["session"].clear_map_box()
             except Exception:  # pragma: no cover - defensive
                 pass
 
@@ -8277,7 +8285,12 @@ class DesktopApp:
                 self._push_tug(self._tug.move_to(target))
         elif action == "end":
             self._settle_tug()   # let go, and watch it come to rest
-            self._clear_live_diff()  # remove the live window (while the session is still known)
+            # Streaming stops, but the WINDOW stays: the object difference map is stale
+            # (it describes the pre-drag model until the maps are recomputed), and the
+            # settled window is the freshest local truth. It is replaced by the next
+            # drag, and cleared when the maps actually update (see update_maps) or the
+            # live-map toggle goes off.
+            self._stop_live_diff()
             self._end_tug()
             self._invalidate_model_state(entry)  # stale: the atoms just moved
             self._refresh_validation_staleness()  # warn if this outran a validation run
@@ -10354,6 +10367,9 @@ class DesktopApp:
                     self._write_display_map(entry["id"], self._display_map_data(entry))
                 rentry["r_work"] = out["r_work"]
                 rentry["r_free"] = out["r_free"]
+                # Fresh maps supersede the drag's standing live window (see the tug
+                # 'end' handling): from here the object maps tell the current story.
+                self._clear_live_diff()
                 self._reload_viewport()
                 self._emit_loaded_changed()
                 self._status(

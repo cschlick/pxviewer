@@ -757,6 +757,10 @@ def exercise_the_live_difference_map_streams_a_box_during_a_drag():
 
         session = app._model_entry(mid)["session"]
         app._tug_session = session                 # as a drag 'begin' would set it
+        # The window must contour at the difference map's OWN level, not a hardcoded
+        # 3.0 — both are sigma-scaled, so the Level slider means one thing.
+        diff = next(v for v in app._volumes if v.get("negative_color"))
+        app.set_volume_iso(diff["id"], 2.5)
         app.set_live_difference_map(True)
         app._maybe_start_live_diff(mid, atom=model.get_number_of_atoms() // 2)
         assert app._diff_ctx is not None           # armed
@@ -765,9 +769,18 @@ def exercise_the_live_difference_map_streams_a_box_during_a_drag():
         pump_until(lambda: session._last_map_box is not None,
                    "no difference window ever arrived", timeout=90)
         assert struct.unpack_from("<I", session._last_map_box, 0)[0] == 4   # _TAG_MAP
+        assert struct.unpack_from("<f", session._last_map_box, 8)[0] == 2.5, (
+            "the window's contour must follow the difference map's level")
 
-        app.set_live_difference_map(False)
+        # A drag ending stops the stream but KEEPS the window: the object map is stale
+        # until the maps are recomputed, and the settled window is the freshest local
+        # truth around the tug.
+        app._stop_live_diff()
         assert app._diff_ctx is None
+        assert session._last_map_box is not None
+
+        # Toggling the live map off removes it for real.
+        app.set_live_difference_map(False)
         assert session._last_map_box is None
 
 
