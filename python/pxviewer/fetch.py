@@ -152,6 +152,25 @@ def emdb_for_pdb(pdb_id: str, *, timeout: float = 30.0) -> Optional[str]:
     return str(ids[0]).split("-")[-1]  # "EMD-1234" -> "1234"
 
 
+def experiment_methods(pdb_id: str, *, timeout: float = 30.0) -> Optional[list]:
+    """The experimental method(s) an entry was solved by, or ``None``.
+
+    RCSB's strings, e.g. ``"X-RAY DIFFRACTION"`` or ``"ELECTRON MICROSCOPY"``. This is
+    what makes a requested entity nonsensical before any download starts: a crystal
+    entry has no EMDB map, and a cryo-EM entry deposits no structure factors. Any
+    network or schema problem is swallowed into ``None`` — the mismatch checks are then
+    skipped and the download's own failure message stands, the old behaviour.
+    """
+    url = f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id.strip().lower()}"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as response:
+            meta = json.load(response)
+        methods = [str(e["method"]) for e in (meta.get("exptl") or []) if e.get("method")]
+        return methods or None
+    except Exception:
+        return None
+
+
 def reported_resolution(pdb_id: str, *, timeout: float = 30.0) -> Optional[float]:
     """The resolution an entry is deposited at, in Angstrom, or ``None``.
 
@@ -241,9 +260,38 @@ def fetch_entry(
     wants_em = any(e in _EM_ENTITIES for e in entities)
     if wants_pdb and not pdb_id:
         raise ValueError("a PDB id is needed for the model or reflections")
+
+    # A requested entity can be nonsensical for the entry: a crystal structure has no
+    # EMDB map, a cryo-EM structure deposits no structure factors. Say that up front,
+    # naming the method, instead of letting the download 404 with generic advice. The
+    # probe is one metadata request, made lazily and only when a mismatch is possible;
+    # when it cannot answer (offline, schema drift) the checks are skipped and the
+    # download's own failure message stands.
+    _methods_cache: list = []
+
+    def _methods() -> list:
+        if not _methods_cache:
+            _methods_cache.append(experiment_methods(pdb_id) if pdb_id else None)
+        return _methods_cache[0] or []
+
+    if "reflections" in entities and pdb_id:
+        probed = _methods()
+        if probed and not any("DIFFRACTION" in m.upper() or "CRYSTALLOGRAPHY" in m.upper()
+                              for m in probed):
+            raise FetchError(
+                "%s was solved by %s — no structure factors are deposited for it. "
+                "Untick reflections, or fetch its map instead."
+                % (pdb_id, probed[0].lower()))
     if wants_em:
         if not emdb_number and pdb_id:
             emdb_number = emdb_for_pdb(pdb_id)
+            if not emdb_number:
+                probed = _methods()
+                if probed and not any("MICROSCOPY" in m.upper() for m in probed):
+                    raise FetchError(
+                        "%s was solved by %s — the EMDB has no map for it. "
+                        "Untick the map, or fetch its reflections instead."
+                        % (pdb_id, probed[0].lower()))
         if not emdb_number:
             raise ValueError(
                 "an EMDB number is needed for the map or half-maps "

@@ -1464,6 +1464,7 @@ class ControlsWindow:
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         self._loaded_tree.itemClicked.connect(self._on_tree_item_clicked)
+        self._loaded_tree.itemDoubleClicked.connect(self._on_tree_item_double_clicked)
         ol.addWidget(self._loaded_tree, stretch=1)
 
         # -- Actions on the objects: a compact icon toolbar -----------------
@@ -4168,8 +4169,10 @@ class ControlsWindow:
             "reflections": QCheckBox("Reflections (structure factors)"),
             "map": QCheckBox("Map"),
         }
+        # Model only by default: most fetches are "show me this structure", and a
+        # ticked-by-default map turns a crystal-entry fetch into an error and an EM
+        # fetch into an unasked-for 50+ MB download.
         checks["model"].setChecked(True)
-        checks["map"].setChecked(True)
         outer.addWidget(QLabel("Fetch:"))
         for cb in checks.values():
             outer.addWidget(cb)
@@ -5473,6 +5476,30 @@ class ControlsWindow:
             return
         visible = not it["visible"]
         QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
+
+    def _on_tree_item_double_clicked(self, item, column: int) -> None:
+        """Double-clicking a model's name selects the whole model — which, with the
+        Selection pane's focus behaviour, also centres and frames it.
+
+        Not on the eye column: a double-click there is two visibility toggles, not a
+        select-all. Deferred off the signal for the same reason as every other tree
+        action — selecting rebuilds panes, and this runs inside the tree's own click
+        delivery."""
+        from PySide6.QtCore import Qt, QTimer
+
+        if column == 0 or self._suppress_model_events:
+            return
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        kind, ident = data
+        if kind != "model":
+            return
+
+        def _select_all(mid=ident):
+            self._desktop.set_active_model(mid)  # a no-op when the click already did it
+            self._run_selection("all")           # honours the Focus/Clip checkboxes
+        QTimer.singleShot(0, _select_all)
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt

@@ -272,6 +272,31 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
         assert progress(app) == "Step 6 / 6"
 
 
+def exercise_double_clicking_a_model_row_selects_the_whole_model():
+    """A double-click on a model's name selects the whole model, which (with the focus
+    behaviour on) also centres and frames it. Not on the eye column — a double-click
+    there is two visibility toggles, never a select-all."""
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        process_events()
+        controls = app._controls
+        mid = app._active_model_id
+        node = controls._loaded_tree.topLevelItem(0)
+
+        controls._on_tree_item_double_clicked(node, 1)   # the name column
+        process_events()
+        assert controls._select_expr.text() == "all"
+        n_atoms = app.session_for(mid).model.get_hierarchy().atoms_size()
+        assert len(app._scene_selection.get(mid, [])) == n_atoms, (
+            "the whole model should be selected")
+
+        app.select_by_expression("")
+        controls._on_tree_item_double_clicked(node, 0)   # the eye column
+        process_events()
+        assert not app._scene_selection.get(mid), (
+            "an eye-column double-click must not select")
+
+
 def exercise_a_single_residue_selection_gets_the_oriented_framing():
     """Typing one residue frames it the standard way -- N left, C right, side chain up
     -- via the same orientation the space-bar navigation uses. Anything that is not

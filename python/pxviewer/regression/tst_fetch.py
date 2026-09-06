@@ -199,6 +199,62 @@ def exercise_an_emdb_only_fetch_is_possible():
                                 emdb_number="53478").endswith("half_map_2.map.gz")
 
 
+def exercise_mismatched_entities_fail_readably_before_downloading():
+    """A crystal entry has no EMDB map, and a cryo-EM entry deposits no structure
+    factors: both are caught by the metadata probe, named plainly, and refused before
+    any download starts. An unanswerable probe (offline) skips the check — the
+    download's own failure is the fallback, never a new way to fail."""
+    calls = []
+    saved = F.experiment_methods
+
+    def serve(*args, **kwargs):
+        calls.append(1)
+        # Maps are served gzipped and are gunzipped on landing; the rest are plain.
+        em = str(kwargs.get("entity", "")).startswith("em_")
+        return FakeResponse(map_bytes() if em else b"DATA " * 40)
+
+    try:
+        with patched_fetch(serve):
+            with tmp_dir() as work:
+                F.experiment_methods = lambda pdb_id, **kw: ["X-RAY DIFFRACTION"]
+                try:
+                    F.fetch_entry(entities=["model", "map"], work_dir=work, pdb_id="1abc")
+                except F.FetchError as exc:
+                    message = str(exc)
+                else:
+                    raise AssertionError("a crystal entry accepted a map request")
+                assert "x-ray diffraction" in message, message   # names the method
+                assert "EMDB has no map" in message, message     # says what is wrong
+                assert "reflections instead" in message, message  # and what to do
+                assert not calls, "started downloading before the mismatch check"
+
+                F.experiment_methods = lambda pdb_id, **kw: ["ELECTRON MICROSCOPY"]
+                try:
+                    F.fetch_entry(entities=["reflections"], work_dir=work, pdb_id="8abc")
+                except F.FetchError as exc:
+                    message = str(exc)
+                else:
+                    raise AssertionError("a cryo-EM entry accepted a reflections request")
+                assert "electron microscopy" in message, message
+                assert "structure factors" in message, message
+                assert "map instead" in message, message
+                assert not calls
+
+                # An EM entry with the EMDB number given outright never needs the probe.
+                F.experiment_methods = lambda pdb_id, **kw: (_ for _ in ()).throw(
+                    AssertionError("probed when the emdb number was already known"))
+                F.fetch_entry(entities=["map"], work_dir=work, emdb_number="1234")
+                assert calls, "the well-formed request did not download"
+
+                # Probe unanswered (offline): the checks stand aside and the fetch runs.
+                calls[:] = []
+                F.experiment_methods = lambda pdb_id, **kw: None
+                F.fetch_entry(entities=["reflections"], work_dir=work, pdb_id="9r04")
+                assert calls, "an unanswerable probe must not block the fetch"
+    finally:
+        F.experiment_methods = saved
+
+
 def exercise_missing_prerequisites_are_refused_before_any_download():
     calls = []
 
