@@ -1467,6 +1467,7 @@ export class LiveViewer {
             this.mapBoxReprRefs.push(neg.selector.ref);
         }
         await build.commit();
+        markVolumeReprsUnpickable(this.plugin);
         this.mapVolume = vol.selector;
     }
 
@@ -1547,6 +1548,7 @@ export class LiveViewer {
         const vol = build.toRoot().apply(HotspotVolume, { nx, ny, nz, values, origin, stepX, stepY, stepZ });
         const repr = vol.apply(VolumeRepresentation3D, this.hotspotReprParams());
         await build.commit();
+        markVolumeReprsUnpickable(this.plugin);
         this.hotspotVolume = vol.selector;
         this.hotspotRepr = repr.selector;
     }
@@ -1728,6 +1730,14 @@ export class LiveViewer {
         provider.apply(ShapeRepresentation3D);
         await build.commit();
         this.localresSurface = provider.selector;
+        // Same problem as markVolumeReprsUnpickable, different object type: a pickable
+        // coloured surface steals identify() hits from the atoms inside it.
+        for (const child of Array.from(this.plugin.state.data.cells.values())) {
+            if (child.transform.parent === this.localresSurface.ref) {
+                const data: any = (child.obj as any)?.data;
+                (data?.repr ?? data)?.setState?.({ pickable: false });
+            }
+        }
         if (!this.localresVisible && this.localresSurface.ref) {
             setSubtreeVisibility(this.plugin.state.data, this.localresSurface.ref, true /* hidden */);
         }
@@ -2721,6 +2731,24 @@ async function setVolumeColor(plugin: PluginContext, ref: string, color: string)
     await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
         old.colorTheme = { name: 'uniform', params: { value: decoded } };
     }).commit();
+}
+
+/** Make every volume representation invisible to identify().
+ *
+ *  Nothing in this app acts on a picked *volume*, but Mol* volumes are pickable by
+ *  default — so once maps were on screen, identify() at a drag start often returned the
+ *  map's surface or wireframe instead of the atom visually underneath, the tug hit-test
+ *  saw "not an atom", and refine-drag fell through to camera rotation. Called after
+ *  every point where volume representations are (re)built.
+ */
+export function markVolumeReprsUnpickable(plugin: PluginContext) {
+    for (const cell of Array.from(plugin.state.data.cells.values())) {
+        const obj: any = cell.obj;
+        if (!(obj instanceof SO.Volume.Representation3D)) continue;
+        const repr = obj.data?.repr;
+        if (!repr || repr.state?.pickable === false) continue;
+        repr.setState?.({ pickable: false });
+    }
 }
 
 /** A difference map's negative contour color — the counterpart of setVolumeColor. */

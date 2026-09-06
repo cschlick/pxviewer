@@ -8,7 +8,7 @@ import { PluginSpec } from 'molstar/lib/mol-plugin/spec';
 import { Interactions } from 'molstar/lib/mol-plugin/behavior/dynamic/custom-props/computed/interactions';
 import { DefaultFocusLociBindings } from 'molstar/lib/mol-plugin/behavior/dynamic/camera';
 import { Binding } from 'molstar/lib/mol-util/binding';
-import { connectLive } from './live';
+import { connectLive, markVolumeReprsUnpickable } from './live';
 
 const DEFAULT_WS = 'ws://127.0.0.1:8787';
 
@@ -69,6 +69,9 @@ function App() {
             if (mvsjParam !== null) {
                 const url = mvsjParam === '' ? 'volume.mvsj' : mvsjParam;
                 await loadMVSFromUrl(model.plugin, url, 'mvsj');
+                // Maps must not steal identify() hits from atoms (refine-drag's hit
+                // test), and nothing in this app acts on a picked volume.
+                markVolumeReprsUnpickable(model.plugin);
             }
             if (wsParam !== null) {
                 const urls = wsParam.split(',').map((u) => u.trim()).filter(Boolean);
