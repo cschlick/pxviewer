@@ -306,14 +306,18 @@ def _highlight_overlay_class():
     return _HIGHLIGHT_OVERLAY_CLASS
 
 
-def _line_icon(name: str, color, size: int = 20):
+def _line_icon(name: str, color, size: int = 20, selected_color=None):
     """A monochrome line SVG (``<name>.svg``) tinted to ``color`` as a QIcon.
 
     Looked up in ``assets/icons_custom`` (our own icons) first, then ``assets/icons`` (the
     Lucide set), so a custom icon can also override a stock name. The icons draw with
     ``stroke="currentColor"``, which Qt's SVG renderer does not resolve on its own, so the
     color is substituted in before rendering. Rendered at 3x the display size so it stays
-    crisp on a HiDPI screen. Returns None if the asset is missing."""
+    crisp on a HiDPI screen. Returns None if the asset is missing.
+
+    ``selected_color`` adds a QIcon Selected-mode rendering — item views use it
+    automatically on selected rows, where the normal tint would sit dark-on-dark
+    against the highlight."""
     from PySide6.QtCore import QByteArray, Qt
     from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
     from PySide6.QtSvg import QSvgRenderer
@@ -323,15 +327,23 @@ def _line_icon(name: str, color, size: int = 20):
         path = _ICONS_DIR / f"{name}.svg"
     if not path.exists():  # pragma: no cover - packaging guard
         return None
-    svg = path.read_text().replace("currentColor", QColor(color).name())
-    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    pm = QPixmap(size * 3, size * 3)
-    pm.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pm)
-    renderer.render(painter)
-    painter.end()
-    pm.setDevicePixelRatio(3.0)
-    return QIcon(pm)
+    svg = path.read_text()
+
+    def _render(tint):
+        renderer = QSvgRenderer(QByteArray(
+            svg.replace("currentColor", QColor(tint).name()).encode("utf-8")))
+        pm = QPixmap(size * 3, size * 3)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        renderer.render(painter)
+        painter.end()
+        pm.setDevicePixelRatio(3.0)
+        return pm
+
+    icon = QIcon(_render(color))
+    if selected_color is not None:
+        icon.addPixmap(_render(selected_color), QIcon.Mode.Selected)
+    return icon
 
 
 # Semantic accent colors, in (light-theme, dark-theme) shades so each reads on its own
@@ -1479,6 +1491,15 @@ class ControlsWindow:
         # active-model radio duplicated the highlight and just added a thing to decode.
         self._loaded_tree.setColumnCount(2)
         self._loaded_tree.setHeaderHidden(True)
+        # Pin the selection paint. Native macOS uses the vivid accent with white text
+        # (which drowned the dark eye icon) when focused, and a pale grey when not. A
+        # fixed pale blue with the normal dark text works for both icon and name, and
+        # is deterministic across machines and system accent colours — safe to
+        # hardcode because the app is pinned to the light theme. One rule, no :active
+        # variant, so focused and unfocused rows paint identically.
+        self._loaded_tree.setStyleSheet(
+            "QTreeWidget::item:selected { background: #b3d7ff;"
+            " color: palette(text); }")
         header = self._loaded_tree.header()
         header.setStretchLastSection(True)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
@@ -5316,12 +5337,14 @@ class ControlsWindow:
             from PySide6.QtGui import QPalette
 
             palette = self._loaded_tree.palette()
-            eye_shown = _line_icon(
-                "eye", palette.color(QPalette.ColorRole.Text), size=16)
-            eye_hidden = _line_icon(
-                "eye-off",
-                palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text),
-                size=16)
+            # A selected row keeps the same dark tints: the tree's stylesheet paints
+            # its selection in the pale highlight (see the tree setup), on which the
+            # text-coloured icon reads fine — Selected-mode pixmaps are passed
+            # explicitly so the view never swaps in a faint variant of its own.
+            text = palette.color(QPalette.ColorRole.Text)
+            dim = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+            eye_shown = _line_icon("eye", text, size=16, selected_color=text)
+            eye_hidden = _line_icon("eye-off", dim, size=16, selected_color=dim)
             vol_nodes: dict = {}  # vid -> node, so a pinned map can nest under its full map
             for it in items:
                 # A resolution map pinned to a full map nests under that map's node (the
