@@ -2505,6 +2505,14 @@ export interface Slab {
      *  map fills the unit cell, and contouring all of it buries the model in density —
      *  which is what Coot's map radius exists to stop. */
     radius?: number | null;
+    /** Where the radius sphere sits, in Angstrom coordinates. Absent: the camera's
+     *  current target — right for the pane's manual controls, which the user drives
+     *  with the view already where they want it. A caller clipping around something it
+     *  just told the camera to fly to must pass the point instead: the clip applies
+     *  immediately while the camera is still mid-animation, so sampling the target here
+     *  would centre the sphere on wherever the view used to be and clip out the very
+     *  thing being framed. */
+    center?: number[] | null;
 }
 
 const SLAB_OPEN: Slab = { front: 0, back: 1, radius: null };
@@ -2565,8 +2573,12 @@ function slabClip(plugin: PluginContext, slab: Slab) {
         objects.push(clipPlane(dir, at(slab.back)));                        // drop further
     }
     if (slab.radius !== null && slab.radius !== undefined && slab.radius > 0) {
-        // Centered on what the camera is looking at, so it follows the view like Coot's.
-        objects.push(clipRadius(camera.state.target, slab.radius));
+        // An explicit center wins; otherwise what the camera is looking at, so the
+        // pane's manual radius follows the view like Coot's.
+        const center = (slab.center && slab.center.length === 3)
+            ? Vec3.create(slab.center[0], slab.center[1], slab.center[2])
+            : camera.state.target;
+        objects.push(clipRadius(center, slab.radius));
     }
     return { variant: 'pixel', objects };
 }
@@ -3239,6 +3251,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'clip') {
                 const slab: Slab = {
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,
+                    center: (Array.isArray(msg.center) && msg.center.length === 3)
+                        ? msg.center : null,
                 };
                 if (typeof msg.ref === 'string') {
                     if (slabIsOpen(slab)) volumeSlabs.delete(msg.ref);

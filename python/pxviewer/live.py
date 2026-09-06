@@ -1197,17 +1197,24 @@ class LiveSession:
         back: float,
         *,
         radius: Optional[float] = None,
+        center: Optional[Any] = None,
         ref: Optional[str] = None,
     ) -> None:
-        """Clip a representation: a front/rear slab, a radius around the view, or both.
+        """Clip a representation: a front/rear slab, a radius around a point, or both.
 
         ``front`` and ``back`` run 0..1 across the scene's depth: ``(0, 1)`` clips
         nothing, and when the two meet everything is clipped and the object disappears.
-        ``radius`` (Angstrom) draws only what is near the view center; None draws it all.
-        ``ref`` names a volume; without one this session's own model is clipped.
+        ``radius`` (Angstrom) draws only what is near ``center``; None draws it all.
+        ``center`` (Angstrom coordinates) fixes the radius sphere; without it the sphere
+        sits on the camera's *current* target, which follows the view like Coot's — right
+        for the pane's manual controls, but a caller that just re-aimed the camera must
+        pass the point explicitly: the clip lands while the camera is still animating,
+        and a sampled target would centre the sphere on the old view and clip out the
+        very thing being framed. ``ref`` names a volume; without one this session's own
+        model is clipped.
 
-        Both follow the camera, and both are per representation deliberately — it is
-        what lets density be cut open, or thinned out, while the model inside stays
+        The slab follows the camera, and clips are per representation deliberately — it
+        is what lets density be cut open, or thinned out, while the model inside stays
         whole. Thread-safe.
         """
         key = None if ref is None else str(ref)
@@ -1215,6 +1222,7 @@ class LiveSession:
             "type": "clip", "ref": key,
             "front": float(front), "back": float(back),
             "radius": None if radius is None else float(radius),
+            "center": None if center is None else [float(c) for c in center],
         }
         if clip["front"] <= 0 and clip["back"] >= 1 and clip["radius"] is None:
             self._clips.pop(key, None)  # nothing to restore

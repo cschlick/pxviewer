@@ -287,12 +287,13 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         calls = []
         session.orient_camera = lambda *a, **k: calls.append(("orient", a, k))
         session.focus = lambda atoms: calls.append(("focus", list(atoms)))
-        session.set_clip = lambda front, back, radius=None, ref=None: calls.append(
-            ("clip", front, back, radius))
+        session.set_clip = lambda front, back, radius=None, center=None, ref=None: \
+            calls.append(("clip", front, back, radius, center))
 
         # The Selection pane's two behaviour switches, both defaulting on, both routed:
         # unchecking Clip to selection frames and orients identically but asks the
-        # viewer to leave the scene unclipped.
+        # viewer to leave the scene unclipped -- and applies no isolation sphere either
+        # (it used to, which made the checkbox a lie: the sphere kept clipping).
         controls = app._controls
         assert controls._focus_on_select.isChecked()
         assert controls._clip_on_select.isChecked()
@@ -301,6 +302,8 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         unclipped = [c for c in calls if c[0] == "orient"]
         assert unclipped and unclipped[-1][2].get("clip") is False, (
             "the Clip to selection checkbox did not route")
+        assert not [c for c in calls if c[0] == "clip"], (
+            "a clip-off selection must not apply the isolation sphere")
         controls._clip_on_select.setChecked(True)
         calls.clear()
 
@@ -342,22 +345,37 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         chain_span = span_atoms[-1] - span_atoms[0]
         assert np.dot(right, chain_span) > 0, "the chain does not run left-to-right"
 
-        # Every focused selection gets the camera-following isolation sphere: sized to
-        # the selection plus context, and lifted again when the selection is cleared.
+        # Every clipped, focused selection gets the isolation sphere: sized to the
+        # selection plus context, and centred ON the selection, never on the camera
+        # target -- the clip lands mid-flight, and a camera-centred sphere sat on the
+        # old view and blanked the viewport (worst with several models loaded).
         clips = [c for c in calls if c[0] == "clip"]
         assert clips and clips[-1][3] is not None and clips[-1][3] > 4.0, clips[-1:]
         assert (clips[-1][1], clips[-1][2]) == (0.0, 1.0), "the slab handles moved"
+        assert clips[-1][4] is not None and (
+            np.linalg.norm(np.asarray(clips[-1][4], dtype=float)
+                           - np.asarray(target, dtype=float)) < 1e-6), (
+            "the sphere is not centred on the framed selection")
 
         # ...while a shape with no frame at all keeps the plain centre-and-frame focus.
         app.select_by_expression("resseq 5 and name CA")
         focus_calls = [c for c in calls if c[0] == "focus"]
         assert focus_calls, "a lone atom cannot be oriented"
-        assert calls[-1] == ("clip", 0.0, 1.0, calls[-1][3]) and calls[-1][3] >= 4.0, (
-            "even a plain focus should isolate the neighbourhood")
+        assert calls[-1][0] == "clip" and calls[-1][3] >= 4.0 \
+            and calls[-1][4] is not None, (
+            "even a plain focus should isolate the neighbourhood, centred on it")
 
         app.select_by_expression("")
-        assert calls[-1] == ("clip", 0.0, 1.0, None), (
+        assert calls[-1] == ("clip", 0.0, 1.0, None, None), (
             "clearing the selection must lift the isolation sphere")
+
+        # A clip-off selection after a clipped one lifts the standing sphere --
+        # otherwise the old sphere keeps cutting the new view.
+        app.select_by_expression("resseq 29")
+        assert calls[-1][0] == "clip" and calls[-1][3] is not None
+        app.select_by_expression("resseq 30", clip=False)
+        assert calls[-1] == ("clip", 0.0, 1.0, None, None), (
+            "a clip-off selection must lift the sphere a clipped one left")
 
 
 def exercise_the_validation_tutorial_advances_when_validation_runs():

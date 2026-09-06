@@ -103,19 +103,26 @@ def exercise_a_clip_addresses_one_representation():
                 live.set_clip(0.25, 0.75, ref="vol8")
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": "vol8", "front": 0.25, "back": 0.75,
-                    "radius": None}
+                    "radius": None, "center": None}
 
                 live.set_clip(0.0, 1.0)                       # no ref: this model
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": None, "front": 0.0, "back": 1.0,
-                    "radius": None}
+                    "radius": None, "center": None}
 
                 # A radius rides the same message: to the viewer the slab and the radius
                 # are one clip, so either changing re-sends both.
                 live.set_clip(0.0, 1.0, radius=12.0, ref="vol8")
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": "vol8", "front": 0.0, "back": 1.0,
-                    "radius": 12.0}
+                    "radius": 12.0, "center": None}
+
+                # An explicit centre travels with it: a caller that just re-aimed the
+                # camera pins the sphere on the selection, not on the still-moving view.
+                live.set_clip(0.0, 1.0, radius=8.0, center=(1, 2.5, -3))
+                assert await next_text(ws, "clip") == {
+                    "type": "clip", "ref": None, "front": 0.0, "back": 1.0,
+                    "radius": 8.0, "center": [1.0, 2.5, -3.0]}
 
         run_client(scenario)
 
@@ -131,7 +138,7 @@ def exercise_a_clip_is_replayed_to_a_late_client():
             async with client(live) as ws:
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": "vol9", "front": 0.2, "back": 0.8,
-                    "radius": 12.0}
+                    "radius": 12.0, "center": None}
 
         run_client(scenario)
 

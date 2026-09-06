@@ -10938,19 +10938,28 @@ class DesktopApp:
                 session.focus(indices)
                 atoms = session.model.get_hierarchy().atoms()
                 centre = np.mean([atoms[i].xyz for i in indices], axis=0)
-            # Isolate the neighbourhood: a camera-following clip sphere around what was
-            # selected, so the rest of the structure does not bury it. The same
-            # shader-side mechanism as the pane's clipping controls -- it cannot be
-            # disturbed by the viewer's own camera management, which is not true of
-            # near/far-plane clipping. Sized to the selection plus enough context to
-            # read its surroundings; lifted when the selection is cleared, and any
-            # later manual clipping simply takes over.
-            atoms = session.model.get_hierarchy().atoms()
-            reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - centre))
-                        for i in indices)
-            session.set_clip(0.0, 1.0, radius=reach + 4.0)
-            if entry is not None:
-                entry["_auto_clip"] = True
+            if clip:
+                # Isolate the neighbourhood: a clip sphere around what was selected, so
+                # the rest of the structure does not bury it. The same shader-side
+                # mechanism as the pane's clipping controls -- it cannot be disturbed by
+                # the viewer's own camera management, which is not true of near/far-plane
+                # clipping. Centred explicitly on the selection: the clip lands while the
+                # camera is still flying there, so the camera-target default would put
+                # the sphere on the *old* view and clip out the very thing being framed
+                # (worst with several far-apart models loaded -- the whole viewport went
+                # blank until a manual clip re-centred it). Sized to the selection plus
+                # enough context to read its surroundings; lifted when the selection is
+                # cleared, and any later manual clipping simply takes over.
+                atoms = session.model.get_hierarchy().atoms()
+                reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - centre))
+                            for i in indices)
+                session.set_clip(0.0, 1.0, radius=reach + 4.0, center=centre)
+                if entry is not None:
+                    entry["_auto_clip"] = True
+            elif entry is not None and entry.pop("_auto_clip", False):
+                # Clip is off for this selection, so lift the sphere a previous
+                # clipped selection left -- otherwise it keeps cutting the new view.
+                session.set_clip(0.0, 1.0, radius=None)
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
         return len(sel)
 
