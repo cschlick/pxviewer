@@ -6,6 +6,8 @@ import { PluginCanvas } from 'molstar/lib/extensions/plugin/react';
 import { loadMVSFromUrl, loadPdb } from 'molstar/lib/extensions/plugin/loaders';
 import { PluginSpec } from 'molstar/lib/mol-plugin/spec';
 import { Interactions } from 'molstar/lib/mol-plugin/behavior/dynamic/custom-props/computed/interactions';
+import { DefaultFocusLociBindings } from 'molstar/lib/mol-plugin/behavior/dynamic/camera';
+import { Binding } from 'molstar/lib/mol-util/binding';
 import { connectLive } from './live';
 
 const DEFAULT_WS = 'ws://127.0.0.1:8787';
@@ -21,6 +23,18 @@ function App() {
             s.behaviors = s.behaviors.map((b: any) =>
                 b?.transformer?.id === 'ms-plugin.create-structure-focus-representation'
                     ? { ...b, defaultParams: { ...(b.defaultParams || {}), components: [] } }
+                    : b);
+            // Mol*'s FocusLoci behavior resets the camera when a click lands on
+            // nothing — losing the view you were working in to a stray click on the
+            // background. Blank exactly those bindings; click-to-focus on an actual
+            // pick keeps its defaults.
+            s.behaviors = s.behaviors.map((b: any) =>
+                b?.transformer?.id === 'ms-plugin.camera-focus-loci'
+                    ? { ...b, defaultParams: { ...(b.defaultParams || {}), bindings: {
+                          ...DefaultFocusLociBindings,
+                          clickResetCameraOnEmpty: Binding.Empty,
+                          clickResetCameraOnEmptySelectMode: Binding.Empty,
+                      } } }
                     : b);
             s.behaviors.push(MolViewSpecBehavior);
             // Registers the 'interactions' representation type and its computed
