@@ -294,6 +294,12 @@ def exercise_double_clicking_a_model_row_selects_the_whole_model():
         controls = app._controls
         tree = controls._loaded_tree
 
+        # The gesture is an OBJECT select: Mol*'s own framing, never the oriented one.
+        orients = []
+        for mid in (first, second):
+            app.session_for(mid).orient_camera = \
+                lambda *a, **k: orients.append(1)
+
         def rect_center(mid, col=1):
             for i in range(tree.topLevelItemCount()):
                 node = tree.topLevelItem(i)
@@ -323,6 +329,7 @@ def exercise_double_clicking_a_model_row_selects_the_whole_model():
         n = app.session_for(first).model.get_hierarchy().atoms_size()
         assert len(app._scene_selection.get(first, [])) == n, (
             "the whole model should be selected in one gesture")
+        assert not orients, "an object select must not use the oriented framing"
 
         # The eye column never selects: a double-click there is two toggles.
         app.select_by_expression("")
@@ -439,6 +446,22 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         app.select_by_expression("resseq 30", clip=False)
         assert calls[-1] == ("clip", 0.0, 1.0, None, None), (
             "a clip-off selection must lift the sphere a clipped one left")
+
+        # An OBJECT select (the row double-click) is deliberately not a fragment
+        # selection: every atom selected, Mol*'s own whole-object framing, no
+        # principal-axes orientation, no isolation sphere -- and it lifts a sphere a
+        # fragment selection left, since the object view must show all of it.
+        app.select_by_expression("resseq 29")            # leaves a sphere
+        calls.clear()
+        n = app.select_object(app._active_model_id)
+        assert n == session.model.get_hierarchy().atoms_size()
+        assert len(app._scene_selection.get(app._active_model_id, [])) == n
+        assert not [c for c in calls if c[0] == "orient"], (
+            "an object select must not use the oriented framing")
+        assert ("clip", 0.0, 1.0, None, None) in calls, (
+            "an object select must lift a standing isolation sphere")
+        assert [c for c in calls if c[0] == "focus"], (
+            "an object select frames with Mol*'s own focus")
 
 
 def exercise_the_validation_tutorial_advances_when_validation_runs():

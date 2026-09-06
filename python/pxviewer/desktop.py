@@ -5508,11 +5508,13 @@ class ControlsWindow:
         QTimer.singleShot(0, lambda: self._apply_visibility(kind, ident, visible))
 
     def _on_tree_row_double_clicked(self, item, column: int) -> None:
-        """A double-click on a model's name selects the whole model — which, with the
-        Selection pane's focus behaviour, also centres and frames it. Called from the
-        viewport event filter (see the tree setup), so it fires even when the first
-        click's activation rebuilt the tree mid-gesture. Not on the eye column: a
-        double-click there is two visibility toggles, not a select-all."""
+        """A double-click on a model's name is an *object select*: every atom selected,
+        the camera on Mol*'s own whole-object framing — deliberately not the oriented
+        fill-the-frame treatment a typed selection gets, so double-clicking a freshly
+        opened model changes nothing visually. Called from the viewport event filter
+        (see the tree setup), so it fires even when the first click's activation
+        rebuilt the tree mid-gesture. Not on the eye column: a double-click there is
+        two visibility toggles, not a select-all."""
         from PySide6.QtCore import Qt, QTimer
 
         if item is None or column == 0 or self._suppress_model_events:
@@ -5524,10 +5526,16 @@ class ControlsWindow:
         if kind != "model":
             return
 
-        def _select_all(mid=ident):
-            self._desktop.set_active_model(mid)  # a no-op when the click already did it
-            self._run_selection("all")           # honours the Focus/Clip checkboxes
-        QTimer.singleShot(0, _select_all)        # off the event, like every tree action
+        def _select_object(mid=ident):
+            try:
+                n = self._desktop.select_object(mid)
+            except Exception as exc:
+                self._selection_label.setText(
+                    f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
+                return
+            self._select_expr.setText("all")
+            self._selection_label.setText(f"{n} atom(s) selected")
+        QTimer.singleShot(0, _select_object)     # off the event, like every tree action
 
     def _on_remove_selected(self) -> None:
         from PySide6.QtCore import Qt
@@ -10937,6 +10945,31 @@ class DesktopApp:
                 session.focus(sorted(focus_atoms))
             except Exception:  # pragma: no cover - defensive
                 pass
+
+    def select_object(self, mid: str) -> int:
+        """Select a whole model as an *object*: every atom selected, framed by the
+        viewer's own default focus.
+
+        Distinct from :meth:`select_by_expression` on purpose — no oriented
+        (principal-axes) framing, no fill-the-frame zoom, no isolation clip sphere.
+        Those exist to show a named fragment the standard way; an object select means
+        "work on this one", and the right view for that is exactly what Mol* gives a
+        whole structure — so double-clicking a freshly opened model's row changes
+        nothing visually. A standing isolation sphere from an earlier fragment
+        selection is lifted, since the object view must show all of it.
+        """
+        self.set_active_model(mid)
+        session = self.active_model_session()
+        if session is None or getattr(session, "model", None) is None:
+            raise ValueError("that object has no model to select")
+        sel = session.select_by(selection="all")
+        session.highlight(sel)
+        entry = self._model_entry(mid)
+        if entry is not None and entry.pop("_auto_clip", False):
+            session.set_clip(0.0, 1.0, radius=None)
+        session.focus(list(sel))                  # Mol*'s own whole-object framing
+        self._on_model_selection(mid, sel)        # table + label follow
+        return len(sel)
 
     def select_by_expression(self, text: str, *, focus: bool = True,
                              clip: bool = True) -> int:
