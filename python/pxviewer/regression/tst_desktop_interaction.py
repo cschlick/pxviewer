@@ -237,6 +237,48 @@ def exercise_minimization_runs_continuously_until_stopped():
 # -- persisted preferences ----------------------------------------------------
 
 
+def exercise_the_settle_wind_down_yields_to_pause_and_pending_drags():
+    """The post-release wind-down is a flourish, and a flourish must never be the thing
+    the user cannot interrupt. It plays only when nothing is waiting: the Pause button
+    skips it, a drag already drained into the worker's batch skips it (the in-playback
+    queue check cannot see those, and rapid grab/release bursts serialized into seconds
+    of mandatory playback), and either way the resting frame still always shows."""
+    import queue
+
+    import numpy as np
+
+    with bare_desktop() as app:
+        class FakeTug:
+            def settle(self, on_frame=None, max_iterations=200):
+                for i in range(40):
+                    on_frame(np.full((3, 3), float(i)))
+
+        app._tug = FakeTug()
+        pushes = []
+        app._push_tug = lambda coords, force=False: pushes.append(float(coords[0][0]))
+        app._tug_queue = queue.Queue()
+
+        start = time.time()
+        app._settle_tug()
+        assert len(pushes) > 5, "the wind-down should play when nothing is waiting"
+        assert pushes[-1] == 39.0
+        assert time.time() - start >= 0.1          # actually paced, not dumped
+
+        pushes[:] = []
+        app._minimize_stop.set()
+        start = time.time()
+        app._settle_tug()
+        assert pushes == [39.0], "Pause must skip straight to the resting frame"
+        assert time.time() - start < 0.1
+        app._minimize_stop.clear()
+
+        pushes[:] = []
+        start = time.time()
+        app._settle_tug(animate=False)             # a later drag is already batched
+        assert pushes == [39.0]
+        assert time.time() - start < 0.1
+
+
 def exercise_the_native_focus_neighbourhood_stays_retired():
     """Mol*'s native click-focus display was replaced by pxviewer's own unified
     selection pipeline (a click and a typed selection get identical treatment; the

@@ -8201,16 +8201,24 @@ class DesktopApp:
                     waiting.append(self._tug_queue.get_nowait())
                 except queue.Empty:
                     break
-            for action, mid, atom, target in _collapse_moves(waiting):
+            collapsed = _collapse_moves(waiting)
+            for i, (action, mid, atom, target) in enumerate(collapsed):
                 try:
-                    self._serve_tug(mid, action, atom, target)
+                    # An 'end' with more messages already drained behind it (the user
+                    # grabbed again mid-batch) skips the settle wind-down: the queue
+                    # check inside the playback cannot see messages that are in this
+                    # batch rather than still queued, and rapid grab/release bursts
+                    # serialized into seconds of mandatory playback per release.
+                    self._serve_tug(mid, action, atom, target,
+                                    settle_animation=(i == len(collapsed) - 1))
                 except Exception as exc:  # pragma: no cover - defensive
                     self._status(f"drag failed: {exc}")
                     self._end_tug()
             if self._tug is not None and self._tug_continuous:
                 self._tug_relax()
 
-    def _serve_tug(self, mid: str, action: str, atom: int, target) -> None:
+    def _serve_tug(self, mid: str, action: str, atom: int, target,
+                   settle_animation: bool = True) -> None:
         """Apply one drag message. On the tug worker's thread."""
         entry = self._model_entry(mid)
         if entry is None:
@@ -8284,7 +8292,8 @@ class DesktopApp:
             else:
                 self._push_tug(self._tug.move_to(target))
         elif action == "end":
-            self._settle_tug()   # let go, and watch it come to rest
+            self._settle_tug(animate=settle_animation)  # let go; rest (wind-down shown
+                                                        # only when nothing is waiting)
             # Streaming stops, but the WINDOW stays: the object difference map is stale
             # (it describes the pre-drag model until the maps are recomputed), and the
             # settled window is the freshest local truth. It is replaced by the next
@@ -8309,7 +8318,7 @@ class DesktopApp:
             self._status(f"drag failed: {exc}")
             self._end_tug()
 
-    def _settle_tug(self) -> None:
+    def _settle_tug(self, animate: bool = True) -> None:
         """After release, relax the fragment to rest before letting go of it.
 
         Fling an atom and let go and it should visibly come to rest, not stop dead
@@ -8331,13 +8340,19 @@ class DesktopApp:
             return
         # The minimization converges in a fraction of a second — far too fast to see. Play
         # it back in real time so the fling visibly winds down to rest, thinning the many
-        # optimizer states to what shows at the frame rate. A new grab aborts it.
-        shown = min(len(trajectory), max(1, int(_TUG_SETTLE_DURATION / _TUG_PUSH_INTERVAL)))
-        for i in np.linspace(0, len(trajectory) - 1, shown).astype(int):
-            if self._tug_queue is not None and not self._tug_queue.empty():
-                break  # the user grabbed again; do not make them wait out the wind-down
-            self._push_tug(trajectory[i], force=True)
-            time.sleep(_TUG_PUSH_INTERVAL)
+        # optimizer states to what shows at the frame rate. The playback yields to
+        # everything more important than a flourish: a new grab, the Pause button, and
+        # shutdown — it must never be the thing the user cannot interrupt.
+        if animate and not self._minimize_stop.is_set() and not self._stopped:
+            shown = min(len(trajectory),
+                        max(1, int(_TUG_SETTLE_DURATION / _TUG_PUSH_INTERVAL)))
+            for i in np.linspace(0, len(trajectory) - 1, shown).astype(int):
+                if self._tug_queue is not None and not self._tug_queue.empty():
+                    break  # the user grabbed again; no waiting out the wind-down
+                if self._minimize_stop.is_set() or self._stopped:
+                    break  # Pause (or shutdown) trumps the flourish
+                self._push_tug(trajectory[i], force=True)
+                time.sleep(_TUG_PUSH_INTERVAL)
         self._push_tug(trajectory[-1], force=True)  # the resting position, always shown
 
     def _push_tug(self, coords, force: bool = False) -> None:
