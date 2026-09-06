@@ -386,8 +386,22 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         context = entry.get("context_on")
         assert context and set(expected) <= set(context)
         assert len(context) > len(expected), "context should reach neighbouring residues"
+
+        # The Mol* focus look: the ribbon steps aside in the context region — the
+        # main layer is restricted away from the context atoms, and the extra
+        # ball-and-stick layer carries them alone.
+        reps = list(session._representations.values())
+        assert len(reps) == 2, [r.get("type") for r in reps]
+        cartoon = next(r for r in reps if "cartoon" in r["type"])
+        stick = next(r for r in reps if r is not cartoon)
+        assert "ball" in stick["type"] and "on" in stick
+        assert "on" in cartoon, "the ribbon must step aside in the context region"
+
         app.select_by_expression("")
         assert entry.get("context_on") is None
+        reps = list(session._representations.values())
+        assert len(reps) == 1 and "on" not in reps[0], (
+            "clearing the selection must restore the unrestricted main layer")
 
         # Pick mode owns its clicks: the same pick only points the panel.
         app.enable_mouse_selection()

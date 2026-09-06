@@ -1649,8 +1649,9 @@ class ControlsWindow:
         self._context_on_select.setToolTip(
             "Draw the selected atoms and every residue within 5 Å of them in "
             "ball-and-stick while the selection stands — the same local context for a "
-            "typed selection and a clicked atom. Restored when the selection clears. "
-            "Skipped for large selections and when the model already shows "
+            "typed selection and a clicked atom; the main representation steps aside "
+            "there, so the region reads as sticks alone. Restored when the selection "
+            "clears. Skipped for large selections and when the model already shows "
             "ball-and-stick.")
         self._context_on_select.setChecked(
             str(self._desktop._settings.value("selection/context_rep", "true")).lower()
@@ -6722,6 +6723,15 @@ class DesktopApp:
         reps = list(entry.get("reps") or [entry["rep"]])
         rep = reps[0]
         on = self._shown_indices(entry)  # restrict to shown structure types
+        # While a neighbourhood context stands, the main representation steps aside
+        # there: the region reads as ball-and-stick alone — the Mol* focus look — not
+        # sticks threaded through ribbon. The context layer (below) draws those atoms.
+        main_on = on
+        context = entry.get("context_on") if rep != "ball-and-stick" else None
+        if context:
+            exclude = set(context)
+            base = on if on is not None else range(session._n_atoms)
+            main_on = [i for i in base if i not in exclude]
         attribute = entry.get("attribute")
         if attribute is not None and entry.get("color") == attribute["name"]:
             values = attribute["values"]
@@ -6739,21 +6749,21 @@ class DesktopApp:
             # says what it is coloring by instead of "values".
             session.set_attribute(attribute["name"], values)
             session.color_by(attribute["name"], type=rep, palette=attribute["palette"],
-                             domain=attribute["domain"], on=on)
+                             domain=attribute["domain"], on=main_on)
             # The attribute API replaces the representation list. Additional default layers
             # remain visible with their ordinary coloring; the primary layer carries the
             # computed scalar coloring.
             for extra in reps[1:]:
                 kwargs = self._model_color_kwargs(entry, extra)
-                if on is not None:
-                    kwargs["on"] = on
+                if main_on is not None:
+                    kwargs["on"] = main_on
                 session.add_representation(extra, **kwargs)
             self._add_context_layer(entry, session, on)
             return
         for i, layer in enumerate(reps):
             kwargs = self._model_color_kwargs(entry, layer)
-            if on is not None:
-                kwargs["on"] = on
+            if main_on is not None:
+                kwargs["on"] = main_on
             method = session.set_representation if i == 0 else session.add_representation
             method(layer, **kwargs)
         self._add_context_layer(entry, session, on)
