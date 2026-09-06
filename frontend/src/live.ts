@@ -712,7 +712,7 @@ export class LiveViewer {
     private mouseSelectionSet = new Set<number>();
     private selectByResidue = false;
     private measurePending: number[] = [];
-    private pickHandler?: (info: AtomInfo | null) => void;
+    private pickHandler?: (info: AtomInfo | null, shift: boolean) => void;
     /** Set by the connection to report a click-built selection back to Python. */
     onSelectionChange?: (indices: number[]) => void;
     /** Set by the connection to report a click-built measurement back to Python. */
@@ -723,7 +723,7 @@ export class LiveViewer {
     static async create(
         plugin: PluginContext,
         topologyBcif: Uint8Array,
-        onPick?: (info: AtomInfo | null) => void,
+        onPick?: (info: AtomInfo | null, shift: boolean) => void,
     ): Promise<LiveViewer> {
         const viewer = new LiveViewer(plugin);
         await viewer.build(topologyBcif);
@@ -1894,7 +1894,7 @@ export class LiveViewer {
         return undefined;
     }
 
-    private subscribeClick(onPick?: (info: AtomInfo | null) => void) {
+    private subscribeClick(onPick?: (info: AtomInfo | null, shift: boolean) => void) {
         this.pickHandler = onPick;
         this.plugin.behaviors.interaction.click.subscribe((e) => {
             const loci = e.current.loci;
@@ -1918,7 +1918,7 @@ export class LiveViewer {
                     chain: StructureProperties.chain.label_asym_id(location),
                     altloc: StructureProperties.atom.label_alt_id(location),
                     index: location.element as unknown as number,
-                } : null);
+                } : null, !!e.modifiers?.shift);
             }
             if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);
             else if (this.clickMode !== 'off') this.handleMeasureClick(location, this.clickMode);
@@ -3358,8 +3358,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             if (building || viewer) return;
             building = true;
             const bcif = new Uint8Array(buffer, 4);
-            viewer = await LiveViewer.create(plugin, bcif, (info) => {
-                ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined }));
+            viewer = await LiveViewer.create(plugin, bcif, (info, shift) => {
+                ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined, shift }));
             });
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
             viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));

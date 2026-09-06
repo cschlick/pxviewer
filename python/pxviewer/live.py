@@ -2175,6 +2175,11 @@ class LiveSession:
             self._client_ready.set()
         elif etype == "pick":
             info = None if event.get("empty") else event.get("atom")
+            if info is not None:
+                # The click's shift modifier rides along with the atom: a handler that
+                # grows/shrinks a selection needs to know how the click was made.
+                info = dict(info)
+                info["shift"] = bool(event.get("shift"))
             for handler in self._pick_handlers:
                 try:
                     handler(info)

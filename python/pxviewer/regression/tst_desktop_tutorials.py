@@ -397,6 +397,39 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         assert "ball" in stick["type"] and "on" in stick
         assert "on" in cartoon, "the ribbon must step aside in the context region"
 
+        # SHIFT-click grows the selection by another residue WITHOUT moving the
+        # camera — re-framing would fight the accumulating gesture — while the clip
+        # sphere and the context re-fit the union so the addition is visible. The box
+        # shows the union expression.
+        calls.clear()
+        idx2 = next(i for i, a in enumerate(atoms)
+                    if a.parent().parent().resseq_as_int() == 5
+                    and a.name.strip() == "CA")
+        session._on_message(json.dumps(
+            {"type": "pick", "empty": False, "atom": {"index": idx2}, "shift": True}))
+        process_events()
+        both = sorted(set(expected)
+                      | {a.i_seq for a in atoms[idx2].parent().parent().atoms()})
+        assert sorted(app._scene_selection.get(first, [])) == both
+        assert "orient" not in calls, "shift-grow must not move the camera"
+        assert "clip" in calls, "the sphere must re-fit the grown selection"
+        text = controls._select_expr.text()
+        assert "resid 29" in text and "resid 5" in text and " or " in text, text
+        assert set(both) <= set(entry.get("context_on") or [])
+
+        # Shift-clicking a residue already selected removes it; emptying the
+        # selection this way clears everything, like an empty expression.
+        session._on_message(json.dumps(
+            {"type": "pick", "empty": False, "atom": {"index": idx2}, "shift": True}))
+        process_events()
+        assert sorted(app._scene_selection.get(first, [])) == expected
+        session._on_message(json.dumps(
+            {"type": "pick", "empty": False, "atom": {"index": idx}, "shift": True}))
+        process_events()
+        assert not app._scene_selection.get(first)
+        assert controls._select_expr.text() == ""
+        assert entry.get("context_on") is None
+
         app.select_by_expression("")
         assert entry.get("context_on") is None
         reps = list(session._representations.values())

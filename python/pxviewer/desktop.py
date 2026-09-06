@@ -550,7 +550,7 @@ def _make_bridge():
 
     class _Bridge(QObject):
         scene_selection_changed = Signal(object)  # {"scene": {model_id: [indices]}, "changed": model_id}
-        atom_picked = Signal(str, int)  # (model id, atom index; -1 when unknown) — a click, any mode
+        atom_picked = Signal(str, int, bool)  # (model id, atom index or -1, shift held) — a click, any mode
         status_changed = Signal(str)
         status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
@@ -5088,14 +5088,15 @@ class ControlsWindow:
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
-    def _on_atom_picked(self, mid: str, index: int) -> None:
+    def _on_atom_picked(self, mid: str, index: int, shift: bool) -> None:
         """An atom of ``mid`` was clicked. With no click mode armed this IS a
-        selection: the clicked residue goes through the same pipeline a typed
-        expression takes — oriented framing, clip, neighbourhood context, all under
-        the Selection pane's checkboxes — and the box shows the equivalent
-        expression. While Pick mode accumulates, refine-drag tugs, or a measurement
-        is being placed, the click belongs to that tool, and the panel just follows
-        the model."""
+        selection: a plain click replaces it with the clicked residue through the
+        same pipeline a typed expression takes — oriented framing, clip,
+        neighbourhood context, all under the Selection pane's checkboxes — and a
+        SHIFT-click grows or shrinks it by that residue, camera left where it is.
+        Either way the box shows the equivalent expression. While Pick mode
+        accumulates, refine-drag tugs, or a measurement is being placed, the click
+        belongs to that tool, and the panel just follows the model."""
         desktop = self._desktop
         entry = desktop._model_entry(mid)
         tool_owns_click = (
@@ -5106,16 +5107,25 @@ class ControlsWindow:
             self._set_current_tree_row("model", mid)  # follow attention, touch nothing
             return
         try:
-            expression = desktop.select_picked_atom(
-                mid, index,
-                focus=self._focus_on_select.isChecked(),
-                clip=self._clip_on_select.isChecked(),
-                context=self._context_on_select.isChecked())
+            if shift:
+                expression = desktop.toggle_picked_residue(
+                    mid, index,
+                    clip=self._clip_on_select.isChecked(),
+                    context=self._context_on_select.isChecked())
+            else:
+                expression = desktop.select_picked_atom(
+                    mid, index,
+                    focus=self._focus_on_select.isChecked(),
+                    clip=self._clip_on_select.isChecked(),
+                    context=self._context_on_select.isChecked())
         except Exception:  # a click must never surface a selection error dialogically
             self._set_current_tree_row("model", mid)
             return
-        if expression:
-            self._select_expr.setText(expression)  # re-runnable, and teaches the grammar
+        # None: the click named no atom. "" is meaningful — the selection emptied, or
+        # it is no longer expressible as whole residues; either way a stale expression
+        # would lie, so the box follows.
+        if expression is not None:
+            self._select_expr.setText(expression)
 
     def _set_current_tree_row(self, kind: str, ident: str) -> None:
         """Point the object list's highlight at (kind, ident), if it has a row."""
@@ -6857,7 +6867,8 @@ class DesktopApp:
         # just points the panel at the model.
         session.on_pick(lambda info, mid=mid: (
             self.bridge.atom_picked.emit(
-                mid, info["index"] if isinstance(info.get("index"), int) else -1)
+                mid, info["index"] if isinstance(info.get("index"), int) else -1,
+                bool(info.get("shift")))
             if info else None))
         # Volume commands ride whichever session is the control session, so contour
         # changes made in the viewport can come back on any of them.
@@ -11145,6 +11156,73 @@ class DesktopApp:
         self._select_fragment(mid, session, entry, indices,
                               focus=focus, clip=clip, context=context)
         return expression
+
+    def toggle_picked_residue(self, mid: str, atom_index: int, *, clip: bool = True,
+                              context: bool = True):
+        """Shift-click: grow or shrink the selection by the clicked atom's residue.
+
+        The residue joins the selection, or leaves it when it is already entirely
+        selected. The camera deliberately stays where it is — re-framing on every
+        added residue would fight the accumulating gesture — but the isolation clip
+        and the neighbourhood context re-fit the grown selection, so an addition is
+        never clipped out of view. Emptying the selection this way clears everything,
+        exactly like an empty expression. Returns the equivalent expression for the
+        selection box ('' when emptied or no longer expressible as whole residues),
+        or ``None`` when the index names no atom.
+        """
+        self.set_active_model(mid)
+        entry = self._model_entry(mid)
+        session = entry["session"] if entry else None
+        if session is None or getattr(session, "model", None) is None:
+            return None
+        atoms = session.model.get_hierarchy().atoms()
+        if not (0 <= int(atom_index) < atoms.size()):
+            return None
+        residue = {a.i_seq for a in atoms[int(atom_index)].parent().parent().atoms()}
+        with self._scene_lock:
+            current = set(self._scene_selection.get(mid, []))
+        grown = (current - residue) if residue <= current else (current | residue)
+        if not grown:
+            session.clear_selection()
+            if entry.pop("_auto_clip", False):
+                session.set_clip(0.0, 1.0, radius=None)
+            self._set_context_rep(entry, None)
+            with self._scene_lock:
+                self._scene_selection.pop(mid, None)
+            self._emit_scene_selection(changed=mid)
+            return ""
+        indices = sorted(grown)
+        sel = session.highlight(indices)
+        if clip:
+            # The same sphere the focus path fits, re-fit to the grown selection —
+            # without it a residue added outside the standing sphere is invisible.
+            xyz = np.array([atoms[i].xyz for i in indices])
+            centre = xyz.mean(axis=0)
+            reach = float(np.linalg.norm(xyz - centre, axis=1).max())
+            session.set_clip(0.0, 1.0, radius=reach + 4.0, center=centre)
+            entry["_auto_clip"] = True
+        elif entry.pop("_auto_clip", False):
+            session.set_clip(0.0, 1.0, radius=None)
+        self._set_context_rep(entry, indices if context else None)
+        self._on_model_selection(mid, sel)
+        return self._selection_expression(entry, indices)
+
+    def _selection_expression(self, entry, indices):
+        """The selection as a whole-residue expression ('(chain A and resid 17) or …'),
+        or '' when some residue is only partially selected — a box expression that
+        does not reproduce the selection would lie."""
+        owner, members = self._residue_map(entry)
+        chosen = set(indices)
+        atoms = entry["session"].model.get_hierarchy().atoms()
+        terms = []
+        for group in sorted({int(owner[i]) for i in chosen}):
+            group_atoms = members[group]
+            if not set(group_atoms) <= chosen:
+                return ""
+            residue_group = atoms[group_atoms[0]].parent().parent()
+            chain_id = residue_group.parent().id.strip()
+            terms.append(f"(chain {chain_id} and resid {residue_group.resid().strip()})")
+        return " or ".join(terms)
 
     def _select_fragment(self, mid, session, entry, atoms_or_sel, *,
                          focus: bool, clip: bool, context: bool) -> int:
