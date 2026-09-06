@@ -7926,7 +7926,9 @@ class DesktopApp:
                                        and v.get("negative_color")), None)
                     colors = ((diff_entry["color"], diff_entry["negative_color"])
                               if diff_entry else None)
-                    session.show_map_box(box, level=3.0, colors=colors)
+                    session.show_map_box(
+                        box, level=3.0, colors=colors,
+                        style=diff_entry.get("style") if diff_entry else None)
                     self._diff_boxes += 1
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 self._status(f"live difference map failed: {exc}")
@@ -9279,7 +9281,7 @@ class DesktopApp:
                     color: Optional[str] = None, iso: Optional[float] = None,
                     radius: Optional[float] = None,
                     negative_color: Optional[str] = None,
-                    iso_kind: str = "relative") -> str:
+                    iso_kind: str = "relative", style: str = "surface") -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
@@ -9298,7 +9300,7 @@ class DesktopApp:
             # A given color wins (a difference map's green, or a caller's choice); else the
             # map draws a random default from the session's current palette group.
             "color": color or self._palettes.next_color(),
-            "opacity": 1.0, "style": "surface", "clip": (0.0, 1.0), "mask_radius": None,
+            "opacity": 1.0, "style": style, "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color, "iso_kind": iso_kind,
         })
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
@@ -10286,7 +10288,8 @@ class DesktopApp:
                                 mmm.get_map_manager_by_id(map_type),
                                 name=map_type, map_id=map_type),
                             map_type, group=gid, color=color, iso=iso,
-                            radius=self.view_radius_default, negative_color=negative)
+                            radius=self.view_radius_default, negative_color=negative,
+                            style="mesh")  # chickenwire: difference lobes stay visible
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
                     f" — maps: {', '.join(types)}")
@@ -10424,7 +10427,8 @@ class DesktopApp:
                 # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
                                  color=color, iso=iso, radius=self.view_radius_default,
-                                 negative_color=negative)
+                                 negative_color=negative,
+                                 style="mesh")  # chickenwire, as Make maps makes them
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")
         return "reflections"

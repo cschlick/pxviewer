@@ -870,7 +870,7 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def show_map_box(self, map_manager: Any, *, level: float = 3.0, is_difference: bool = True,
-                     colors: Optional[tuple] = None) -> None:
+                     colors: Optional[tuple] = None, style: Optional[str] = None) -> None:
         """Stream a small live density window (a boxed ``map_manager``) to the viewport.
 
         The whole box is one binary payload — an affine plus the raw f32 grid (see
@@ -883,19 +883,23 @@ class LiveSession:
 
         payload = struct.pack("<I", _TAG_MAP) + encode_map_box(
             map_manager, level=level, is_difference=is_difference)
-        style = None
-        if colors is not None:
-            # The window's contour colors (positive, negative) — sent as a tiny text
-            # message so the binary payload format stays untouched; the viewer keeps
-            # the style and repaints the standing window if it changed.
-            style = json.dumps({"type": "map_box_style",
-                                "positive": str(colors[0]), "negative": str(colors[1])})
+        style_message = None
+        if colors is not None or style is not None:
+            # The window's look (contour colors, surface/mesh style) — sent as a tiny
+            # text message so the binary payload format stays untouched; the viewer
+            # keeps it and repaints the standing window if it changed.
+            body = {"type": "map_box_style"}
+            if colors is not None:
+                body["positive"], body["negative"] = str(colors[0]), str(colors[1])
+            if style is not None:
+                body["style"] = str(style)
+            style_message = json.dumps(body)
         self._last_map_box = payload
-        self._map_box_style = style
+        self._map_box_style = style_message
         loop = self._loop
         if loop is not None:
-            if style is not None:
-                loop.call_soon_threadsafe(self._broadcast_text, style)
+            if style_message is not None:
+                loop.call_soon_threadsafe(self._broadcast_text, style_message)
             loop.call_soon_threadsafe(self._broadcast, payload)
 
     def clear_map_box(self) -> None:

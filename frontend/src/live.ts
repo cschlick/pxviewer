@@ -1452,14 +1452,16 @@ export class LiveViewer {
         this.mapBoxReprRefs = [];
         const pos = vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
             type: 'isosurface',
-            typeParams: { isoValue: Volume.IsoValue.absolute(level), alpha: 1 },
+            typeParams: { isoValue: Volume.IsoValue.absolute(level), alpha: 1,
+                          visuals: this.mapBoxVisuals },
             color: 'uniform', colorParams: { value: this.mapBoxColors.positive },
         }));
         this.mapBoxReprRefs.push(pos.selector.ref);
         if (isDifference) {
             const neg = vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
                 type: 'isosurface',
-                typeParams: { isoValue: Volume.IsoValue.absolute(-level), alpha: 1 },
+                typeParams: { isoValue: Volume.IsoValue.absolute(-level), alpha: 1,
+                              visuals: this.mapBoxVisuals },
                 color: 'uniform', colorParams: { value: this.mapBoxColors.negative },
             }));
             this.mapBoxReprRefs.push(neg.selector.ref);
@@ -1468,22 +1470,28 @@ export class LiveViewer {
         this.mapVolume = vol.selector;
     }
 
-    /** The live window's contour colors, updatable while it stands. */
+    /** The live window's look — contour colors + surface/mesh — updatable while it stands. */
     private mapBoxColors = { positive: ColorNames.green as Color, negative: ColorNames.red as Color };
+    private mapBoxVisuals: ('solid' | 'wireframe')[] = ['wireframe'];  // matches the mesh default of X-ray maps
     private mapBoxReprRefs: string[] = [];
 
-    /** Set the live window's contour colors; repaints a standing window in place. */
-    async setMapBoxStyle(positive?: string, negative?: string) {
+    /** Set the live window's look; repaints a standing window in place. */
+    async setMapBoxStyle(positive?: string, negative?: string, style?: string) {
         const pos = positive !== undefined ? decodeColor(positive) : undefined;
         const neg = negative !== undefined ? decodeColor(negative) : undefined;
         if (pos !== undefined) this.mapBoxColors.positive = pos;
         if (neg !== undefined) this.mapBoxColors.negative = neg;
+        if (style !== undefined) {
+            const visuals = STYLE_VISUALS[style.toLowerCase()];
+            if (visuals) this.mapBoxVisuals = visuals as ('solid' | 'wireframe')[];
+        }
         if (!this.mapBoxReprRefs.length) return;
         const colors = [this.mapBoxColors.positive, this.mapBoxColors.negative];
         const build = this.plugin.state.data.build();
         this.mapBoxReprRefs.forEach((ref, i) => {
             build.to(ref).update((old: any) => {
                 old.colorTheme = { name: 'uniform', params: { value: colors[i] } };
+                if (old.type?.name === 'isosurface') old.type.params.visuals = this.mapBoxVisuals;
             });
         });
         await build.commit();
@@ -3235,7 +3243,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'dots' && viewer) {
                 if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
             } else if (msg.type === 'map_box_style' && viewer) {
-                await viewer.setMapBoxStyle(msg.positive, msg.negative);
+                await viewer.setMapBoxStyle(msg.positive, msg.negative, msg.style);
             } else if (msg.type === 'map_box' && viewer) {
                 if (msg.action === 'clear') await viewer.clearMapBox();
             } else if (msg.type === 'hotspot_volume' && viewer) {
