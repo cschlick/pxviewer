@@ -550,6 +550,7 @@ def _make_bridge():
 
     class _Bridge(QObject):
         scene_selection_changed = Signal(object)  # {"scene": {model_id: [indices]}, "changed": model_id}
+        model_picked = Signal(str)  # an atom of this model was clicked, in any mode
         status_changed = Signal(str)
         status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
@@ -1428,6 +1429,7 @@ class ControlsWindow:
         self._models_summary: list = []
         self._suppress_table_model_combo = False
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
+        desktop.bridge.model_picked.connect(self._on_model_picked)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.status_warned.connect(self._flash_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
@@ -5075,6 +5077,11 @@ class ControlsWindow:
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
+    def _on_model_picked(self, mid: str) -> None:
+        """An atom of ``mid`` was clicked, in any click mode: the panel follows the
+        user's attention — its row highlights and, being a model row, it activates."""
+        self._set_current_tree_row("model", mid)
+
     def _set_current_tree_row(self, kind: str, ident: str) -> None:
         """Point the object list's highlight at (kind, ident), if it has a row."""
         from PySide6.QtCore import Qt
@@ -6778,6 +6785,13 @@ class DesktopApp:
         # mode is what actually turns picking on/off. Registering here means a
         # selection can be built in any loaded model, not just the active one.
         session.on_selection(lambda sel, mid=mid: self._on_model_selection(mid, sel))
+        # Every atom click reports a pick, whatever the click mode — Pick mode only
+        # gates whether a *selection* is built from it. A pick names the model the
+        # user is working in, and the Objects panel follows that attention (see
+        # ControlsWindow._on_model_picked); without this, plain clicks moved nothing
+        # unless the Pick tool happened to be armed.
+        session.on_pick(lambda info, mid=mid: (
+            self.bridge.model_picked.emit(mid) if info else None))
         # Volume commands ride whichever session is the control session, so contour
         # changes made in the viewport can come back on any of them.
         session.on_volume_iso(self._on_volume_iso_changed)

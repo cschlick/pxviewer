@@ -524,6 +524,18 @@ def exercise_a_viewport_pick_points_the_panel_at_the_owning_model():
         process_events()
         assert app._active_model_id == a
 
+        # A plain click needs no Pick mode: every atom click reports a pick naming
+        # its model, and the panel follows that too — through the session's own
+        # message path, as the viewer sends it.
+        app.session_for(b)._on_message('{"type": "pick", "empty": false, "atom": {"id": 1}}')
+        process_events()
+        assert app._active_model_id == b, "a bare atom click should activate its model"
+
+        # A background click (empty pick) moves nothing.
+        app.session_for(a)._on_message('{"type": "pick", "empty": true}')
+        process_events()
+        assert app._active_model_id == b
+
 
 def exercise_rebuilding_the_appearance_pane_spawns_no_stray_windows():
     """Orphaning a still-visible widget turns it into a floating top-level window, which
