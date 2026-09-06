@@ -550,7 +550,7 @@ def _make_bridge():
 
     class _Bridge(QObject):
         scene_selection_changed = Signal(object)  # {"scene": {model_id: [indices]}, "changed": model_id}
-        model_picked = Signal(str)  # an atom of this model was clicked, in any mode
+        atom_picked = Signal(str, int)  # (model id, atom index; -1 when unknown) — a click, any mode
         status_changed = Signal(str)
         status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
@@ -1429,7 +1429,7 @@ class ControlsWindow:
         self._models_summary: list = []
         self._suppress_table_model_combo = False
         desktop.bridge.scene_selection_changed.connect(self._on_scene_selection_changed)
-        desktop.bridge.model_picked.connect(self._on_model_picked)
+        desktop.bridge.atom_picked.connect(self._on_atom_picked)
         desktop.bridge.status_changed.connect(self._set_status)
         desktop.bridge.status_warned.connect(self._flash_status)
         desktop.bridge.loaded_changed.connect(self._on_loaded_changed)
@@ -1644,6 +1644,21 @@ class ControlsWindow:
             lambda on: self._desktop._settings.setValue(
                 "selection/clip_on_apply", "true" if on else "false"))
         sl.addWidget(self._clip_on_select)
+
+        self._context_on_select = QCheckBox("Neighborhood in ball-and-stick")
+        self._context_on_select.setToolTip(
+            "Draw the selected atoms and every residue within 5 Å of them in "
+            "ball-and-stick while the selection stands — the same local context for a "
+            "typed selection and a clicked atom. Restored when the selection clears. "
+            "Skipped for large selections and when the model already shows "
+            "ball-and-stick.")
+        self._context_on_select.setChecked(
+            str(self._desktop._settings.value("selection/context_rep", "true")).lower()
+            != "false")
+        self._context_on_select.toggled.connect(
+            lambda on: self._desktop._settings.setValue(
+                "selection/context_rep", "true" if on else "false"))
+        sl.addWidget(self._context_on_select)
 
         sl.addWidget(QLabel("Selected:"))
         self._selection_label = QLabel("None")
@@ -2846,16 +2861,10 @@ class ControlsWindow:
         radius_row.addStretch()
         vg.addLayout(radius_row)
 
-        focus_surroundings = QCheckBox("Show Mol* focus neighborhood on click")
-        focus_surroundings.setChecked(self._desktop._focus_surroundings)
-        focus_surroundings.setToolTip(
-            "Restore Mol*'s native click-focus display: show the focused residue and its "
-            "5 Å surroundings as ball-and-stick. Interactions remain governed separately by "
-            "the model's Show → Mol* interactions checkbox. This preference is saved "
-            "automatically; camera focusing itself is unchanged.")
-        focus_surroundings.toggled.connect(self._desktop.set_focus_surroundings)
-        vg.addWidget(focus_surroundings)
-        self._focus_surroundings_check = focus_surroundings
+        # (The old "Show Mol* focus neighborhood on click" toggle is gone: a click now
+        # runs pxviewer's own selection pipeline, and the neighbourhood context is the
+        # Selection pane's "Neighborhood in ball-and-stick" checkbox — one treatment
+        # for clicked and typed selections alike.)
         layout.addWidget(viewer)
 
         defaults = QGroupBox("New model defaults")
@@ -4637,7 +4646,8 @@ class ControlsWindow:
         try:
             n = self._desktop.select_by_expression(
                 expr, focus=self._focus_on_select.isChecked(),
-                clip=self._clip_on_select.isChecked())
+                clip=self._clip_on_select.isChecked(),
+                context=self._context_on_select.isChecked())
         except Exception as exc:  # invalid syntax / no model
             self._selection_label.setText(
                 f"<span style='color:{_accent(self._window, 'error')}'>{exc}</span>")
@@ -5077,10 +5087,34 @@ class ControlsWindow:
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
-    def _on_model_picked(self, mid: str) -> None:
-        """An atom of ``mid`` was clicked, in any click mode: the panel follows the
-        user's attention — its row highlights and, being a model row, it activates."""
-        self._set_current_tree_row("model", mid)
+    def _on_atom_picked(self, mid: str, index: int) -> None:
+        """An atom of ``mid`` was clicked. With no click mode armed this IS a
+        selection: the clicked residue goes through the same pipeline a typed
+        expression takes — oriented framing, clip, neighbourhood context, all under
+        the Selection pane's checkboxes — and the box shows the equivalent
+        expression. While Pick mode accumulates, refine-drag tugs, or a measurement
+        is being placed, the click belongs to that tool, and the panel just follows
+        the model."""
+        desktop = self._desktop
+        entry = desktop._model_entry(mid)
+        tool_owns_click = (
+            desktop._selection_enabled or desktop._tug_enabled
+            or (entry is not None
+                and getattr(entry["session"], "_click_mode", "off") != "off"))
+        if tool_owns_click or index < 0:
+            self._set_current_tree_row("model", mid)  # follow attention, touch nothing
+            return
+        try:
+            expression = desktop.select_picked_atom(
+                mid, index,
+                focus=self._focus_on_select.isChecked(),
+                clip=self._clip_on_select.isChecked(),
+                context=self._context_on_select.isChecked())
+        except Exception:  # a click must never surface a selection error dialogically
+            self._set_current_tree_row("model", mid)
+            return
+        if expression:
+            self._select_expr.setText(expression)  # re-runnable, and teaches the grammar
 
     def _set_current_tree_row(self, kind: str, ident: str) -> None:
         """Point the object list's highlight at (kind, ident), if it has a row."""
@@ -5740,9 +5774,12 @@ class DesktopApp:
         self._default_model_interactions = (
             str(self._settings.value("defaults/molstar_interactions", "false")).lower()
             in ("1", "true", "yes"))
-        self._focus_surroundings = (
-            str(self._settings.value("defaults/focus_surroundings", "true")).lower()
-            in ("1", "true", "yes"))
+        # Mol*'s native click-focus display is retired (the stored preference is
+        # deliberately ignored): a click now runs pxviewer's own selection pipeline,
+        # and the local ball-and-stick context is the Selection pane's
+        # "Neighborhood in ball-and-stick" — identical for clicked and typed
+        # selections. The plumbing stays for the pick-mode suppression calls.
+        self._focus_surroundings = False
         self._scene_counter = 0  # cache-buster for the composed volume MVSJ
         self._dummy: Optional[Any] = None  # persistent control ws when no model is visible
         self._batching = False  # defer viewport reload / signals during a group load
@@ -6711,6 +6748,7 @@ class DesktopApp:
                 if on is not None:
                     kwargs["on"] = on
                 session.add_representation(extra, **kwargs)
+            self._add_context_layer(entry, session, on)
             return
         for i, layer in enumerate(reps):
             kwargs = self._model_color_kwargs(entry, layer)
@@ -6718,6 +6756,22 @@ class DesktopApp:
                 kwargs["on"] = on
             method = session.set_representation if i == 0 else session.add_representation
             method(layer, **kwargs)
+        self._add_context_layer(entry, session, on)
+
+    def _add_context_layer(self, entry, session, on) -> None:
+        """The selection's neighbourhood as an extra ball-and-stick layer (see
+        ``_set_context_rep``), restricted to what the structure-type toggles show."""
+        context = entry.get("context_on")
+        if not context or entry.get("rep") == "ball-and-stick":
+            return  # nothing to add, or the model already shows sticks everywhere
+        if on is not None:
+            shown = set(on)
+            context = [i for i in context if i in shown]
+            if not context:
+                return
+        kwargs = self._model_color_kwargs(entry, "ball-and-stick")
+        kwargs["on"] = context
+        session.add_representation("ball-and-stick", **kwargs)
 
     def _model_color_kwargs(self, entry, rep: str) -> dict:
         """How to color a model's representation: an explicit user color wins; else the
@@ -6786,12 +6840,15 @@ class DesktopApp:
         # selection can be built in any loaded model, not just the active one.
         session.on_selection(lambda sel, mid=mid: self._on_model_selection(mid, sel))
         # Every atom click reports a pick, whatever the click mode — Pick mode only
-        # gates whether a *selection* is built from it. A pick names the model the
-        # user is working in, and the Objects panel follows that attention (see
-        # ControlsWindow._on_model_picked); without this, plain clicks moved nothing
-        # unless the Pick tool happened to be armed.
+        # gates whether an *accumulating* selection is built from it. The pick names
+        # the model and the atom; the GUI side decides what the click means (see
+        # ControlsWindow._on_atom_picked): with no click mode armed it selects the
+        # residue through the same pipeline a typed selection takes, otherwise it
+        # just points the panel at the model.
         session.on_pick(lambda info, mid=mid: (
-            self.bridge.model_picked.emit(mid) if info else None))
+            self.bridge.atom_picked.emit(
+                mid, info["index"] if isinstance(info.get("index"), int) else -1)
+            if info else None))
         # Volume commands ride whichever session is the control session, so contour
         # changes made in the viewport can come back on any of them.
         session.on_volume_iso(self._on_volume_iso_changed)
@@ -10706,6 +10763,9 @@ class DesktopApp:
         for m in self._models:
             try:
                 m["session"].clear_selection()
+                if m.pop("_auto_clip", False):
+                    m["session"].set_clip(0.0, 1.0, radius=None)
+                self._set_context_rep(m, None)
             except Exception:  # pragma: no cover - defensive
                 pass
         with self._scene_lock:
@@ -11017,12 +11077,13 @@ class DesktopApp:
         entry = self._model_entry(mid)
         if entry is not None and entry.pop("_auto_clip", False):
             session.set_clip(0.0, 1.0, radius=None)
+        self._set_context_rep(entry, None)        # a whole object needs no context view
         session.focus(list(sel))                  # Mol*'s own whole-object framing
         self._on_model_selection(mid, sel)        # table + label follow
         return len(sel)
 
     def select_by_expression(self, text: str, *, focus: bool = True,
-                             clip: bool = True) -> int:
+                             clip: bool = True, context: bool = True) -> int:
         """Resolve a cctbx/Phenix selection string on the active model and select it.
 
         cctbx's own atom-selection machinery turns the string into atom indices
@@ -11041,13 +11102,44 @@ class DesktopApp:
             if entry is not None and entry.pop("_auto_clip", False):
                 # The isolation sphere was ours; clearing the selection lifts it.
                 session.set_clip(0.0, 1.0, radius=None)
+            self._set_context_rep(entry, None)
             with self._scene_lock:
                 dropped = self._scene_selection.pop(mid, None) is not None
             if dropped:
                 self._emit_scene_selection()
             return 0
         sel = session.select_by(selection=text)  # cctbx; raises on invalid syntax
-        session.highlight(sel)                    # show it in the viewer
+        return self._select_fragment(mid, session, entry, sel,
+                                     focus=focus, clip=clip, context=context)
+
+    def select_picked_atom(self, mid: str, atom_index: int, *, focus: bool = True,
+                           clip: bool = True, context: bool = True):
+        """A viewport atom click, unified with the selection box: select the clicked
+        atom's whole residue and give it exactly the treatment a typed selection gets
+        — same oriented framing, same clip sphere, same neighbourhood context. One
+        grammar for "show me this residue", however it was indicated. Returns the
+        equivalent selection expression (for the selection box), or ``None`` when the
+        index names no atom."""
+        self.set_active_model(mid)
+        entry = self._model_entry(mid)
+        session = entry["session"] if entry else None
+        if session is None or getattr(session, "model", None) is None:
+            return None
+        atoms = session.model.get_hierarchy().atoms()
+        if not (0 <= int(atom_index) < atoms.size()):
+            return None
+        residue_group = atoms[int(atom_index)].parent().parent()
+        indices = [a.i_seq for a in residue_group.atoms()]
+        chain_id = residue_group.parent().id.strip()
+        expression = f"chain {chain_id} and resid {residue_group.resid().strip()}"
+        self._select_fragment(mid, session, entry, indices,
+                              focus=focus, clip=clip, context=context)
+        return expression
+
+    def _select_fragment(self, mid, session, entry, atoms_or_sel, *,
+                         focus: bool, clip: bool, context: bool) -> int:
+        """The one path every fragment selection takes — typed or clicked."""
+        sel = session.highlight(atoms_or_sel)     # show it in the viewer
         if focus and len(sel):
             # Aim the camera at what was just named. On by default: a typed selection
             # is a statement of intent ("show me resseq 29"), unlike a viewport click,
@@ -11098,8 +11190,62 @@ class DesktopApp:
                 # Clip is off for this selection, so lift the sphere a previous
                 # clipped selection left -- otherwise it keeps cutting the new view.
                 session.set_clip(0.0, 1.0, radius=None)
+        # The neighbourhood context rides the selection, not the camera: it shows (or
+        # clears) whether or not the focus checkbox moved the view.
+        self._set_context_rep(entry, list(sel) if context else None)
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
         return len(sel)
+
+    # A fragment's local context: the selection plus every residue within this many
+    # Angstrom drawn ball-and-stick while the selection stands. The size cap keeps the
+    # treatment for fragments being *inspected* — a whole chain or model is a region,
+    # and dressing thousands of atoms in sticks helps nothing and costs plenty.
+    _CONTEXT_RADIUS = 5.0
+    _CONTEXT_MAX_ATOMS = 250
+
+    def _set_context_rep(self, entry, indices) -> None:
+        """Draw (or clear, with ``indices=None``) the selection's neighbourhood context."""
+        if entry is None:
+            return
+        want = None
+        if (indices and len(indices) <= self._CONTEXT_MAX_ATOMS
+                and entry.get("rep") != "ball-and-stick"):
+            want = self._neighborhood_indices(entry, indices)
+        if want == entry.get("context_on"):
+            return  # unchanged (both None, or the same neighbourhood) — no redraw
+        entry["context_on"] = want
+        self._apply_model_rep(entry)
+
+    def _neighborhood_indices(self, entry, indices) -> list:
+        """Atom indices of every residue with an atom within ``_CONTEXT_RADIUS`` of the
+        selection — the selection's own residues included."""
+        coords = np.array(entry["session"].model.get_hierarchy().atoms().extract_xyz())
+        mask = np.zeros(len(coords), dtype=bool)
+        r2 = self._CONTEXT_RADIUS ** 2
+        # One pass per selected atom keeps peak memory flat on large models.
+        for i in indices:
+            mask |= ((coords - coords[i]) ** 2).sum(axis=1) <= r2
+        owner, members = self._residue_map(entry)
+        out: set = set()
+        for group in {int(owner[j]) for j in np.nonzero(mask)[0]}:
+            out.update(members[group])
+        return sorted(out)
+
+    def _residue_map(self, entry):
+        """Cached (atom -> residue-group index, residue-group -> atom indices)."""
+        cached = entry.get("residue_map")
+        if cached is None:
+            hierarchy = entry["session"].model.get_hierarchy()
+            owner = np.zeros(hierarchy.atoms_size(), dtype=int)
+            members: list = []
+            for model_ in hierarchy.models():
+                for chain in model_.chains():
+                    for residue_group in chain.residue_groups():
+                        idxs = [a.i_seq for a in residue_group.atoms()]
+                        owner[idxs] = len(members)
+                        members.append(idxs)
+            cached = entry["residue_map"] = (owner, members)
+        return cached
 
 
 def run_desktop(host: str = "127.0.0.1", port: int = 5173,

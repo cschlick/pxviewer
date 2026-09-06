@@ -237,45 +237,20 @@ def exercise_minimization_runs_continuously_until_stopped():
 # -- persisted preferences ----------------------------------------------------
 
 
-def exercise_focus_surroundings_defaults_on_and_persists():
-    """Mol*'s click-focus neighbourhood is on by default and the choice survives a
-    restart. Pick mode suppresses it *without* changing the preference, then restores it
-    -- so turning picking on and off again does not quietly rewrite a setting.
-    """
-    key = "defaults/focus_surroundings"
-    QSettings("pxviewer", "pxviewer").remove(key)
+def exercise_the_native_focus_neighbourhood_stays_retired():
+    """Mol*'s native click-focus display was replaced by pxviewer's own unified
+    selection pipeline (a click and a typed selection get identical treatment; the
+    local context is the Selection pane's Neighborhood checkbox). The old stored
+    preference must be ignored — even a settings file that says "true" must not
+    resurrect the native overlay alongside the unified one."""
+    QSettings("pxviewer", "pxviewer").setValue("defaults/focus_surroundings", "true")
 
-    first = DesktopApp(port=0)
+    app = DesktopApp(port=0)
     try:
-        controls = first._controls
-        assert first._focus_surroundings
-        assert controls._focus_surroundings_check.isChecked()
-
-        # A real session rather than a mock: the flag it keeps is the state under test,
-        # and asserting on it says the session was actually reconfigured.
-        session = LiveSession.from_sites([[0, 0, 0], [1, 0, 0]])
-        entry = {"session": session}
-        first._models.append(entry)
-
-        controls._pick_btn.click()
-        assert session._focus_surroundings is False    # suppressed in the viewer ...
-        assert first._focus_surroundings               # ... but the preference stands
-
-        controls._pick_btn.click()
-        assert session._focus_surroundings is True     # and it comes back
-        first._models.remove(entry)
-
-        controls._focus_surroundings_check.click()
-        assert not first._focus_surroundings
+        assert app._focus_surroundings is False
+        assert app._controls._context_on_select.isChecked()  # the replacement, default on
     finally:
-        first.stop()
-
-    second = DesktopApp(port=0)
-    try:
-        assert not second._focus_surroundings
-        assert not second._controls._focus_surroundings_check.isChecked()
-    finally:
-        second.stop()
+        app.stop()
 
 
 def exercise_new_model_show_and_representation_defaults_persist():

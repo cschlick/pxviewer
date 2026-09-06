@@ -62,6 +62,13 @@ export interface AtomInfo {
      * indistinguishable to everything downstream.
      */
     altloc: string;
+    /**
+     * The structure-wide positional atom index — the same indexing every other channel
+     * (selection, highlight, representations) speaks. Carried so Python can act on a
+     * click (select the residue, run its own focus) without a fragile round-trip
+     * through id/name/resseq matching.
+     */
+    index: number;
 }
 
 interface LiveTrajectoryParams {
@@ -1910,6 +1917,7 @@ export class LiveViewer {
                     resseq: StructureProperties.residue.label_seq_id(location),
                     chain: StructureProperties.chain.label_asym_id(location),
                     altloc: StructureProperties.atom.label_alt_id(location),
+                    index: location.element as unknown as number,
                 } : null);
             }
             if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);

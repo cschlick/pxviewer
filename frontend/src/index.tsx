@@ -24,14 +24,18 @@ function App() {
                 b?.transformer?.id === 'ms-plugin.create-structure-focus-representation'
                     ? { ...b, defaultParams: { ...(b.defaultParams || {}), components: [] } }
                     : b);
-            // Mol*'s FocusLoci behavior resets the camera when a click lands on
-            // nothing — losing the view you were working in to a stray click on the
-            // background. Blank exactly those bindings; click-to-focus on an actual
-            // pick keeps its defaults.
+            // Mol*'s FocusLoci behavior owns two click gestures we do not want: reset
+            // the camera on an empty click (a stray background click threw the view
+            // away), and centre-focus on an atom click (its framing — Python drives
+            // the camera from pick events through pxviewer's own selection pipeline
+            // instead, so a click and a typed selection frame identically). Blank all
+            // of its bindings.
             s.behaviors = s.behaviors.map((b: any) =>
                 b?.transformer?.id === 'ms-plugin.camera-focus-loci'
                     ? { ...b, defaultParams: { ...(b.defaultParams || {}), bindings: {
                           ...DefaultFocusLociBindings,
+                          clickCenterFocus: Binding.Empty,
+                          clickCenterFocusSelectMode: Binding.Empty,
                           clickResetCameraOnEmpty: Binding.Empty,
                           clickResetCameraOnEmptySelectMode: Binding.Empty,
                       } } }

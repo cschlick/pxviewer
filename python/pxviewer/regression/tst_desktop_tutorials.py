@@ -342,6 +342,63 @@ def exercise_double_clicking_a_model_row_selects_the_whole_model():
         assert app._model_entry(first)["visible"], "the two toggles should cancel out"
 
 
+def exercise_a_click_and_a_typed_selection_are_one_pipeline():
+    """The unification: with no click mode armed, a viewport atom click selects the
+    clicked residue through exactly the pipeline a typed selection takes — oriented
+    framing, isolation clip, neighbourhood context — and the selection box shows the
+    equivalent expression. A tool that owns clicks (Pick mode) keeps them: the panel
+    follows the model, nothing else changes."""
+    import json
+
+    with desktop() as app:
+        app.load_file(data_path("3nir.pdb"))
+        process_events()
+        first = app._active_model_id
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        second = app._active_model_id
+        controls = app._controls
+        session = app.session_for(first)
+        calls = []
+        session.orient_camera = lambda *a, **k: calls.append("orient")
+        session.set_clip = lambda *a, **k: calls.append("clip")
+
+        # "Click" a CA of residue 29 in the NON-active model, through the session's
+        # real message path, exactly as the viewer reports it.
+        atoms = session.model.get_hierarchy().atoms()
+        idx = next(i for i, a in enumerate(atoms)
+                   if a.parent().parent().resseq_as_int() == 29
+                   and a.name.strip() == "CA")
+        session._on_message(json.dumps(
+            {"type": "pick", "empty": False, "atom": {"index": idx}}))
+        process_events()
+
+        assert app._active_model_id == first             # the panel followed
+        expected = sorted(a.i_seq for a in atoms[idx].parent().parent().atoms())
+        assert sorted(app._scene_selection.get(first, [])) == expected, (
+            "the click should select the clicked residue, whole")
+        assert "resid 29" in controls._select_expr.text(), controls._select_expr.text()
+        assert "orient" in calls, "a click gets the same oriented framing as typing"
+
+        # The neighbourhood context covers the residue plus neighbours, and clears
+        # with the selection.
+        entry = app._model_entry(first)
+        context = entry.get("context_on")
+        assert context and set(expected) <= set(context)
+        assert len(context) > len(expected), "context should reach neighbouring residues"
+        app.select_by_expression("")
+        assert entry.get("context_on") is None
+
+        # Pick mode owns its clicks: the same pick only points the panel.
+        app.enable_mouse_selection()
+        app.session_for(second)._on_message(json.dumps(
+            {"type": "pick", "empty": False, "atom": {"index": 0}}))
+        process_events()
+        assert app._active_model_id == second
+        assert not app._scene_selection.get(second), (
+            "in Pick mode the pick must not replace the selection")
+
+
 def exercise_a_single_residue_selection_gets_the_oriented_framing():
     """Typing one residue frames it the standard way -- N left, C right, side chain up
     -- via the same orientation the space-bar navigation uses. Anything that is not
