@@ -497,18 +497,29 @@ def exercise_a_viewport_pick_points_the_panel_at_the_owning_model():
         assert app._active_model_id == b
         tree = app._controls._loaded_tree
 
-        app._controls._on_scene_selection_changed({a: [0]})
+        app._controls._on_scene_selection_changed({"scene": {a: [0]}, "changed": a})
         process_events()                     # activation is deferred off the row change
         assert tree.currentItem().data(0, Qt.ItemDataRole.UserRole) == ("model", a)
         assert app._active_model_id == a
         assert app._controls._focused == ("model", a)
 
-        # A selection spanning several models names no single owner: nothing moves.
-        app._controls._on_scene_selection_changed({a: [0], b: [1]})
+        # Sessions keep independent selections, so a's standing picks must not veto
+        # the sync when atoms are then picked in b: the panel follows WHO CHANGED.
+        app._controls._on_scene_selection_changed({"scene": {a: [0], b: [1]}, "changed": b})
+        process_events()
+        assert app._active_model_id == b
+
+        # A model whose picks were just cleared moves nothing.
+        app._controls._on_scene_selection_changed({"scene": {a: [0]}, "changed": b})
+        process_events()
+        assert app._active_model_id == b
+
+        # A bare scene dict (older callers) still routes via its sole owner.
+        app._controls._on_scene_selection_changed({a: [0]})
         process_events()
         assert app._active_model_id == a
 
-        # Clearing the selection leaves the panel where it is too.
+        # And an empty payload moves nothing.
         app._controls._on_scene_selection_changed({})
         process_events()
         assert app._active_model_id == a

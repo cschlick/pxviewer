@@ -549,7 +549,7 @@ def _make_bridge():
     from PySide6.QtCore import QObject, Signal
 
     class _Bridge(QObject):
-        scene_selection_changed = Signal(object)  # {model_id: [atom indices]} across all models
+        scene_selection_changed = Signal(object)  # {"scene": {model_id: [indices]}, "changed": model_id}
         status_changed = Signal(str)
         status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
@@ -5044,22 +5044,34 @@ class ControlsWindow:
             toggle.blockSignals(False)
         self._sync_all_markup_button()  # these are markup too, and now there is some
 
-    def _on_scene_selection_changed(self, scene) -> None:
-        """A model's picks changed. Refresh the aggregate label + the atoms table."""
-        self._scene_selection = scene or {}
-        total = sum(len(v) for v in self._scene_selection.values())
+    def _on_scene_selection_changed(self, payload) -> None:
+        """A model's picks changed. Refresh the aggregate label + the atoms table.
+
+        ``payload`` is ``{"scene": {model_id: [indices]}, "changed": model_id}`` —
+        ``changed`` names the model whose picks just changed. A bare scene dict is
+        also accepted (older callers); then only a sole owner can be inferred."""
+        if isinstance(payload, dict) and "scene" in payload:
+            scene, changed = payload.get("scene") or {}, payload.get("changed")
+        else:
+            scene, changed = payload or {}, None
+        self._scene_selection = scene
+        total = sum(len(v) for v in scene.values())
         # Hide/show-selected only make sense with a selection.
         self._hide_sel_btn.setEnabled(total > 0)
         self._show_sel_btn.setEnabled(total > 0)
-        self._selection_label.setText(self._desktop.selection_description(self._scene_selection))
-        # Viewer -> Objects list: the selection lives in exactly one model, so make that
-        # model's row current (which also makes it the active model). This is the missing
-        # direction — picking atoms used to leave the panel pointing wherever it was, so
-        # the Appearance pane and atoms table acted on an object the user had stopped
-        # thinking about. A selection spanning several models (or none) moves nothing.
-        owners = [mid for mid, indices in self._scene_selection.items() if indices]
-        if len(owners) == 1:
-            self._set_current_tree_row("model", owners[0])
+        self._selection_label.setText(self._desktop.selection_description(scene))
+        # Viewer -> Objects list: follow the model whose picks just changed, making its
+        # row current (and it the active model) — the panel follows the user's
+        # attention. Judged by WHO CHANGED, not by counting owners: sessions keep
+        # independent selections, so a standing selection in one model must not veto
+        # the sync when atoms are picked in another (it did — clicking the non-active
+        # model moved nothing whenever the active one still had picks). A model whose
+        # picks were just *cleared* moves nothing.
+        if changed is None:
+            owners = [mid for mid, indices in scene.items() if indices]
+            changed = owners[0] if len(owners) == 1 else None
+        if changed is not None and scene.get(changed):
+            self._set_current_tree_row("model", changed)
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
@@ -9844,7 +9856,7 @@ class DesktopApp:
                 self._scene_selection[mid] = indices
             else:
                 self._scene_selection.pop(mid, None)
-        self._emit_scene_selection()
+        self._emit_scene_selection(changed=mid)
 
     def selection_description(self, scene: Optional[dict] = None, *, limit: int = 6) -> str:
         """Describe a selection at its semantic level: complete residues or individual atoms."""
@@ -9946,10 +9958,11 @@ class DesktopApp:
             lines.append(f"…and {len(selected) - shown} more")
         return "\n".join(lines)
 
-    def _emit_scene_selection(self) -> None:
+    def _emit_scene_selection(self, changed: Optional[str] = None) -> None:
+        """Publish the scene selection; ``changed`` names the model whose picks moved."""
         with self._scene_lock:
             snapshot = {k: list(v) for k, v in self._scene_selection.items()}
-        self.bridge.scene_selection_changed.emit(snapshot)
+        self.bridge.scene_selection_changed.emit({"scene": snapshot, "changed": changed})
 
     def _emitted_items(self) -> list:
         """The Loaded-tree items as published (models, volumes, reflections)."""
