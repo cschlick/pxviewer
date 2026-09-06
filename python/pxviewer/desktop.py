@@ -3240,6 +3240,16 @@ class ControlsWindow:
                 themes=([("Local resolution", "localres")]
                         if it.get("resolution_map") else None),
                 title="Map color")
+            if live.get("negative_color"):
+                # A difference map draws a second contour at -level; its color is as
+                # much the user's as the positive one — and both are carried into the
+                # live recalc window (see show_map_box).
+                def _set_negative(color, it=it):
+                    self._safe(
+                        lambda: self._desktop.set_volume_negative_color(vid, color))
+
+                self._add_color_row(live.get("negative_color"), _set_negative,
+                                    title="Negative-contour color", label="− color")
 
             def _set_opacity(v, it=it):
                 it["opacity"] = v
@@ -3430,7 +3440,8 @@ class ControlsWindow:
         self._appearance_layout.addLayout(row)
         return {"check": check, "spin": spin}
 
-    def _add_color_row(self, current, on_pick, *, themes=None, title="Color"):
+    def _add_color_row(self, current, on_pick, *, themes=None, title="Color",
+                       label="Color"):
         """A color control: optional color-by themes, then swatches, then a picker.
 
         Colors are shown rather than named — a swatch says what a hex is and the word does
@@ -3454,7 +3465,7 @@ class ControlsWindow:
         theme_values = {value for _label, value in themes}
 
         row = QHBoxLayout()
-        lab = QLabel("Color")
+        lab = QLabel(label)
         lab.setMinimumWidth(80)
         row.addWidget(lab)
         combo = QComboBox()
@@ -7907,7 +7918,15 @@ class DesktopApp:
                     self._diff_engine_key = gid
                 box = self._diff_engine.recompute_local(center, radius=6.0, sites_cart=sites)
                 if gen == self._diff_gen and self._live_diff:  # not superseded during the recompute
-                    session.show_map_box(box, level=3.0)
+                    # The live window wears the paired difference map's own colors, so
+                    # a user recoloring that map recolors the recalc too -- never a
+                    # third color pair on screen.
+                    diff_entry = next((v for v in self._volumes
+                                       if v.get("group") == gid
+                                       and v.get("negative_color")), None)
+                    colors = ((diff_entry["color"], diff_entry["negative_color"])
+                              if diff_entry else None)
+                    session.show_map_box(box, level=3.0, colors=colors)
                     self._diff_boxes += 1
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 self._status(f"live difference map failed: {exc}")
@@ -8911,6 +8930,11 @@ class DesktopApp:
         """Set a volume's color live."""
         self._volume_command(vid, "color", color,
                              lambda c, ref, v: c.set_volume_color(ref, v))
+
+    def set_volume_negative_color(self, vid: str, color: str) -> None:
+        """Set a difference map's negative-contour color live."""
+        self._volume_command(vid, "negative_color", color,
+                             lambda c, ref, v: c.set_volume_negative_color(ref, v))
 
     def save_screenshot(self, path: str) -> None:
         """Render the viewport and write it to ``path`` as a PNG.
@@ -10252,11 +10276,11 @@ class DesktopApp:
                 with self._batch_load():
                     for map_type in types:
                         is_diff = map_type in DIFFERENCE_MAP_TYPES
+                        # Canonical colors on purpose (blue 2mFo-DFc, green/red mFo-DFc):
+                        # X-ray maps carry Coot-bred meaning, and a random palette color
+                        # here clashed with the live recalc's conventions. The color
+                        # controls stay authoritative afterwards.
                         color, iso, negative = MAP_STYLE[is_diff]
-                        # Difference maps keep green/red (Coot semantics); the 2mFo-DFc map
-                        # takes a random color from the session's current palette group.
-                        if not is_diff:
-                            color = self._palettes.next_color()
                         self._add_volume(
                             VolumeData.from_map_manager(
                                 mmm.get_map_manager_by_id(map_type),
@@ -10392,9 +10416,8 @@ class DesktopApp:
             for coefficients in data.map_coefficient_arrays():
                 label = coefficients.info().label_string()
                 is_diff = is_difference_map(label)
+                # Canonical colors, as in make_maps: the color controls take over from here.
                 color, iso, negative = MAP_STYLE[is_diff]
-                if not is_diff:  # a random palette color; difference maps keep green/red
-                    color = self._palettes.next_color()
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
                 # A map from reflections fills the unit cell: open it with a radius,

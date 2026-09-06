@@ -39,6 +39,10 @@ def exercise_volume_appearance_commands_reach_the_client():
                 assert await next_text(ws, "volume_color") == {
                     "type": "volume_color", "ref": "vol1", "color": "green"}
 
+                live.set_volume_negative_color("vol1", "orange")
+                assert await next_text(ws, "volume_negative_color") == {
+                    "type": "volume_negative_color", "ref": "vol1", "color": "orange"}
+
                 live.set_volume_opacity("vol2", 0.25)
                 assert await next_text(ws, "volume_opacity") == {
                     "type": "volume_opacity", "ref": "vol2", "opacity": 0.25}
@@ -70,6 +74,37 @@ def exercise_the_scroll_target_is_replayed_to_a_late_client():
             async with client(live) as ws:
                 assert await next_text(ws, "volume_scroll_target") == {
                     "type": "volume_scroll_target", "ref": "vol6"}
+
+        run_client(scenario)
+
+
+def exercise_the_map_box_style_precedes_its_payload_for_a_late_client():
+    """The live density window wears the paired difference map's colors. A client
+    connecting mid-drag must receive the style *before* the box payload, or the window
+    builds in the default green/red and only repaints a frame later."""
+    import struct
+
+    with session() as live:
+        # A standing window, as a drag leaves it (the payload bytes are opaque here —
+        # ordering, not decoding, is what this pins).
+        live._map_box_style = json.dumps(
+            {"type": "map_box_style", "positive": "#ffcc00", "negative": "purple"})
+        live._last_map_box = struct.pack("<I", 7) + b"opaque-grid"
+
+        async def scenario():
+            async with client(live) as ws:
+                style, payload = None, None
+                while payload is None:
+                    message = await asyncio.wait_for(ws.recv(), timeout=10)
+                    if isinstance(message, (bytes, bytearray)):
+                        if bytes(message[:4]) == struct.pack("<I", 7):
+                            payload = message
+                    else:
+                        decoded = json.loads(message)
+                        if decoded.get("type") == "map_box_style":
+                            style = decoded
+                assert style is not None, "the payload arrived without its style"
+                assert style["positive"] == "#ffcc00" and style["negative"] == "purple"
 
         run_client(scenario)
 

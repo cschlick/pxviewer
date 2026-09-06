@@ -1449,20 +1449,44 @@ export class LiveViewer {
         const vol = build.toRoot().apply(LiveDiffVolume, {
             version: this.mapVersion, nx, ny, nz, values, origin, stepX, stepY, stepZ,
         });
-        vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
+        this.mapBoxReprRefs = [];
+        const pos = vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
             type: 'isosurface',
             typeParams: { isoValue: Volume.IsoValue.absolute(level), alpha: 1 },
-            color: 'uniform', colorParams: { value: ColorNames.green },
+            color: 'uniform', colorParams: { value: this.mapBoxColors.positive },
         }));
+        this.mapBoxReprRefs.push(pos.selector.ref);
         if (isDifference) {
-            vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
+            const neg = vol.apply(VolumeRepresentation3D, createVolumeRepresentationParams(this.plugin, undefined, {
                 type: 'isosurface',
                 typeParams: { isoValue: Volume.IsoValue.absolute(-level), alpha: 1 },
-                color: 'uniform', colorParams: { value: ColorNames.red },
+                color: 'uniform', colorParams: { value: this.mapBoxColors.negative },
             }));
+            this.mapBoxReprRefs.push(neg.selector.ref);
         }
         await build.commit();
         this.mapVolume = vol.selector;
+    }
+
+    /** The live window's contour colors, updatable while it stands. */
+    private mapBoxColors = { positive: ColorNames.green as Color, negative: ColorNames.red as Color };
+    private mapBoxReprRefs: string[] = [];
+
+    /** Set the live window's contour colors; repaints a standing window in place. */
+    async setMapBoxStyle(positive?: string, negative?: string) {
+        const pos = positive !== undefined ? decodeColor(positive) : undefined;
+        const neg = negative !== undefined ? decodeColor(negative) : undefined;
+        if (pos !== undefined) this.mapBoxColors.positive = pos;
+        if (neg !== undefined) this.mapBoxColors.negative = neg;
+        if (!this.mapBoxReprRefs.length) return;
+        const colors = [this.mapBoxColors.positive, this.mapBoxColors.negative];
+        const build = this.plugin.state.data.build();
+        this.mapBoxReprRefs.forEach((ref, i) => {
+            build.to(ref).update((old: any) => {
+                old.colorTheme = { name: 'uniform', params: { value: colors[i] } };
+            });
+        });
+        await build.commit();
     }
 
     /** Remove the live difference-density window (see `setMapBox`). */
@@ -1473,6 +1497,7 @@ export class LiveViewer {
             await b.commit();
         }
         this.mapVolume = undefined;
+        this.mapBoxReprRefs = [];
     }
 
     /**
@@ -2690,6 +2715,20 @@ async function setVolumeColor(plugin: PluginContext, ref: string, color: string)
     }).commit();
 }
 
+/** A difference map's negative contour color — the counterpart of setVolumeColor. */
+async function setVolumeNegativeColor(plugin: PluginContext, ref: string, color: string) {
+    const decoded = decodeColor(color);
+    if (decoded === undefined) {
+        console.warn('Unknown volume color:', color);
+        return;
+    }
+    const repr = findVolumeNegativeReprCell(plugin, ref);
+    if (!repr) return;
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
+        old.colorTheme = { name: 'uniform', params: { value: decoded } };
+    }).commit();
+}
+
 /** Clip a volume (an MVSJ representation) to a front/rear slab. */
 async function setVolumeSlab(plugin: PluginContext, ref: string, slab: Slab) {
     const repr = await findVolumeReprCell(plugin, ref);
@@ -3195,6 +3234,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 else await viewer.setClashes(msg.pairs ?? []);
             } else if (msg.type === 'dots' && viewer) {
                 if (msg.action === 'clear') await viewer.clearProbeDots(msg.channel ?? undefined);
+            } else if (msg.type === 'map_box_style' && viewer) {
+                await viewer.setMapBoxStyle(msg.positive, msg.negative);
             } else if (msg.type === 'map_box' && viewer) {
                 if (msg.action === 'clear') await viewer.clearMapBox();
             } else if (msg.type === 'hotspot_volume' && viewer) {
@@ -3225,6 +3266,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeVisible(plugin, msg.ref, msg.value);
             } else if (msg.type === 'volume_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeColor(plugin, msg.ref, msg.color);
+            } else if (msg.type === 'volume_negative_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
+                await setVolumeNegativeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {

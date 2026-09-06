@@ -476,6 +476,7 @@ class LiveSession:
         self._last_frame: Optional[bytes] = None
         self._structure_visible = True  # this model's own visibility (replayed to late clients)
         self._last_map_box: Optional[bytes] = None  # current live density window, replayed to late clients
+        self._map_box_style: Optional[str] = None   # its contour colors, replayed first
         self._last_hotspot_volume: Optional[bytes] = None  # current severity cloud, replayed to late clients
         self._hotspot_knee: Optional[float] = None  # current cloud opacity knee, replayed to late clients
         self._hotspot_anchors: Optional[dict] = None  # imported colour contract, replayed to late clients
@@ -868,7 +869,8 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def show_map_box(self, map_manager: Any, *, level: float = 3.0, is_difference: bool = True) -> None:
+    def show_map_box(self, map_manager: Any, *, level: float = 3.0, is_difference: bool = True,
+                     colors: Optional[tuple] = None) -> None:
         """Stream a small live density window (a boxed ``map_manager``) to the viewport.
 
         The whole box is one binary payload — an affine plus the raw f32 grid (see
@@ -881,14 +883,25 @@ class LiveSession:
 
         payload = struct.pack("<I", _TAG_MAP) + encode_map_box(
             map_manager, level=level, is_difference=is_difference)
+        style = None
+        if colors is not None:
+            # The window's contour colors (positive, negative) — sent as a tiny text
+            # message so the binary payload format stays untouched; the viewer keeps
+            # the style and repaints the standing window if it changed.
+            style = json.dumps({"type": "map_box_style",
+                                "positive": str(colors[0]), "negative": str(colors[1])})
         self._last_map_box = payload
+        self._map_box_style = style
         loop = self._loop
         if loop is not None:
+            if style is not None:
+                loop.call_soon_threadsafe(self._broadcast_text, style)
             loop.call_soon_threadsafe(self._broadcast, payload)
 
     def clear_map_box(self) -> None:
         """Remove the live density window (see :meth:`show_map_box`). Thread-safe."""
         self._last_map_box = None
+        self._map_box_style = None
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
@@ -1071,6 +1084,14 @@ class LiveSession:
         ``volume-0`` or a custom :class:`Volume` ref). Thread-safe.
         """
         message = json.dumps({"type": "volume_color", "ref": str(ref), "color": str(color)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_negative_color(self, ref: str, color: str) -> None:
+        """Change a difference map's negative-contour color by reference. Thread-safe."""
+        message = json.dumps(
+            {"type": "volume_negative_color", "ref": str(ref), "color": str(color)})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -2125,6 +2146,9 @@ class LiveSession:
             for payload in self._probe_dots_payloads.values():
                 await self._locked_send(websocket, payload)
             if self._last_map_box is not None:
+                if getattr(self, "_map_box_style", None):
+                    # Style first, so the window builds in the right colors.
+                    await self._locked_send(websocket, self._map_box_style)
                 await self._locked_send(websocket, self._last_map_box)
             if self._localres_downsample is not None:
                 # Before the payload: the factor must be in place when the grids build.
