@@ -5545,6 +5545,14 @@ class DesktopApp:
         self._app = QApplication.instance()
         if self._app is None:
             self._app = QApplication(sys.argv[:1])
+        # Always the light theme, whatever the OS is set to. Dark mode never rendered
+        # well here (half-dark panels, unreadable accents) and is not worth maintaining.
+        # Pinned before any widget exists so nothing ever paints from a dark palette;
+        # the palette-watch machinery stays for the one real event left, the initial
+        # palette landing after show.
+        from PySide6.QtCore import Qt as _Qt
+
+        self._app.styleHints().setColorScheme(_Qt.ColorScheme.Light)
         # App identity. On Linux — Wayland especially — the launcher/taskbar finds an
         # app's icon by matching its running window to a .desktop file of this name;
         # setWindowIcon alone only covers the title bar. `pxviewer install-desktop-entry`
