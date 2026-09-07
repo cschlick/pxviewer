@@ -417,7 +417,9 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         # main layer is restricted away from the context atoms, and the extra
         # ball-and-stick layer carries them alone.
         reps = list(session._representations.values())
-        assert len(reps) == 2, [r.get("type") for r in reps]
+        assert len(reps) == 2, (
+            [(r.get("id"), r.get("type"), "on" in r) for r in reps],
+            entry.get("reps"), app._default_model_reps)
         cartoon = next(r for r in reps if "cartoon" in r["type"])
         stick = next(r for r in reps if r is not cartoon)
         assert "ball" in stick["type"] and "on" in stick
