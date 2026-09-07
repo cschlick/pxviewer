@@ -8180,8 +8180,15 @@ class DesktopApp:
             ok = np.isfinite(static_v) & np.isfinite(window_v)
             if ok.sum() < 50:
                 return
-            spread = float(np.std(static_v[ok])) * float(np.std(window_v[ok]))
-            corr = (float(np.corrcoef(static_v[ok], window_v[ok])[0, 1])
+            static_v, window_v = static_v[ok], window_v[ok]
+            # Only meaningful where there is SIGNAL: for a well-fitted model both
+            # difference maps are noise, and two noise realizations decorrelate even
+            # when both are honestly quiet — which made this warning fire spuriously.
+            strong = (np.abs(static_v) > 2.0) | (np.abs(window_v) > 2.0)
+            if strong.sum() < 30:
+                return  # both maps are quiet here; nothing to disagree about
+            spread = float(np.std(static_v[strong])) * float(np.std(window_v[strong]))
+            corr = (float(np.corrcoef(static_v[strong], window_v[strong])[0, 1])
                     if spread > 1e-9 else 1.0)
             if corr < 0.85:
                 self._status(

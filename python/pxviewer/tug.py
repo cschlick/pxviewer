@@ -24,7 +24,8 @@ from typing import Any, List, Optional
 import numpy as np
 
 __all__ = [
-    "Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA", "JIGGLE_AMPLITUDE", "JIGGLE_STEPS",
+    "Tug", "ZONE_RADIUS", "TUG_SIGMA", "ANCHOR_SIGMA", "HOLD_SIGMA",
+    "JIGGLE_AMPLITUDE", "JIGGLE_STEPS",
 ]
 
 #: How much of the structure gives way, in Angstrom around the dragged atom. Big enough
@@ -36,6 +37,14 @@ ZONE_RADIUS = 8.0
 #: the geometry has to argue with it. Too strong and the model tears; too weak and the
 #: atom lags behind the pointer and feels dead.
 TUG_SIGMA = 0.05
+#: How firmly every *interior* zone atom holds its starting position (A). Loose on
+#: purpose — bonds to the pulled atom and the density term can still move what they
+#: must — but present, because with no hold at all a grab let the minimizer idealize
+#: the whole zone's geometry: a 0.1 A nudge moved ~100 atoms by up to 1.6 A, which
+#: exploded the difference map with real (but unwanted) signal. Sigma measured, not
+#: guessed: at 0.3 the same nudge still moved ~70 atoms (max 0.56 A); at 0.1 the
+#: zone stays essentially where the user left it.
+HOLD_SIGMA = 0.1
 
 #: The pins. Much stronger than the pull, because the boundary is not meant to be a
 #: negotiation — it is what stops the zone drifting away from the structure it belongs to.
@@ -137,6 +146,7 @@ class Tug:
 
         anchors = _boundary_atoms(grm, self._full_sites, zone)
         self._pin(anchors)
+        self._hold(anchors)
 
     # -- the drag --------------------------------------------------------
 
@@ -248,6 +258,32 @@ class Tug:
                 sites_cart=self._sites.select(flex.size_t(local.tolist())),
                 selection=flex.size_t(local.tolist()),
                 sigma=ANCHOR_SIGMA))
+
+    def _hold(self, anchors: np.ndarray) -> None:
+        """Softly hold every interior zone atom where the drag found it.
+
+        The boundary is pinned hard (see ``_pin``); without an interior hold the rest
+        of the zone was free to relax toward ideal geometry the moment a drag began,
+        moving atoms the user never touched (see ``HOLD_SIGMA``). The pulled atom is
+        excluded — its reference is the pointer target (see ``_tug``)."""
+        from cctbx.array_family import flex
+        from mmtbx.geometry_restraints import reference
+
+        skip = set(np.flatnonzero(np.isin(self._indices, anchors)).tolist())
+        skip.add(self._local)
+        held = [i for i in range(len(self._indices)) if i not in skip]
+        if not held:
+            return
+        proxies = reference.add_coordinate_restraints(
+            sites_cart=self._sites.select(flex.size_t(held)),
+            selection=flex.size_t(held),
+            sigma=HOLD_SIGMA)
+        if self._grm.reference_coordinate_proxies is None:
+            # No boundary pins seeded the list (a self-contained ligand): start it.
+            self._grm.adopt_reference_coordinate_restraints_in_place(proxies)
+        else:
+            # APPEND — adopt would replace the list and silently drop _pin's anchors.
+            self._grm.append_reference_coordinate_restraints_in_place(proxies)
 
     def _tug(self, target) -> None:
         """Re-aim the pull. The pins are re-made with it: cctbx removes reference

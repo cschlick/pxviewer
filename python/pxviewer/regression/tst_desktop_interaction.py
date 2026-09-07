@@ -366,6 +366,36 @@ def exercise_minimization_runs_continuously_until_stopped():
 # -- persisted preferences ----------------------------------------------------
 
 
+def exercise_a_tiny_drag_leaves_the_zone_where_it_was():
+    """A 0.1 A nudge must not rearrange the neighbourhood. Without the interior hold
+    (HOLD_SIGMA) the zone minimizer idealized the whole sphere's geometry the moment a
+    drag began — ~100 atoms moved, up to 1.6 A, which exploded the live difference map
+    with real-but-unwanted signal and read as a map-level bug. The hold keeps untouched
+    atoms essentially where the user left them."""
+    if not monomer_library():
+        print("    (skipped: monomer library not available)")
+        return
+    import numpy as np
+
+    from pxviewer.tug import Tug
+    from iotbx.data_manager import DataManager
+
+    dm = DataManager()
+    dm.process_model_file(data_path("1ubq.pdb"))
+    model = dm.get_model()
+    model.process(make_restraints=True)
+    before = model.get_sites_cart().as_numpy_array().copy()
+
+    tug = Tug(model, 110, mode="sphere", radius=8.0)
+    tug.set_target(tuple(before[110] + np.array([0.1, 0.0, 0.0])))
+    tug.move_to(tuple(before[110] + np.array([0.1, 0.0, 0.0])))
+    now = model.get_sites_cart().as_numpy_array()
+    moved = np.linalg.norm(now - before, axis=1)
+    assert moved.max() < 0.35, f"a 0.1 A nudge moved an atom {moved.max():.2f} A"
+    assert (moved > 0.1).sum() < 40, (
+        f"a 0.1 A nudge moved {(moved > 0.1).sum()} atoms more than 0.1 A")
+
+
 def exercise_the_settle_wind_down_yields_to_pause_and_pending_drags():
     """The post-release wind-down is a flourish, and a flourish must never be the thing
     the user cannot interrupt. It plays only when nothing is waiting: the Pause button
