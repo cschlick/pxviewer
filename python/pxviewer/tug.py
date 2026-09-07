@@ -146,9 +146,34 @@ class Tug:
         self._grm = grm.select(self._zone)
         self._sites = self._full_sites.select(self._zone)
 
-        anchors = _boundary_atoms(grm, self._full_sites, zone)
-        self._pin(anchors)
-        self._hold(anchors)
+        self._anchors = _boundary_atoms(grm, self._full_sites, zone)
+        self._pin(self._anchors)
+        self._hold(self._anchors)
+
+    def rebind(self, atom: int, *, pull_sigma: Optional[float] = None) -> bool:
+        """Re-grab within the SAME zone without rebuilding it.
+
+        The expensive part of a grab is the restraints sub-selection, which depends
+        only on topology — never on coordinates — so a repeat grab in the zone can
+        reuse it: refresh the sites (the model may have minimized since), re-pin the
+        boundary and the interior holds at today's positions, and point the pull at
+        the new atom. Milliseconds, against the occasional >1 s cold build. Returns
+        False when ``atom`` is outside this zone — build a fresh Tug instead. Call
+        only on a finished Tug (finish() removed the old reference restraints)."""
+        hits = np.flatnonzero(self._indices == int(atom))
+        if not len(hits):
+            return False
+        self.atom = int(atom)
+        self._local = int(hits[0])
+        if pull_sigma is not None:
+            self.pull_sigma = float(pull_sigma)
+        self._full_sites = self.model.get_sites_cart()
+        self._sites = self._full_sites.select(self._zone)
+        # A clean slate of reference restraints at the CURRENT positions.
+        self._grm.remove_reference_coordinate_restraints_in_place()
+        self._pin(self._anchors)
+        self._hold(self._anchors)
+        return True
 
     # -- the drag --------------------------------------------------------
 

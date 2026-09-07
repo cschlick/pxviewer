@@ -6088,6 +6088,7 @@ class DesktopApp:
             in ("1", "true", "yes"))
         self._tug_misses = 0
         self._tug_begin_walltime = None  # set at grab; cleared on the first pushed frame
+        self._tug_cache = None  # (signature, finished Tug) — the last zone, reusable
         self._tug_continuous = True
         # Whether a settled drag re-phases the whole-structure maps (see
         # _queue_post_drag_map_update). On, because a minimization already does it and a
@@ -8653,32 +8654,54 @@ class DesktopApp:
             if not model.restraints_manager_available():
                 self._status("preparing restraints for dragging…")
             zone_build_started = time.monotonic()
-            try:
-                # Against the pre-warm (see _warm_restraints): if one is in flight for this
-                # model, wait for it rather than building the same thing alongside it.
-                scope = self._tug_scope
-                selection = None
-                if scope["mode"] == "selection":
-                    with self._scene_lock:
-                        selection = list(self._scene_selection.get(mid, []))
-                    if not selection:
-                        self._status("select atoms first to drag by selection")
-                        self._tug = None
-                        return
-                with self._restraints_lock:
-                    from .tug import TUG_SIGMA
+            # A repeat grab in the same neighbourhood reuses the last zone: the
+            # restraints sub-selection depends only on topology, and rebuilding it
+            # is the occasional >1 s a grab goes dead for. The signature pins
+            # everything a rebind cannot refresh — the scope, the restraints
+            # manager identity (edits rebuild it), and the map object (re-phasing
+            # replaces it).
+            scope = self._tug_scope
+            map_data = self.map_for_model(mid) if self._tug_into_density else None
+            selection = None
+            if scope["mode"] == "selection":
+                with self._scene_lock:
+                    selection = list(self._scene_selection.get(mid, []))
+            signature = (mid, scope["mode"], scope["radius"], scope["flank"],
+                         tuple(selection or ()),
+                         id(model.get_restraints_manager()), id(map_data))
+            from .tug import TUG_SIGMA as _TUG_SIGMA
 
-                    self._tug = Tug(
-                        model, atom,
-                        mode=scope["mode"], radius=scope["radius"], flank=scope["flank"],
-                        selection=selection,
-                        map_data=self.map_for_model(mid) if self._tug_into_density else None,
-                        # Strength scales the pull's restraint WEIGHT (weight ~ 1/sigma^2).
-                        pull_sigma=TUG_SIGMA / math.sqrt(self._tug_strength))
+            pull_sigma = _TUG_SIGMA / math.sqrt(self._tug_strength)
+            if self._tug_cache is not None and self._tug_cache[0] == signature:
+                cached = self._tug_cache[1]
+                if cached.rebind(atom, pull_sigma=pull_sigma):
+                    self._tug = cached
+                    self._tug_cache = None
+            if self._tug is not None:
+                pass  # rebound in ~ms; the timing below reports it honestly
+            else:
+                self._tug_cache = None
+            if scope["mode"] == "selection" and not selection:
+                self._status("select atoms first to drag by selection")
+                self._tug = None
+                return
+            try:
+                if self._tug is None:
+                    # Against the pre-warm (see _warm_restraints): if one is in flight
+                    # for this model, wait rather than building alongside it.
+                    with self._restraints_lock:
+                        self._tug = Tug(
+                            model, atom,
+                            mode=scope["mode"], radius=scope["radius"],
+                            flank=scope["flank"], selection=selection,
+                            map_data=map_data,
+                            # Strength scales the pull's WEIGHT (weight ~ 1/sigma^2).
+                            pull_sigma=pull_sigma)
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"could not start dragging: {exc}")
                 self._tug = None
                 return
+            self._tug_signature = signature
             self._tug_model = mid
             self._tug_session = session
             self._tug_last = None
@@ -8880,6 +8903,10 @@ class DesktopApp:
             return
         try:
             self._tug.finish()
+            # Park the finished zone for the next grab: a rebind in the same
+            # neighbourhood is milliseconds where a rebuild is the occasional >1 s.
+            if getattr(self, "_tug_signature", None) is not None:
+                self._tug_cache = (self._tug_signature, self._tug)
         except Exception:  # pragma: no cover - defensive
             pass
         self._tug = None
@@ -9734,6 +9761,8 @@ class DesktopApp:
         if entry is None:
             return
         self._models.remove(entry)
+        if self._tug_cache is not None and self._tug_cache[0][0] == mid:
+            self._tug_cache = None  # do not keep the removed model's zone alive
         try:
             entry["session"].stop()
         except Exception:  # pragma: no cover - defensive

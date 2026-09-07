@@ -395,6 +395,17 @@ def exercise_a_tiny_drag_leaves_the_zone_where_it_was():
     assert (moved > 0.1).sum() < 40, (
         f"a 0.1 A nudge moved {(moved > 0.1).sum()} atoms more than 0.1 A")
 
+    # The zone survives its drag: a finished Tug rebinds to another atom in the
+    # SAME zone (~ms, where a rebuild is the occasional >1 s a grab goes dead for),
+    # and refuses an atom outside it.
+    tug.finish()
+    neighbour = int(tug.indices[len(tug.indices) // 3])
+    assert tug.rebind(neighbour), "an in-zone atom must rebind"
+    assert tug.atom == neighbour
+    far = next(i for i in range(model.get_number_of_atoms() - 1, -1, -1)
+               if i not in set(int(x) for x in tug.indices))
+    assert not tug.rebind(far), "an out-of-zone atom must force a fresh build"
+
 
 def exercise_the_settle_wind_down_yields_to_pause_and_pending_drags():
     """The post-release wind-down is a flourish, and a flourish must never be the thing
