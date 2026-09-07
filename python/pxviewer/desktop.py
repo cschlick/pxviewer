@@ -8644,6 +8644,7 @@ class DesktopApp:
             # user is left waiting, and silence there reads as a dropped click.
             if not model.restraints_manager_available():
                 self._status("preparing restraints for dragging…")
+            zone_build_started = time.monotonic()
             try:
                 # Against the pre-warm (see _warm_restraints): if one is in flight for this
                 # model, wait for it rather than building the same thing alongside it.
