@@ -10955,39 +10955,106 @@ class DesktopApp:
         return "group"
 
     def load_xray_demo(self, *, d_min: float = 2.0) -> str:
-        """Demo: the bundled model plus reflections computed from it.
+        """Demo: the bundled model plus 1ubq's REAL deposited diffraction data.
 
-        The point is to show the density-from-data path without shipping a real dataset:
-        amplitudes (and free flags) are generated from the model and written to an MTZ,
-        then the model and the reflections are loaded side by side — unpaired, so the
-        Reflections pane offers "Make maps" and you can watch 2mFo-DFc and mFo-DFc get
-        computed from them.
+        The amplitudes are fetched from the PDB once and cached (converted to MTZ in
+        the working directory), so the maps behave the way maps behave on an actual
+        experiment — in particular the difference map has a real noise floor, so its
+        sigma-scaled contours mean what a crystallographer expects. Offline, the demo
+        falls back to amplitudes synthesized from the model with realistic noise
+        (perfect synthetic data has no floor, and every model twitch went off the
+        sigma scale — see _synthetic_demo_mtz). Model and reflections load unpaired:
+        pairing them with "Make maps" is the demo.
         """
-        import os
-        import tempfile
-
         self.stop_demo()
         self._reset_interactions()
-
-        from .cctbx_io import read_model
 
         sample = sample_structure_path()
         if sample is None:
             raise FileNotFoundError("the bundled sample model is missing")
 
+        try:
+            mtz = self._deposited_demo_mtz()
+            source = "deposited 1ubq data"
+        except Exception as exc:
+            self._status(f"deposited 1ubq data unavailable ({_first_line(exc)}) — "
+                         "synthesizing amplitudes instead")
+            mtz = self._synthetic_demo_mtz(sample, d_min)
+            source = "synthesized amplitudes (offline)"
+
+        # Not paired — pairing them is the demo — but loaded in one batch so the viewport
+        # reloads once, and shown as one group so the pair reads as the unit it is.
+        before = self._object_ids()
+        with self._batch_load():
+            self._load_model_file(str(sample))
+            self._load_reflection_file(mtz)
+            self._group_loaded_together(
+                before, f"{Path(sample).name} + reflections", label="not yet phased")
+        self._status(
+            f"X-ray demo: {SAMPLE_STRUCTURE[0]} + {source} — open the reflections and "
+            "click Make maps")
+        return "xray"
+
+    def _deposited_demo_mtz(self) -> str:
+        """1ubq's deposited amplitudes as a cached MTZ in the working directory.
+
+        Fetched once (the PDB's structure-factor CIF), converted once: amplitudes (or
+        intensities, converted) plus generated free flags — the 1987 deposition
+        predates free-flag bookkeeping — written next to the other fetched files
+        where the user can see them. Raises on any problem; the caller falls back."""
+        import os
+
+        stem = Path(SAMPLE_STRUCTURE[0]).stem
+        out = Path(self.work_dir()) / f"{stem}_data.mtz"
+        if out.is_file() and out.stat().st_size > 0:
+            return str(out)
+
+        from . import fetch as _fetch
+
+        fetched = _fetch.fetch_entry(
+            entities=["reflections"], work_dir=self.work_dir(), pdb_id=stem,
+            reuse_existing=True,
+            progress=lambda entity, stage, done, total: self._status(
+                f"fetching deposited {stem} data: {stage}"))
+        from iotbx.reflection_file_reader import any_reflection_file
+
+        arrays = any_reflection_file(str(fetched["reflections"])).as_miller_arrays(
+            merge_equivalents=True)
+        f_obs = next((a for a in arrays if a.is_xray_amplitude_array()), None)
+        if f_obs is None:
+            intensities = next((a for a in arrays if a.is_xray_intensity_array()), None)
+            if intensities is None:
+                raise ValueError("the deposited file carries no amplitudes or intensities")
+            f_obs = intensities.f_sq_as_f()
+        f_obs = f_obs.set_observation_type_xray_amplitude()
+        flags = f_obs.generate_r_free_flags(fraction=0.05)
+        dataset = f_obs.as_mtz_dataset(column_root_label="F")
+        dataset.add_miller_array(flags, column_root_label="R-free-flags")
+        dataset.mtz_object().write(str(out))
+        if not (out.is_file() and out.stat().st_size > 0):  # pragma: no cover - io guard
+            raise IOError("could not write the converted dataset")
+        return str(out)
+
+    def _synthetic_demo_mtz(self, sample, d_min: float) -> str:
+        """Amplitudes synthesized from the model — the OFFLINE stand-in.
+
+        With realistic noise, deliberately: perfect synthetic amplitudes give a
+        sigma-scaled difference map no noise floor, so any model motion — a 0.1 A
+        drag, one settle step — towered over nothing and lit the whole zone at
+        3 sigma, which read as the live map being broken. Measured on this demo:
+        15% noise puts R-work near 0.12 (an ordinary refinement), a held 0.15 A
+        nudge shows a modest local lobe, and the resting difference map stays
+        quiet. Seeded, so every run sees the same data."""
+        import os
+        import tempfile
+
+        from scitbx.array_family import flex as _flex
+
+        from .cctbx_io import read_model
+
         f_calc = read_model(str(sample)).get_xray_structure().structure_factors(
             d_min=d_min).f_calc()
         f_obs = abs(f_calc).set_observation_type_xray_amplitude()
-        # Realistic experimental noise, deliberately. Perfect amplitudes give a
-        # sigma-scaled difference map no noise floor, so ANY model motion — a 0.1 A
-        # drag, one settle step — towered over nothing and lit the whole zone at
-        # 3 sigma, which read as the live map being broken. Measured on this demo:
-        # 15% noise puts R-work near 0.12 (an ordinary refinement), a held 0.15 A
-        # nudge shows a modest local lobe (0.4% of the zone above 3 sigma, against
-        # 11% noise-free), and the resting difference map stays quiet. Seeded, so
-        # every run of the tutorial sees the same data.
-        from scitbx.array_family import flex as _flex
-
         noise = np.abs(1.0 + np.random.default_rng(7).normal(0.0, 0.15, f_obs.size()))
         f_obs = f_obs.customized_copy(data=f_obs.data() * _flex.double(noise))
         f_obs = f_obs.customized_copy(sigmas=f_obs.data() * 0.15)  # sigmas to match
@@ -11001,19 +11068,7 @@ class DesktopApp:
         dataset = f_obs.as_mtz_dataset(column_root_label="F")
         dataset.add_miller_array(flags, column_root_label="R-free-flags")
         dataset.mtz_object().write(mtz)
-
-        # Not paired — pairing them is the demo — but loaded in one batch so the viewport
-        # reloads once, and shown as one group so the pair reads as the unit it is.
-        before = self._object_ids()
-        with self._batch_load():
-            self._load_model_file(str(sample))
-            self._load_reflection_file(mtz)
-            self._group_loaded_together(
-                before, f"{Path(sample).name} + reflections", label="not yet phased")
-        self._status(
-            f"X-ray demo: {SAMPLE_STRUCTURE[0]} + reflections — open the reflections and "
-            "click Make maps")
-        return "xray"
+        return mtz
 
     # Where the hidden ATP sits, cartesian, in the bundled model's frame — near the surface
     # with clearance from the unit-cell edges, so its difference blob doesn't wrap.
