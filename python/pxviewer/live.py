@@ -2237,12 +2237,14 @@ class LiveSession:
             self._on_measure(event)
         elif etype == "tug":
             action, atom = event.get("action"), event.get("atom")
-            if action == "arm":
-                # Refine-drag mode enabled — no atom yet. Passed through so the app can clear
-                # the way (e.g. stop a running minimization) before the first grab.
+            if action in ("arm", "miss"):
+                # arm: refine-drag mode enabled, no atom yet — the app clears the way
+                # (e.g. stops a running minimization) before the first grab.
+                # miss: a grab in tug mode found no atom under the pointer — pure
+                # diagnostics, so a session where grabs keep dying names itself.
                 for handler in self._tug_handlers:
                     try:
-                        handler("arm", -1, None)
+                        handler(action, -1, None)
                     except Exception:  # pragma: no cover - user callback errors
                         pass
             elif action in ("begin", "move", "end") and isinstance(atom, int):

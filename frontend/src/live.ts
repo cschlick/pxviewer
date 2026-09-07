@@ -3040,6 +3040,7 @@ function pointerInSpace(plugin: PluginContext, fx: number, fy: number, anchor: V
 // The state is module-level, shared across every live connection: markers ride the control
 // session (its ws delivers the positions), but the drag can be handled by whichever session
 // sees the mousedown first, and Python routes the marker-move back the same either way.
+let missReportedStamp = -1;  // one grab-miss report per press, whoever notices first
 let markerPositions: { id: string; position: Vec3 }[] = [];
 let markerRadius = 0.5;
 let markerDrag: { id: string; anchor: Vec3; last: Vec3; ws: WebSocket } | null = null;

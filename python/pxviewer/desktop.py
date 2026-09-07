@@ -1983,6 +1983,15 @@ class ControlsWindow:
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         og.addWidget(self._tug_continuous_check)
+        self._tug_diag_check = QCheckBox("Drag diagnostics")
+        self._tug_diag_check.setToolTip(
+            "Report each gesture in the status line: grabs that found no atom under "
+            "the pointer, and grab-to-first-motion latency with the zone-build cost. "
+            "For chasing dead-feeling drags; harmless to leave on.")
+        self._tug_diag_check.setChecked(self._desktop._tug_diagnostics)
+        self._tug_diag_check.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_tug_diagnostics(on)))
+        og.addWidget(self._tug_diag_check)
         strength_row = QHBoxLayout()
         strength_label = QLabel("Pull strength")
         strength_row.addWidget(strength_label)
@@ -6074,6 +6083,11 @@ class DesktopApp:
                 self._settings.value("drag/pull_strength", 1.0)))
         except (TypeError, ValueError):
             self._tug_strength = 1.0
+        self._tug_diagnostics = (
+            str(self._settings.value("drag/diagnostics", "false")).lower()
+            in ("1", "true", "yes"))
+        self._tug_misses = 0
+        self._tug_begin_walltime = None  # set at grab; cleared on the first pushed frame
         self._tug_continuous = True
         # Whether a settled drag re-phases the whole-structure maps (see
         # _queue_post_drag_map_update). On, because a minimization already does it and a
@@ -8066,6 +8080,13 @@ class DesktopApp:
         """
         self._tug_into_density = bool(enabled)
 
+    def set_tug_diagnostics(self, enabled: bool) -> None:
+        """Per-gesture reporting in the status line: grabs that found no atom, and
+        grab-to-first-motion latency with the zone-build cost — so a session where
+        drags feel dead can say WHERE the time goes. Persisted."""
+        self._tug_diagnostics = bool(enabled)
+        self._settings.setValue("drag/diagnostics", "true" if enabled else "false")
+
     def set_tug_strength(self, strength: float) -> None:
         """How hard a drag pulls, as a multiple of the default (weight scales with
         ``strength``; the pull restraint's sigma is TUG_SIGMA/sqrt(strength)). Takes
@@ -8653,10 +8674,18 @@ class DesktopApp:
             self._tug_session = session
             self._tug_last = None
             self._tug_last_push = 0.0
+            self._tug_zone_build_ms = int((time.monotonic() - zone_build_started) * 1000)
+            self._tug_begin_walltime = time.monotonic()
             self._maybe_start_live_diff(mid, atom)  # arm the live difference map, if on
             self._status(f"dragging atom {atom} — {self._tug.zone_size} atoms giving way")
             return
 
+        if action == "miss":
+            self._tug_misses += 1
+            if self._tug_diagnostics:
+                self._status(f"grab found no atom under the pointer "
+                             f"({self._tug_misses} missed this session)")
+            return
         if self._tug is None or self._tug_model != mid:
             return
         if action == "move" and target is not None:
@@ -8828,6 +8857,12 @@ class DesktopApp:
         # The zone is the only thing that can have moved; everything else is untouched.
         zone = self._tug.indices if self._tug is not None else None
         self._tug_session.push(coords, changed=zone)
+        if self._tug_begin_walltime is not None:
+            latency = int((time.monotonic() - self._tug_begin_walltime) * 1000)
+            self._tug_begin_walltime = None
+            if self._tug_diagnostics:
+                self._status(f"grab → first motion {latency} ms "
+                             f"(zone build {getattr(self, '_tug_zone_build_ms', 0)} ms)")
         self._queue_live_diff(coords)  # follow the drag with a local difference map, if on
 
     def _end_tug(self) -> None:
