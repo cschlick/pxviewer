@@ -142,10 +142,12 @@ def exercise_a_refinement_mtz_opens_its_maps():
 
         by_name = dict((v["name"], v) for v in app._volumes)
         assert set(by_name) == {"2FOFCWT", "FOFCWT"}
-        # A regular map opens in a palette colour at 1.5 sigma; a difference map keeps
-        # the convention it has to keep -- green/red -- at 3.
-        assert by_name["2FOFCWT"]["color"] in palette_colors()
+        # X-ray maps open in their canonical colours (a random palette colour clashed
+        # with the live recalc's conventions): blue density at 1.5 sigma, green/red
+        # difference at 3 -- and as mesh, so difference lobes stay visible inside.
+        assert by_name["2FOFCWT"]["color"] == "dodgerblue"
         assert by_name["2FOFCWT"]["iso"] == 1.5
+        assert by_name["2FOFCWT"]["style"] == "mesh"
         assert (by_name["FOFCWT"]["color"], by_name["FOFCWT"]["iso"]) == ("green", 3.0)
 
         # Data and maps are one group: the maps came from the file and go with it.
@@ -213,7 +215,7 @@ def exercise_making_maps_pairs_them_with_the_model_that_phased_them():
 
         by_name = dict((v["name"], v) for v in app._volumes)
         assert set(by_name) == {"2mFo-DFc", "mFo-DFc"}
-        assert by_name["2mFo-DFc"]["color"] in palette_colors()
+        assert by_name["2mFo-DFc"]["color"] == "dodgerblue"  # canonical, as on file load
         assert (by_name["mFo-DFc"]["color"], by_name["mFo-DFc"]["iso"]) == ("green", 3.0)
 
         gid = app._models[0]["group"]

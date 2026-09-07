@@ -269,8 +269,12 @@ def exercise_density_is_what_makes_a_tug_correct_something():
     assert approx_equal(before_geometry, before_map)   # same start, or this proves nothing
 
     # Geometry alone cannot improve on a truth it cannot see; density moves towards it.
+    # The margin over geometry is deliberately modest since the interior hold arrived
+    # (HOLD_SIGMA): untouched zone atoms are softly pinned where the drag found them —
+    # a 0.1 A nudge must not rearrange the neighbourhood — which damps zone-wide
+    # correction by design (measured here: 0.209 vs 0.251 with the hold, from 0.414).
     assert after_map < before_map - 0.05
-    assert after_map < after_geometry - 0.05
+    assert after_map < after_geometry - 0.02
 
 
 def exercise_continuous_mode_keeps_minimizing_between_targets():
