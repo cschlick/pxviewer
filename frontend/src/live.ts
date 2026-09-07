@@ -3410,6 +3410,28 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // `viewer` is absent restores the coordinates baked into the BCIF and makes a just-applied
     // model shift visibly snap back after a page reload. Preserve coordinate messages in wire
     // order and apply them as soon as the live trajectory exists.
+    // The live density window applies latest-wins: arrivals fill one slot, and this
+    // pump applies the newest whenever the previous apply finishes. After each apply
+    // the window's rebuilt render objects are marked unpickable again — an in-place
+    // data update recreates them pickable, and a pickable box parked around the very
+    // atoms being grabbed ate the drag hit test.
+    let pendingLiveBox: ArrayBuffer | null = null;
+    let applyingLiveBox = false;
+    const pumpLiveBox = async () => {
+        if (applyingLiveBox) return;
+        applyingLiveBox = true;
+        try {
+            while (viewer && pendingLiveBox) {
+                const buffer = pendingLiveBox;
+                pendingLiveBox = null;
+                await viewer.setMapBox(buffer, 4);
+                markVolumeReprsUnpickable(plugin);
+            }
+        } finally {
+            applyingLiveBox = false;
+        }
+    };
+
     // Streamed frames set the viewer's TARGET coordinates; the screen eases toward
     // them (LiveViewer.smoothLoop). Two problems die here at once. Backpressure:
     // ws.onmessage is async, so applying frames here let a 125 Hz stream out-run a
@@ -3710,10 +3732,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             if (viewer) await viewer.setProbeDots(buffer, 4);
             else pendingDots.push(buffer);
         } else if (tag === TAG_MAP) {
-            // A live density window (see viewer.setMapBox). Only the latest matters, so
-            // if the viewer is still building just keep the most recent one.
-            if (viewer) await viewer.setMapBox(buffer, 4);
-            else pendingMapBox = buffer;
+            // A live density window (see viewer.setMapBox). Only the latest matters —
+            // and applying each payload here (an async handler, no backpressure) let
+            // box commits pile up during a drag exactly the way coordinate frames
+            // once did: main thread saturated, grabs starving. One slot, one pump.
+            if (viewer) {
+                pendingLiveBox = buffer;
+                void pumpLiveBox();
+            } else pendingMapBox = buffer;
         } else if (tag === TAG_HOTSPOT_VOLUME) {
             // A validation-severity cloud (see viewer.setHotspotVolume). Like the map box,
             // only the most recent matters while the viewer is still building.

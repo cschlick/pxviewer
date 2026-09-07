@@ -8224,6 +8224,14 @@ class DesktopApp:
             session = self._tug_session
             if session is None or not self._live_diff or gen != self._diff_gen:
                 continue  # the drag ended (or a newer one began) before this frame ran
+            # Pace the recompute. Each one is a full FFT holding real CPU (and, in
+            # bursts, enough GIL to starve the tug worker and the socket threads —
+            # grabs went dead while the window chased every frame). The window is
+            # feedback, not simulation: a few refreshes a second reads the same.
+            since = time.monotonic() - getattr(self, "_diff_last_recompute", 0.0)
+            if since < 0.15:
+                time.sleep(0.15 - since)
+            self._diff_last_recompute = time.monotonic()
             try:
                 if self._diff_engine is None or self._diff_engine_key != gid:
                     from .reflections import LiveDifferenceMap
