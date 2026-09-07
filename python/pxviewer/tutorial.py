@@ -378,8 +378,9 @@ def xray_refinement_tutorial() -> Tutorial:
             "already made. The honest reporter is the **mFo-DFc difference map**: green where "
             "the data wants density the model does not explain, red where the model puts "
             "atoms the data will not support.\n\n**Loaded:** a model alongside amplitudes "
-            "computed from that same model, so the two start in exact agreement — which "
-            "gives us a flat difference map to break on purpose.",
+            "computed from that same model with realistic experimental noise — so the "
+            "difference map starts quiet (nothing above the noise), ready to break "
+            "on purpose.",
         ),
         Step(
             "Phase the data: in the **Objects** list select the **reflections**, then click "

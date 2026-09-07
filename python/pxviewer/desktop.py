@@ -10978,7 +10978,19 @@ class DesktopApp:
         f_calc = read_model(str(sample)).get_xray_structure().structure_factors(
             d_min=d_min).f_calc()
         f_obs = abs(f_calc).set_observation_type_xray_amplitude()
-        f_obs = f_obs.customized_copy(sigmas=f_obs.data() * 0.05)  # plausible sigmas
+        # Realistic experimental noise, deliberately. Perfect amplitudes give a
+        # sigma-scaled difference map no noise floor, so ANY model motion — a 0.1 A
+        # drag, one settle step — towered over nothing and lit the whole zone at
+        # 3 sigma, which read as the live map being broken. Measured on this demo:
+        # 15% noise puts R-work near 0.12 (an ordinary refinement), a held 0.15 A
+        # nudge shows a modest local lobe (0.4% of the zone above 3 sigma, against
+        # 11% noise-free), and the resting difference map stays quiet. Seeded, so
+        # every run of the tutorial sees the same data.
+        from scitbx.array_family import flex as _flex
+
+        noise = np.abs(1.0 + np.random.default_rng(7).normal(0.0, 0.15, f_obs.size()))
+        f_obs = f_obs.customized_copy(data=f_obs.data() * _flex.double(noise))
+        f_obs = f_obs.customized_copy(sigmas=f_obs.data() * 0.15)  # sigmas to match
         flags = f_obs.generate_r_free_flags(fraction=0.05)
 
         # A temp dir, not auto-cleaned: make_maps reads this file back, so it has to
