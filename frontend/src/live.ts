@@ -2821,23 +2821,29 @@ export function markVolumeReprsUnpickable(plugin: PluginContext) {
  *  server already sends no-store, this is for the state diff, not the browser).
  */
 async function reloadVolumeData(plugin: PluginContext, ref: string) {
+    const LOG: any[] = ((window as any).__reload_log = (window as any).__reload_log ?? []);
     const repr = await findVolumeReprCell(plugin, ref);
-    if (!repr) return;
+    if (!repr) { LOG.push({ ref, fail: 'no-repr' }); return; }
     let cur: any = repr;
     for (let hops = 0; cur && hops < 10; hops++) {
+        LOG.push({ ref, hop: hops, t: cur.transform?.transformer?.id,
+                   keys: Object.keys(cur.transform?.params ?? {}) });
         const url = (cur.transform?.params as any)?.url;
         if (url !== undefined) {
             const raw = typeof url === 'string' ? url : url?.url;
-            if (typeof raw !== 'string') return;
+            if (typeof raw !== 'string') { LOG.push({ ref, fail: 'url-shape' }); return; }
             const fresh = `${raw.split(/[?#]/)[0]}?v=${Date.now()}`;
             const next = typeof url === 'string' ? fresh : { ...url, url: fresh };
-            await plugin.state.data.build().to(cur.transform.ref)
-                .update((old: any) => ({ ...old, url: next })).commit();
+            try {
+                await plugin.state.data.build().to(cur.transform.ref)
+                    .update((old: any) => ({ ...old, url: next })).commit();
+                LOG.push({ ref, ok: fresh, cellStatus: plugin.state.data.cells.get(cur.transform.ref)?.status });
+            } catch (e) { LOG.push({ ref, fail: 'commit', e: String(e) }); }
             // The refresh rebuilt the repr's render objects, which come back pickable.
             markVolumeReprsUnpickable(plugin);
             return;
         }
-        if (cur.transform?.parent === cur.transform?.ref) return;  // the state root
+        if (cur.transform?.parent === cur.transform?.ref) { LOG.push({ ref, fail: 'hit-root' }); return; }
         cur = plugin.state.data.cells.get(cur.transform.parent);
     }
 }
@@ -3329,6 +3335,56 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // `viewer` is absent restores the coordinates baked into the BCIF and makes a just-applied
     // model shift visibly snap back after a page reload. Preserve coordinate messages in wire
     // order and apply them as soon as the live trajectory exists.
+    // Latest-wins frame application — the client-side half of frame pacing.
+    //
+    // ws.onmessage is async, so without this every arriving frame independently
+    // started a Mol* state commit; at a 125 Hz stream against a ~25 Hz apply rate
+    // the commit queue grew without bound. The symptoms were exactly what a user
+    // reports as "sluggish": high-frequency playback of stale frames, input starved
+    // by the saturated main thread, and the model still moving 10-20 s after the
+    // stream went quiet. Instead, arrivals only update this pending state and one
+    // pump applies the NEWEST of it whenever the previous apply finishes — every
+    // "nth" frame with n adapting to what this machine can actually draw.
+    //
+    // Deltas cannot simply be dropped: each carries only the atoms that moved since
+    // the previous frame, so a skipped delta's atoms would freeze mid-air. Dropped
+    // frames therefore MERGE: later positions overwrite earlier ones per atom, and
+    // a full frame supersedes everything merged before it.
+    let pendingFullFrame: Float32Array | null = null;
+    const pendingDeltas = new Map<number, number>();  // atom -> offset into deltaXyz store
+    let deltaXyzStore: number[] = [];
+    let applyingFrames = false;
+    const pumpFrames = async () => {
+        if (applyingFrames) return;
+        applyingFrames = true;
+        try {
+            while (viewer && (pendingFullFrame || pendingDeltas.size)) {
+                if (pendingFullFrame) {
+                    const coords = pendingFullFrame;
+                    pendingFullFrame = null;
+                    await viewer.update(coords);
+                    continue;
+                }
+                const n = pendingDeltas.size;
+                const indices = new Uint32Array(n);
+                const xyz = new Float32Array(n * 3);
+                let k = 0;
+                for (const [atom, at] of pendingDeltas) {
+                    indices[k] = atom;
+                    xyz[k * 3] = deltaXyzStore[at];
+                    xyz[k * 3 + 1] = deltaXyzStore[at + 1];
+                    xyz[k * 3 + 2] = deltaXyzStore[at + 2];
+                    k++;
+                }
+                pendingDeltas.clear();
+                deltaXyzStore = [];
+                await viewer.updateDelta(indices, xyz);
+            }
+        } finally {
+            applyingFrames = false;
+        }
+    };
+
     const pendingCoordinates: Array<
         { kind: 'full', coords: Float32Array } |
         { kind: 'delta', indices: Uint32Array, xyz: Float32Array }
@@ -3544,6 +3600,22 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined, shift }));
             });
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
+            (window as any).__dumpVol = (ref: string) => {
+                const cell = findCellByTag(plugin, `mvs-ref:${ref}-repr`);
+                const neg = findVolumeNegativeReprCell(plugin, ref);
+                const grab = (c: any) => c && {
+                    iso: c.transform?.params?.type?.params?.isoValue,
+                    status: c.status,
+                };
+                let stats: any = null;
+                let cur: any = cell;
+                for (let i = 0; i < 6 && cur; i++) {
+                    const d: any = cur.obj?.data;
+                    if (d?.grid?.stats) { stats = d.grid.stats; break; }
+                    cur = plugin.state.data.cells.get(cur.transform.parent);
+                }
+                return JSON.stringify({ pos: grab(cell), neg: grab(neg), stats });
+            };
             // Test hook for the rendered-app harness (QTest probes aim presses with it);
             // reads the same live coordinates and camera the fallback hit-test uses.
             (window as any).__projectAtom = (i: number) => {
@@ -3576,8 +3648,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const coords = new Float32Array(buffer, 8);
             perf.frameReceived('full', coords.length / 3);
             quality.pingCoordinates();  // geometry is being rebuilt, not just redrawn
-            if (viewer) await viewer.update(coords);
-            else pendingCoordinates.push({ kind: 'full', coords });
+            if (viewer) {
+                pendingFullFrame = coords.slice();  // own it: the socket buffer is transient
+                pendingDeltas.clear();
+                deltaXyzStore = [];
+                void pumpFrames();
+            } else pendingCoordinates.push({ kind: 'full', coords });
         } else if (tag === TAG_FRAME_DELTA) {
             // [u32 tag][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n] — only the atoms
             // that moved, at their absolute positions. See LiveViewer.updateDelta.
@@ -3586,8 +3662,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const xyz = new Float32Array(buffer, 12 + n * 4, n * 3);
             perf.frameReceived('delta', n);
             quality.pingCoordinates();
-            if (viewer) await viewer.updateDelta(indices, xyz);
-            else pendingCoordinates.push({ kind: 'delta', indices, xyz });
+            if (viewer) {
+                for (let k = 0; k < n; k++) {
+                    const at = deltaXyzStore.length;
+                    deltaXyzStore.push(xyz[k * 3], xyz[k * 3 + 1], xyz[k * 3 + 2]);
+                    pendingDeltas.set(indices[k], at);
+                }
+                void pumpFrames();
+            } else pendingCoordinates.push({ kind: 'delta', indices, xyz });
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching
