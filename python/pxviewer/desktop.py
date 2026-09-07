@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import signal
 import json
+import math
 import os
 import sys
 import threading
@@ -1982,6 +1983,25 @@ class ControlsWindow:
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         og.addWidget(self._tug_continuous_check)
+        strength_row = QHBoxLayout()
+        strength_label = QLabel("Pull strength")
+        strength_row.addWidget(strength_label)
+        self._tug_strength_spin = QDoubleSpinBox()
+        self._tug_strength_spin.setRange(0.1, 20.0)
+        self._tug_strength_spin.setSingleStep(0.5)
+        self._tug_strength_spin.setDecimals(1)
+        self._tug_strength_spin.setSuffix("×")
+        self._tug_strength_spin.setValue(self._desktop._tug_strength)
+        strength_tip = ("How hard a drag pulls the grabbed atom toward the pointer, as a "
+                        "multiple of the default. Raise it if drags feel weak against the "
+                        "geometry (or the density term); takes effect on the next grab.")
+        strength_label.setToolTip(strength_tip)
+        self._tug_strength_spin.setToolTip(strength_tip)
+        self._tug_strength_spin.valueChanged.connect(lambda v: self._safe(
+            lambda: self._desktop.set_tug_strength(v)))
+        strength_row.addWidget(self._tug_strength_spin)
+        strength_row.addStretch()
+        og.addLayout(strength_row)
         settle_row = QHBoxLayout()
         settle_label = QLabel("Settle wind-down")
         settle_row.addWidget(settle_label)
@@ -6049,6 +6069,11 @@ class DesktopApp:
                 self._settings.value("drag/settle_seconds", _TUG_SETTLE_DURATION)))
         except (TypeError, ValueError):
             self._tug_settle_seconds = _TUG_SETTLE_DURATION
+        try:
+            self._tug_strength = max(0.05, float(
+                self._settings.value("drag/pull_strength", 1.0)))
+        except (TypeError, ValueError):
+            self._tug_strength = 1.0
         self._tug_continuous = True
         # Whether a settled drag re-phases the whole-structure maps (see
         # _queue_post_drag_map_update). On, because a minimization already does it and a
@@ -8041,6 +8066,14 @@ class DesktopApp:
         """
         self._tug_into_density = bool(enabled)
 
+    def set_tug_strength(self, strength: float) -> None:
+        """How hard a drag pulls, as a multiple of the default (weight scales with
+        ``strength``; the pull restraint's sigma is TUG_SIGMA/sqrt(strength)). Takes
+        effect on the next drag — a drag already running keeps what it started with.
+        Persisted."""
+        self._tug_strength = max(0.05, float(strength))
+        self._settings.setValue("drag/pull_strength", self._tug_strength)
+
     def set_tug_settle_seconds(self, seconds: float) -> None:
         """How long the post-release wind-down plays, in seconds (0 freezes at once).
 
@@ -8603,11 +8636,15 @@ class DesktopApp:
                         self._tug = None
                         return
                 with self._restraints_lock:
+                    from .tug import TUG_SIGMA
+
                     self._tug = Tug(
                         model, atom,
                         mode=scope["mode"], radius=scope["radius"], flank=scope["flank"],
                         selection=selection,
-                        map_data=self.map_for_model(mid) if self._tug_into_density else None)
+                        map_data=self.map_for_model(mid) if self._tug_into_density else None,
+                        # Strength scales the pull's restraint WEIGHT (weight ~ 1/sigma^2).
+                        pull_sigma=TUG_SIGMA / math.sqrt(self._tug_strength))
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"could not start dragging: {exc}")
                 self._tug = None

@@ -94,6 +94,7 @@ class Tug:
         map_data: Any = None,
         map_weight: float = 10.0,
         steps: int = STEPS_PER_FRAME,
+        pull_sigma: float = TUG_SIGMA,
     ):
         """Build a drag around ``atom``. What gives way is set by ``mode``:
 
@@ -116,6 +117,7 @@ class Tug:
         self.model = model
         self.atom = int(atom)
         self.map_data = map_data
+        self.pull_sigma = float(pull_sigma)  # the pull restraint's sigma; smaller pulls harder
         self.map_weight = float(map_weight)
         self.steps = int(steps)
 
@@ -303,7 +305,7 @@ class Tug:
             reference.add_coordinate_restraints(
                 sites_cart=flex.vec3_double([tuple(float(v) for v in target)]),
                 selection=flex.size_t([self._local]),
-                sigma=TUG_SIGMA))
+                sigma=self.pull_sigma))
 
     def _minimize(self, steps: Optional[int] = None) -> None:
         import scitbx.lbfgs
