@@ -74,10 +74,30 @@ def _isolate_qsettings():
     if not scratch:
         scratch = tempfile.mkdtemp(prefix="pxviewer-test-settings-")
         os.environ["PXVIEWER_SETTINGS_DIR"] = scratch
-    return scratch
+        return scratch, True
+    return scratch, False
 
 
-TEST_SETTINGS_DIR = _isolate_qsettings()
+TEST_SETTINGS_DIR, TEST_SETTINGS_DIR_CREATED = _isolate_qsettings()
+
+
+def desktop_settings():
+    """The same ``QSettings`` store the desktop reads and writes.
+
+    ``DesktopApp`` honours ``PXVIEWER_SETTINGS_DIR`` (set just above) by persisting into
+    a plain ini file there; the two-argument constructor does not. A test that snapshots
+    or writes through ``QSettings("pxviewer", "pxviewer")`` while the app reads the ini
+    is operating on a different store entirely -- which is how a saved two-layer
+    representation default once slipped past :func:`shipped_defaults` and leaked into
+    every later script of a suite run. Every test-side settings access goes through here.
+    """
+    from PySide6.QtCore import QSettings
+
+    settings_dir = os.environ.get("PXVIEWER_SETTINGS_DIR")
+    if settings_dir:
+        return QSettings(os.path.join(settings_dir, "pxviewer.ini"),
+                         QSettings.Format.IniFormat)
+    return QSettings("pxviewer", "pxviewer")
 
 
 def qt_application():
@@ -136,9 +156,7 @@ def shipped_defaults():
     exactly what happened once, and is why every desktop script takes this rather than
     only the two that set a preference deliberately.
     """
-    from PySide6.QtCore import QSettings
-
-    settings = QSettings("pxviewer", "pxviewer")
+    settings = desktop_settings()
     saved = [(key, settings.contains(key), settings.value(key))
              for key in DESKTOP_SETTINGS_KEYS]
     for key in DESKTOP_SETTINGS_KEYS:

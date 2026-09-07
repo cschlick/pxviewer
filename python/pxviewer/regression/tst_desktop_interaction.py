@@ -20,13 +20,11 @@ import time
 from libtbx.test_utils import approx_equal, raises
 
 from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, process_events, qt_application,
-    shipped_defaults, skip, tmp_dir)
+    closing_modals, data_path, desktop_settings, dispose, have, process_events,
+    qt_application, shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "iotbx.data_manager"):
     skip("PySide6 QtWebEngine / websockets / iotbx.data_manager not available")
-
-from PySide6.QtCore import QSettings                # noqa: E402
 
 QAPP = qt_application()
 
@@ -468,7 +466,7 @@ def exercise_the_native_focus_neighbourhood_stays_retired():
     local context is the Selection pane's Neighborhood checkbox). The old stored
     preference must be ignored — even a settings file that says "true" must not
     resurrect the native overlay alongside the unified one."""
-    QSettings("pxviewer", "pxviewer").setValue("defaults/focus_surroundings", "true")
+    desktop_settings().setValue("defaults/focus_surroundings", "true")
 
     app = DesktopApp(port=0)
     try:
@@ -481,7 +479,7 @@ def exercise_the_native_focus_neighbourhood_stays_retired():
 def exercise_new_model_show_and_representation_defaults_persist():
     """The layers and Show choices a new model opens with survive a restart, and are
     applied to the next model loaded."""
-    settings = QSettings("pxviewer", "pxviewer")
+    settings = desktop_settings()
     settings.setValue("defaults/model_representations", '["cartoon"]')
     settings.setValue(
         "defaults/shown_structure_types",

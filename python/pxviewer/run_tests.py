@@ -143,6 +143,16 @@ def _hotspots_dir():
 
 
 def run():
+    # Importing tst_utils above (for ``have``) pointed *this* process's settings at a
+    # scratch directory, and child processes inherit environment -- so without this,
+    # all fifty-odd test scripts share one settings file, and a preference one script
+    # saves through the app leaks into every script after it. Drop the inherited dir
+    # (only if the import created it; a deliberately exported one is kept) so each
+    # child's own tst_utils import isolates it afresh.
+    from pxviewer.regression import tst_utils
+    if (tst_utils.TEST_SETTINGS_DIR_CREATED
+            and os.environ.get("PXVIEWER_SETTINGS_DIR") == tst_utils.TEST_SETTINGS_DIR):
+        del os.environ["PXVIEWER_SETTINGS_DIR"]
     try:
         import libtbx.load_env                      # noqa: F401
         from libtbx import test_utils
