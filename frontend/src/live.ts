@@ -1925,6 +1925,66 @@ export class LiveViewer {
         return this.currentStructure();
     }
 
+    /** Deterministic screen-space hit test over the live coordinates.
+     *
+     *  The fallback for canvas3d.identify(): the pick buffer goes stale while streamed
+     *  frames rebuild the structure and its render objects, so during — and briefly
+     *  after — any drag, settle wind-down or minimization, most presses on an atom
+     *  read as empty (measured: 3/20 presses on the same known-good pixel landed a
+     *  tug on an idle scene). This test projects every atom from the same typed
+     *  arrays the streamed frames patch — one matrix multiply each, ~1–5 ms at 100k
+     *  atoms, and only on a mousedown identify already missed — and returns the atom
+     *  nearest the pointer within `maxPx` CSS pixels. Among near-ties (~3 px) the
+     *  atom closest to the camera wins, so what you grab is what you see; the tight
+     *  radius keeps background drags rotating.
+     */
+    nearestAtomOnScreen(fx: number, fy: number): number | undefined {
+        const canvas3d = this.plugin.canvas3d;
+        if (!canvas3d || !this.cx || !this.nAtoms) return undefined;
+        const camera = canvas3d.camera;
+        const vp = camera.viewport;
+        const canvas: HTMLCanvasElement | undefined = (canvas3d as any)?.webgl?.gl?.canvas;
+        const rect = canvas?.getBoundingClientRect();
+        if (!rect || !rect.width || !rect.height) return undefined;
+        const p = Vec3();
+        const proj = Vec4();
+        const tie = 9;  // px^2: "the same spot" as far as a fingertip is concerned
+        let best: number | undefined;
+        let bestD2 = Infinity;
+        let bestDepth = Infinity;
+        for (let i = 0; i < this.nAtoms; i++) {
+            Vec3.set(p, this.cx[i], this.cy[i], this.cz[i]);
+            camera.project(proj, p);
+            const depth = proj[2];
+            if (!(depth >= 0 && depth <= 1)) continue;   // behind the camera, or past far
+            const dx = ((proj[0] - vp.x) / vp.width - fx) * rect.width;
+            const dy = (1 - (proj[1] - vp.y) / vp.height - fy) * rect.height;
+            const d2 = dx * dx + dy * dy;
+            if (best === undefined || d2 < bestD2 - tie
+                    || (Math.abs(d2 - bestD2) <= tie && depth < bestDepth)) {
+                best = i;
+                bestD2 = Math.min(d2, bestD2);
+                bestDepth = depth;
+            }
+        }
+        if (best === undefined) return undefined;
+        // Accept within the atom's APPARENT radius (plus a fingertip): rendered atoms
+        // span ~2 px zoomed out and ~25 px at a fill-frame residue, so no fixed pixel
+        // radius is right at both ends. The apparent radius comes from projecting a
+        // 0.4 A offset at the atom's own depth — the same scale its ball is drawn at.
+        Vec3.set(p, this.cx[best], this.cy[best], this.cz[best]);
+        camera.project(proj, p);
+        const bx = (proj[0] - vp.x) / vp.width;
+        const by = (proj[1] - vp.y) / vp.height;
+        const off = Vec3.scaleAndAdd(Vec3(), p, camera.state.up as Vec3, 0.4);
+        camera.project(proj, off);
+        const rx = ((proj[0] - vp.x) / vp.width - bx) * rect.width;
+        const ry = ((proj[1] - vp.y) / vp.height - by) * rect.height;
+        const apparent = Math.sqrt(rx * rx + ry * ry);
+        const accept = Math.max(10, 1.3 * apparent);
+        return bestD2 <= accept * accept ? best : undefined;
+    }
+
     /** Where an atom is right now — the anchor for the plane a drag happens on. */
     atomPosition(atom: number): Vec3 | undefined {
         const structure = this.currentStructure();
@@ -2928,27 +2988,34 @@ function markerHitTest(plugin: PluginContext, fx: number, fy: number): { id: str
  *  what you see is bonds, so a bond has to be grabbable too. A bond gives the endpoint
  *  nearer the pointer, which is the atom you meant.
  */
-function atomAt(plugin: PluginContext, viewer: LiveViewer | null, x: number, y: number) {
+function atomAt(plugin: PluginContext, viewer: LiveViewer | null,
+                point: { x: number; y: number; fx: number; fy: number }) {
     if (!viewer || !plugin.canvas3d) return undefined;
+    const { x, y } = point;
     const picked = plugin.canvas3d.identify(Vec2.create(x, y));
-    if (!picked?.id) return undefined;
-    const loci = plugin.canvas3d.getLoci(picked.id).loci;
-    const own = viewer.structureForPicking();
+    if (picked?.id) {
+        const loci = plugin.canvas3d.getLoci(picked.id).loci;
+        const own = viewer.structureForPicking();
 
-    if (StructureElement.Loci.is(loci)) {
-        if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
-        const location = StructureElement.Loci.getFirstLocation(loci);
-        return location ? (location.element as unknown as number) : undefined;
+        if (StructureElement.Loci.is(loci)) {
+            // Another model's atom: its own viewer handles this event — never fall
+            // through to the geometric test, or two viewers would claim one press.
+            if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
+            const location = StructureElement.Loci.getFirstLocation(loci);
+            if (location) return location.element as unknown as number;
+        } else if (Bond.isLoci(loci) && loci.bonds.length) {
+            if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
+            const bond = loci.bonds[0];
+            const a = bond.aUnit.elements[bond.aIndex] as unknown as number;
+            const b = bond.bUnit.elements[bond.bIndex] as unknown as number;
+            // Whichever end is nearer the pointer on screen is the one you were aiming at.
+            return nearerOnScreen(plugin, viewer, x, y, a, b);
+        }
     }
-    if (Bond.isLoci(loci) && loci.bonds.length) {
-        if (!own || !Structure.areRootsEquivalent(loci.structure, own)) return undefined;
-        const bond = loci.bonds[0];
-        const a = bond.aUnit.elements[bond.aIndex] as unknown as number;
-        const b = bond.bUnit.elements[bond.bIndex] as unknown as number;
-        // Whichever end is nearer the pointer on screen is the one you were aiming at.
-        return nearerOnScreen(plugin, viewer, x, y, a, b);
-    }
-    return undefined;
+    // identify() saw nothing — which, while frames stream, it does even on an atom
+    // (the pick buffer trails the rebuilt render objects). The geometric test is
+    // deterministic and reads the same coordinates the screen is drawn from.
+    return viewer.nearestAtomOnScreen(point.fx, point.fy);
 }
 
 /** Of two atoms, the one whose projection is closer to `(x, y)` in the viewport. */
@@ -3092,7 +3159,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const onMouseDown = (ev: MouseEvent) => {
         if (markerArmed && ev.button === 0 && viewer && plugin.canvas3d) {
             const point = canvasPoint(ev);
-            const atom = atomAt(plugin, viewer, point.x, point.y);
+            const atom = atomAt(plugin, viewer, point);
             // Snap to the atom under the cursor; for empty space, unproject at the
             // camera's focus depth — the plane through the rotation center.
             let pos = atom !== undefined ? viewer.atomPosition(atom) : undefined;
@@ -3104,6 +3171,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             return;
         }
         if (ev.button !== 0 || !plugin.canvas3d) return;
+        if (ev.defaultPrevented) return;  // another connection already claimed this press
         const point = canvasPoint(ev);
         // A marker under the cursor wins over the molecule: Shift-drag moves the marker,
         // and must not start a tug (see the marker-dragging note). Any session may own the
@@ -3117,12 +3185,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 return;
             }
         }
-        if (!tugMode) return;
-        if (!viewer) return;
-        const atom = atomAt(plugin, viewer, point.x, point.y);
-        if (atom === undefined) return;  // background: let Mol* rotate, as Coot does
+        const W: any = window as any;
+        if (!tugMode) { W.__why = 'no-tugmode'; return; }
+        if (!viewer) { W.__why = 'no-viewer'; return; }
+        const atom = atomAt(plugin, viewer, point);
+        if (atom === undefined) { W.__why = 'no-atom'; return; }  // background: rotate
         const anchor = viewer.atomPosition(atom);
-        if (!anchor) return;
+        if (!anchor) { W.__why = 'no-anchor'; return; }
+        W.__why = 'tug';
         tugging = { atom, anchor };
         // Taken from the trackball only now that an atom is really under the pointer.
         ev.preventDefault();
@@ -3474,6 +3544,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined, shift }));
             });
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
+            // Test hook for the rendered-app harness (QTest probes aim presses with it);
+            // reads the same live coordinates and camera the fallback hit-test uses.
+            (window as any).__projectAtom = (i: number) => {
+                const cam = plugin.canvas3d?.camera; const v: any = viewer;
+                if (!cam || !v) return null;
+                const pr = cam.project(Vec4(), Vec3.create(v.cx[i], v.cy[i], v.cz[i]));
+                const vp = cam.viewport;
+                return { sx: (pr[0] - vp.x) / vp.width, sy: 1 - (pr[1] - vp.y) / vp.height };
+            };
             viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));
             building = false;
             for (const frame of pendingCoordinates.splice(0)) {
