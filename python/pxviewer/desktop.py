@@ -6023,6 +6023,8 @@ class DesktopApp:
         self._tug_last_push: float = 0.0
         self._tug_queue: Any = None  # made with its worker on the first drag
         self._diff_suppressed: list = []  # static diff maps hidden behind the live window
+        self._stale_dimmed: dict = {}     # ref -> own opacity, while maps trail the model
+        self._diff_agreement_gen = -1     # last drag generation the tripwire sampled
         # Live difference map while dragging (see set_live_difference_map): a warm-recompute
         # engine, cached per phased group, fed the latest drag frame off a one-slot queue so
         # only the most recent conformation is ever mapped (older frames are dropped).
@@ -6403,6 +6405,43 @@ class DesktopApp:
         *were* — recompute on the next request rather than show a stale fit."""
         for key in ("analysis", "validation", "hotspots"):
             entry.pop(key, None)
+        self._dim_stale_diff(entry.get("group"))
+
+    def _dim_stale_diff(self, gid) -> None:
+        """Dim the group's difference map the moment the model outruns its phasing.
+
+        The atoms just moved, so the difference map now answers a question about the
+        previous model — true red/green and stale red/green look identical, which is
+        exactly how a stale map gets mistaken for a level bug. Dimmed (not hidden):
+        readable as "this is old", restored to the entry's own opacity when fresh
+        maps land (see update_maps). A render-side change only."""
+        control = self._control_session()
+        if control is None or gid is None:
+            return
+        for volume in self._volumes:
+            if (volume.get("group") != gid or not volume.get("negative_color")
+                    or volume["ref"] in self._stale_dimmed):
+                continue
+            self._stale_dimmed[volume["ref"]] = volume.get("opacity", 1.0)
+            try:
+                control.set_volume_opacity(volume["ref"], 0.35)
+            except Exception:  # pragma: no cover - defensive
+                pass
+        if self._stale_dimmed:
+            self._status("difference map is behind the model — re-phasing brings it back")
+
+    def _undim_stale_diff(self) -> None:
+        """Fresh maps landed: restore every dimmed difference map to its own opacity."""
+        control = self._control_session()
+        dimmed, self._stale_dimmed = self._stale_dimmed, {}
+        if control is None:
+            return
+        for ref, opacity in dimmed.items():
+            if any(v["ref"] == ref for v in self._volumes):
+                try:
+                    control.set_volume_opacity(ref, opacity)
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
     @staticmethod
     def _sites_fingerprint(model):
@@ -8104,6 +8143,7 @@ class DesktopApp:
                     # stands in for — both are sigma-scaled, so the slider means one
                     # thing. A hardcoded 3.0 disagreed the moment the user moved it.
                     level = float(diff_entry["iso"]) if diff_entry else 3.0
+                    self._check_window_agreement(diff_entry, box, center)
                     session.show_map_box(
                         box, level=level, colors=colors,
                         style=diff_entry.get("style") if diff_entry else None)
@@ -8117,6 +8157,38 @@ class DesktopApp:
         self._diff_ctx = None
         self._diff_atom = None
         self._diff_gen += 1  # invalidate any recompute still in flight
+
+    def _check_window_agreement(self, diff_entry, box, center) -> None:
+        """Tripwire: the live window and the static difference map must describe the
+        same physics wherever both are CURRENT. Sample both over the window's region
+        and warn — with the number — when they disagree, so a real divergence in the
+        field names itself instead of reading as a mysterious level change. Once per
+        drag (the first frame), a few hundred samples, worker thread."""
+        if diff_entry is None or self._diff_agreement_gen == self._diff_gen:
+            return
+        self._diff_agreement_gen = self._diff_gen
+        try:
+            from .volume_io import sample_at_sites
+
+            mm = diff_entry["data"].map_manager
+            if callable(mm):
+                mm = mm()
+            rng = np.random.default_rng(0)
+            points = np.asarray(center, dtype=float) + rng.uniform(-4.5, 4.5, (400, 3))
+            static_v = np.asarray(sample_at_sites(mm, points), dtype=float)
+            window_v = np.asarray(sample_at_sites(box, points), dtype=float)
+            ok = np.isfinite(static_v) & np.isfinite(window_v)
+            if ok.sum() < 50:
+                return
+            spread = float(np.std(static_v[ok])) * float(np.std(window_v[ok]))
+            corr = (float(np.corrcoef(static_v[ok], window_v[ok])[0, 1])
+                    if spread > 1e-9 else 1.0)
+            if corr < 0.85:
+                self._status(
+                    f"live window disagrees with the static difference map (r={corr:.2f})"
+                    " — the static map is stale or mis-scaled; please report this number")
+        except Exception:  # pragma: no cover - a diagnostic must never break the drag
+            pass
 
     def _clear_live_diff(self) -> None:
         """Stop streaming the live difference map and remove the window from the viewport."""
@@ -10663,6 +10735,7 @@ class DesktopApp:
                 # Fresh maps supersede the drag's standing live window (see the tug
                 # 'end' handling): from here the object maps tell the current story.
                 self._clear_live_diff()
+                self._undim_stale_diff()  # the maps are current again
                 # In place, never a page reload: a reload re-runs the scene's camera
                 # fit, so the auto re-phase after every settled drag snapped the camera
                 # home — the one thing a background refresh must never do. The viewer
