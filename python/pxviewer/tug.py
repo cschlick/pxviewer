@@ -220,8 +220,14 @@ class Tug:
         from cctbx import geometry_restraints
         from mmtbx.refinement import geometry_minimization
 
-        # Hold the atom where it now is, so the fragment settles in place rather than
-        # continuing toward wherever the pull was last aimed.
+        # Re-anchor the pins and holds where the drag LEFT the zone, then hold the
+        # atom where it now is. The holds anchor at grab time, and after a long drag
+        # a settle against those old anchors tugged the whole neighbourhood — and the
+        # released atom with it — back toward the start, partially undoing the drag.
+        # Settling means coming to rest in place, so the reference is the present.
+        self._grm.remove_reference_coordinate_restraints_in_place()
+        self._pin(self._anchors)
+        self._hold(self._anchors)
         self.set_target(tuple(self._sites[self._local]))
 
         owner = self
