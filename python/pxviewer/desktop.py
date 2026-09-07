@@ -8649,8 +8649,10 @@ class DesktopApp:
         if self._tug is None:
             return
         try:
+            settle_started = time.monotonic()
             trajectory: list = []
             self._tug.settle(on_frame=lambda c: trajectory.append(c.copy()))
+            compute_took = time.monotonic() - settle_started
         except Exception as exc:  # pragma: no cover - runtime errors
             self._status(f"settle failed: {exc}")
             return
@@ -8661,17 +8663,26 @@ class DesktopApp:
         # optimizer states to what shows at the frame rate. The playback yields to
         # everything more important than a flourish: a new grab, the Pause button, and
         # shutdown — it must never be the thing the user cannot interrupt.
-        duration = self._tug_settle_seconds
-        if animate and duration > 0 and not self._minimize_stop.is_set() and not self._stopped:
-            shown = min(len(trajectory),
-                        max(1, int(duration / _TUG_PUSH_INTERVAL)))
-            for i in np.linspace(0, len(trajectory) - 1, shown).astype(int):
+        # The knob is TOTAL time from release to freeze, wall clock. The settle
+        # compute above is silent but already spent part of the budget, so the
+        # playback gets what remains — and frames are scheduled against the clock
+        # rather than accumulating sleeps, because per-frame push overhead on top of
+        # a fixed sleep stretched a 0.4 s setting into ~1.2 s of visible motion.
+        play = max(0.0, self._tug_settle_seconds - compute_took)
+        if animate and play > 0 and not self._minimize_stop.is_set() and not self._stopped:
+            shown = min(len(trajectory), max(2, int(play / _TUG_PUSH_INTERVAL)))
+            indices = np.linspace(0, len(trajectory) - 1, shown).astype(int)
+            playback_started = time.monotonic()
+            for k, i in enumerate(indices):
                 if self._tug_queue is not None and not self._tug_queue.empty():
                     break  # the user grabbed again; no waiting out the wind-down
                 if self._minimize_stop.is_set() or self._stopped:
                     break  # Pause (or shutdown) trumps the flourish
+                due = playback_started + play * (k / max(1, shown - 1))
+                wait = due - time.monotonic()
+                if wait > 0:
+                    time.sleep(wait)
                 self._push_tug(trajectory[i], force=True)
-                time.sleep(_TUG_PUSH_INTERVAL)
         self._push_tug(trajectory[-1], force=True)  # the resting position, always shown
 
     def _queue_post_drag_map_update(self, entry) -> None:
