@@ -8723,6 +8723,14 @@ class DesktopApp:
                 return
             first = last = None
             shown = 0
+            updated_at_hold = False
+            # The static difference map describes the model as it was when last phased;
+            # from the first minimization step it is a ghost, exactly as during a drag.
+            # Suppressed for the run; the post-run (or at-hold) re-phase restores it.
+            reflections = self.reflections_for_model(entry["id"])
+            if reflections is not None:
+                gid = entry.get("group")
+                self.bridge.run_on_main.emit(lambda: self._suppress_static_diff(gid))
             try:
                 self._status(
                     f"refining {name}{' into the map' if map_data else ''}… "
@@ -8767,6 +8775,14 @@ class DesktopApp:
                     settled = (stats["bonds_after"] >= (prev["bonds_after"] if prev else 1e9) - 1e-4
                                and stats["angles_after"] >= (prev["angles_after"] if prev else 1e9) - 1e-2)
                     if settled:
+                        # The model will not move again: re-phase NOW, not when the hold
+                        # ends. A held run used to sit for minutes over maps phased
+                        # against the pre-run model — a wall of stale red/green that
+                        # silently cleared on the next touch.
+                        if reflections is not None:
+                            updated_at_hold = True
+                            self.bridge.run_on_main.emit(
+                                lambda rid=reflections["id"]: self._update_maps_if_live(rid))
                         self._status(
                             f"{name} refined (bond rmsd {stats['bonds_after']:.3f}) — holding; "
                             "press Stop or enable Refine drag to finish")
@@ -8775,6 +8791,7 @@ class DesktopApp:
                         break
             except Exception as exc:  # pragma: no cover - restraints/runtime errors
                 self._status(f"minimization failed: {exc}")
+                self.bridge.run_on_main.emit(self._restore_static_diff)
                 return
             finally:
                 self._minimize_idle.set()  # the model is the drag's to take now
@@ -8788,11 +8805,13 @@ class DesktopApp:
             self._invalidate_model_state(entry)  # stale: the coordinates just moved
             self._refresh_validation_staleness()  # warn: results now describe a past geometry
             # So is the density, if this model was phased: it describes where the atoms
-            # were. Once per run, never per step — each update is two transforms.
-            reflections = self.reflections_for_model(entry["id"])
-            if reflections is not None:
+            # were. Once per run, never per step — each update is two transforms — and
+            # not again if the at-hold update above already re-phased this resting model.
+            if reflections is not None and not updated_at_hold:
                 self.bridge.run_on_main.emit(
                     lambda rid=reflections["id"]: self._update_maps_if_live(rid))
+            elif reflections is None:
+                self.bridge.run_on_main.emit(self._restore_static_diff)
 
         self.bridge.minimizing_changed.emit(True)
         self.run_background(work, name="pxviewer-minimize", label="Minimizing")
@@ -10675,10 +10694,11 @@ class DesktopApp:
         longer hold. Safe on the GUI thread: the unload runs there too, so this cannot be
         undercut mid-check."""
         entry = self._reflection_entry(rid)
-        if entry is None or entry.get("r_work") is None:
-            return
-        mmm = self.group_mmm(entry.get("group"))
-        if mmm is None or mmm.model() is None:
+        if (entry is None or entry.get("r_work") is None
+                or self.group_mmm(entry.get("group")) is None
+                or self.group_mmm(entry.get("group")).model() is None):
+            # No update will run, so nothing else will lift a standing suppression.
+            self._restore_static_diff()
             return
         self.update_maps(rid)
 
