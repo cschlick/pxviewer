@@ -7087,19 +7087,19 @@ class DesktopApp:
     def _add_context_layer(self, entry, session, on) -> None:
         """The selection's neighbourhood as an extra ball-and-stick layer (see
         ``_set_context_rep``), restricted to what the structure-type toggles show."""
-        # Whatever else happens, never two context layers: remove the previous one
-        # by id before (maybe) adding — set_representation wipes the whole list on a
-        # full rebuild, but layers added elsewhere skip the wipe, and under load the
-        # interleave stacked a duplicate ball-and-stick context.
-        stale = entry.pop("context_layer_id", None)
-        if stale is not None:
-            try:
-                session.remove_representation(stale)
-            except Exception:  # pragma: no cover - defensive
-                pass
+        # Whatever else happens, never two context layers. Tracking-and-removing the
+        # previous id still stacked duplicates under suite load (two adds that never
+        # saw each other's tracking), so the layer carries a FIXED id instead: the
+        # representation store is id-keyed, and a second add overwrites rather than
+        # appends — duplicate-proof against any thread or ordering.
+        layer_id = f"context-{entry['id']}"
         context = entry.get("context_on")
         if not context or entry.get("rep") == "ball-and-stick":
-            return  # nothing to add, or the model already shows sticks everywhere
+            try:
+                session.remove_representation(layer_id)  # idempotent
+            except Exception:  # pragma: no cover - defensive
+                pass
+            return
         if on is not None:
             shown = set(on)
             context = [i for i in context if i in shown]
@@ -7107,7 +7107,8 @@ class DesktopApp:
                 return
         kwargs = self._model_color_kwargs(entry, "ball-and-stick")
         kwargs["on"] = context
-        entry["context_layer_id"] = session.add_representation("ball-and-stick", **kwargs)
+        kwargs["id"] = layer_id
+        session.add_representation("ball-and-stick", **kwargs)
 
     def _model_color_kwargs(self, entry, rep: str) -> dict:
         """How to color a model's representation: an explicit user color wins; else the
