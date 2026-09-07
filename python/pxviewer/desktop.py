@@ -8609,8 +8609,17 @@ class DesktopApp:
             else:
                 self._push_tug(self._tug.move_to(target))
         elif action == "end":
-            self._settle_tug(animate=settle_animation)  # let go; rest (wind-down shown
-                                                        # only when nothing is waiting)
+            # Only the LAST release settles. The settle is an LBFGS to convergence —
+            # seconds of compute on a big zone — and it used to run once per queued
+            # release, serialized on this worker: a burst of quick touches kept it
+            # relaxing OLD drags for 10-20 s after the user's last one. A release with
+            # more input already waiting (later messages in this batch, or fresh ones
+            # in the queue) just lets go where it stands; the next drag's own
+            # minimizer takes over immediately.
+            rushed = (not settle_animation
+                      or (self._tug_queue is not None and not self._tug_queue.empty()))
+            if not rushed:
+                self._settle_tug()
             # Streaming stops, but the WINDOW stays: the object difference map is stale
             # (it describes the pre-drag model until the maps are recomputed), and the
             # settled window is the freshest local truth. It is replaced by the next
