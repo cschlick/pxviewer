@@ -1963,6 +1963,25 @@ class ControlsWindow:
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
         og.addWidget(self._tug_continuous_check)
+        settle_row = QHBoxLayout()
+        settle_label = QLabel("Settle wind-down")
+        settle_row.addWidget(settle_label)
+        self._tug_settle_spin = QDoubleSpinBox()
+        self._tug_settle_spin.setRange(0.0, 5.0)
+        self._tug_settle_spin.setSingleStep(0.2)
+        self._tug_settle_spin.setDecimals(1)
+        self._tug_settle_spin.setSuffix(" s")
+        self._tug_settle_spin.setValue(self._desktop._tug_settle_seconds)
+        tip = ("How long the model visibly keeps relaxing after you let go, before it "
+               "freezes. The physics finishes either way — this stretches the decay so "
+               "a fling reads as settling, not stopping dead. 0 freezes immediately.")
+        settle_label.setToolTip(tip)
+        self._tug_settle_spin.setToolTip(tip)
+        self._tug_settle_spin.valueChanged.connect(lambda v: self._safe(
+            lambda: self._desktop.set_tug_settle_seconds(v)))
+        settle_row.addWidget(self._tug_settle_spin)
+        settle_row.addStretch()
+        og.addLayout(settle_row)
         self._tug_livemap_check = QCheckBox("Live difference map")
         self._tug_livemap_check.setToolTip(
             "While dragging, recompute the mFo-DFc difference map in a small window around "
@@ -6006,6 +6025,11 @@ class DesktopApp:
         # relaxation is on by default — a drag settles as a living motion, which reads better
         # than a nudge-and-stop; the checkbox in the Refine drag box mirrors this.
         self._tug_into_density = False
+        try:
+            self._tug_settle_seconds = max(0.0, float(
+                self._settings.value("drag/settle_seconds", _TUG_SETTLE_DURATION)))
+        except (TypeError, ValueError):
+            self._tug_settle_seconds = _TUG_SETTLE_DURATION
         self._tug_continuous = True
         # Whether a settled drag re-phases the whole-structure maps (see
         # _queue_post_drag_map_update). On, because a minimization already does it and a
@@ -7998,6 +8022,15 @@ class DesktopApp:
         """
         self._tug_into_density = bool(enabled)
 
+    def set_tug_settle_seconds(self, seconds: float) -> None:
+        """How long the post-release wind-down plays, in seconds (0 freezes at once).
+
+        The settle minimization itself converges in a fraction of a second; this is the
+        watchable decay it is stretched over — the knob for how long the model visibly
+        keeps relaxing after a drag lets go. Persisted."""
+        self._tug_settle_seconds = max(0.0, float(seconds))
+        self._settings.setValue("drag/settle_seconds", self._tug_settle_seconds)
+
     def set_tug_continuous(self, enabled: bool) -> None:
         """Whether the minimizer keeps running for the whole hold, or settles per move.
 
@@ -8628,9 +8661,10 @@ class DesktopApp:
         # optimizer states to what shows at the frame rate. The playback yields to
         # everything more important than a flourish: a new grab, the Pause button, and
         # shutdown — it must never be the thing the user cannot interrupt.
-        if animate and not self._minimize_stop.is_set() and not self._stopped:
+        duration = self._tug_settle_seconds
+        if animate and duration > 0 and not self._minimize_stop.is_set() and not self._stopped:
             shown = min(len(trajectory),
-                        max(1, int(_TUG_SETTLE_DURATION / _TUG_PUSH_INTERVAL)))
+                        max(1, int(duration / _TUG_PUSH_INTERVAL)))
             for i in np.linspace(0, len(trajectory) - 1, shown).astype(int):
                 if self._tug_queue is not None and not self._tug_queue.empty():
                     break  # the user grabbed again; no waiting out the wind-down

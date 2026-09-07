@@ -437,6 +437,19 @@ def exercise_the_settle_wind_down_yields_to_pause_and_pending_drags():
         assert pushes == [39.0]
         assert time.time() - start < 0.1
 
+        # The wind-down length is the user's knob: 0 freezes at once, and a longer
+        # setting plays a longer decay.
+        pushes[:] = []
+        app.set_tug_settle_seconds(0.0)
+        app._settle_tug()
+        assert pushes == [39.0], "a zero wind-down must freeze immediately"
+        app.set_tug_settle_seconds(0.4)
+        pushes[:] = []
+        start = time.time()
+        app._settle_tug()
+        assert len(pushes) > 5 and time.time() - start >= 0.2, (
+            "a set wind-down should play for about that long")
+
 
 def exercise_the_native_focus_neighbourhood_stays_retired():
     """Mol*'s native click-focus display was replaced by pxviewer's own unified
