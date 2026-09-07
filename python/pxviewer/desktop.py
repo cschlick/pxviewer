@@ -585,6 +585,25 @@ def _make_bridge():
     return _Bridge()
 
 
+def _thin_gestures(items):
+    """Discard whole gestures the worker could not keep up with.
+
+    When a batch drains with SEVERAL grab-and-release gestures queued, the older ones
+    are input the system failed to process in time — serving them late replays clicks
+    the user has already moved past (each begin pays a restraints build, each gesture
+    streams motion), which is how a burst of quick tugs turned into seconds of
+    catch-up. Kept: everything before the first begin (the tail — moves/end — of the
+    gesture already in progress) and everything from the LAST begin on (the newest
+    gesture, complete or still open). The rest is dropped as if those clicks never
+    happened. Orphaned messages this can create for a *future* batch (an end whose
+    begin was dropped) are already guarded no-ops in _serve_tug.
+    """
+    begins = [i for i, item in enumerate(items) if item[0] == "begin"]
+    if len(begins) <= 1:
+        return items
+    return items[:begins[0]] + items[begins[-1]:]
+
+
 def _collapse_moves(items):
     """Keep only the last of each run of drag targets.
 
@@ -8518,7 +8537,7 @@ class DesktopApp:
                     waiting.append(self._tug_queue.get_nowait())
                 except queue.Empty:
                     break
-            collapsed = _collapse_moves(waiting)
+            collapsed = _collapse_moves(_thin_gestures(waiting))
             for i, (action, mid, atom, target) in enumerate(collapsed):
                 try:
                     # An 'end' with more messages already drained behind it (the user

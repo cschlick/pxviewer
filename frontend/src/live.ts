@@ -755,6 +755,9 @@ export class LiveViewer {
         this.cx = Float32Array.from(conf.x);
         this.cy = Float32Array.from(conf.y);
         this.cz = Float32Array.from(conf.z);
+        this.tx = Float32Array.from(this.cx);
+        this.ty = Float32Array.from(this.cy);
+        this.tz = Float32Array.from(this.cz);
         const build = plugin.state.data.build().to(topologyModel).apply(LiveTrajectory, {
             version: this.version,
             x: this.cx.slice(),
@@ -963,6 +966,7 @@ export class LiveViewer {
     /** Swap in a new frame given interleaved [x0,y0,z0,x1,...] coordinates. */
     async update(interleaved: ArrayLike<number>) {
         deinterleaveInto(interleaved, this.nAtoms, this.cx, this.cy, this.cz);
+        deinterleaveInto(interleaved, this.nAtoms, this.tx, this.ty, this.tz);
         await this.scheduleCommit();
     }
 
@@ -975,6 +979,75 @@ export class LiveViewer {
      * to say O(zone) of news — on the wire, and again unpacking it here. Patching costs
      * the size of the change instead.
      */
+    /** Where the stream says atoms ARE; the screen eases toward it (see smoothLoop). */
+    private tx!: Float32Array;
+    private ty!: Float32Array;
+    private tz!: Float32Array;
+    private smoothing = false;
+    /** Ergonomics over immediacy: the displayed model closes this fraction of its
+     *  remaining distance per ~120 ms. Slow, continuous evolution was asked for
+     *  explicitly — an uneven stream (minimize steps can take hundreds of ms under
+     *  load) otherwise reads as freeze-then-jolt, with tugs that seem to do nothing
+     *  and then snap far away. */
+    private static readonly SMOOTH_TAU_S = 0.12;
+    private static readonly SNAP_A = 0.004;  // close enough to land exactly
+
+    /** A streamed full frame: retarget every atom; the screen glides there. */
+    setTargetFull(coords: Float32Array) {
+        deinterleaveInto(coords, this.nAtoms, this.tx, this.ty, this.tz);
+        this.startSmoothing();
+    }
+
+    /** A streamed delta: retarget just the atoms it names. */
+    setTargetDelta(indices: Uint32Array, xyz: Float32Array) {
+        const n = indices.length;
+        for (let i = 0; i < n; i++) {
+            const a = indices[i];
+            this.tx[a] = xyz[i * 3];
+            this.ty[a] = xyz[i * 3 + 1];
+            this.tz[a] = xyz[i * 3 + 2];
+        }
+        this.startSmoothing();
+    }
+
+    private startSmoothing() {
+        if (this.smoothing) return;
+        this.smoothing = true;
+        void this.smoothLoop();
+    }
+
+    private async smoothLoop() {
+        let last = performance.now();
+        try {
+            while (true) {
+                await new Promise((r) => setTimeout(r, 33));  // ~30 Hz, rAF-independent
+                const now = performance.now();
+                const dt = Math.min(0.25, (now - last) / 1000);
+                last = now;
+                const alpha = 1 - Math.exp(-dt / LiveViewer.SMOOTH_TAU_S);
+                const snap2 = LiveViewer.SNAP_A * LiveViewer.SNAP_A;
+                let moving = 0;
+                for (let a = 0; a < this.nAtoms; a++) {
+                    const dx = this.tx[a] - this.cx[a];
+                    const dy = this.ty[a] - this.cy[a];
+                    const dz = this.tz[a] - this.cz[a];
+                    const d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 === 0) continue;
+                    if (d2 <= snap2) {
+                        this.cx[a] = this.tx[a]; this.cy[a] = this.ty[a]; this.cz[a] = this.tz[a];
+                    } else {
+                        this.cx[a] += dx * alpha; this.cy[a] += dy * alpha; this.cz[a] += dz * alpha;
+                        moving++;
+                    }
+                }
+                await this.scheduleCommit();  // coalesced; this loop is the only applier
+                if (!moving) break;
+            }
+        } finally {
+            this.smoothing = false;
+        }
+    }
+
     async updateDelta(indices: Uint32Array, xyz: Float32Array) {
         const n = indices.length;
         for (let i = 0; i < n; i++) {
@@ -982,6 +1055,7 @@ export class LiveViewer {
             this.cx[a] = xyz[i * 3];
             this.cy[a] = xyz[i * 3 + 1];
             this.cz[a] = xyz[i * 3 + 2];
+            this.tx[a] = this.cx[a]; this.ty[a] = this.cy[a]; this.tz[a] = this.cz[a];
         }
         await this.scheduleCommit();
     }
@@ -3335,56 +3409,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // `viewer` is absent restores the coordinates baked into the BCIF and makes a just-applied
     // model shift visibly snap back after a page reload. Preserve coordinate messages in wire
     // order and apply them as soon as the live trajectory exists.
-    // Latest-wins frame application — the client-side half of frame pacing.
-    //
-    // ws.onmessage is async, so without this every arriving frame independently
-    // started a Mol* state commit; at a 125 Hz stream against a ~25 Hz apply rate
-    // the commit queue grew without bound. The symptoms were exactly what a user
-    // reports as "sluggish": high-frequency playback of stale frames, input starved
-    // by the saturated main thread, and the model still moving 10-20 s after the
-    // stream went quiet. Instead, arrivals only update this pending state and one
-    // pump applies the NEWEST of it whenever the previous apply finishes — every
-    // "nth" frame with n adapting to what this machine can actually draw.
-    //
-    // Deltas cannot simply be dropped: each carries only the atoms that moved since
-    // the previous frame, so a skipped delta's atoms would freeze mid-air. Dropped
-    // frames therefore MERGE: later positions overwrite earlier ones per atom, and
-    // a full frame supersedes everything merged before it.
-    let pendingFullFrame: Float32Array | null = null;
-    const pendingDeltas = new Map<number, number>();  // atom -> offset into deltaXyz store
-    let deltaXyzStore: number[] = [];
-    let applyingFrames = false;
-    const pumpFrames = async () => {
-        if (applyingFrames) return;
-        applyingFrames = true;
-        try {
-            while (viewer && (pendingFullFrame || pendingDeltas.size)) {
-                if (pendingFullFrame) {
-                    const coords = pendingFullFrame;
-                    pendingFullFrame = null;
-                    await viewer.update(coords);
-                    continue;
-                }
-                const n = pendingDeltas.size;
-                const indices = new Uint32Array(n);
-                const xyz = new Float32Array(n * 3);
-                let k = 0;
-                for (const [atom, at] of pendingDeltas) {
-                    indices[k] = atom;
-                    xyz[k * 3] = deltaXyzStore[at];
-                    xyz[k * 3 + 1] = deltaXyzStore[at + 1];
-                    xyz[k * 3 + 2] = deltaXyzStore[at + 2];
-                    k++;
-                }
-                pendingDeltas.clear();
-                deltaXyzStore = [];
-                await viewer.updateDelta(indices, xyz);
-            }
-        } finally {
-            applyingFrames = false;
-        }
-    };
-
+    // Streamed frames set the viewer's TARGET coordinates; the screen eases toward
+    // them (LiveViewer.smoothLoop). Two problems die here at once. Backpressure:
+    // ws.onmessage is async, so applying frames here let a 125 Hz stream out-run a
+    // ~25 Hz apply rate and queue commits without bound — sluggish input, stale
+    // playback, motion long after the stream stopped. Ergonomics: applying whatever
+    // arrives makes an uneven stream read as freeze-then-jolt; the eased display
+    // evolves smoothly however the frames come, which matters more than relaying
+    // each minimizer state verbatim. Retargeting is O(patch) with no commit, so
+    // arrival cost is trivial and nothing can back up.
     const pendingCoordinates: Array<
         { kind: 'full', coords: Float32Array } |
         { kind: 'delta', indices: Uint32Array, xyz: Float32Array }
@@ -3648,12 +3681,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const coords = new Float32Array(buffer, 8);
             perf.frameReceived('full', coords.length / 3);
             quality.pingCoordinates();  // geometry is being rebuilt, not just redrawn
-            if (viewer) {
-                pendingFullFrame = coords.slice();  // own it: the socket buffer is transient
-                pendingDeltas.clear();
-                deltaXyzStore = [];
-                void pumpFrames();
-            } else pendingCoordinates.push({ kind: 'full', coords });
+            if (viewer) viewer.setTargetFull(coords);  // copies into targets; no retention
+            else pendingCoordinates.push({ kind: 'full', coords });
         } else if (tag === TAG_FRAME_DELTA) {
             // [u32 tag][u32 frameIndex][u32 n][u32 * n indices][f32 * 3n] — only the atoms
             // that moved, at their absolute positions. See LiveViewer.updateDelta.
@@ -3662,14 +3691,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             const xyz = new Float32Array(buffer, 12 + n * 4, n * 3);
             perf.frameReceived('delta', n);
             quality.pingCoordinates();
-            if (viewer) {
-                for (let k = 0; k < n; k++) {
-                    const at = deltaXyzStore.length;
-                    deltaXyzStore.push(xyz[k * 3], xyz[k * 3 + 1], xyz[k * 3 + 2]);
-                    pendingDeltas.set(indices[k], at);
-                }
-                void pumpFrames();
-            } else pendingCoordinates.push({ kind: 'delta', indices, xyz });
+            if (viewer) viewer.setTargetDelta(indices, xyz);  // copies; no retention
+            else pendingCoordinates.push({ kind: 'delta', indices, xyz });
         } else if (tag === TAG_ATTRIBUTE) {
             // [u32 tag][u32 keyLen][key utf8][pad to 4][f32 * N]. Stored regardless
             // of viewer state (it may still be building); applied when the matching
