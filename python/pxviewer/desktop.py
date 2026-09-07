@@ -99,6 +99,12 @@ _MASK_RADIUS_DEFAULT = 3.0
 # that is exactly the case coalescing makes free, so favor not throttling the big ones.
 _TUG_PUSH_INTERVAL = 0.008
 
+# How long a settled drag waits before the whole-structure maps are re-phased. Long enough
+# that a burst of pulls — the normal way anyone fits — costs one recompute rather than one
+# per release, short enough that a user who has stopped fitting is not left looking at
+# density for atoms that have moved. Restarted by every drag (see _schedule_map_update).
+_DRAG_MAP_UPDATE_MS = 1500
+
 # How long the post-release wind-down plays for. The minimization itself converges in a
 # fraction of a second; this stretches its states over a watchable settle so a released
 # fling comes visibly to rest — the clearest signal that the fragment is done, not broken.
@@ -345,6 +351,13 @@ def _line_icon(name: str, color, size: int = 20, selected_color=None):
         icon.addPixmap(_render(selected_color), QIcon.Mode.Selected)
     return icon
 
+
+# One idea, one name. "Let the map pull" was offered twice under two labels — "Use map"
+# beside Minimize, "Into the density" beside the drag — which read as two unrelated
+# features rather than the same switch on two operations.
+_INTO_DENSITY_TIP = (
+    "Let the map pull too, so the model settles into the density rather than only onto "
+    "ideal geometry. Needs a map paired with the model, so the two share a frame.")
 
 # Semantic accent colors, in (light-theme, dark-theme) shades so each reads on its own
 # background — dark greens/ambers on a light UI, brighter ones on a dark UI. Everything else
@@ -1394,6 +1407,13 @@ class ControlsWindow:
         self._status_label.setWordWrap(True)
         self._status_label.setStyleSheet("color: palette(placeholder-text);")
         status_row.addWidget(self._status_label, stretch=1)
+        # Which mouse mode is armed (see _update_mode_chip), beside the buttons rather
+        # than in the message: a mode is a standing state, not an event, and the status
+        # text is overwritten by the next thing that happens.
+        self._mode_chip = QLabel("")
+        self._mode_chip.setToolTip("The armed mouse mode — what a click in the viewport does")
+        self._mode_chip.setVisible(False)
+        status_row.addWidget(self._mode_chip)
         self._reset_view_btn = self._make_icon_button(
             "fullscreen", "Reset view",
             "Reset the view — reframe the camera to fit the whole scene")
@@ -1445,6 +1465,7 @@ class ControlsWindow:
         desktop.bridge.volume_iso_changed.connect(self._on_volume_iso_changed)
         self._update_minimize_map()  # nothing loaded yet, so no map to minimize into
         self._update_tug_density()
+        self._update_tug_maps_after()
         self._update_pair_button()
         self._fit_tree_height()  # the empty list must not reserve space either
         self._appearance_sig = _UNSET  # no pane built yet, so the first update must build one
@@ -1783,24 +1804,16 @@ class ControlsWindow:
         map_layout.addLayout(map_row)
         layout.addWidget(map_tools)
 
-        layout.addWidget(self._build_edits_group())
+        layout.addWidget(self._build_refine_drag_group())
 
-        layout.addWidget(self._build_ligand_placement_group())
-
+        # Minimize is the whole model at once; a refine drag is the neighbourhood under the
+        # pointer. Two different actions, so two boxes — sharing one is what let a second,
+        # differently-named "pull into density" option grow up beside the first.
         minimization = QGroupBox("Minimization")
         ming = QVBoxLayout(minimization)
-        ming.addWidget(QLabel("Relax the model onto ideal geometry:"))
-        self._refine_drag_btn = self._make_icon_button(
-            "hand", "Refine drag",
-            "Explicitly enable coordinate-changing atom drags. While active, drag an atom "
-            "to pull it and locally minimize the model. Mutually exclusive with Pick.",
-            checkable=True)
-        self._refine_drag_btn.toggled.connect(self._on_toggle_refine_drag)
-        ming.addWidget(self._refine_drag_btn)
-        self._minimize_map_check = QCheckBox("Use map")
-        self._minimize_map_check.setToolTip(
-            "Also pull the model into the density. Needs a map loaded together with "
-            "the model as a group, so the two share a frame.")
+        ming.addWidget(QLabel("Relax the whole model onto ideal geometry:"))
+        self._minimize_map_check = QCheckBox("Into the density")
+        self._minimize_map_check.setToolTip(_INTO_DENSITY_TIP)
         ming.addWidget(self._minimize_map_check)
         min_row = QHBoxLayout()
         self._minimize_btn = self._make_icon_button(
@@ -1819,8 +1832,16 @@ class ControlsWindow:
         ming.addLayout(min_row)
         layout.addWidget(minimization)
 
+        # Last, and in this order: these two are tall (a list, four inputs) and reached
+        # occasionally, where the boxes above are the everyday ones. Refine drag in
+        # particular is a mouse mode toggled constantly while fitting, and it must not sit
+        # below a scroll of panels nobody has opened.
+        layout.addWidget(self._build_edits_group())
+
+        layout.addWidget(self._build_ligand_placement_group())
+
         layout.addStretch()
-        # Wrap in a scroll area (like the Scene tab). Without it, when the four groups are
+        # Wrap in a scroll area (like the Scene tab). Without it, when the groups are
         # taller than the pane the layout compresses them instead — and the icon buttons,
         # whose stylesheet lowers their minimum height, get squashed flat (the Ligand
         # placement row rendered 30x17 rather than 30x26). Scrolling keeps every widget at
@@ -1833,20 +1854,46 @@ class ControlsWindow:
         scroll.setWidget(tab)
         return scroll
 
-    def _build_drag_group(self):
-        """The 'Drag atoms' options (lives on the Settings tab)."""
+    def _build_refine_drag_group(self):
+        """Refine drag — the arm switch and every option that shapes it, in one box.
+
+        These options used to be a "Drag atoms" group over on the Settings tab, whose hint
+        label had to open with "Enable Refine drag on the Tools tab": a panel giving
+        directions to its own switch, which is a panel admitting it is in the wrong place.
+        The rule the Selection pane already states applies here — the option belongs beside
+        the control it modifies.
+
+        Disarmed, the box is one row: the switch and a summary of what a drag would do.
+        Arming it reveals the options. That keeps the tab short without burying anything,
+        since the settings are only actionable while the mode they shape is on.
+        """
         from PySide6.QtWidgets import (
             QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QSpinBox,
-            QVBoxLayout,
+            QVBoxLayout, QWidget,
         )
 
-        dragging = QGroupBox("Drag atoms")
-        dg = QVBoxLayout(dragging)
-        hint = QLabel(
-            "Enable Refine drag on the Tools tab, then drag any atom or bond to pull it; "
-            "the model bends to follow.")
-        hint.setWordWrap(True)
-        dg.addWidget(hint)
+        box = QGroupBox("Refine drag")
+        dg = QVBoxLayout(box)
+
+        arm_row = QHBoxLayout()
+        self._refine_drag_btn = self._make_icon_button(
+            "hand", "Refine drag",
+            "Drag any atom or bond to pull it and the model bends to follow — a local "
+            "minimization under the pointer. Mutually exclusive with Pick.  (Ctrl+R)",
+            checkable=True)
+        self._refine_drag_btn.toggled.connect(self._on_toggle_refine_drag)
+        arm_row.addWidget(self._refine_drag_btn)
+        # What a drag would do, in one line, for when the controls below are folded away.
+        self._tug_summary = QLabel("")
+        self._tug_summary.setWordWrap(True)
+        self._tug_summary.setStyleSheet("color: palette(placeholder-text);")
+        arm_row.addWidget(self._tug_summary, stretch=1)
+        dg.addLayout(arm_row)
+
+        self._tug_options = QWidget()
+        og = QVBoxLayout(self._tug_options)
+        og.setContentsMargins(0, 0, 0, 0)
+        dg.addWidget(self._tug_options)
 
         # What a drag lets move — Coot's refine scopes. A sphere (whole residues within a
         # radius), a single residue, or a stretch of residues each side along the chain.
@@ -1880,7 +1927,7 @@ class ControlsWindow:
         flank_spin.setToolTip("How many residues each side of the grabbed one also move.")
         scope_row.addWidget(flank_spin)
         scope_row.addStretch()
-        dg.addLayout(scope_row)
+        og.addLayout(scope_row)
 
         def _apply_scope() -> None:
             kind = scope_combo.currentData()
@@ -1896,19 +1943,17 @@ class ControlsWindow:
                     mode="residues", flank=flank_spin.value()))
             else:  # selection
                 self._safe(lambda: self._desktop.set_tug_scope(mode="selection"))
+            self._refresh_tug_summary()
 
         scope_combo.currentIndexChanged.connect(lambda _i: _apply_scope())
         radius_spin.valueChanged.connect(lambda _v: _apply_scope())
         flank_spin.valueChanged.connect(lambda _v: _apply_scope())
-        _apply_scope()  # set initial visibility (radius shown, flank hidden)
 
         self._tug_density_check = QCheckBox("Into the density")
-        self._tug_density_check.setToolTip(
-            "Let the map pull too, so a drag settles the neighborhood into density "
-            "rather than only bending it. Needs a map paired with the model.")
+        self._tug_density_check.setToolTip(_INTO_DENSITY_TIP)
         self._tug_density_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_into_density(on)))
-        dg.addWidget(self._tug_density_check)
+        og.addWidget(self._tug_density_check)
         self._tug_continuous_check = QCheckBox("Keep minimizing while dragging")
         self._tug_continuous_check.setToolTip(
             "While dragging, the model keeps relaxing the whole time — a gentle living "
@@ -1917,18 +1962,58 @@ class ControlsWindow:
         self._tug_continuous_check.setChecked(True)  # on by default; connect after, no fire
         self._tug_continuous_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_tug_continuous(on)))
-        dg.addWidget(self._tug_continuous_check)
+        og.addWidget(self._tug_continuous_check)
         self._tug_livemap_check = QCheckBox("Live difference map")
         self._tug_livemap_check.setToolTip(
             "While dragging, recompute the mFo-DFc difference map in a small window around "
             "the atom and show it live — green where the data wants density, red where the "
             "model has too much. Honest feedback as you fit (the main 2mFo-DFc map is left "
-            "alone to avoid model bias). Needs a map phased from reflections; use Recompute "
-            "for the whole-structure maps.")
+            "alone to avoid model bias). Needs a map phased from reflections.")
         self._tug_livemap_check.toggled.connect(lambda on: self._safe(
             lambda: self._desktop.set_live_difference_map(on)))
-        dg.addWidget(self._tug_livemap_check)
-        return dragging
+        og.addWidget(self._tug_livemap_check)
+        self._tug_maps_check = QCheckBox("Update maps after each drag")
+        self._tug_maps_check.setToolTip(
+            "Re-phase the whole-structure maps once a drag settles, the way Minimize "
+            "already does — so the density stops describing where the atoms used to be, "
+            "with no trip to the reflections' Appearance pane. Debounced, so a burst of "
+            "drags costs one recompute. Needs reflections phased against the model.")
+        self._tug_maps_check.setChecked(True)  # on by default; connect after, no fire
+        self._tug_maps_check.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_update_maps_after_drag(on)))
+        og.addWidget(self._tug_maps_check)
+
+        for check in (self._tug_density_check, self._tug_livemap_check,
+                      self._tug_maps_check, self._tug_continuous_check):
+            check.toggled.connect(lambda _on: self._refresh_tug_summary())
+
+        _apply_scope()             # initial visibility (radius shown, flank hidden) + summary
+        self._tug_options.setVisible(False)   # folded until the drag is armed
+        return box
+
+    def _refresh_tug_summary(self) -> None:
+        """One line saying what a drag would do — the folded box's whole content.
+
+        Only what is actually in force: an option that is switched off, or unavailable
+        because nothing is loaded to make it work, would be a promise the drag cannot keep.
+        """
+        scope = self._desktop._tug_scope
+        if scope["mode"] == "sphere":
+            bits = ["sphere %.0f Å" % scope["radius"]]
+        elif scope["mode"] == "selection":
+            bits = ["selection"]
+        elif scope.get("flank"):
+            bits = ["± %d residues" % scope["flank"]]
+        else:
+            bits = ["single residue"]
+        for check, word in ((self._tug_density_check, "into density"),
+                            (self._tug_livemap_check, "live difference map"),
+                            (self._tug_maps_check, "maps update")):
+            if check.isChecked() and check.isEnabled():
+                bits.append(word)
+        if not self._tug_continuous_check.isChecked():
+            bits.append("step per move")
+        self._tug_summary.setText(" · ".join(bits))
 
     def _build_ligand_placement_group(self):
         """Permanent 'Ligand placement' panel (Tools tab): drop a ligand marker, then build
@@ -2228,15 +2313,42 @@ class ControlsWindow:
             self._tug_density_check.setChecked(False)
             self._tug_density_check.setToolTip(
                 "Pair the model with a map to let a drag settle it into density.")
+        else:
+            self._tug_density_check.setToolTip(_INTO_DENSITY_TIP)  # a map arrived; say so
+        self._refresh_tug_summary()
 
     def _update_minimize_map(self) -> None:
-        """Offer 'Use map' only when the active model actually has one to use."""
+        """Offer the density pull only when the active model actually has a map to use."""
         available = self._desktop.map_for_model() is not None
         self._minimize_map_check.setEnabled(available)
         if not available:
             self._minimize_map_check.setChecked(False)
             self._minimize_map_check.setToolTip(
                 "Load a model and a map together to pair them, then minimize into density.")
+        else:
+            self._minimize_map_check.setToolTip(_INTO_DENSITY_TIP)
+
+    def _update_tug_maps_after(self) -> None:
+        """Re-phasing after a drag needs reflections already phased against the model.
+
+        Left checked when unavailable, unlike the density boxes: it is a standing
+        preference for a thing that costs nothing when there is nothing to re-phase (the
+        backend simply finds no reflections), so unchecking it here would silently discard
+        the user's choice the moment a model loaded without data.
+        """
+        available = self._desktop.reflections_for_model() is not None
+        self._tug_maps_check.setEnabled(available)
+        if not available:
+            self._tug_maps_check.setToolTip(
+                "Phase reflections against the model (Make maps) and each drag can "
+                "re-phase them as it settles.")
+        else:
+            self._tug_maps_check.setToolTip(
+                "Re-phase the whole-structure maps once a drag settles, the way Minimize "
+                "already does — so the density stops describing where the atoms used to "
+                "be, with no trip to the reflections' Appearance pane. Debounced, so a "
+                "burst of drags costs one recompute.")
+        self._refresh_tug_summary()
 
     def _build_clashes_page(self):
         """The all-atom contacts (probe2) view — shown as a validator sub-tab, so it sits
@@ -2907,7 +3019,8 @@ class ControlsWindow:
         self._default_show_checks = show_checks
         layout.addWidget(defaults)
 
-        layout.addWidget(self._build_drag_group())
+        # (The "Drag atoms" group used to sit here. It is now the Refine drag box on the
+        # Tools tab, wrapped around the switch it was giving directions to.)
         layout.addWidget(self._build_perf_group())
 
         layout.addStretch()
@@ -3605,6 +3718,7 @@ class ControlsWindow:
             ("right-drag", "Zoom"),
             ("Ctrl + scroll", "Zoom"),
             ("scroll", "Contour level"),
+            ("Ctrl + R", "Arm / disarm Refine drag"),
             ("Refine drag mode", "Pull and minimize an atom"),
         ]
         for r, (gesture, action) in enumerate(bindings):
@@ -4680,6 +4794,7 @@ class ControlsWindow:
             self._desktop.enable_mouse_selection()
         else:
             self._desktop.disable_mouse_selection()
+        self._update_mode_chip()
 
     def _on_toggle_refine_drag(self, checked: bool) -> None:
         if checked:
@@ -4688,6 +4803,32 @@ class ControlsWindow:
             # them on its own thread, where a failure can only be reported, not fixed.
             self._offer_restraints_if_blocked()
         self._desktop.set_tug_enabled(checked)
+        # The options matter while the mode is on; the summary is what stands in for them
+        # when it is off, so exactly one of the two is ever showing.
+        self._tug_options.setVisible(checked)
+        self._tug_summary.setVisible(not checked)
+        self._update_mode_chip()
+
+    def _update_mode_chip(self) -> None:
+        """Name the armed mouse mode in the status row, or hide the chip if none is.
+
+        Pick and Refine drag are set on a tab and then used in the viewport, with the tab
+        long since switched away from — so until now nothing on screen said what a click
+        would do. The status line is the one strip visible from every tab.
+        """
+        if self._refine_drag_btn.isChecked():
+            text, accent = "Refine drag", "stop"
+        elif self._pick_btn.isChecked():
+            text, accent = "Pick", "go"
+        else:
+            self._mode_chip.setVisible(False)
+            return
+        color = _accent(self._mode_chip, accent)
+        self._mode_chip.setText(text)
+        self._mode_chip.setStyleSheet(
+            "QLabel { border: 1px solid %s; border-radius: 4px; padding: 1px 6px;"
+            " color: %s; }" % (color, color))
+        self._mode_chip.setVisible(True)
 
     def _on_clear_selection(self) -> None:
         self._desktop.clear_selection()
@@ -4734,6 +4875,7 @@ class ControlsWindow:
         # The Minimize/Stop pair carries a state-dependent look (filled accent + white glyph
         # when active), so repaint it for the current run state rather than a flat re-tint.
         self._on_minimizing_changed(not self._desktop._minimize_idle.is_set())
+        self._update_mode_chip()  # likewise a baked accent, not a palette() stylesheet
 
     def _refresh_theme(self, *, force: bool = False) -> None:
         """Apply one settled application palette to the complete controls subtree.
@@ -5498,6 +5640,7 @@ class ControlsWindow:
         self._refresh_console_session()
         self._update_minimize_map()  # the active model may now have (or have lost) a map
         self._update_tug_density()
+        self._update_tug_maps_after()
         self._update_pair_button()
         # Point the Appearance pane at the focused object. Focusing a model activates
         # it, so a focused *model* must always be the active one — if the active model
@@ -5861,9 +6004,15 @@ class DesktopApp:
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
         # Dragging atoms: explicitly armed, one drag at a time (there is one pointer). Continuous
         # relaxation is on by default — a drag settles as a living motion, which reads better
-        # than a nudge-and-stop; the checkbox in Settings mirrors this.
+        # than a nudge-and-stop; the checkbox in the Refine drag box mirrors this.
         self._tug_into_density = False
         self._tug_continuous = True
+        # Whether a settled drag re-phases the whole-structure maps (see
+        # _queue_post_drag_map_update). On, because a minimization already does it and a
+        # drag moves the model exactly as much.
+        self._maps_after_drag = True
+        self._drag_map_timer: Any = None
+        self._drag_map_rid: Optional[str] = None  # which reflections that timer will re-phase
         # What a drag lets move (see tug.Tug): a sphere of a given radius, or a stretch of
         # residues (flank each side; 0 == single residue). Default is the sphere.
         self._tug_scope = {"mode": "sphere", "radius": 8.0, "flank": 0}
@@ -5956,6 +6105,11 @@ class DesktopApp:
             prv = QShortcut(QKeySequence("Shift+Space"), _w)
             prv.setContext(Qt.ShortcutContext.WindowShortcut)
             prv.activated.connect(lambda: self.advance_residue(-1))
+            # Refine drag is a mode you leave and re-enter constantly while fitting, and
+            # its switch is a tab away from the viewport where it is used.
+            tug = QShortcut(QKeySequence("Ctrl+R"), _w)
+            tug.setContext(Qt.ShortcutContext.WindowShortcut)
+            tug.activated.connect(self._controls._refine_drag_btn.click)
 
     # -- lifecycle -------------------------------------------------------
 
@@ -6079,6 +6233,8 @@ class DesktopApp:
         if self._stopped:
             return
         self._stopped = True
+        if self._drag_map_timer is not None:
+            self._drag_map_timer.stop()  # no re-phase into a tree being torn down
         try:
             self._controls.shutdown_console()
         except Exception:  # pragma: no cover - defensive
@@ -7825,6 +7981,17 @@ class DesktopApp:
         if flank is not None:
             self._tug_scope["flank"] = int(flank)
 
+    def set_update_maps_after_drag(self, enabled: bool) -> None:
+        """Whether a settled drag re-phases the whole-structure maps. Takes effect at once.
+
+        Off, the maps stay as they were until **Update maps** on the reflections' Appearance
+        pane — which is the old behaviour, kept for anyone fitting a long way from the data
+        who does not want the recompute between pulls.
+        """
+        self._maps_after_drag = bool(enabled)
+        if not enabled and self._drag_map_timer is not None:
+            self._drag_map_timer.stop()  # a pending re-phase is no longer wanted
+
     def set_live_difference_map(self, enabled: bool) -> None:
         """Whether a drag streams a live mFo-DFc difference map around the dragged atom.
 
@@ -8303,6 +8470,7 @@ class DesktopApp:
             self._end_tug()
             self._invalidate_model_state(entry)  # stale: the atoms just moved
             self._refresh_validation_staleness()  # warn if this outran a validation run
+            self._queue_post_drag_map_update(entry)  # and so is the density, if phased
 
     def _tug_relax(self) -> None:
         """One free-running step, for continuous mode. On the worker's thread.
@@ -8354,6 +8522,57 @@ class DesktopApp:
                 self._push_tug(trajectory[i], force=True)
                 time.sleep(_TUG_PUSH_INTERVAL)
         self._push_tug(trajectory[-1], force=True)  # the resting position, always shown
+
+    def _queue_post_drag_map_update(self, entry) -> None:
+        """Ask for a re-phase now that a drag has settled. Worker thread.
+
+        A minimization already chains this (see minimize_model): the moment the model moves
+        the maps describe atoms that are no longer there, and the difference map especially
+        becomes the answer to a question about the previous model. A drag moves the model
+        for exactly the same reason, and leaving it out is what sent the user off to the
+        reflections' Appearance pane and back after every pull.
+
+        Only queued here, never run: re-phasing is GUI-thread work, and it is debounced
+        (see :meth:`_schedule_map_update`) because drags come in bursts and each recompute
+        is two transforms over the whole structure — one per release would spend the
+        machine on maps the next pull invalidates before they land.
+        """
+        if not self._maps_after_drag:
+            return
+        reflections = self.reflections_for_model(entry["id"])
+        if reflections is None:
+            return  # nothing phased against this model; there are no maps to bring up to date
+        self.bridge.run_on_main.emit(
+            lambda rid=reflections["id"]: self._schedule_map_update(rid))
+
+    def _schedule_map_update(self, rid: str) -> None:
+        """(Re)start the post-drag re-phase timer, so a burst collapses to one. GUI thread."""
+        from PySide6.QtCore import QTimer
+
+        if self._stopped:
+            return
+        if self._drag_map_timer is None:
+            # Parentless: DesktopApp is not a QObject; the attribute is what keeps it alive.
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._fire_map_update)
+            self._drag_map_timer = timer
+        self._drag_map_rid = rid
+        self._drag_map_timer.start(_DRAG_MAP_UPDATE_MS)
+
+    def _fire_map_update(self) -> None:
+        """Re-phase, unless the user has started dragging again. GUI thread.
+
+        A drag running right now means the timer's quiet spell was an illusion — the grab
+        landed between the release and this call — so wait out another one rather than
+        recomputing against a model that is moving under the recompute.
+        """
+        if self._stopped or not self._maps_after_drag:
+            return
+        if self._tug is not None:
+            self._drag_map_timer.start(_DRAG_MAP_UPDATE_MS)
+            return
+        self._update_maps_if_live(self._drag_map_rid)
 
     def _push_tug(self, coords, force: bool = False) -> None:
         """Stream a drag frame — paced, as a delta, and never a repeat of the last.
@@ -10691,9 +10910,10 @@ class DesktopApp:
     def load_real_space_refinement_demo(self, *, d_min: float = 3.0, shake: float = 0.5) -> str:
         """Demo mirroring Phenix's cryo-EM real-space refinement: a model sitting slightly off
         a density map, to be refined back into it. A cryo-EM-resolution map is computed from
-        the bundled model, then the model is *shaken* off it — so 'Minimize' with 'Use map'
-        (gradient-driven real-space refinement, exactly what phenix.real_space_refine does)
-        pulls it back into the density. Self-contained (no phenix, no dataset)."""
+        the bundled model, then the model is *shaken* off it — so 'Minimize' with 'Into the
+        density' (gradient-driven real-space refinement, exactly what
+        phenix.real_space_refine does) pulls it back into the density. Self-contained (no
+        phenix, no dataset)."""
         self.stop_demo()
         self._reset_interactions()
 
@@ -10724,8 +10944,8 @@ class DesktopApp:
             for vd in volumes:
                 self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (cryo-EM density)", group=gid)
         self._status(
-            "Cryo-EM demo: a shaken model in its density — Minimize with 'Use map' to "
-            "real-space refine it back in")
+            "Cryo-EM demo: a shaken model in its density — Minimize with 'Into the "
+            "density' to real-space refine it back in")
         return "group"
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:

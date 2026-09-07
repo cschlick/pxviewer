@@ -178,6 +178,135 @@ def exercise_pick_and_refine_drag_are_mutually_exclusive():
         assert app._selection_enabled and not app._tug_enabled
 
 
+def exercise_the_refine_drag_options_live_with_the_switch_that_arms_them():
+    """Every option that shapes a drag sits in the box with the drag's own switch.
+
+    They used to be a "Drag atoms" group on the Settings tab, two tabs from the button
+    they described -- so much so that the group's hint label had to open by telling the
+    reader where that button was. Folded away while the mode is off, because a setting for
+    a mode nobody has armed is not actionable; the summary line carries the state instead.
+    """
+    with bare_desktop() as app:
+        controls = app._controls
+
+        # The Settings tab no longer builds a drag group at all.
+        settings = controls._tabs.widget(controls._tab_labels.index("Settings"))
+        titles = [b.title() for b in settings.findChildren(type(controls._appearance_box))]
+        assert "Drag atoms" not in titles, titles
+
+        # ... and the Tools tab does, around the switch.
+        tools = controls._tabs.widget(controls._tab_labels.index("Tools"))
+        box = next(b for b in tools.findChildren(type(controls._appearance_box))
+                   if b.title() == "Refine drag")
+        for w in (controls._refine_drag_btn, controls._tug_density_check,
+                  controls._tug_continuous_check, controls._tug_livemap_check,
+                  controls._tug_maps_check):
+            assert box.isAncestorOf(w), w
+
+        # Folded until armed, and the summary says what a drag would do either way.
+        assert not controls._tug_options.isVisible()
+        assert controls._tug_summary.text() == "sphere 8 Å", controls._tug_summary.text()
+        controls._refine_drag_btn.click()
+        assert controls._tug_options.isVisibleTo(box)
+        controls._refine_drag_btn.click()
+        assert not controls._tug_options.isVisibleTo(box)
+
+        # The summary tracks the options, and reports only what is actually in force:
+        # 'maps update' is checked but unavailable with nothing phased, so it stays out.
+        assert controls._tug_maps_check.isChecked()
+        assert not controls._tug_maps_check.isEnabled()
+        controls._tug_continuous_check.setChecked(False)
+        assert controls._tug_summary.text() == "sphere 8 Å · step per move"
+
+
+def exercise_the_density_pull_has_one_name_in_both_places():
+    """Minimize and a refine drag can each be pulled by the map. It is one idea, and it
+    had two labels -- 'Use map' beside Minimize, 'Into the density' beside the drag --
+    which read as two unrelated features."""
+    from pxviewer.desktop import _INTO_DENSITY_TIP
+
+    with bare_desktop() as app:
+        controls = app._controls
+        assert controls._minimize_map_check.text() == controls._tug_density_check.text()
+
+        # Nothing loaded, so each carries its own note about what to do first.
+        assert "pair" in controls._minimize_map_check.toolTip().lower()
+        assert "pair" in controls._tug_density_check.toolTip().lower()
+
+        # A map arrives and both say the real thing again, rather than keeping the "no
+        # map" note forever -- which is what they did, having only ever overwritten it.
+        app.map_for_model = lambda mid=None: object()
+        controls._update_minimize_map()
+        controls._update_tug_density()
+        assert controls._minimize_map_check.toolTip() == _INTO_DENSITY_TIP
+        assert controls._tug_density_check.toolTip() == _INTO_DENSITY_TIP
+
+
+def exercise_the_status_row_names_the_armed_mouse_mode():
+    """Pick and Refine drag are armed on a tab and then used in the viewport, with the tab
+    switched away from -- so nothing said what a click would now do. The status row is
+    visible from every tab, so the armed mode is named there."""
+    with bare_desktop() as app:
+        controls = app._controls
+        assert not controls._mode_chip.isVisible()
+
+        controls._refine_drag_btn.click()
+        assert controls._mode_chip.text() == "Refine drag"
+        assert controls._mode_chip.isVisibleTo(controls._window)
+
+        controls._pick_btn.click()          # the modes are exclusive; the chip follows
+        assert controls._mode_chip.text() == "Pick"
+
+        controls._pick_btn.click()
+        assert not controls._mode_chip.isVisibleTo(controls._window)
+
+
+def exercise_a_settled_drag_re_phases_the_maps_and_a_burst_costs_one():
+    """A drag moves the model, so it leaves the maps describing atoms that are no longer
+    there -- exactly what a minimization already re-phases for. Debounced, because fitting
+    is a burst of pulls and each recompute is two transforms over the whole structure; and
+    a drag running when the timer fires means the quiet spell was an illusion."""
+    with bare_desktop() as app:
+        done = []
+        app._update_maps_if_live = done.append
+
+        # Nothing phased against the model: nothing to bring up to date, and no timer.
+        app._queue_post_drag_map_update({"id": "no-such-model"})
+        process_events()
+        assert app._drag_map_timer is None and done == []
+
+        # Phased, and the release queues one -- across the worker/GUI thread hand-off the
+        # drag actually uses, not by calling the GUI half directly.
+        app.reflections_for_model = lambda mid=None: {"id": "reflections-1"}
+        app._queue_post_drag_map_update({"id": "m"})
+        process_events()
+        assert app._drag_map_timer is not None and app._drag_map_timer.isActive()
+
+        # A burst of releases collapses into one pending re-phase.
+        for _ in range(4):
+            app._schedule_map_update("reflections-1")
+        assert app._drag_map_timer.isActive()
+        assert done == []                          # nothing has fired yet
+
+        # Firing while a drag is running waits out another spell rather than recomputing
+        # against a model that is moving under the recompute.
+        app._tug = object()
+        app._fire_map_update()
+        assert done == [] and app._drag_map_timer.isActive()
+
+        app._tug = None
+        app._fire_map_update()
+        assert done == ["reflections-1"]
+
+        # Switched off, a pending re-phase is dropped and no new one is queued.
+        app._schedule_map_update("reflections-1")
+        app.set_update_maps_after_drag(False)
+        assert not app._drag_map_timer.isActive()
+        app._queue_post_drag_map_update({"id": "anything"})
+        process_events()
+        assert done == ["reflections-1"]
+
+
 def exercise_refine_drag_arm_is_exactly_pause():
     """Arming a drag stops a running minimization -- the same signal and the same status
     the Pause button raises. With nothing running it is a no-op, as Pause is."""

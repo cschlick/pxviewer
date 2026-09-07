@@ -348,10 +348,10 @@ def cryo_em_refinement_tutorial() -> Tutorial:
             "own density, waiting to be pushed back in.",
         ),
         Step(
-            "Real-space refine it: on the **Tools** tab, in **Minimize**, tick **Use map** "
-            "(so the minimizer pulls toward the density, not just ideal geometry) and click "
-            "**Minimize**. Watch the model creep into the map — that *is* real-space "
-            "refinement, streaming live.",
+            "Real-space refine it: on the **Tools** tab, in **Minimization**, tick **Into "
+            "the density** (so the minimizer pulls toward the density, not just ideal "
+            "geometry) and click **Minimize**. Watch the model creep into the map — that "
+            "*is* real-space refinement, streaming live.",
             done=_minimizing,
             target=lambda cw: cw._minimize_btn,
         ),
@@ -391,19 +391,19 @@ def xray_refinement_tutorial() -> Tutorial:
             done=lambda cw: cw._desktop.map_for_model() is not None,
         ),
         Step(
-            "Now arm the live feedback. On the **Settings** tab, in **Drag atoms**, tick "
-            "**Live difference map**.\n\nFrom here on every drag re-phases mFo-DFc in a small "
-            "box around the atom you are holding and streams it to the viewport as you move. "
-            "Only that window updates — the whole-structure maps are deliberately left alone, "
-            "so what you see is the data disagreeing with you, not a stale map echoing the "
-            "model back.",
+            "Now arm the live feedback. On the **Tools** tab, turn on **Refine drag** — its "
+            "options fold open — and tick **Live difference map**.\n\nFrom here on every "
+            "drag re-phases mFo-DFc in a small box around the atom you are holding and "
+            "streams it to the viewport as you move.\n\nOnly that window updates *while "
+            "you drag* — the whole-structure maps are deliberately left alone until the "
+            "drag settles — so what you see under the pointer is the data disagreeing with "
+            "you, not a stale map echoing the model back.",
             done=lambda cw: cw._desktop._live_diff,
             target=lambda cw: cw._tug_livemap_check,
         ),
         Step(
-            "Break the fit: enable **Refine drag** on the Tools tab, then drag an atom in "
-            "the viewport and pull it out of its "
-            "density.\n\nWatch the box that follows your pointer. **Red** blooms where you "
+            "Break the fit: with **Refine drag** on, drag an atom in the viewport and pull "
+            "it out of its density.\n\nWatch the box that follows your pointer. **Red** blooms where you "
             "have just parked atoms the data does not support, and **green** stays behind in "
             "the density they left — the difference map recomputing as fast as you can drag. "
             "Let go and the window clears, leaving the model genuinely wrong.",
@@ -411,19 +411,22 @@ def xray_refinement_tutorial() -> Tutorial:
             target=lambda cw: cw._tug_livemap_check,
         ),
         Step(
-            "Refine it back. On the **Tools** tab, in **Minimization**, tick **Use map** and "
-            "click **Minimize**.\n\nThe minimizer pulls the model toward the density while "
-            "the geometry restraints keep bonds and angles honest — the two targets X-ray "
-            "refinement always balances. Watch the atom slide home, streaming live.",
+            "Refine it back. On the **Tools** tab, in **Minimization**, tick **Into the "
+            "density** and click **Minimize**.\n\nThe minimizer pulls the model toward the "
+            "density while the geometry restraints keep bonds and angles honest — the two "
+            "targets X-ray refinement always balances. Watch the atom slide home, "
+            "streaming live.",
             done=_minimizing,
             target=lambda cw: cw._minimize_btn,
         ),
         Step(
-            "When it stops moving click **Stop**, then select the **reflections** again and "
-            "click **Update maps** to re-phase against the corrected model. The difference "
-            "density you created is gone.\n\nThat is the whole X-ray loop, and why the "
-            "difference map is the one to trust: it shows the error, you fix it — by hand or "
-            "by minimizing — then re-phase and look again.",
+            "When it stops moving click **Stop**. The maps re-phase against the corrected "
+            "model on their own — a minimization always does it, and so does a settled "
+            "refine drag — and the difference density you created is gone. (The "
+            "reflections' **Update maps** button does the same thing by hand, for a model "
+            "moved by some route that does not.)\n\nThat is the whole X-ray loop, and why "
+            "the difference map is the one to trust: it shows the error, you fix it — by "
+            "hand or by minimizing — then re-phase and look again.",
             target=lambda cw: cw._minimize_stop_btn,
         ),
     ], loader=lambda d: d.load_xray_demo())
