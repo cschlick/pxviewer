@@ -6022,6 +6022,7 @@ class DesktopApp:
         self._tug_last: Any = None
         self._tug_last_push: float = 0.0
         self._tug_queue: Any = None  # made with its worker on the first drag
+        self._diff_suppressed: list = []  # static diff maps hidden behind the live window
         # Live difference map while dragging (see set_live_difference_map): a warm-recompute
         # engine, cached per phased group, fed the latest drag frame off a one-slot queue so
         # only the most recent conformation is ever mapped (older frames are dropped).
@@ -8031,6 +8032,12 @@ class DesktopApp:
         self._diff_ctx = (gid, refl_path)
         self._diff_atom = atom
         self._diff_gen += 1
+        # The live window is about to replace the STORY the static difference map
+        # tells — and that map is stale from the first moved atom, a whole ghost of
+        # red/green the user would have to mentally ignore. Suppress it (a viewer
+        # render skip; the eye and the entry's visibility are untouched) until fresh
+        # maps supersede the window or the live view is turned off.
+        self._suppress_static_diff(gid)
         if self._diff_queue is None:
             import queue
 
@@ -8118,6 +8125,37 @@ class DesktopApp:
             # Any session may have shown (and would replay) the window; clear them all.
             try:
                 entry["session"].clear_map_box()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        self._restore_static_diff()
+
+    def _suppress_static_diff(self, gid) -> None:
+        """Hide the group's static difference map while the live window speaks for it."""
+        control = self._control_session()
+        if control is None:
+            return
+        for volume in self._volumes:
+            if volume.get("group") != gid or not volume.get("negative_color"):
+                continue
+            if volume.get("visible") and volume["ref"] not in self._diff_suppressed:
+                try:
+                    control.set_volume_visible(volume["ref"], False)
+                    self._diff_suppressed.append(volume["ref"])
+                except Exception:  # pragma: no cover - defensive
+                    pass
+
+    def _restore_static_diff(self) -> None:
+        """Show again what _suppress_static_diff hid — per the entry's own visibility."""
+        control = self._control_session()
+        refs, self._diff_suppressed = self._diff_suppressed, []
+        if control is None:
+            return
+        for ref in refs:
+            volume = next((v for v in self._volumes if v["ref"] == ref), None)
+            if volume is None or not volume.get("visible"):
+                continue  # removed, or the user hid it meanwhile: leave it be
+            try:
+                control.set_volume_visible(ref, True)
             except Exception:  # pragma: no cover - defensive
                 pass
 

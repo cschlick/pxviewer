@@ -943,16 +943,27 @@ def exercise_the_live_difference_map_streams_a_box_during_a_drag():
         assert struct.unpack_from("<f", session._last_map_box, 8)[0] == 2.5, (
             "the window's contour must follow the difference map's level")
 
+        # While the live window speaks for the difference map, the STATIC one is
+        # suppressed — its stale red/green everywhere was a ghost the user had to
+        # mentally ignore. A viewer render skip only: the entry's own visibility
+        # (the eye) is untouched.
+        assert app._diff_suppressed == [diff["ref"]]
+        assert session._volume_visibility.get(diff["ref"]) is False
+        assert diff["visible"] is True
+
         # A drag ending stops the stream but KEEPS the window: the object map is stale
         # until the maps are recomputed, and the settled window is the freshest local
         # truth around the tug.
         app._stop_live_diff()
         assert app._diff_ctx is None
         assert session._last_map_box is not None
+        assert session._volume_visibility.get(diff["ref"]) is False  # still suppressed
 
-        # Toggling the live map off removes it for real.
+        # Toggling the live map off removes it for real — and the static map returns.
         app.set_live_difference_map(False)
         assert session._last_map_box is None
+        assert session._volume_visibility.get(diff["ref"]) is True
+        assert app._diff_suppressed == []
 
 
 # -- what the panes say -------------------------------------------------------
