@@ -1092,6 +1092,15 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def reload_volume(self, ref: str) -> None:
+        """Ask the viewer to re-download a volume's map file and swap the density in
+        place. The camera and every appearance setting stand — unlike a viewport
+        reload. For maps whose backing file was rewritten (re-phasing). Thread-safe."""
+        message = json.dumps({"type": "volume_reload", "ref": str(ref)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_volume_negative_color(self, ref: str, color: str) -> None:
         """Change a difference map's negative-contour color by reference. Thread-safe."""
         message = json.dumps(

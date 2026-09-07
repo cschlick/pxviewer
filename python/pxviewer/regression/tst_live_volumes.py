@@ -39,6 +39,10 @@ def exercise_volume_appearance_commands_reach_the_client():
                 assert await next_text(ws, "volume_color") == {
                     "type": "volume_color", "ref": "vol1", "color": "green"}
 
+                live.reload_volume("vol9")
+                assert await next_text(ws, "volume_reload") == {
+                    "type": "volume_reload", "ref": "vol9"}
+
                 live.set_volume_negative_color("vol1", "orange")
                 assert await next_text(ws, "volume_negative_color") == {
                     "type": "volume_negative_color", "ref": "vol1", "color": "orange"}

@@ -10586,6 +10586,7 @@ class DesktopApp:
                 return
 
             def swap():
+                refreshed = []
                 for entry in volumes:
                     map_type = entry["data"].map_id
                     fresh = out["maps"].get(map_type)
@@ -10599,12 +10600,23 @@ class DesktopApp:
                     entry["data"] = VolumeData.from_map_manager(
                         fresh, name=map_type, map_id=map_type)
                     self._write_display_map(entry["id"], self._display_map_data(entry))
+                    refreshed.append(entry["ref"])
                 rentry["r_work"] = out["r_work"]
                 rentry["r_free"] = out["r_free"]
                 # Fresh maps supersede the drag's standing live window (see the tug
                 # 'end' handling): from here the object maps tell the current story.
                 self._clear_live_diff()
-                self._reload_viewport()
+                # In place, never a page reload: a reload re-runs the scene's camera
+                # fit, so the auto re-phase after every settled drag snapped the camera
+                # home — the one thing a background refresh must never do. The viewer
+                # re-downloads each rewritten map file and swaps the density under a
+                # motionless camera (level, colors, style and clip all stand).
+                control = self._control_session()
+                if control is not None:
+                    for ref in refreshed:
+                        control.reload_volume(ref)
+                else:
+                    self._reload_viewport()  # no live client to command; the old way
                 self._emit_loaded_changed()
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, "

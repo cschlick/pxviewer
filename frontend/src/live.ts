@@ -2751,6 +2751,37 @@ export function markVolumeReprsUnpickable(plugin: PluginContext) {
     }
 }
 
+/** Re-fetch a volume's map file and swap the density in place.
+ *
+ *  The camera, contour level, colors, style and clip all stand — unlike a viewport
+ *  reload, which re-runs the scene's camera fit (the auto re-phase after a drag used
+ *  to snap the camera home through exactly that). The volume's data node is found by
+ *  walking up from its representation to the transform that carries a URL; Mol* only
+ *  re-runs a transform whose params changed, so the URL gets a version stamp (the
+ *  server already sends no-store, this is for the state diff, not the browser).
+ */
+async function reloadVolumeData(plugin: PluginContext, ref: string) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    let cur: any = repr;
+    for (let hops = 0; cur && hops < 10; hops++) {
+        const url = (cur.transform?.params as any)?.url;
+        if (url !== undefined) {
+            const raw = typeof url === 'string' ? url : url?.url;
+            if (typeof raw !== 'string') return;
+            const fresh = `${raw.split(/[?#]/)[0]}?v=${Date.now()}`;
+            const next = typeof url === 'string' ? fresh : { ...url, url: fresh };
+            await plugin.state.data.build().to(cur.transform.ref)
+                .update((old: any) => ({ ...old, url: next })).commit();
+            // The refresh rebuilt the repr's render objects, which come back pickable.
+            markVolumeReprsUnpickable(plugin);
+            return;
+        }
+        if (cur.transform?.parent === cur.transform?.ref) return;  // the state root
+        cur = plugin.state.data.cells.get(cur.transform.parent);
+    }
+}
+
 /** A difference map's negative contour color — the counterpart of setVolumeColor. */
 async function setVolumeNegativeColor(plugin: PluginContext, ref: string, color: string) {
     const decoded = decodeColor(color);
@@ -3304,6 +3335,8 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_negative_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeNegativeColor(plugin, msg.ref, msg.color);
+            } else if (msg.type === 'volume_reload' && typeof msg.ref === 'string') {
+                await reloadVolumeData(plugin, msg.ref);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
                 await setVolumeOpacity(plugin, msg.ref, msg.opacity);
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
