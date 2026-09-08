@@ -2774,20 +2774,12 @@ class ControlsWindow:
         action_row.addWidget(open_volume)
         layout.addLayout(action_row)
 
-        metric_row = QHBoxLayout()
-        metric_row.addWidget(QLabel("Field:"))
-        metric = QComboBox()
-        metric.setEnabled(False)
-        metric.setToolTip(
-            "Choose the displayed field. Combined means where to look; a component field "
-            "shows a single check's contribution — the why behind a highlight.\n"
-            "After Find hotspots: the combined severity and its components.\n"
-            "After Open volume…: the imported concern fields.")
-        metric.currentIndexChanged.connect(self._on_hotspot_metric_changed)
-        self._hotspot_metric_combo = metric
-        metric_row.addWidget(metric, stretch=1)
-        layout.addLayout(metric_row)
-
+        # Deliberately no field picker. Only the combined value is shown: it is the one
+        # thing this tab adds (where to look), and the per-check story is already told
+        # twice — the table's component columns and the Validation tab. A menu of
+        # per-component fields was built, shipped, and removed as concept surface the
+        # user should not have to ingest; the backend switch survives for scripting
+        # (see set_hotspot_field_metric).
         field_row = QHBoxLayout()
         show3d = QCheckBox("Show in 3-D")
         show3d.setToolTip(
@@ -2944,16 +2936,6 @@ class ControlsWindow:
             self._hotspot_knee_slider.blockSignals(False)
             self._hotspot_knee_value.setText(
                 f"{imported.anchors['yellow']:.{self._hotspot_knee_digits}f}")
-        fields = list(imported.fields) if imported is not None else []
-        self._hotspot_metric_combo.blockSignals(True)
-        self._hotspot_metric_combo.clear()
-        for name in fields:
-            self._hotspot_metric_combo.addItem(name.replace("_", " ").title(), name)
-        selected = entry.get("concern_metric") if entry else None
-        self._hotspot_metric_combo.setCurrentIndex(
-            max(0, self._hotspot_metric_combo.findData(selected)))
-        self._hotspot_metric_combo.blockSignals(False)
-        self._hotspot_metric_combo.setEnabled(bool(fields))
         for widget in self._hotspot_knee_widgets:
             widget.setVisible(True)
 
@@ -2972,14 +2954,6 @@ class ControlsWindow:
                 on=on, style=self._hotspot_style.currentData())
         except Exception as exc:
             self._set_status(str(exc))
-
-    def _on_hotspot_metric_changed(self, *_args) -> None:
-        metric = self._hotspot_metric_combo.currentData()
-        if metric:
-            try:
-                self._desktop.set_hotspot_field_metric(str(metric))
-            except Exception as exc:
-                self._set_status(str(exc))
 
     def _on_hotspot_hydrogens(self, on: bool) -> None:
         """The hydrogens option changed. It changes what a clash *is*, so a cached score no
@@ -3022,17 +2996,6 @@ class ControlsWindow:
         _mid, result, columns, rows = payload
         # A computed score supersedes any import, so the slider goes back to severity units.
         self._set_threshold_scale(concern=False)
-        # The Field menu offers the decomposition: the combined value, then each of the
-        # score's own components — the channels are kept exactly so this menu can exist.
-        combo = self._hotspot_metric_combo
-        combo.blockSignals(True)
-        combo.clear()
-        combo.addItem("Combined severity", "combined")
-        for key in result.components:
-            combo.addItem(key.replace("_", " ").title(), key)
-        combo.setCurrentIndex(0)
-        combo.blockSignals(False)
-        combo.setEnabled(True)
         self._hotspot_summary.setText(result.summary)
         self._hotspot_show3d.setEnabled(True)
         if self._hotspot_show3d.isChecked():
@@ -7839,6 +7802,11 @@ class DesktopApp:
         it. The atom coloring follows (where hotspot coloring is what is on screen),
         and a 3-D field that is up is redrawn from the chosen channel; one that is not
         up stays down.
+
+        Scripting/console only: the tab deliberately shows just the combined value
+        (the per-check story is already told by the table's component columns and the
+        Validation tab), so no UI drives this — a field-picker dropdown was shipped
+        and removed as redundant concept surface.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:

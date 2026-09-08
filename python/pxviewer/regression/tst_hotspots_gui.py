@@ -159,11 +159,12 @@ def exercise_importing_concern_drops_a_computed_score():
             dispose(app)
 
 
-def exercise_the_field_menu_decomposes_a_computed_score():
-    """After Find hotspots the Field menu offers the combined value and each component —
-    the channels are kept precisely so the aggregate can be decomposed — and choosing
-    one recolors the atoms by that channel on the same absolute scale. Imported concern
-    keeps its own population path (see the manifest exercises)."""
+def exercise_a_computed_score_decomposes_by_component():
+    """The tab shows only the combined value (the per-check story is the table's
+    component columns and the Validation tab), but the decomposition survives for
+    scripting: set_hotspot_field_metric switches between the combined severity and any
+    component channel, recoloring the atoms by that channel on the same absolute
+    scale — nothing recomputed, because the channels are kept for exactly this."""
     from pxviewer.desktop import _HOTSPOT_COLOR
 
     app, mid = _app_with_model()
@@ -184,20 +185,11 @@ def exercise_the_field_menu_decomposes_a_computed_score():
                               "domain": hotspots.DOMAIN,
                               "palette": entry["hotspot_palette"]}
 
-        controls = app._controls
-        controls._on_hotspots_ready((mid, result, ["chain"], []))
-        combo = controls._hotspot_metric_combo
-        assert combo.isEnabled()
-        assert [combo.itemData(i) for i in range(combo.count())] == [
-            "combined", "ramachandran", "rotamer", "clash"]
-
-        combo.setCurrentIndex(combo.findData("rotamer"))
-        process_events()
+        app.set_hotspot_field_metric("rotamer")
         assert entry["hotspot_metric"] == "rotamer"
         assert entry["attribute"]["values"] is result.components["rotamer"]
 
-        combo.setCurrentIndex(combo.findData("combined"))
-        process_events()
+        app.set_hotspot_field_metric("combined")
         assert entry["hotspot_metric"] == "combined"
         assert entry["attribute"]["values"] is result.values
     finally:
