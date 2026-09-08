@@ -302,6 +302,12 @@ def _hotspots_ran(cw: Any) -> bool:
     return bool(entry and entry.get("hotspots") is not None)
 
 
+def _hotspot_component_chosen(cw: Any) -> bool:
+    mid = _active(cw)
+    entry = cw._desktop._model_entry(mid) if mid else None
+    return bool(entry and entry.get("hotspot_metric") not in (None, "combined"))
+
+
 def hotspots_tutorial() -> Tutorial:
     """Aggregate the validation checks into one severity field and go where it points —
     the judging tutorial that follows validation, on the same check-tripping structure."""
@@ -346,13 +352,21 @@ def hotspots_tutorial() -> Tutorial:
             target=lambda cw: cw._hotspot_show3d,
         ),
         Step(
-            "That's the loop: find, click, fix (drag or minimize), re-run — a model that "
-            "moves drops its stale score.\n\nOne control stays quiet in this workflow: "
-            "the **Field** menu. It belongs to the other way in — **Open volume…** "
-            "imports bounded *concern* fields computed by the external Hotspots "
-            "generator, and the menu then lists each component field. Severity "
-            "(computed here) and concern (imported) are different quantities on "
-            "different scales, so a model shows one or the other, never both.",
+            "An aggregate you cannot decompose is a number taken on faith — so the "
+            "**Field** menu holds the decomposition. **Combined severity** says where "
+            "to look; each component — Ramachandran, Rotamer, Clash — shows a single "
+            "check's own contribution.\n\nPick a component from the menu: the atom "
+            "colors and any 3-D field follow it, on the same absolute scale.",
+            done=_hotspot_component_chosen,
+            target=lambda cw: cw._hotspot_metric_combo,
+        ),
+        Step(
+            "That's the loop: find, click, fix (drag or minimize), re-run — a model "
+            "that moves drops its stale score.\n\nThe Field menu has one other life: "
+            "**Open volume…** imports bounded *concern* fields computed by the "
+            "external Hotspots generator, and the menu then lists those instead. "
+            "Severity (computed here) and concern (imported) are different quantities "
+            "on different scales, so a model shows one or the other, never both.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
 

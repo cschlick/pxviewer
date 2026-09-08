@@ -159,6 +159,51 @@ def exercise_importing_concern_drops_a_computed_score():
             dispose(app)
 
 
+def exercise_the_field_menu_decomposes_a_computed_score():
+    """After Find hotspots the Field menu offers the combined value and each component —
+    the channels are kept precisely so the aggregate can be decomposed — and choosing
+    one recolors the atoms by that channel on the same absolute scale. Imported concern
+    keeps its own population path (see the manifest exercises)."""
+    from pxviewer.desktop import _HOTSPOT_COLOR
+
+    app, mid = _app_with_model()
+    try:
+        entry = app._model_entry(mid)
+        model = entry["session"].model
+        n = model.get_hierarchy().atoms().size()
+        result = hotspots.Hotspots(
+            values=np.linspace(0.0, 2.0, n),
+            components={"ramachandran": np.zeros(n),
+                        "rotamer": np.linspace(0.0, 4.0, n),
+                        "clash": np.ones(n)},
+            fit="none", summary="synthetic")
+        entry["hotspots"] = result
+        entry["color"] = _HOTSPOT_COLOR
+        entry["hotspot_palette"] = ["#000000", "#ff0000"]
+        entry["attribute"] = {"name": _HOTSPOT_COLOR, "values": result.values,
+                              "domain": hotspots.DOMAIN,
+                              "palette": entry["hotspot_palette"]}
+
+        controls = app._controls
+        controls._on_hotspots_ready((mid, result, ["chain"], []))
+        combo = controls._hotspot_metric_combo
+        assert combo.isEnabled()
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            "combined", "ramachandran", "rotamer", "clash"]
+
+        combo.setCurrentIndex(combo.findData("rotamer"))
+        process_events()
+        assert entry["hotspot_metric"] == "rotamer"
+        assert entry["attribute"]["values"] is result.components["rotamer"]
+
+        combo.setCurrentIndex(combo.findData("combined"))
+        process_events()
+        assert entry["hotspot_metric"] == "combined"
+        assert entry["attribute"]["values"] is result.values
+    finally:
+        dispose(app)
+
+
 def exercise_percentile_never_gates_visibility():
     """A manifest with no percentile map imports and draws; every voxel of concern reaches
     the wire, unmasked."""

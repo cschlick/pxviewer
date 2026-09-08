@@ -2779,8 +2779,10 @@ class ControlsWindow:
         metric = QComboBox()
         metric.setEnabled(False)
         metric.setToolTip(
-            "Choose an imported component field. Combined means where to look; component "
-            "fields retain why that region is highlighted.")
+            "Choose the displayed field. Combined means where to look; a component field "
+            "shows a single check's contribution — the why behind a highlight.\n"
+            "After Find hotspots: the combined severity and its components.\n"
+            "After Open volume…: the imported concern fields.")
         metric.currentIndexChanged.connect(self._on_hotspot_metric_changed)
         self._hotspot_metric_combo = metric
         metric_row.addWidget(metric, stretch=1)
@@ -3020,10 +3022,17 @@ class ControlsWindow:
         _mid, result, columns, rows = payload
         # A computed score supersedes any import, so the slider goes back to severity units.
         self._set_threshold_scale(concern=False)
-        self._hotspot_metric_combo.blockSignals(True)
-        self._hotspot_metric_combo.clear()
-        self._hotspot_metric_combo.blockSignals(False)
-        self._hotspot_metric_combo.setEnabled(False)
+        # The Field menu offers the decomposition: the combined value, then each of the
+        # score's own components — the channels are kept exactly so this menu can exist.
+        combo = self._hotspot_metric_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Combined severity", "combined")
+        for key in result.components:
+            combo.addItem(key.replace("_", " ").title(), key)
+        combo.setCurrentIndex(0)
+        combo.blockSignals(False)
+        combo.setEnabled(True)
         self._hotspot_summary.setText(result.summary)
         self._hotspot_show3d.setEnabled(True)
         if self._hotspot_show3d.isChecked():
@@ -7591,6 +7600,7 @@ class DesktopApp:
                 self._drop_imported_concern(current)
                 self._hotspot_knee = hotspots.FIELD_ISO
                 current["hotspots"] = result
+                current.pop("hotspot_metric", None)  # a new score starts on Combined
                 current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
                 current["color"] = _HOTSPOT_COLOR
                 current["attribute"] = {
@@ -7820,15 +7830,54 @@ class DesktopApp:
             (entry["id"], summary, concern.residue_columns(metrics), rows))
 
     def set_hotspot_field_metric(self, metric: str, mid: Optional[str] = None) -> None:
-        """Switch among the imported fields without re-reading any file."""
+        """Switch the displayed field, whichever generation is on screen.
+
+        With imported concern: among the manifest's fields, without re-reading any file.
+        With a computed score: between the combined severity (``"combined"``) and its
+        per-metric components — nothing is recomputed, because the components are kept
+        precisely so the aggregate can be decomposed into the channels that produced
+        it. The atom coloring follows (where hotspot coloring is what is on screen),
+        and a 3-D field that is up is redrawn from the chosen channel; one that is not
+        up stays down.
+        """
         entry = self._model_entry(mid or self._active_model_id)
-        imported = entry.get("concern") if entry else None
-        if imported is None or metric not in imported.fields:
-            raise ValueError(f"concern field is not available: {metric}")
-        entry["concern_metric"] = metric
-        style = "contour" if entry.get("hotspot_volume") is not None else "cloud"
-        self.show_hotspot_field(entry["id"], on=True, style=style)
-        self._emit_concern_table(entry)
+        if entry is None:
+            raise ValueError("load a model first")
+        imported = entry.get("concern")
+        if imported is not None:
+            if metric not in imported.fields:
+                raise ValueError(f"concern field is not available: {metric}")
+            entry["concern_metric"] = metric
+            style = "contour" if entry.get("hotspot_volume") is not None else "cloud"
+            self.show_hotspot_field(entry["id"], on=True, style=style)
+            self._emit_concern_table(entry)
+            return
+        result = entry.get("hotspots")
+        if result is None:
+            raise ValueError("no hotspots yet — use Find hotspots, or Open volume… to import")
+        if metric != "combined" and metric not in result.components:
+            raise ValueError(f"severity component is not available: {metric}")
+        from . import hotspots
+
+        entry["hotspot_metric"] = metric
+        values = result.values if metric == "combined" else result.components[metric]
+        model = getattr(entry["session"], "model", None)
+        # Recolor the atoms only where hotspot coloring is what is on screen; a user
+        # who has since chosen another coloring keeps their choice.
+        if model is not None and entry.get("color") == _HOTSPOT_COLOR:
+            attribute = dict(entry.get("attribute") or {})
+            attribute.update({
+                "name": _HOTSPOT_COLOR, "values": values,
+                "residue_values": hotspots.residue_broadcast(model, values),
+                "domain": hotspots.DOMAIN,
+                "palette": entry.get("hotspot_palette") or attribute.get("palette"),
+            })
+            entry["attribute"] = attribute
+            self._apply_model_rep(entry)
+        if entry.get("hotspot_cloud"):
+            self.show_hotspot_field(entry["id"], on=True, style="cloud")
+        elif entry.get("hotspot_volume") is not None:
+            self.show_hotspot_field(entry["id"], on=True, style="contour")
 
     def show_hotspot_field(self, mid: Optional[str] = None, *, on: bool = True,
                            style: str = "cloud") -> None:
@@ -7876,10 +7925,14 @@ class DesktopApp:
             if model is None:  # pragma: no cover - defensive
                 return
             grid_spacing = cloud_spacing if style == "cloud" else hotspots.FIELD_SPACING
+            metric = entry.get("hotspot_metric", "combined")
+            values = (result.values if metric == "combined"
+                      else result.components.get(metric, result.values))
             field, spacing, origin = hotspots.severity_field(
-                model, result.values, spacing=grid_spacing)
+                model, values, spacing=grid_spacing)
             threshold = float(getattr(self, "_hotspot_knee", hotspots.FIELD_ISO))
-            units, label = "severity", "severity"
+            units = "severity"
+            label = "severity" if metric == "combined" else f"{metric} severity"
         if not (field >= threshold).any():
             self._status(f"nothing reaches {units} {threshold:.2f} — nothing to draw in 3-D")
             return
