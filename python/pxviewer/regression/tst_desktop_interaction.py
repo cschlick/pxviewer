@@ -1132,6 +1132,38 @@ def exercise_one_button_shows_and_hides_every_validation_overlay():
         assert button.text() == "Hide all markers"
 
 
+def exercise_the_play_button_queues_exactly_the_ticked_checks():
+    """One play button runs whatever is ticked: the per-residue validators go by key,
+    Clashes & contacts (the reduce2 + probe2 analysis) by flag. Running with nothing
+    ticked reports rather than crashing or silently doing everything."""
+    with desktop() as app:
+        controls = app._controls
+        calls = []
+        app.run_validation = lambda keys=None, clashes=False: calls.append((keys, clashes))
+
+        # Fresh install: every per-residue check ticked, the heavy clashes one not.
+        controls._on_run_validation()
+        keys, clashes = calls[-1]
+        assert keys == [key for key, _box in controls._check_boxes]
+        assert len(keys) >= 4 and not clashes
+
+        # A subset plus clashes goes through exactly as ticked.
+        for key, box in controls._check_boxes:
+            box.setChecked(key == "ramachandran")
+        controls._clashes_check.setChecked(True)
+        controls._on_run_validation()
+        assert calls[-1] == (["ramachandran"], True)
+
+        # Nothing ticked: the real runner refuses and the handler reports it.
+        del app.run_validation                      # back to the class's method
+        ubiquitin(app)
+        controls._clashes_check.setChecked(False)
+        for _key, box in controls._check_boxes:
+            box.setChecked(False)
+        controls._on_run_validation()               # must not raise
+        assert not app._model_entry(app._active_model_id).get("validation")
+
+
 # -- long operations ----------------------------------------------------------
 
 

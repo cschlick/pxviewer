@@ -65,10 +65,11 @@ MAX_GROUPS = 2
 #: without burying the assertion that broke.
 TRAIL = 15
 
-#: Buttons that start background work -- Minimize, Stop, Add H + analyze, Build ligand.
-#: They are icon-only, so they are recognised by their tooltip.
+#: Buttons that start background work -- Minimize, Stop, the validation run (which can
+#: queue reduce2 + probe2 when the checkbox fuzzing ticked Clashes & contacts), Build
+#: ligand. They are icon-only, so they are recognised by their tooltip.
 THREADED_TOOLTIPS = (
-    "Minimize the active model", "Halt the run", "Add hydrogens with reduce2",
+    "Minimize the active model", "Halt the run", "Run the ticked checks",
     "Build the ligand")
 
 

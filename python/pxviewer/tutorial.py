@@ -279,8 +279,10 @@ def validation_tutorial() -> Tutorial:
             "those checks. Let's run validation on it.",
         ),
         Step(
-            "Open the **Validation** tab and click **Run validation**. It runs every "
-            "validator on the active model in the background — give it a moment.",
+            "Open the **Validation** tab. The per-residue checks are all ticked already; "
+            "press the **play** button to run them on the active model in the background "
+            "— give it a moment. (The 'Clashes & contacts' check adds hydrogens and runs "
+            "probe2, so it starts unticked — queue it when you want it.)",
             done=_validation_ran,
             target=lambda cw: cw._validate_btn,
         ),

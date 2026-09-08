@@ -603,7 +603,8 @@ def exercise_the_validation_tutorial_advances_when_validation_runs():
         controls._start_tutorial(tutorial.validation_tutorial())
         process_events()
         assert progress(app) == "Step 1 / 3"
-        assert controls._validate_btn.text() == "Run validation"    # the step-2 target
+        # The step-2 target is the play button that runs the ticked checks.
+        assert controls._validate_btn.toolTip().startswith("Run the ticked checks")
 
         # 1TEC arrives with the tutorial: the structure the steps talk about is the one
         # on screen, which is the whole reason the loader exists.

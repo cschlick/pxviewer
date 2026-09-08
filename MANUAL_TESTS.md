@@ -206,9 +206,12 @@ Load the X-ray demo or a model with restraints available.
 3. Geometry tab: Atoms subtab and each restraint subtab; click rows.
    - **Watch for:** tables fill, sort, and follow the active model; clicking a restraint
      row marks it in the viewport in ball-and-stick.
-4. Validation tab: run validation; open every subtab; click rows.
-   - **Watch for:** results appear per-section; clicking a finding focuses the culprit;
-     the staleness warning appears after you edit the model and clears on re-run.
+4. Validation tab: press play with the default ticks; open every subtab; click rows.
+   Then tick **Clashes & contacts** and run again.
+   - **Watch for:** results appear per-section; only ticked checks produce subtabs;
+     clicking a finding focuses the culprit; the staleness warning appears after you
+     edit the model and clears on re-run; the clashes run adds a "+ H" object, hides
+     the original, and lights up the Contacts/Clashes toggles.
 5. Place a marker; build a ligand from SMILES at it (e.g. `CCO`). Try a ligand the
    monomer library doesn't know.
    - **Watch for:** the built ligand appears at the marker as its own object; the

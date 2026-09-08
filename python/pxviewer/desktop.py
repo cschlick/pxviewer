@@ -2418,28 +2418,22 @@ class ControlsWindow:
         self._refresh_tug_summary()
 
     def _build_clashes_page(self):
-        """The all-atom contacts (probe2) view — shown as a validator sub-tab, so it sits
-        beside the per-residue checks rather than in its own panel. It stays a separate run
-        from 'Run validation' because it is heavier: it adds hydrogens (a new object) and
-        shells out to probe2, so it is opt-in via its own Analyze button. The two overlays
-        toggle independently once an analysis has produced dots."""
+        """The all-atom contacts (probe2) results view — a validator sub-tab, so it sits
+        beside the per-residue checks rather than in its own panel. The analysis itself
+        is queued from the checks row above (it is one of the checkboxes); this page
+        just holds the two overlay toggles once a run has produced dots."""
         from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
         from .live import PROBE_CLASHES, PROBE_CONTACTS
 
         page = QWidget()
         ag = QVBoxLayout(page)
-        hint = QLabel("MolProbity all-atom contacts. Add hydrogens (reduce2), then run "
-                      "probe2, and toggle the overlays:")
+        hint = QLabel("MolProbity all-atom contacts. Tick 'Clashes & contacts' above and "
+                      "run — it adds hydrogens (reduce2) as a new object, runs probe2, "
+                      "and these overlays light up:")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(placeholder-text);")
         ag.addWidget(hint)
-        analyze = self._make_icon_button(
-            "heading-1", "Add H + analyze",
-            "Add hydrogens with reduce2 as a new object (hiding the original), then run "
-            "probe2 for MolProbity contacts and clashes")
-        analyze.clicked.connect(self._on_analyze)
-        self._register_busy_button(analyze, "Adding hydrogens and running probe")
         self._contacts_toggle = self._make_icon_button(
             "fold-horizontal", "Contacts", "Show/hide the full probe2 contact-dot surface",
             checkable=True)
@@ -2455,9 +2449,8 @@ class ControlsWindow:
             lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
         self._clashes_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
 
-        # One row: add-H (the prerequisite) then the two result toggles.
+        # One row: the two result toggles.
         prow = QHBoxLayout()
-        prow.addWidget(analyze)
         prow.addWidget(self._contacts_toggle)
         prow.addWidget(self._clashes_toggle)
         prow.addStretch(1)
@@ -2466,23 +2459,47 @@ class ControlsWindow:
         return page
 
     def _build_validation_tab(self):
-        """MolProbity validation, all in one place. 'Run validation' runs every registered
-        per-residue validator (data-driven from the validation registry) and each result
-        becomes a sub-tab. The all-atom contacts analysis (probe2) is a peer sub-tab —
-        'Clashes & contacts' — always present as the first tab, so both kinds of check live
-        in the same results area rather than in separate panels."""
+        """MolProbity validation, all in one place: tick the checks to queue, press one
+        run button. The checks are data-driven from the validation registry, plus the
+        all-atom contacts analysis (reduce2 + probe2) as one more — heavier — check.
+        Every result becomes a sub-tab in the shared results area below; contacts keeps
+        its always-present 'Clashes & contacts' sub-tab for the overlay toggles."""
         from PySide6.QtWidgets import (
-            QHBoxLayout, QLabel, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+            QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QTabWidget,
+            QVBoxLayout, QWidget,
         )
+
+        from . import validation
 
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        intro = QLabel("MolProbity validation of the active model. Run the per-residue "
-                       "checks below; the Clashes & contacts tab runs probe2 separately.")
+        intro = QLabel("MolProbity validation of the active model: tick the checks to "
+                       "run, then press play. Each result becomes a sub-tab below.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
+
+        # The queue: one checkbox per registered validator, all on by default -- they
+        # share one cheap pass. Clashes & contacts is the odd one out (reduce2 + probe2,
+        # and it adds a hydrogenated sibling object), so it starts unticked.
+        checks = QGridLayout()
+        checks.setHorizontalSpacing(16)
+        checks.setVerticalSpacing(4)
+        self._check_boxes: list = []   # (validator key, QCheckBox)
+        for i, spec in enumerate(validation.validators()):
+            box = QCheckBox(spec.title)
+            box.setChecked(True)
+            box.setToolTip(f"Queue the {spec.title} check for the next run")
+            checks.addWidget(box, i // 2, i % 2)
+            self._check_boxes.append((spec.key, box))
+        self._clashes_check = QCheckBox("Clashes && contacts (adds hydrogens — slower)")
+        self._clashes_check.setToolTip(
+            "Queue the all-atom contact analysis: add hydrogens with reduce2 as a new "
+            "object (hiding the original), then run probe2 for MolProbity contacts and "
+            "clashes. The heaviest check, so it starts unticked.")
+        checks.addWidget(self._clashes_check, (len(self._check_boxes) + 1) // 2, 0, 1, 2)
+        layout.addLayout(checks)
 
         # Per-validator Markers checkboxes, rebuilt with the sub-tabs on every run. The probe
         # overlay toggles are separate because they live on the always-present Clashes page and
@@ -2490,9 +2507,10 @@ class ControlsWindow:
         self._marker_checks: list = []
 
         run_row = QHBoxLayout()
-        run_btn = QPushButton("Run validation")
-        run_btn.setToolTip("Run every MolProbity per-residue validator on the active model "
-                           "(background thread); each becomes a sub-tab below.")
+        run_btn = self._make_icon_button(
+            "play", "Run",
+            "Run the ticked checks on the active model (background); each result "
+            "becomes a sub-tab below.")
         run_btn.clicked.connect(self._on_run_validation)
         self._validate_btn = run_btn  # a tutorial highlight target
         self._register_busy_button(run_btn, "Running validation")
@@ -2632,7 +2650,9 @@ class ControlsWindow:
 
     def _on_run_validation(self) -> None:
         try:
-            self._desktop.run_validation()
+            self._desktop.run_validation(
+                keys=[key for key, box in self._check_boxes if box.isChecked()],
+                clashes=self._clashes_check.isChecked())
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -4908,12 +4928,6 @@ class ControlsWindow:
 
     def _on_clear_measurements(self) -> None:
         self._desktop.clear_measurements()
-
-    def _on_analyze(self) -> None:
-        try:
-            self._desktop.analyze_clashes()
-        except Exception as exc:
-            self._set_status(str(exc))
 
     def _icon(self, name: str, size: int = 18):
         """A Lucide icon tinted to the button text color (or None if the asset is gone)."""
@@ -7942,75 +7956,59 @@ class DesktopApp:
         if session is not None:
             session.clear_primitives()
 
-    def analyze_clashes(self) -> None:
-        """Add hydrogens to the active model (reduce2), register the result as a new
-        object, hide the original, and draw probe2 contacts + clashes as two
-        independently toggleable overlays.
+    def _clashes_work(self, name: str, src_mid, analysis) -> None:
+        """The all-atom contacts check (background thread): add hydrogens to the model
+        (reduce2), register the result as a new object, hide the original, and draw
+        probe2 contacts + clashes as two independently toggleable overlays.
 
         With real hydrogens probe2 decides overlaps from actual H positions and
         directionality — the MolProbity-approved path — so no heavy-atom heuristics
-        are needed. reduce2 + probe2 are slow, so this runs on a background thread;
+        are needed. Runs on the validation thread (see :meth:`run_validation`);
         adding the model object is marshalled back to the GUI thread.
         """
-        entry = self._model_entry(self._active_model_id)
-        if entry is None:
-            raise ValueError("load a model first")
-        model = getattr(entry["session"], "model", None)
-        if model is None:
-            raise ValueError("the active object has no cctbx model")
-        name, src_mid = entry["name"], entry["id"]
-        # reduce2 and probe are the two expensive steps in the whole validation stack, and the
-        # hotspot score needs the same two. Go through the shared analysis so whichever feature
-        # runs first pays and the other is nearly free.
-        analysis = self._model_analysis(entry)
+        from .hydrogens import hydrogens_available
+        from .live import LiveSession, PROBE_CLASHES, PROBE_CONTACTS
 
-        def work():
-            from .hydrogens import hydrogens_available
-            from .live import LiveSession, PROBE_CLASHES, PROBE_CONTACTS
+        if not hydrogens_available():
+            self._status("reduce2 needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
+            return
+        try:
+            self._status(f"adding hydrogens to {name} (reduce2)…")
+            hmodel = analysis.hydrogenated()
+        except Exception as exc:  # pragma: no cover - reduce2/runtime errors
+            self._status(f"reduce2 failed: {exc}")
+            return
 
-            if not hydrogens_available():
-                self._status("reduce2 needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
-                return
-            try:
-                self._status(f"adding hydrogens to {name} (reduce2)…")
-                hmodel = analysis.hydrogenated()
-            except Exception as exc:  # pragma: no cover - reduce2/runtime errors
-                self._status(f"reduce2 failed: {exc}")
-                return
+        box: dict = {}
+        ready = threading.Event()
 
-            box: dict = {}
-            ready = threading.Event()
+        def add_on_main():
+            hsession = LiveSession.from_cctbx_model(hmodel)
+            # Ball-and-stick so the placed hydrogens and the clash spikes are
+            # actually visible (a cartoon ribbon would hide both).
+            box["mid"] = self._add_model(hsession, f"{name} + H", rep="ball-and-stick")
+            box["session"] = hsession
+            self.set_model_visible(src_mid, False)  # hide the H-less original
+            ready.set()
 
-            def add_on_main():
-                hsession = LiveSession.from_cctbx_model(hmodel)
-                # Ball-and-stick so the placed hydrogens and the clash spikes are
-                # actually visible (a cartoon ribbon would hide both).
-                box["mid"] = self._add_model(hsession, f"{name} + H", rep="ball-and-stick")
-                box["session"] = hsession
-                self.set_model_visible(src_mid, False)  # hide the H-less original
-                ready.set()
+        self.bridge.run_on_main.emit(add_on_main)
+        ready.wait()
+        hsession, hmid = box["session"], box["mid"]
 
-            self.bridge.run_on_main.emit(add_on_main)
-            ready.wait()
-            hsession, hmid = box["session"], box["mid"]
+        try:
+            self._status("running probe2 on the hydrogenated model…")
+            contacts, clashes = analysis.probe_dots_split()  # cached; free after a hotspot run
+        except Exception as exc:  # pragma: no cover - probe/runtime errors
+            self._status(f"probe failed: {exc}")
+            return
 
-            try:
-                self._status("running probe2 on the hydrogenated model…")
-                contacts, clashes = analysis.probe_dots_split()  # cached; free after a hotspot run
-            except Exception as exc:  # pragma: no cover - probe/runtime errors
-                self._status(f"probe failed: {exc}")
-                return
-
-            hentry = self._model_entry(hmid)
-            if hentry is not None:  # cache so the toggles redraw without re-running probe
-                hentry["probe_dots"] = {PROBE_CONTACTS: contacts, PROBE_CLASHES: clashes}
-            hsession.show_probe_dots(contacts, channel=PROBE_CONTACTS)
-            hsession.show_probe_dots(clashes, channel=PROBE_CLASHES)
-            self._status(f"{name} + H: {len(clashes)} clashes, {len(contacts)} contact dots")
-            self.bridge.analysis_ready.emit(hmid)
-
-        self.run_background(work, name="pxviewer-reduce2", label="Adding hydrogens and running probe")
-        self._status("adding hydrogens with reduce2…")
+        hentry = self._model_entry(hmid)
+        if hentry is not None:  # cache so the toggles redraw without re-running probe
+            hentry["probe_dots"] = {PROBE_CONTACTS: contacts, PROBE_CLASHES: clashes}
+        hsession.show_probe_dots(contacts, channel=PROBE_CONTACTS)
+        hsession.show_probe_dots(clashes, channel=PROBE_CLASHES)
+        self._status(f"{name} + H: {len(clashes)} clashes, {len(contacts)} contact dots")
+        self.bridge.analysis_ready.emit(hmid)
 
     def set_probe_channel(self, channel: int, visible: bool) -> None:
         """Toggle a probe overlay (contacts/clashes) on the active model, redrawing
@@ -8025,11 +8023,17 @@ class DesktopApp:
         else:
             session.clear_probe_dots(channel=channel)
 
-    def run_validation(self) -> None:
-        """Run every registered MolProbity validator on the active model and hand the
-        results to the Validation tab. Validators can be slow (they build restraints
-        and run mmtbx analyses), so this runs on a background thread; the results are
-        cached on the model entry and emitted to the GUI thread via ``validation_ready``.
+    def run_validation(self, keys=None, clashes: bool = False) -> None:
+        """Run the checked MolProbity validations on the active model as one background
+        job, handing results to the Validation tab as each lands.
+
+        ``keys`` selects the per-residue validators (``None`` runs every registered
+        one; an empty list runs none); ``clashes`` appends the all-atom contact
+        analysis (reduce2 + probe2), by far the heaviest check and the one that adds a
+        hydrogenated sibling object. Everything checked runs sequentially on one
+        thread because the checks share the per-model analysis cache, whose expensive
+        lazy steps (reduce2, probe) are not re-entrant — two concurrent checks would
+        race to hydrogenate the same model.
         """
         entry = self._model_entry(self._active_model_id)
         if entry is None:
@@ -8037,34 +8041,48 @@ class DesktopApp:
         model = getattr(entry["session"], "model", None)
         if model is None:
             raise ValueError("the active object has no cctbx model")
+        if keys is not None and not keys and not clashes:
+            raise ValueError("no validations checked")
         mid, name = entry["id"], entry["name"]
-        analysis = self._model_analysis(entry)  # reused by a later hotspot score
+        # reduce2 and probe are the two expensive steps in the whole validation stack, and
+        # the hotspot score needs the same two. Everything goes through the shared analysis
+        # so whichever check runs first pays and the rest are nearly free.
+        analysis = self._model_analysis(entry)
 
         def work():
-            from . import validation
-
-            try:
-                self._status(f"validating {name}…")
-                results = validation.run_all(model, analysis)
-            except Exception as exc:  # pragma: no cover - validator/runtime errors
-                self._status(f"validation failed: {exc}")
-                return
-            ventry = self._model_entry(mid)
-            if ventry is not None:  # cache so marker toggles redraw without re-running
-                ventry["validation"] = {r.key: r for r in results}
-                self._mark_validated(ventry)  # fingerprint the coordinates these describe
-            total = sum(len(r.markup) for r in results)
-            self._status(f"{name}: {len(results)} validators, {total} markers")
-            self.bridge.validation_ready.emit((mid, results))
-            self._refresh_validation_staleness()  # fresh results: clear any stale warning
-            # Fill the Hotspots tab too, on the same shared analysis. Both features need
-            # reduce2 and probe — the expensive part — so doing it here means the user pays
-            # once whichever button they pressed, instead of again on the next tab.
-            self._status(f"{name}: scoring hotspots from the same analysis…")
-            self._populate_hotspots_from_analysis(mid, model, analysis)
+            if keys is None or keys:
+                self._validation_work(mid, name, model, analysis, keys)
+            if clashes:
+                self._clashes_work(name, mid, analysis)
 
         self.run_background(work, name="pxviewer-validation", label="Running validation")
         self._status("validating…")
+
+    def _validation_work(self, mid, name, model, analysis, keys) -> None:
+        """The per-residue validator pass (background thread): run the selected
+        validators, cache the results on the model entry, emit them to the GUI thread
+        via ``validation_ready``, and score hotspots from the same analysis."""
+        from . import validation
+
+        try:
+            self._status(f"validating {name}…")
+            results = validation.run_all(model, analysis, keys=keys)
+        except Exception as exc:  # pragma: no cover - validator/runtime errors
+            self._status(f"validation failed: {exc}")
+            return
+        ventry = self._model_entry(mid)
+        if ventry is not None:  # cache so marker toggles redraw without re-running
+            ventry["validation"] = {r.key: r for r in results}
+            self._mark_validated(ventry)  # fingerprint the coordinates these describe
+        total = sum(len(r.markup) for r in results)
+        self._status(f"{name}: {len(results)} validators, {total} markers")
+        self.bridge.validation_ready.emit((mid, results))
+        self._refresh_validation_staleness()  # fresh results: clear any stale warning
+        # Fill the Hotspots tab too, on the same shared analysis. Both features need
+        # reduce2 and probe — the expensive part — so doing it here means the user pays
+        # once whichever button they pressed, instead of again on the next tab.
+        self._status(f"{name}: scoring hotspots from the same analysis…")
+        self._populate_hotspots_from_analysis(mid, model, analysis)
 
     def set_validation_markers(self, key: str, visible: bool) -> None:
         """Toggle a validator's MolProbity markup on the active model, redrawing from
