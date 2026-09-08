@@ -43,6 +43,7 @@ TUTORIAL_TITLES = [
     "A model with its map",
     "Alternate conformations",
     "Validate a structure",
+    "Find validation hotspots",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
     "Look at local resolution",
@@ -620,6 +621,42 @@ def exercise_the_validation_tutorial_advances_when_validation_runs():
         app._model_entry(mid)["validation"] = {"rotalyze": object()}
         controls._maybe_advance_tutorial()
         assert progress(app) == "Step 3 / 3"
+        assert app._viewport.coach_next.text() == "Finish"
+
+        controls._tutorial_next()
+        assert app._viewport.coach_bar.isHidden()
+
+
+def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
+    """Load the demo, find hotspots, show the 3-D field, read the wrap-up."""
+    with desktop() as app:
+        controls = app._controls
+        controls._start_tutorial(tutorial.hotspots_tutorial())
+        process_events()
+        assert progress(app) == "Step 1 / 5"
+        assert [m["name"] for m in app._models] == ["1tec.pdb"]
+
+        controls._tutorial_next()                     # orientation step
+        assert progress(app) == "Step 2 / 5"
+
+        # Step 2 advances once a score is cached. Stood in for rather than run: a real
+        # scoring pass is exercised by tst_hotspots.py, and repeating it here would say
+        # nothing new about the coach.
+        mid = app._active_model_id
+        assert app._model_entry(mid).get("hotspots") is None
+        app._model_entry(mid)["hotspots"] = object()
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 3 / 5"
+
+        controls._tutorial_next()                     # reading the worklist
+        assert progress(app) == "Step 4 / 5"
+
+        # Step 4: the 3-D field toggle. The real toggle: its handler reports rather
+        # than raises on the stub score, and the coach only reads the checkbox.
+        controls._hotspot_show3d.setEnabled(True)
+        controls._hotspot_show3d.setChecked(True)
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 5 / 5"
         assert app._viewport.coach_next.text() == "Finish"
 
         controls._tutorial_next()

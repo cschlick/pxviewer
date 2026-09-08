@@ -296,6 +296,67 @@ def validation_tutorial() -> Tutorial:
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
 
 
+def _hotspots_ran(cw: Any) -> bool:
+    mid = _active(cw)
+    entry = cw._desktop._model_entry(mid) if mid else None
+    return bool(entry and entry.get("hotspots") is not None)
+
+
+def hotspots_tutorial() -> Tutorial:
+    """Aggregate the validation checks into one severity field and go where it points —
+    the judging tutorial that follows validation, on the same check-tripping structure."""
+    return Tutorial("Find validation hotspots", [
+        Step(
+            "Validation gives one table per check — but a region worth rebuilding usually "
+            "trips **several** checks at once, and reading five tables to notice that is "
+            "work a picture can do. **Hotspots** aggregates the per-residue checks "
+            "(Ramachandran, rotamers, clashes) into one per-atom **severity** field, so "
+            "the eye goes straight to where they agree.\n\nOne caveat before anything: "
+            "severity **ranks, it does not score**. It says *look here first* — the "
+            "component columns keep the *why*, and no combined number here measures "
+            "model quality.\n\n**1TEC is loaded** — the same structure the validation "
+            "tutorial uses, tripping every check.",
+        ),
+        Step(
+            "Open the **Hotspots** tab (the flame) and click **Find hotspots**. It runs "
+            "in the background and colors the model by severity when done.\n\nThe fast "
+            "pass finds heavy-atom clashes only; the checkbox above adds hydrogens first "
+            "(reduce2 — the MolProbity clashscore treatment, much slower). Either way, "
+            "one run also fills the **Validation** tab: the two share the expensive "
+            "analysis, so whichever button you press, you get both.",
+            done=_hotspots_ran,
+            target=lambda cw: cw._hotspot_btn,
+        ),
+        Step(
+            "The model is now colored by severity on an **absolute** scale — clean atoms "
+            "fade into the background, then yellow through red, with **1.0 the community "
+            "outlier threshold** — so the same color means the same thing in every "
+            "structure.\n\nThe table is the worklist, worst first. Click a row to zoom "
+            "to that residue (the first click switches the model to ball-and-stick), and "
+            "read its component columns for *why* it lit up.",
+        ),
+        Step(
+            "Surface color has a blind spot: a **buried** hotspot is hidden behind the "
+            "atoms in front of it. Tick **Show in 3-D** to draw severity as a field "
+            "around the model, visible *through* the structure.\n\n**Density** shades "
+            "every voxel by its own value; **Contour** draws a shell at the threshold; "
+            "the **threshold** slider keeps only regions above it. Same absolute scale "
+            "as the atom colors.",
+            done=lambda cw: cw._hotspot_show3d.isChecked(),
+            target=lambda cw: cw._hotspot_show3d,
+        ),
+        Step(
+            "That's the loop: find, click, fix (drag or minimize), re-run — a model that "
+            "moves drops its stale score.\n\nOne control stays quiet in this workflow: "
+            "the **Field** menu. It belongs to the other way in — **Open volume…** "
+            "imports bounded *concern* fields computed by the external Hotspots "
+            "generator, and the menu then lists each component field. Severity "
+            "(computed here) and concern (imported) are different quantities on "
+            "different scales, so a model shows one or the other, never both.",
+        ),
+    ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
+
+
 def ligand_fitting_tutorial() -> Tutorial:
     """Fit a ligand into difference density — pxviewer's take on Phenix's ligand-fitting
     tutorial, self-contained (no phenix, no external data)."""
@@ -543,10 +604,11 @@ def local_resolution_tutorial() -> Tutorial:
 def all_tutorials() -> List[Tutorial]:
     """Every walkthrough offered, in menu order — looking before judging before changing:
     the three viewing ones (open a model, a model with its map, alternate conformations),
-    then validation, then the fitting/refinement group, then the restraint-edits pair
-    (reading before writing). There is no separate examples list: every bundled example
-    is the opening scene of the tutorial that explains it."""
+    then the judging pair (validation, then its hotspot aggregate), then the
+    fitting/refinement group, then the restraint-edits pair (reading before writing).
+    There is no separate examples list: every bundled example is the opening scene of the
+    tutorial that explains it."""
     return [open_model_tutorial(), map_model_tutorial(), altlocs_tutorial(),
-            validation_tutorial(), ligand_fitting_tutorial(), cryo_em_refinement_tutorial(),
-            local_resolution_tutorial(), xray_refinement_tutorial(), load_edits_tutorial(),
-            restraint_edits_tutorial()]
+            validation_tutorial(), hotspots_tutorial(), ligand_fitting_tutorial(),
+            cryo_em_refinement_tutorial(), local_resolution_tutorial(),
+            xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]
