@@ -211,7 +211,8 @@ Load the X-ray demo or a model with restraints available.
    - **Watch for:** results appear per-section; only ticked checks produce subtabs;
      clicking a finding focuses the culprit — the first click switches the model to
      ball-and-stick and later clicks feel instant, with no node errors in the
-     terminal; the staleness warning appears after you
+     terminal; switching back to Cartoon in Appearance sticks (row clicks don't
+     re-flip it); the staleness warning appears after you
      edit the model and clears on re-run; the clashes run adds a "+ H" object, hides
      the original, and lights up the Contacts/Clashes toggles.
 5. Place a marker; build a ligand from SMILES at it (e.g. `CCO`). Try a ligand the

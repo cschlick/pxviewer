@@ -1113,6 +1113,13 @@ def exercise_validation_subtabs_and_row_focus():
         table.selectRow(0)
         assert sent == [], sent
 
+        # But the courtesy flip happens once per model: a user who deliberately
+        # switches back to ribbon has made a choice, and later clicks respect it.
+        app.set_model_representation(mid, "cartoon")
+        table.clearSelection()
+        table.selectRow(0)
+        assert entry["reps"] == ["cartoon"]
+
 
 def exercise_one_button_shows_and_hides_every_validation_overlay():
     """Each validator draws on its own channel, so clearing the viewport otherwise means

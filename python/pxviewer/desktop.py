@@ -2646,8 +2646,9 @@ class ControlsWindow:
         with the whole model in sticks the per-selection neighbourhood layer has
         nothing to add, so clicking through a worklist re-sends no representations —
         without this, each click rebuilt the entire cartoon (the ribbon steps aside
-        around the neighbourhood), which was sluggish and raced the frontend's
-        rebuilds hard enough to spray could-not-find-node errors."""
+        around the neighbourhood), which was sluggish. Once per model only: a user
+        who switches back to ribbon afterwards keeps ribbon (see
+        :meth:`~DesktopApp.ensure_atoms_shown_once`)."""
         cols = result.columns
         if "chain" not in cols or "resid" not in cols:
             return
@@ -2658,7 +2659,7 @@ class ControlsWindow:
         resid = table.item(row, cols.index("resid"))
         if chain is None or resid is None:
             return
-        self._desktop.ensure_atoms_shown()
+        self._desktop.ensure_atoms_shown_once()
         expression = self._desktop.focus_residue(
             chain.text(), resid.text(),
             focus=self._focus_on_select.isChecked(),
@@ -3055,7 +3056,7 @@ class ControlsWindow:
         chain = table.item(row, columns.index("chain"))
         resid = table.item(row, columns.index("resid"))
         if chain is not None and resid is not None:
-            self._desktop.ensure_atoms_shown()
+            self._desktop.ensure_atoms_shown_once()
             expression = self._desktop.focus_residue(
                 chain.text(), resid.text(),
                 focus=self._focus_on_select.isChecked(),
@@ -7320,6 +7321,19 @@ class DesktopApp:
         entry["rep"] = rep
         entry["reps"] = [rep]
         self._apply_model_rep(entry)
+
+    def ensure_atoms_shown_once(self, mid: Optional[str] = None) -> None:
+        """:meth:`ensure_atoms_shown`, but only the first time per model — the courtesy
+        switch for worklist row clicks (Validation, Hotspots). The first click puts a
+        ribbon model in ball-and-stick; a user who then deliberately switches back to
+        ribbon in the Appearance pane has made a choice, and later clicks respect it
+        rather than re-flipping (at the cost of the slower per-click ribbon rebuild)."""
+        mid = mid or self._active_model_id
+        entry = self._model_entry(mid)
+        if entry is None or entry.get("_atoms_shown_once"):
+            return
+        entry["_atoms_shown_once"] = True
+        self.ensure_atoms_shown(mid)
 
     def ensure_atoms_shown(self, mid: Optional[str] = None) -> None:
         """Switch a model off a ribbon (cartoon) view to ball-and-stick, so atom-precision
