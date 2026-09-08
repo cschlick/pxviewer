@@ -563,6 +563,7 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
     app = DesktopApp(port=0)
     try:
         app._webapp.start()
+        app._can_hide = True    # hardware behaviour: software WebGL refuses hiding
         app.load_map_model_demo(d_min=4.0)
         process_events()
         vid = app._volumes[0]["id"]
@@ -594,6 +595,23 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
         assert n == len(DesktopApp._CC_PALETTE)
         assert list(struct.unpack_from("<%dI" % n, payloads[-1], 16)) == \
             DesktopApp._CC_PALETTE
+
+        # The coloured surface stays interactive: a level change takes the cheap
+        # client-side re-contour path (not a re-level of the parked plain contour),
+        # the one visibility checkbox drives the coloured surface, and the pane's
+        # snapshot knows the colouring is on, so a rebuild does not forget it.
+        levels, shown = [], []
+        stub.set_localres_iso = levels.append
+        stub.set_localres_visible = shown.append
+        app.set_volume_iso(vid, 2.0)
+        assert levels, "the level change never reached the coloured surface"
+        app._on_volume_iso_changed(full["ref"], 2.5)   # the wheel's echo path
+        assert len(levels) == 2
+        app.set_volume_visible(vid, False)
+        assert shown == [False]
+        row = next(r for r in app._loaded_summary()["items"]
+                   if r.get("id") == vid and r["kind"] == "volume")
+        assert row["color_by_cc"]
 
         # One colour source at a time, in both directions.
         app._pin_resolution_map(vid, cc_entry["data"], color=True)

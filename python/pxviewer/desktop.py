@@ -9577,7 +9577,7 @@ class DesktopApp:
         if entry is None or entry.get("iso") == value:
             return
         entry["iso"] = value
-        if entry.get("color_by_resolution"):
+        if entry.get("color_by_resolution") or entry.get("color_by_cc"):
             # The cheap path: the browser retained both grids with the full payload, so a
             # level change is one float over the wire and a client-side re-contour --
             # the same work a plain map's level change costs. _push_localres (which
@@ -9769,7 +9769,8 @@ class DesktopApp:
         for entry in self._volumes:
             if entry.get("is_resolution"):
                 continue  # never in the scene (see _write_volume_scene): nothing to hide
-            if not entry["visible"] or entry.get("color_by_resolution"):
+            if (not entry["visible"] or entry.get("color_by_resolution")
+                    or entry.get("color_by_cc")):
                 # Hidden maps, and the parked plain contour of a coloured map -- the
                 # coloured surface represents that one, whatever the entry's own flag.
                 try:
@@ -9840,6 +9841,13 @@ class DesktopApp:
         if entry is None:
             return
         entry["iso"] = float(value)
+        if entry.get("color_by_resolution") or entry.get("color_by_cc"):
+            # The viewer just re-levelled the *parked* plain contour (the wheel works on
+            # refs); a coloured surface is what is on screen, so re-level that too.
+            session = self._control_session()
+            if session is not None:
+                surface = self._display_map_data(entry)
+                session.set_localres_iso(self._absolute_iso(entry, surface))
         self.bridge.volume_iso_changed.emit((entry["id"], float(value)))
 
     def set_active_model(self, mid: str) -> None:
@@ -10016,7 +10024,7 @@ class DesktopApp:
         entry["visible"] = bool(visible)
         control = self._control_session()
         if control is not None:
-            if entry.get("color_by_resolution"):
+            if entry.get("color_by_resolution") or entry.get("color_by_cc"):
                 # The coloured surface is this map's representation: the one checkbox
                 # hides and shows it. The plain contour stays parked regardless.
                 control.set_localres_visible(bool(visible))
@@ -10452,6 +10460,10 @@ class DesktopApp:
                 entry["localres_drawn"] = True
                 self._status(f"{entry['name']}: local resolution ready — "
                              "the map is coloured by it")
+            elif entry.get("color_by_cc"):
+                entry["localres_drawn"] = True
+                self._status(f"{entry['name']}: map-model CC ready — pink is density "
+                             "the model fails to explain, teal a good fit")
         self._emit_loaded_changed()
 
     def set_localres_domain(self, full_vid: str, lo: float, hi: float) -> None:
@@ -10978,6 +10990,7 @@ class DesktopApp:
              "pinned_to": v.get("pinned_to"), "is_resolution": bool(v.get("is_resolution")),
              "resolution_map": v.get("resolution_map"),
              "color_by_resolution": bool(v.get("color_by_resolution")),
+             "color_by_cc": bool(v.get("color_by_cc")),
              "localres_downsample": v.get("localres_downsample"),
              "localres_domain": v.get("localres_domain")}
             for v in self._volumes if not v.get("is_resolution")
