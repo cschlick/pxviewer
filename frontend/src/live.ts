@@ -673,7 +673,12 @@ export class LiveViewer {
     private cartoonReprNodes: StateObjectSelector[] = [];
     private focusRibbonMaskNodes: StateObjectSelector[] = [];
     private focusRibbonMaskEnabled = false;
-    private focusRibbonMaskTask: Promise<void> = Promise.resolve();
+    /** Set by the connection to its shared apply chain, so subscription-driven work
+     *  (the focus-mask refresh, camera slab re-aims) cannot interleave with a
+     *  representation rebuild running on that chain. Work already ON the chain must
+     *  call methods directly rather than going through this — see serializeApply. */
+    serialize: (work: () => Promise<void> | void) => Promise<void> =
+        (work) => Promise.resolve().then(work);
     private focusSub: { unsubscribe(): void } | null = null;
     private slab: Slab = { ...SLAB_OPEN };
     private slabVersion = 0;
@@ -855,7 +860,9 @@ export class LiveViewer {
             this.reprNodes.push(repr);
             if (spec.type === 'cartoon') this.cartoonReprNodes.push(repr);
         }
-        await this.queueFocusRibbonMaskRefresh();
+        // Directly: setRepresentations runs on the apply chain (via a control
+        // message), and enqueueing from inside the chain would deadlock it.
+        await this.refreshFocusRibbonMask();
     }
 
     /**
@@ -864,21 +871,20 @@ export class LiveViewer {
      * stick overlay; this transparent layer only masks the same whole residue in our
      * independently managed cartoon representations.
      */
+    /** Called from control messages, which already run on the apply chain — so this
+     *  refreshes directly (enqueueing would deadlock the chain on itself). */
     setFocusRibbonMask(enabled: boolean) {
         this.focusRibbonMaskEnabled = enabled;
-        return this.queueFocusRibbonMaskRefresh();
+        return this.refreshFocusRibbonMask();
     }
 
     private subscribeFocus() {
+        // Focus changes arrive from Mol* on their own schedule, so the refresh rides
+        // the shared apply chain — mid-rebuild, the cartoon refs it masks are dying
+        // and being reborn, and an unserialized refresh raced them.
         this.focusSub = this.plugin.managers.structure.focus.behaviors.current.subscribe(() => {
-            void this.queueFocusRibbonMaskRefresh();
+            void this.serialize(() => this.refreshFocusRibbonMask());
         });
-    }
-
-    private queueFocusRibbonMaskRefresh() {
-        const refresh = () => this.refreshFocusRibbonMask();
-        this.focusRibbonMaskTask = this.focusRibbonMaskTask.then(refresh, refresh);
-        return this.focusRibbonMaskTask;
     }
 
     private async refreshFocusRibbonMask() {
@@ -3164,6 +3170,25 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // pointing at — Coot's binding, and the wheel is a shortcut for the Level slider you
     // can see, so the server names the target and we echo every change back to keep the
     // two in step. See applyCootBindings for where zoom went.
+    // State-tree work serializes through one promise chain. ws.onmessage does not
+    // wait for an async handler before dispatching the next message, and the focus
+    // and camera subscriptions fire whenever they like -- so without this, two
+    // representation rebuilds (or a rebuild and a mask/slab/volume apply) interleave:
+    // one deletes nodes the other is still building on, and Mol* throws "Could not
+    // find node" / "not present in the tree" from whichever loses. Python sends
+    // commands assuming in-order application; this chain restores that. Two rules:
+    // work already running ON the chain (anything reached from handleControlMessage)
+    // must call further updates directly, never enqueue-and-await them -- that is a
+    // deadlock; and coordinate frames plus the live map box stay OUT of the chain --
+    // they are latest-wins by design (targets + pumpLiveBox) and must never queue
+    // behind a slow rebuild.
+    let applyChain: Promise<void> = Promise.resolve();
+    const serializeApply = (work: () => Promise<void> | void): Promise<void> => {
+        applyChain = applyChain.then(work).catch(
+            (e) => console.warn('pxviewer: applying a viewer update failed:', e));
+        return applyChain;
+    };
+
     // Volumes clipped by this connection (models carry their own slab on the viewer).
     // Both must be re-aimed as the camera turns, so the slab stays square to the view.
     const volumeSlabs = new Map<string, Slab>();
@@ -3181,8 +3206,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         try {
             do {
                 reaimAgain = false;
-                for (const [ref, slab] of volumeSlabs) await setVolumeSlab(plugin, ref, slab);
-                if (viewer?.hasSlab()) await viewer.reaimSlab();
+                // On the apply chain: camera events fire mid-rebuild, and re-aiming
+                // representations whose nodes a rebuild is replacing raced it.
+                await serializeApply(async () => {
+                    for (const [ref, slab] of volumeSlabs) await setVolumeSlab(plugin, ref, slab);
+                    if (viewer?.hasSlab()) await viewer.reaimSlab();
+                });
             } while (reaimAgain);
         } finally {
             reaiming = false;
@@ -3642,7 +3671,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 pendingControl.push(msg);
                 return;
             }
-            await handleControlMessage(msg);
+            await serializeApply(() => handleControlMessage(msg));
             return;
         }
         const buffer = ev.data as ArrayBuffer;
@@ -3655,6 +3684,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             viewer = await LiveViewer.create(plugin, bcif, (info, shift) => {
                 ws.send(JSON.stringify({ type: 'pick', empty: info === null, atom: info ?? undefined, shift }));
             });
+            viewer.serialize = serializeApply;  // subscription-driven work joins the apply chain
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
             (window as any).__dumpVol = (ref: string) => {
                 const cell = findCellByTag(plugin, `mvs-ref:${ref}-repr`);
@@ -3688,17 +3718,22 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 else await viewer.updateDelta(frame.indices, frame.xyz);
             }
             ws.send(JSON.stringify({ type: 'ready' }));
-            // Now that the viewer exists, apply anything that arrived while building.
-            const queued = pendingControl.splice(0);
-            for (const m of queued) await handleControlMessage(m);
-            for (const buf of pendingDots.splice(0)) await viewer.setProbeDots(buf, 4);
-            if (pendingMapBox) { await viewer.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
-            if (pendingHotspotVolume) { await viewer.setHotspotVolume(pendingHotspotVolume, 4); pendingHotspotVolume = null; }
-            if (pendingLocalres) {
-                await viewer.setLocalresSurface(pendingLocalres, 4);
-                pendingLocalres = null;
-                ws.send(JSON.stringify({ type: 'localres-shown' }));
-            }
+            // Now that the viewer exists, apply anything that arrived while building --
+            // enqueued on the apply chain (in this order, ahead of anything arriving
+            // from here on) rather than awaited in place, so a message landing while
+            // this flush runs cannot interleave with it.
+            for (const m of pendingControl.splice(0)) void serializeApply(() => handleControlMessage(m));
+            await serializeApply(async () => {
+                const v = viewer!;
+                for (const buf of pendingDots.splice(0)) await v.setProbeDots(buf, 4);
+                if (pendingMapBox) { await v.setMapBox(pendingMapBox, 4); pendingMapBox = null; }
+                if (pendingHotspotVolume) { await v.setHotspotVolume(pendingHotspotVolume, 4); pendingHotspotVolume = null; }
+                if (pendingLocalres) {
+                    await v.setLocalresSurface(pendingLocalres, 4);
+                    pendingLocalres = null;
+                    ws.send(JSON.stringify({ type: 'localres-shown' }));
+                }
+            });
         } else if (tag === TAG_FRAME) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -3729,7 +3764,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // [u32 tag][u32 channel][u32 n][per dot: 6 f32 (loc, spike) + u32 rgb].
             // Buffer per channel if the viewer is still building (dots are not a
             // droppable frame).
-            if (viewer) await viewer.setProbeDots(buffer, 4);
+            if (viewer) { const v = viewer; await serializeApply(() => v.setProbeDots(buffer, 4)); }
             else pendingDots.push(buffer);
         } else if (tag === TAG_MAP) {
             // A live density window (see viewer.setMapBox). Only the latest matters —
@@ -3743,17 +3778,20 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         } else if (tag === TAG_HOTSPOT_VOLUME) {
             // A validation-severity cloud (see viewer.setHotspotVolume). Like the map box,
             // only the most recent matters while the viewer is still building.
-            if (viewer) await viewer.setHotspotVolume(buffer, 4);
+            if (viewer) { const v = viewer; await serializeApply(() => v.setHotspotVolume(buffer, 4)); }
             else pendingHotspotVolume = buffer;
         } else if (tag === TAG_LOCALRES) {
             // The primary map surface coloured by a second grid (see viewer.setLocalresSurface).
             // Like the other volumes, only the most recent matters while the viewer is building.
             if (viewer) {
-                await viewer.setLocalresSurface(buffer, 4);
-                // Only after the build commits: the payload is ~128 MB and the marching
-                // cubes over it is seconds -- the app holds its busy indicator up until
-                // this arrives, so "sent" is never mistaken for "on screen and usable".
-                ws.send(JSON.stringify({ type: 'localres-shown' }));
+                const v = viewer;
+                await serializeApply(async () => {
+                    await v.setLocalresSurface(buffer, 4);
+                    // Only after the build commits: the payload is ~128 MB and the marching
+                    // cubes over it is seconds -- the app holds its busy indicator up until
+                    // this arrives, so "sent" is never mistaken for "on screen and usable".
+                    ws.send(JSON.stringify({ type: 'localres-shown' }));
+                });
             } else pendingLocalres = buffer;
         }
     };
