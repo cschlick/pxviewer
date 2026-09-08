@@ -7314,12 +7314,20 @@ class DesktopApp:
         threading.Thread(target=work, name="pxviewer-restraints-warm", daemon=True).start()
 
     def set_model_representation(self, mid: str, rep: str) -> None:
-        """Change a model's representation type (from the inline dropdown)."""
+        """Change a model's representation type (from the inline dropdown).
+
+        An explicit choice here also clears the standing neighbourhood context layer:
+        the user has just said what the model should look like, and keeping a
+        selection's ball-and-stick patch on top of it reads as the switch half
+        failing. Picking Cartoon therefore yields pure ribbon — until the next
+        selection gesture, where the Selection pane's Neighborhood checkbox applies
+        as ever. (See ROADMAP.md for the possible future beyond one-rep-per-model.)"""
         entry = self._model_entry(mid)
         if entry is None or entry.get("reps") == [rep]:
             return
         entry["rep"] = rep
         entry["reps"] = [rep]
+        entry["context_on"] = None
         self._apply_model_rep(entry)
 
     def ensure_atoms_shown_once(self, mid: Optional[str] = None) -> None:

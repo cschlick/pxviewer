@@ -1119,6 +1119,15 @@ def exercise_validation_subtabs_and_row_focus():
         table.clearSelection()
         table.selectRow(0)
         assert entry["reps"] == ["cartoon"]
+        assert entry.get("context_on")     # ...and the click drew its neighborhood patch
+
+        # An explicit rep choice clears the standing neighborhood patch -- the user
+        # just said what the whole model should look like, and leaving a selection's
+        # ball-and-stick on top reads as the switch half failing. The next selection
+        # gesture re-applies the Selection pane's checkbox as ever.
+        app.set_model_representation(mid, "spacefill")
+        assert entry["reps"] == ["spacefill"]
+        assert not entry.get("context_on")
 
 
 def exercise_one_button_shows_and_hides_every_validation_overlay():
