@@ -1075,18 +1075,33 @@ def exercise_validation_subtabs_and_row_focus():
         app._controls._on_validation_ready((mid, [result]))
 
         tabs = app._controls._validation_subtabs
-        # Clashes & contacts is the permanent first tab; the validator follows it.
+        # Validators come first and a run lands on its own results; Clashes & contacts
+        # is the permanent LAST tab, out of the way until its analysis is queued.
         assert tabs.count() == 2
-        rama = next(i for i in range(tabs.count())
-                    if tabs.tabText(i) == "Ramachandran")
-        assert rama == 1
+        assert tabs.tabText(0) == "Ramachandran"
+        assert tabs.tabText(tabs.count() - 1).startswith("Clashes")
+        assert tabs.currentIndex() == 0
 
-        table = tabs.widget(rama).findChild(QTableWidget)
+        table = tabs.widget(0).findChild(QTableWidget)
         assert table.selectionBehavior() == QTableWidget.SelectionBehavior.SelectRows
 
         table.selectRow(0)
         index = app._model_entry(mid)["_residue_index"]
         assert index[("A", "13")] == [94, 95, 96, 97, 98, 99, 100, 101]   # ILE 13
+
+        # The row click is the unified selection pipeline, under the Selection pane's
+        # checkboxes: neighborhood context drawn (the box is on by default) and the
+        # selection box showing the equivalent expression.
+        entry = app._model_entry(mid)
+        assert app._controls._context_on_select.isChecked()
+        assert entry.get("context_on")
+        assert app._controls._select_expr.text() == "chain A and resid 13"
+
+        # Untick Neighborhood and click again: no context layer this time.
+        app._controls._context_on_select.setChecked(False)
+        table.clearSelection()
+        table.selectRow(0)
+        assert not entry.get("context_on")
 
 
 def exercise_one_button_shows_and_hides_every_validation_overlay():

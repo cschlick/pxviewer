@@ -2539,8 +2539,9 @@ class ControlsWindow:
         self._stale_warning.setVisible(False)
         layout.addWidget(self._stale_warning)
 
-        # One results area: the always-present Clashes & contacts tab, then a tab per
-        # validator, (re)built as runs complete.
+        # One results area: a tab per validator, (re)built as runs complete, with the
+        # always-present Clashes & contacts tab last — it holds overlay toggles rather
+        # than a results table, so until its analysis runs it stays out of the way.
         self._validation_subtabs = QTabWidget()
         self._validation_subtabs.setDocumentMode(True)
         self._clashes_page = self._build_clashes_page()
@@ -2633,9 +2634,13 @@ class ControlsWindow:
         return page
 
     def _on_validation_row_selected(self, table, result) -> None:
-        """A validation table row was selected: select + focus that residue. Rows
-        carry chain/resid columns (per-residue validators); whole-model results like
-        Rama-Z have neither, so there is nothing to focus."""
+        """A validation table row was selected: select + focus that residue through
+        the same pipeline a click or a typed expression takes, under the Selection
+        pane's checkboxes — so the neighbourhood context and isolation clip behave
+        identically however the residue was indicated, and the selection box shows
+        the equivalent expression. Rows carry chain/resid columns (per-residue
+        validators); whole-model results like Rama-Z have neither, so there is
+        nothing to focus."""
         cols = result.columns
         if "chain" not in cols or "resid" not in cols:
             return
@@ -2646,7 +2651,14 @@ class ControlsWindow:
         resid = table.item(row, cols.index("resid"))
         if chain is None or resid is None:
             return
-        self._desktop.focus_residue(chain.text(), resid.text())
+        expression = self._desktop.focus_residue(
+            chain.text(), resid.text(),
+            focus=self._focus_on_select.isChecked(),
+            clip=self._clip_on_select.isChecked(),
+            context=self._context_on_select.isChecked())
+        if expression is not None:
+            self._select_expr.setText(expression)
+            self._select_expr_model = self._desktop._active_model_id
 
     def _on_run_validation(self) -> None:
         try:
@@ -2665,7 +2677,7 @@ class ControlsWindow:
 
     def _on_validation_ready(self, payload) -> None:
         """Validation finished (GUI thread): rebuild a sub-tab per result, keeping the
-        always-present Clashes & contacts tab (index 0) in place.
+        always-present Clashes & contacts tab in place as the last tab.
 
         ``draw_markers`` (default True for an explicit Run validation) is False when the tab is
         being populated as a side effect of a hotspot run — the tables fill in, but the markup
@@ -2674,19 +2686,25 @@ class ControlsWindow:
         mid, results, draw_markers = (*payload, True)[:3]
         tabs = self._validation_subtabs
         current = tabs.tabText(tabs.currentIndex())  # preserve the selected validator
-        while tabs.count() > 1:  # drop the previous run's validator tabs; keep Clashes (0)
-            page = tabs.widget(1)
-            tabs.removeTab(1)
+        while tabs.count() > 1:  # drop the previous run's validator tabs; keep Clashes (last)
+            page = tabs.widget(0)
+            tabs.removeTab(0)
             page.deleteLater()
         # Those checkboxes went with the pages; drop them before the new ones register, or the
         # "all" button would be reasoning about deleted widgets.
         self._marker_checks.clear()
-        for result in results:
-            tabs.addTab(self._build_validation_section(mid, result, draw_markers), result.title)
-        for i in range(tabs.count()):  # keep the user on the same validator across re-runs
-            if tabs.tabText(i) == current:
-                tabs.setCurrentIndex(i)
-                break
+        for pos, result in enumerate(results):
+            tabs.insertTab(pos, self._build_validation_section(mid, result, draw_markers),
+                           result.title)
+        # Land on the freshest thing: the same validator the user was reading when it is
+        # part of this run, otherwise the first result — never the Clashes toggles page,
+        # which a run of per-residue checks says nothing about.
+        if results:
+            tabs.setCurrentIndex(0)
+            for i in range(tabs.count() - 1):
+                if tabs.tabText(i) == current:
+                    tabs.setCurrentIndex(i)
+                    break
         self._sync_all_markup_button()
 
     def _build_hotspots_tab(self):
@@ -3018,7 +3036,8 @@ class ControlsWindow:
 
     def _on_hotspot_row_selected(self) -> None:
         """Selecting a hotspot focuses that residue — the table is a worklist, so picking a
-        row should put you in front of the thing to fix."""
+        row should put you in front of the thing to fix. Same unified pipeline and
+        Selection-pane checkboxes as a Validation row, a click, or a typed expression."""
         columns = getattr(self, "_hotspot_columns", None)
         table = self._hotspot_table
         row = table.currentRow()
@@ -3027,7 +3046,14 @@ class ControlsWindow:
         chain = table.item(row, columns.index("chain"))
         resid = table.item(row, columns.index("resid"))
         if chain is not None and resid is not None:
-            self._desktop.focus_residue(chain.text(), resid.text())
+            expression = self._desktop.focus_residue(
+                chain.text(), resid.text(),
+                focus=self._focus_on_select.isChecked(),
+                clip=self._clip_on_select.isChecked(),
+                context=self._context_on_select.isChecked())
+            if expression is not None:
+                self._select_expr.setText(expression)
+                self._select_expr_model = self._desktop._active_model_id
 
     def _build_settings_tab(self):
         """Second-class settings that don't belong in the everyday workflow."""
@@ -11677,32 +11703,34 @@ class DesktopApp:
         extents = DesktopApp._frame_extents(xyz, com, up, direction)
         return com, up, direction, radius, extents
 
-    def focus_residue(self, chain: str, resid: str) -> None:
+    def focus_residue(self, chain: str, resid: str, *, focus: bool = True,
+                      clip: bool = False, context: bool = False):
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode
         string) on the active model — driven by a Validation table row or space-bar
-        navigation. The residue is framed N->C left-to-right with its side chain up
-        (falling back to a plain focus for non-amino-acids). The residue->atom-index
+        navigation. Routed through the same fragment pipeline as a click or a typed
+        expression, so the caller's flags (the Selection pane's checkboxes, for a
+        Validation row) govern the framing, isolation clip and neighbourhood context
+        identically. Space-bar navigation keeps the plain defaults: frame it, touch
+        nothing else. Returns the equivalent selection expression (for the selection
+        box), or ``None`` when the residue names no atoms. The residue->atom-index
         map is built once from the model and cached on the model entry."""
         entry = self._model_entry(self._active_model_id)
         if entry is None:
-            return
+            return None
         model = getattr(entry["session"], "model", None)
         if model is None:
-            return
+            return None
         index = entry.get("_residue_index")
         if index is None:
             index = entry["_residue_index"] = self._build_residue_index(model)
         key = (chain.strip(), resid.strip())
         atoms = index.get(key)
         if not atoms:
-            return
+            return None
         self._focused_residue = key
-        self.highlight_atoms_in(entry["id"], atoms)
-        orient = self._residue_orientation(model, atoms)
-        if orient is None:
-            self.focus_atoms_in(entry["id"], atoms)
-        else:
-            entry["session"].orient_camera(*orient)
+        self._select_fragment(entry["id"], entry["session"], entry, list(atoms),
+                              focus=focus, clip=clip, context=context)
+        return f"chain {key[0]} and resid {key[1]}"
 
     def advance_residue(self, step: int = 1) -> None:
         """Move the focused residue to the next/previous one in its chain (space-bar
