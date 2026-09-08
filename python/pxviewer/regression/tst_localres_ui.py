@@ -552,6 +552,62 @@ def exercise_the_computed_resolution_map_is_saved_and_reused():
             dispose(app)
 
 
+def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
+    """Picking Map-model CC computes a field against the group's model, pins it hidden
+    under the map (a colour source, never a surface or a tree row — the localres
+    contract), colours the map by it with the brand ramp riding the payload, and stays
+    mutually exclusive with colour-by-resolution. Unloading the map takes it along."""
+    import struct
+    import time
+
+    app = DesktopApp(port=0)
+    try:
+        app._webapp.start()
+        app.load_map_model_demo(d_min=4.0)
+        process_events()
+        vid = app._volumes[0]["id"]
+        full = app._volume_entry(vid)
+
+        payloads = []
+        stub = StubSession()
+        stub.show_localres_grid = payloads.append
+        app._control_session = lambda: stub
+
+        app.compute_cc_map(vid)
+        deadline = time.time() + 120
+        while time.time() < deadline and not full.get("cc_map"):
+            process_events()
+            time.sleep(0.02)
+        process_events()
+        assert full.get("cc_map"), "the CC field never landed"
+
+        cc_entry = app._volume_entry(full["cc_map"])
+        assert cc_entry["is_resolution"] and cc_entry["pinned_to"] == vid
+        assert not cc_entry["visible"]
+        assert full["color_by_cc"]
+        lo, hi = full["cc_domain"]
+        assert -1.0 <= lo < hi <= 1.0
+        assert hi > 0.9        # the demo map is computed from its model: near-perfect
+
+        # The brand ramp rides the payload header (see encode_localres).
+        n = struct.unpack_from("<fffI", payloads[-1])[3]
+        assert n == len(DesktopApp._CC_PALETTE)
+        assert list(struct.unpack_from("<%dI" % n, payloads[-1], 16)) == \
+            DesktopApp._CC_PALETTE
+
+        # One colour source at a time, in both directions.
+        app._pin_resolution_map(vid, cc_entry["data"], color=True)
+        assert full["color_by_resolution"] and not full["color_by_cc"]
+        app.set_color_by_cc(vid, True)
+        assert full["color_by_cc"] and not full["color_by_resolution"]
+
+        # The field's lifecycle rides its map.
+        app.remove_volume(vid)
+        assert app._volume_entry(full["cc_map"]) is None
+    finally:
+        dispose(app)
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

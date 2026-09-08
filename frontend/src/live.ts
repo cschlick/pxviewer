@@ -224,8 +224,8 @@ export type LocalresGrid = {
 };
 
 /** The [lo, hi] colour ramp sampled into a 256-entry LUT (see buildLocalresShape). */
-function localresLut(lo: number, hi: number): Color[] {
-    const scale = ColorScale.create({ domain: [lo, hi], listOrName: LOCALRES_PALETTE });
+function localresLut(lo: number, hi: number, palette?: Color[]): Color[] {
+    const scale = ColorScale.create({ domain: [lo, hi], listOrName: palette ?? LOCALRES_PALETTE });
     const lut: Color[] = [];
     for (let i = 0; i < 256; i++) lut.push(scale.color(lo + ((i + 0.5) / 256) * (hi - lo)));
     return lut;
@@ -706,6 +706,7 @@ export class LiveViewer {
     // lives in Python; this is applied from its messages and defaulted the same.
     private localresFactor = 4;
     private localresLevel: number | undefined;       // last built level, for factor changes
+    private localresPalette: Color[] | undefined;    // payload-supplied ramp (CC field); undefined = resolution ramp
     private localresVisible = true;                  // the one checkbox: hide/show in place
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
@@ -1737,7 +1738,13 @@ export class LiveViewer {
         const isoLevel = dv.getFloat32(offset, true);
         const lo = dv.getFloat32(offset + 4, true);
         const hi = dv.getFloat32(offset + 8, true);
-        let p = offset + 12;
+        // Optional explicit colour ramp (low to high); zero entries means the built-in
+        // resolution palette, so plain local-resolution payloads look exactly as before.
+        const nColors = dv.getUint32(offset + 12, true);
+        let p = offset + 16;
+        const palette: Color[] = [];
+        for (let i = 0; i < nColors; i++) { palette.push(Color(dv.getUint32(p, true))); p += 4; }
+        this.localresPalette = palette.length ? palette : undefined;
         const readGrid = () => {
             const nx = dv.getInt32(p, true), ny = dv.getInt32(p + 4, true), nz = dv.getInt32(p + 8, true);
             p += 12;
@@ -1752,7 +1759,8 @@ export class LiveViewer {
 
         // Kept so a level change needs no new grids. The colour ramp is sampled into a
         // LUT here so the per-vertex work is an array index, not a scale evaluation.
-        this.localresGrids = { A, B, lo, hi, levels: new Map(), lut: localresLut(lo, hi) };
+        this.localresGrids = { A, B, lo, hi, levels: new Map(),
+                               lut: localresLut(lo, hi, this.localresPalette) };
         this.localresLevel = isoLevel;
         const shape = await this.buildLocalresShape(
             this.localresGridAt(this.localresFactor), B, isoLevel, lo, hi,
@@ -1783,7 +1791,7 @@ export class LiveViewer {
         if (!held) return;   // the payload header carries the domain; nothing to update yet
         held.lo = lo;
         held.hi = hi;
-        held.lut = localresLut(lo, hi);
+        held.lut = localresLut(lo, hi, this.localresPalette);
         if (this.localresLevel !== undefined) await this.setLocalresIso(this.localresLevel);
     }
 

@@ -3416,18 +3416,29 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_style(vid, v))
 
             def _set_color(v, it=it):
-                # "Local resolution" rides the same dropdown as the flat colours: both
-                # answer "what colours this map", so two controls for one question (a
-                # colour row AND a separate checkbox) made each look unrelated to the
-                # other. Picking it turns the colouring on; picking any colour returns
-                # to a flat surface in that colour.
+                # "Local resolution" and "Map-model CC" ride the same dropdown as the
+                # flat colours: all three answer "what colours this map", so separate
+                # controls for one question made each look unrelated to the others.
+                # Picking a colouring turns it on; picking any colour returns to a flat
+                # surface in that colour. Picking Map-model CC computes fresh against
+                # the model as it now stands (the manual re-run, like Update maps).
                 if v == "localres":
                     it["color_by_resolution"] = True
+                    it["color_by_cc"] = False
                     self._safe(lambda: self._desktop.set_color_by_resolution(vid, True))
                     return
-                if it.get("color_by_resolution"):
+                if v == "ccmap":
+                    it["color_by_cc"] = True
                     it["color_by_resolution"] = False
-                    self._safe(lambda: self._desktop.set_color_by_resolution(vid, False))
+                    self._safe(lambda: self._desktop.compute_cc_map(vid))
+                    return
+                for flag, off in (("color_by_resolution",
+                                   lambda: self._desktop.set_color_by_resolution(vid, False)),
+                                  ("color_by_cc",
+                                   lambda: self._desktop.set_color_by_cc(vid, False))):
+                    if it.get(flag):
+                        it[flag] = False
+                        self._safe(off)
                 it["color"] = v
                 self._safe(lambda: self._desktop.set_volume_color(vid, v))
 
@@ -3443,11 +3454,18 @@ class ControlsWindow:
             add_combo("Downsample",
                       [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],
                       int(it.get("localres_downsample") or 1), _set_localres_ds)
+            themes = []
+            if it.get("resolution_map"):
+                themes.append(("Local resolution", "localres"))
+            mmm = self._desktop.group_mmm(it.get("group"))
+            if mmm is not None and mmm.model() is not None:
+                # A paired model is what makes a CC field computable at all.
+                themes.append(("Map-model CC", "ccmap"))
             self._add_color_row(
-                "localres" if it.get("color_by_resolution") else live.get("color"),
+                "localres" if it.get("color_by_resolution")
+                else "ccmap" if it.get("color_by_cc") else live.get("color"),
                 _set_color,
-                themes=([("Local resolution", "localres")]
-                        if it.get("resolution_map") else None),
+                themes=themes or None,
                 title="Map color")
             if live.get("negative_color"):
                 # A difference map draws a second contour at -level; its color is as
@@ -9937,8 +9955,7 @@ class DesktopApp:
         entry["mask_radius"] = radius
         self._write_display_map(vid, self._display_map_data(entry))
         self._reload_viewport()
-        if entry.get("color_by_resolution"):
-            self._push_localres(entry)  # re-extract the coloured surface from the masked grid
+        self._push_volume_coloring(entry)  # re-extract any coloured surface from the masked grid
         self._status(
             f"{entry['name']}: masked {radius:g} A around the model" if radius
             else f"{entry['name']}: mask off")
@@ -10013,15 +10030,23 @@ class DesktopApp:
             return
         if entry.get("color_by_resolution"):
             self.set_color_by_resolution(vid, False)  # tear down the streamed surface first
-        res_vid = entry.get("resolution_map")
-        if res_vid is not None:
-            self._remove_resolution_map(res_vid)  # the pinned resolution map goes with it
+        if entry.get("color_by_cc"):
+            self.set_color_by_cc(vid, False)
+        for key in ("resolution_map", "cc_map"):
+            pinned = entry.get(key)
+            if pinned is not None:
+                self._remove_resolution_map(pinned)  # the pinned colour source goes with it
         if entry.get("is_resolution") and entry.get("pinned_to"):
             parent = self._volume_entry(entry["pinned_to"])
             if parent is not None:
-                if parent.get("color_by_resolution"):
-                    self.set_color_by_resolution(parent["id"], False)
-                parent.pop("resolution_map", None)
+                if parent.get("resolution_map") == vid:
+                    if parent.get("color_by_resolution"):
+                        self.set_color_by_resolution(parent["id"], False)
+                    parent.pop("resolution_map", None)
+                if parent.get("cc_map") == vid:
+                    if parent.get("color_by_cc"):
+                        self.set_color_by_cc(parent["id"], False)
+                    parent.pop("cc_map", None)
         self._volumes.remove(entry)
         self._prune_group(entry["group"])
         self._reload_viewport()
@@ -10312,6 +10337,8 @@ class DesktopApp:
         if on:
             if not full.get("resolution_map"):
                 raise ValueError("no resolution map computed for this map yet")
+            if full.get("color_by_cc"):
+                self.set_color_by_cc(full_vid, False)  # one colour source at a time
             full["color_by_resolution"] = True
             self._push_localres(full)
         else:
@@ -10376,7 +10403,7 @@ class DesktopApp:
                 name = f"{entry['id']}.d{factor}.map"
                 shown.decimated(factor).write_map(str(vols_dir / name))
                 urls[factor] = f"{self._webapp.url}vols/{name}"
-        if not entry.get("color_by_resolution"):
+        if not (entry.get("color_by_resolution") or entry.get("color_by_cc")):
             # The plain surface is what is on screen: swap the scene to the coarser
             # (or full) file. Parked-plain maps pick the right file up on any reload.
             self._reload_viewport()
@@ -10518,6 +10545,149 @@ class DesktopApp:
             # what the user set), and the coloured surface takes that visibility over.
             session.set_volume_visible(full["ref"], False)
             session.set_localres_visible(bool(full["visible"]))
+
+    # -- map-model CC colouring -------------------------------------------------
+
+    #: The app icon's spectrum, low to high: poor agreement in hot pink through purple
+    #: and blue to good agreement in calm teal. Deliberately unlike both the hotspot
+    #: yellow-to-red and the local-resolution blue-to-red, so the three colourings can
+    #: never be mistaken for one another.
+    _CC_PALETTE = [0xEC4899, 0xA855F7, 0x6366F1, 0x3B82F6, 0x2DD4BF]
+
+    def compute_cc_map(self, vid: str) -> None:
+        """Compute a voxel-local map-model CC field for a map against its group's model,
+        pin it hidden under the map, and colour the map's surface by it.
+
+        The field is :func:`pxviewer.volume_io.local_map_model_cc` — the model's density
+        on the map's own grid, correlated with the map over a resolution-sized moving
+        window — so regions the model fails to explain glow pink while well-fit density
+        stays teal. Manual by design: picking the colouring computes against the model
+        as it now stands, and a model that has since moved needs a re-pick, exactly the
+        Update-maps contract. Runs on a background thread.
+        """
+        full = self._volume_entry(vid)
+        if full is None:
+            raise ValueError("pick a map to colour")
+        mmm = self.group_mmm(full.get("group"))
+        model = mmm.model() if mmm is not None else None
+        if model is None:
+            raise ValueError("the map's group has no model to correlate against — "
+                             "pair them first (fetch together, or Make maps)")
+        name = full["name"]
+
+        def work():
+            from .volume_io import local_map_model_cc
+
+            self._status(f"computing local map-model CC for {name}…")
+            try:
+                # Only sets the window scale and the model map's sharpness — a rough
+                # estimate shifts contrast, not meaning (unlike localres, where d_min
+                # moves the answer; see local_resolution_from_half_maps).
+                d_min = float(mmm.resolution())
+            except Exception:  # pragma: no cover - estimator quirks
+                d_min = 3.0
+            try:
+                cc = local_map_model_cc(full["data"], model, d_min=d_min)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                self._status(f"map-model CC failed: {exc}")
+                return
+            self.bridge.run_on_main.emit(lambda: self._pin_cc_map(vid, cc))
+
+        self.run_background(work, name="pxviewer-ccmap", label="Map-model CC")
+
+    def _pin_cc_map(self, full_vid: str, cc_data) -> None:
+        """Add a computed CC field as a hidden volume pinned under ``full_vid``
+        (replacing any previous one), then colour the map by it."""
+        full = self._volume_entry(full_vid)
+        if full is None:  # the map was unloaded while we computed
+            return
+        old = full.get("cc_map")
+        if old is not None:
+            self.set_color_by_cc(full_vid, False)
+            self._remove_resolution_map(old)  # same removal: a hidden pinned source
+        full.pop("cc_domain", None)           # a fresh field gets a fresh colour range
+        with self._batch_load():
+            cc_vid = self._add_volume(cc_data, f"{full['name']} · map-model CC",
+                                      iso=0.5, iso_kind="absolute")
+            cc_entry = self._volume_entry(cc_vid)
+            # A colour source, never a surface — the same contract as the pinned
+            # resolution map (see _pin_resolution_map for what the flag gates).
+            cc_entry["is_resolution"] = True
+            cc_entry["pinned_to"] = full_vid
+            cc_entry["visible"] = False
+        full["cc_map"] = cc_vid
+        self.set_color_by_cc(full_vid, True)
+
+    def set_color_by_cc(self, full_vid: str, on: bool) -> None:
+        """Toggle colouring a full map by its pinned map-model CC field. Mirrors
+        :meth:`set_color_by_resolution`; the two colourings are mutually exclusive
+        (one colour source per map), so turning either on turns the other off."""
+        full = self._volume_entry(full_vid)
+        if full is None:
+            return
+        if on:
+            if not full.get("cc_map"):
+                raise ValueError("no CC field computed for this map yet")
+            if full.get("color_by_resolution"):
+                self.set_color_by_resolution(full_vid, False)
+            full["color_by_cc"] = True
+            self._push_cc(full)
+        else:
+            full["color_by_cc"] = False
+            session = self._control_session()
+            if session is not None:
+                session.clear_localres_grid()
+                session.set_volume_visible(full["ref"], bool(full["visible"]))
+        self._emit_loaded_changed()
+
+    def _push_cc(self, full) -> None:
+        """(Re)stream a full map's colour-by-CC surface — :meth:`_push_localres` with
+        the CC field as the colour source and the brand spectrum as the ramp (the wire
+        and the frontend surface machinery are shared; only the grids and the palette
+        differ)."""
+        if not full.get("color_by_cc"):
+            return
+        cc = self._volume_entry(full.get("cc_map"))
+        if cc is None:
+            return
+        from .volume_io import encode_localres
+
+        surface = self._display_map_data(full)
+        domain = full.get("cc_domain")
+        if domain is None:  # stored once, like localres_domain — see _push_localres
+            domain = self._cc_domain(cc["data"])
+            full["cc_domain"] = domain
+        payload = encode_localres(
+            surface.map_manager, cc["data"].map_manager,
+            iso_level=self._absolute_iso(full, surface), domain=domain,
+            palette=self._CC_PALETTE)
+        session = self._control_session()
+        if session is not None:
+            session.set_localres_downsample(int(full.get("localres_downsample", 4)))
+            full["localres_drawn"] = False
+            self._begin_localres_wait()   # released by the viewport's localres-shown ack
+            session.show_localres_grid(payload)
+            session.set_volume_visible(full["ref"], False)
+            session.set_localres_visible(bool(full["visible"]))
+
+    @staticmethod
+    def _cc_domain(cc_data) -> tuple:
+        """A colour range for a CC field: the localres percentiles, but capped at 1.0
+        and opened *downward* when nearly flat. Correlation has a hard ceiling, so the
+        localres fallback for a degenerate span (widen upward by 1.0) would put the
+        whole ramp above any possible value — a perfectly-explained map should colour
+        uniformly teal, not borrow an out-of-range scale."""
+        lo, hi = DesktopApp._localres_domain(cc_data)
+        hi = min(hi, 1.0)
+        lo = max(min(lo, hi - 0.1), -1.0)
+        return (lo, hi)
+
+    def _push_volume_coloring(self, full) -> None:
+        """Re-stream whichever colour-by surface is active for this map, if either."""
+        if full.get("color_by_resolution"):
+            self._push_localres(full)
+        elif full.get("color_by_cc"):
+            self._push_cc(full)
 
     # -- fetch from the PDB / EMDB ---------------------------------------------
 

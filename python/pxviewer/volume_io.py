@@ -381,7 +381,8 @@ def encode_hotspot_concern(map_manager: Any, *, concern_knee: float = 0.5,
 
 
 def encode_localres(
-    surface_map: Any, color_map: Any, *, iso_level: float, domain: Tuple[float, float]
+    surface_map: Any, color_map: Any, *, iso_level: float, domain: Tuple[float, float],
+    palette: Optional[List[int]] = None,
 ) -> bytes:
     """Serialise a local-resolution colouring: two co-registered grids the frontend turns
     into one surface whose *shape* is the primary map and whose *colour* is a second field.
@@ -393,14 +394,84 @@ def encode_localres(
     Both grids ride along so the frontend needs no crystallography and no state-tree lookup;
     they must share a physical grid for the sampling to line up (see :func:`_encode_affine_grid`).
 
+    ``palette`` is an optional explicit colour ramp — 0xRRGGBB ints, low to high —
+    for a colouring that is not local resolution (the map-model CC field ships the
+    brand spectrum this way). An empty count means the frontend's built-in
+    resolution ramp, so existing colourings are unchanged.
+
     Layout (little-endian; the sender prepends the u32 message tag):
-        f32 isoLevel; f32 domainLo, domainHi; <affine-grid A>; <affine-grid B>
+        f32 isoLevel; f32 domainLo, domainHi; u32 nColors; u32 rgb × nColors;
+        <affine-grid A>; <affine-grid B>
     """
     import struct
 
     lo, hi = domain
-    header = struct.pack("<fff", float(iso_level), float(lo), float(hi))
+    colors = [int(c) & 0xFFFFFF for c in (palette or [])]
+    header = struct.pack("<fffI", float(iso_level), float(lo), float(hi), len(colors))
+    header += struct.pack("<%dI" % len(colors), *colors) if colors else b""
     return header + _encode_affine_grid(surface_map) + _encode_affine_grid(color_map)
+
+
+def local_map_model_cc(
+    map_data: Any, model: Any, *, d_min: float, radius: Optional[float] = None,
+) -> "VolumeData":
+    """A voxel-wise local map-model correlation field (native cctbx + a moving window).
+
+    The model's density is computed on the experimental map's own grid
+    (``map_model_manager.generate_map`` — the same call the validation map-fit channels
+    use, with the scattering table passed explicitly so a cryo-EM model map is not
+    silently computed with X-ray form factors), and every voxel then gets the Pearson
+    correlation between the two maps over a Gaussian window of ``radius`` Å around it —
+    local means, variances and covariance are all the same smoothing applied to products,
+    which is the standard sliding-window construction cctbx does not package as one call.
+
+    ``radius`` defaults to ``2 × d_min`` (floored at 3 Å): tight enough that a misplaced
+    side chain shows as its own patch, wide enough that the correlation is estimated over
+    many independent voxels. Voxels where either map is locally flat (solvent, far from
+    the model) get 0.0 rather than noise — the same sentinel the local-resolution map
+    uses for its mask, so the colour-domain percentiles skip them.
+
+    Returns a :class:`VolumeData` on the experimental grid, values clipped to [-1, 1].
+    """
+    import scipy.ndimage as ndi
+    from iotbx.map_model_manager import map_model_manager
+
+    mm = getattr(map_data, "map_manager", map_data)
+    model = model.deep_copy()
+    scattering = model.get_scattering_table() or "electron"
+    model.setup_scattering_dictionaries(scattering_table=scattering)
+    mmm = map_model_manager(map_manager=mm.deep_copy(), model=model)
+    mmm.generate_map(model=model, d_min=float(d_min), map_id="model_map",
+                     scattering_table=scattering)
+
+    exp = mm.map_data().as_numpy_array().astype(np.float64)
+    calc = mmm.get_map_manager_by_id("model_map").map_data().as_numpy_array().astype(
+        np.float64)
+    radius = max(3.0, 2.0 * float(d_min)) if radius is None else float(radius)
+    spacing = [float(p) for p in mm.pixel_sizes()]
+    sigma = [radius / max(s, 1e-6) for s in spacing]
+
+    def g(a):
+        return ndi.gaussian_filter(a, sigma=sigma, mode="nearest")
+
+    m_exp, m_calc = g(exp), g(calc)
+    cov = g(exp * calc) - m_exp * m_calc
+    var_exp = g(exp * exp) - m_exp * m_exp
+    var_calc = g(calc * calc) - m_calc * m_calc
+    # Locally flat in either map means the correlation is 0/0 — solvent against nothing.
+    # The floor is relative to each map's global variance, so it needs no absolute scale.
+    floor_exp = 1e-4 * float(exp.var())
+    floor_calc = 1e-4 * float(calc.var())
+    with np.errstate(invalid="ignore", divide="ignore"):
+        cc = cov / np.sqrt(np.maximum(var_exp, floor_exp)
+                           * np.maximum(var_calc, floor_calc))
+    cc = np.clip(np.nan_to_num(cc, nan=0.0), -1.0, 1.0)
+    cc[(var_exp < floor_exp) | (var_calc < floor_calc)] = 0.0
+
+    from cctbx.array_family import flex
+
+    out = mm.customized_copy(map_data=flex.double(np.ascontiguousarray(cc)))
+    return VolumeData.from_map_manager(out, name="map-model CC")
 
 
 def local_resolution_from_half_maps(

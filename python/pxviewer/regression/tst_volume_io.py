@@ -131,6 +131,54 @@ def exercise_masking_leaves_the_real_map_alone():
     assert occupied(kept) < 0.5 * occupied(before)
 
 
+def exercise_local_map_model_cc_agrees_where_the_model_explains_the_map():
+    """A map generated from the model correlates ~1 everywhere the field is defined, and
+    shaking the model drops it — the two behaviours that make the field a fit signal
+    rather than noise. Flat regions carry the 0.0 mask sentinel, values stay in [-1, 1]."""
+    from scitbx.array_family import flex
+
+    from pxviewer.volume_io import local_map_model_cc
+
+    mmm = synthetic_mmm()
+    vol = VolumeData.from_map_manager(mmm.map_manager())
+    model = mmm.model()
+
+    cc = local_map_model_cc(vol, model, d_min=3.0)
+    a = cc.array
+    assert a.shape == vol.array.shape
+    assert float(a.max()) <= 1.0 and float(a.min()) >= -1.0
+    on = a[a != 0.0]
+    assert on.size and float(np.median(on)) > 0.95
+
+    shaken = model.deep_copy()
+    rng = np.random.default_rng(3)
+    sites = shaken.get_sites_cart()
+    shaken.set_sites_cart(sites + flex.vec3_double(
+        (1.5 * rng.standard_normal((sites.size(), 3))).tolist()))
+    worse = local_map_model_cc(vol, shaken, d_min=3.0).array
+    worse_on = worse[worse != 0.0]
+    assert float(np.median(worse_on)) < float(np.median(on)) - 0.2
+
+
+def exercise_encode_localres_carries_an_optional_palette():
+    """The payload header says how many ramp colours follow; zero means the frontend's
+    built-in resolution ramp, so a plain localres payload differs only by the count."""
+    import struct
+
+    from pxviewer.volume_io import encode_localres
+
+    mm = synthetic_mmm().map_manager()
+    plain = encode_localres(mm, mm, iso_level=1.5, domain=(4.0, 14.0))
+    iso, lo, hi, n = struct.unpack_from("<fffI", plain)
+    assert (round(iso, 5), lo, hi, n) == (1.5, 4.0, 14.0, 0)
+
+    ramp = [0xEC4899, 0x2DD4BF]
+    branded = encode_localres(mm, mm, iso_level=1.5, domain=(4.0, 14.0), palette=ramp)
+    assert struct.unpack_from("<fffI", branded)[3] == 2
+    assert list(struct.unpack_from("<2I", branded, 16)) == ramp
+    assert branded[16 + 8:] == plain[16:]      # same grids after either header
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

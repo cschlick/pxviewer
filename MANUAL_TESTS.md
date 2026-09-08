@@ -174,6 +174,13 @@ Run **Tutorials ▸ Look at local resolution** twice.
 5. Second run of the tutorial.
    - **Watch for:** the saved resolution map loads from disk — seconds, not the
      original computation.
+6. Map-model CC: load a map+model pair (the cryo-EM refine demo works), then on the
+   map's pane pick Color ▸ **Map-model CC**.
+   - **Watch for:** a background compute announces itself, then the map recolours in
+     the px spectrum — poorly-fit regions pink/magenta through purple to well-fit
+     teal, unmistakably not the hotspot or resolution schemes; picking a flat colour
+     restores the plain contour; after moving the model, picking a colour and then
+     Map-model CC again recomputes against the new positions.
 
 ## Pass 7 — Tutorials sweep (15 min)
 
