@@ -1089,19 +1089,29 @@ def exercise_validation_subtabs_and_row_focus():
         index = app._model_entry(mid)["_residue_index"]
         assert index[("A", "13")] == [94, 95, 96, 97, 98, 99, 100, 101]   # ILE 13
 
-        # The row click is the unified selection pipeline, under the Selection pane's
-        # checkboxes: neighborhood context drawn (the box is on by default) and the
-        # selection box showing the equivalent expression.
+        # The first row click switches the ribbon model to ball-and-stick -- the
+        # atom-precision rule measuring and dragging already follow -- and the
+        # selection box shows the equivalent expression. With the whole model in
+        # sticks the neighbourhood layer has nothing to add, so there is no
+        # per-selection context layer to rebuild.
         entry = app._model_entry(mid)
-        assert app._controls._context_on_select.isChecked()
-        assert entry.get("context_on")
+        assert entry["reps"] == ["ball-and-stick"]
+        assert not entry.get("context_on")
         assert app._controls._select_expr.text() == "chain A and resid 13"
 
-        # Untick Neighborhood and click again: no context layer this time.
-        app._controls._context_on_select.setChecked(False)
+        # ...which is what makes clicking through a worklist cheap: a later click
+        # re-sends no representations at all, just highlight + camera + clip.
+        sent = []
+        session = entry["session"]
+        for name in ("set_representation", "add_representation",
+                     "remove_representation"):
+            real = getattr(session, name)
+            setattr(session, name,
+                    (lambda real=real, name=name:
+                     lambda *a, **k: (sent.append(name), real(*a, **k))[1])())
         table.clearSelection()
         table.selectRow(0)
-        assert not entry.get("context_on")
+        assert sent == [], sent
 
 
 def exercise_one_button_shows_and_hides_every_validation_overlay():

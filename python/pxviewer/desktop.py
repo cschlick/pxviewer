@@ -2636,11 +2636,18 @@ class ControlsWindow:
     def _on_validation_row_selected(self, table, result) -> None:
         """A validation table row was selected: select + focus that residue through
         the same pipeline a click or a typed expression takes, under the Selection
-        pane's checkboxes — so the neighbourhood context and isolation clip behave
-        identically however the residue was indicated, and the selection box shows
-        the equivalent expression. Rows carry chain/resid columns (per-residue
-        validators); whole-model results like Rama-Z have neither, so there is
-        nothing to focus."""
+        pane's checkboxes, with the selection box showing the equivalent expression.
+        Rows carry chain/resid columns (per-residue validators); whole-model results
+        like Rama-Z have neither, so there is nothing to focus.
+
+        The first click switches a ribbon model to ball-and-stick (the standing rule
+        for atom-precision work — measuring and dragging do the same). Judging an
+        outlier needs its atoms anyway, and it makes every later click nearly free:
+        with the whole model in sticks the per-selection neighbourhood layer has
+        nothing to add, so clicking through a worklist re-sends no representations —
+        without this, each click rebuilt the entire cartoon (the ribbon steps aside
+        around the neighbourhood), which was sluggish and raced the frontend's
+        rebuilds hard enough to spray could-not-find-node errors."""
         cols = result.columns
         if "chain" not in cols or "resid" not in cols:
             return
@@ -2651,6 +2658,7 @@ class ControlsWindow:
         resid = table.item(row, cols.index("resid"))
         if chain is None or resid is None:
             return
+        self._desktop.ensure_atoms_shown()
         expression = self._desktop.focus_residue(
             chain.text(), resid.text(),
             focus=self._focus_on_select.isChecked(),
@@ -3036,8 +3044,9 @@ class ControlsWindow:
 
     def _on_hotspot_row_selected(self) -> None:
         """Selecting a hotspot focuses that residue — the table is a worklist, so picking a
-        row should put you in front of the thing to fix. Same unified pipeline and
-        Selection-pane checkboxes as a Validation row, a click, or a typed expression."""
+        row should put you in front of the thing to fix. Same unified pipeline,
+        Selection-pane checkboxes and first-click switch to ball-and-stick as a
+        Validation row (see :meth:`_on_validation_row_selected` for why)."""
         columns = getattr(self, "_hotspot_columns", None)
         table = self._hotspot_table
         row = table.currentRow()
@@ -3046,6 +3055,7 @@ class ControlsWindow:
         chain = table.item(row, columns.index("chain"))
         resid = table.item(row, columns.index("resid"))
         if chain is not None and resid is not None:
+            self._desktop.ensure_atoms_shown()
             expression = self._desktop.focus_residue(
                 chain.text(), resid.text(),
                 focus=self._focus_on_select.isChecked(),

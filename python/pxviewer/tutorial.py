@@ -289,7 +289,8 @@ def validation_tutorial() -> Tutorial:
         Step(
             "Each validator now has its own sub-tab: a summary, a table of outliers, and a "
             "**Markers** switch that draws the problems right in the viewport. Click any row "
-            "in a table to select and zoom to that residue.\n\nThat's the loop — find the "
+            "in a table to select and zoom to that residue — the first click switches the "
+            "model to ball-and-stick, so the atoms you are judging are actually visible.\n\nThat's the loop — find the "
             "outliers, see them in 3D, fix them (drag or minimize), and re-run.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
