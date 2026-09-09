@@ -10825,17 +10825,22 @@ class DesktopApp:
         elif full.get("color_by_cc"):
             self._push_cc(full)
 
-    #: The px spectrum as [rgb, stop] ramp stops on the deficit cloud's [0, 1] scale
-    #: (deficit = 1 − CC): faint teal where the fit is merely imperfect, through blue
-    #: and purple to hot pink where the model fails to explain the density. The stops
-    #: sit where real damage lands — a 2 Å-displaced stretch reads deficit ~0.6–0.8,
-    #: so pink starts at 0.75; a ramp anchored at the theoretical extremes painted
-    #: everything indigo and kept pink for anti-correlation nothing real reaches.
+    #: The px spectrum as [rgb, stop] ramp stops in *linear* deficit units (1 − CC):
+    #: faint teal where the fit is merely imperfect, through blue and purple to hot
+    #: pink where the model fails to explain the density. The stops sit where real
+    #: damage lands — a 2 Å-displaced stretch reads deficit ~0.6–0.8, so pink starts
+    #: at 0.75; a ramp anchored at the theoretical extremes painted everything indigo
+    #: and kept pink for anti-correlation nothing real reaches.
     _CC_FIELD_STOPS = [(0x2DD4BF, 0.0), (0x3B82F6, 0.25), (0x6366F1, 0.45),
                        (0xA855F7, 0.60), (0xEC4899, 0.75)]
-    #: Where the deficit cloud starts to become visible: CC below 1 − this shows.
-    #: Feeds encode_severity_box's cut, which seeds the Hotspots knee slider too.
-    _CC_FIELD_CUT = 0.25
+    #: Where the deficit cloud starts to become visible, in deficit units. 0.4 by
+    #: default — every real structure carries a broad mildly-imperfect envelope
+    #: (deficit ~0.25–0.4), and starting below it shrouds the severe cores in a
+    #: uniform haze; the slider goes lower for anyone who wants the haze back.
+    #: (A gamma/log remap of the displayed values was tried instead and reverted:
+    #: applied consistently to values, stops, cut and knee alike it is exactly a
+    #: no-op, and applied inconsistently it makes the slider lie.)
+    _CC_FIELD_CUT = 0.40
 
     def set_cc_field(self, vid: str, on: bool) -> None:
         """The second presentation of the CC field: a 3-D deficit cloud drawn *over*

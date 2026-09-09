@@ -640,7 +640,7 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
 
         # The Hotspots tab's controls drive it: the checkbox reflects the state, and
         # the threshold slider speaks deficit units — a knee of 0.5 reaches the wire
-        # as 0.5, not divided by the severity cap.
+        # as 0.5, never divided by the severity cap.
         process_events()
         assert app._controls._cc_field_check.isChecked()
         knees = []

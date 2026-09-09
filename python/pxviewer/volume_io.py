@@ -427,9 +427,12 @@ def local_map_model_cc(
 
     ``radius`` defaults to ``2 × d_min`` (floored at 3 Å): tight enough that a misplaced
     side chain shows as its own patch, wide enough that the correlation is estimated over
-    many independent voxels. Voxels where either map is locally flat (solvent, far from
-    the model) get 0.0 rather than noise — the same sentinel the local-resolution map
-    uses for its mask, so the colour-domain percentiles skip them.
+    many independent voxels. It is the window's approximate *extent*, not the Gaussian's
+    sigma — the kernel uses ``σ = radius / 2``, so most of the weight falls inside the
+    stated radius. (Using the radius as σ directly smeared a 16-residue displacement
+    into one structureless blob.) Voxels where either map is locally flat (solvent, far
+    from the model) get 0.0 rather than noise — the same sentinel the local-resolution
+    map uses for its mask, so the colour-domain percentiles skip them.
 
     Returns a :class:`VolumeData` on the experimental grid, values clipped to [-1, 1].
     """
@@ -449,7 +452,7 @@ def local_map_model_cc(
         np.float64)
     radius = max(3.0, 2.0 * float(d_min)) if radius is None else float(radius)
     spacing = [float(p) for p in mm.pixel_sizes()]
-    sigma = [radius / max(s, 1e-6) for s in spacing]
+    sigma = [(radius / 2.0) / max(s, 1e-6) for s in spacing]
 
     def g(a):
         return ndi.gaussian_filter(a, sigma=sigma, mode="nearest")
