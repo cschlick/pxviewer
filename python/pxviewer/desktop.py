@@ -10982,6 +10982,24 @@ class DesktopApp:
         if defined.size:
             cut = float(min(max(cut, np.percentile(defined, 85)), 0.95))
         full["cc_field_cut"] = cut
+        # Interactivity: raymarch cost scales with the box the cloud spans, and the
+        # map's full box is mostly emptiness once the deficit is masked to atom reach
+        # (the severity field never has this problem — it only ever spans the model).
+        # Crop to the nonzero bounding box, with a margin so the cloud fades out
+        # rather than off; then a hard voxel budget, because a big molecule must not
+        # buy back the cost the crop just saved.
+        occupied = np.argwhere(deficit > 0.0)
+        if occupied.size:
+            lo = np.maximum(occupied.min(axis=0) - 2, 0)
+            hi = np.minimum(occupied.max(axis=0) + 3, deficit.shape)
+            deficit = deficit[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]
+            origin = [float(o) + int(l) for o, l in zip(origin, lo)]
+        budget = 72   # per axis: a 72-cube raymarches interactively on the low preset
+        extra = [max(1, int(np.ceil(n / budget))) for n in deficit.shape]
+        if any(f > 1 for f in extra):
+            deficit = deficit[::extra[0], ::extra[1], ::extra[2]]
+            spacing = [s * f for s, f in zip(spacing, extra)]
+            origin = [o / f for o, f in zip(origin, extra)]
         payload = hotspots.encode_severity_box(
             deficit, spacing, origin, steps_per_cell=cloud_steps,
             cap=1.0, cut=cut)
@@ -11940,6 +11958,7 @@ class DesktopApp:
 
     def fetch_map_model_pair(self, *, pdb_id: str, emdb_number: Optional[str] = None,
                              displace: Optional[tuple] = None,
+                             map_opacity: Optional[float] = None,
                              reuse_existing: bool = True) -> None:
         """Fetch a deposited cryo-EM map and its model, and load them as one paired
         group — real data, cached in the working directory like every other fetch.
@@ -11999,10 +12018,14 @@ class DesktopApp:
                         self._add_model(session, f"{label} model{suffix}", group=gid)
                         for vd in volumes:
                             iso_sigma = self._sigma_iso(vd, contour)
-                            self._add_volume(
+                            new_vid = self._add_volume(
                                 vd, f"EMD-{emdb} map" if emdb else f"{label} map",
                                 group=gid,
                                 **({"iso": iso_sigma} if iso_sigma is not None else {}))
+                            if map_opacity is not None:
+                                # A curated scene (the map-fit tutorial): the story is
+                                # told over the map, so it opens translucent.
+                                self.set_volume_opacity(new_vid, float(map_opacity))
                     self._status(f"{label}: deposited model and map, loaded as a pair")
                 finally:
                     added.set()

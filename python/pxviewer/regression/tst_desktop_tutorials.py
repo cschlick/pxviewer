@@ -665,36 +665,59 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
 
 
 def exercise_the_map_fit_tutorial_walks_both_presentations():
-    """Pair on screen, deficit field up, colouring up, contracts read — the coach
-    side of the map-fit walkthrough. The real tutorial fetches 7BV2/EMD-30210; the
-    suite must run offline, so the loader is swapped for the synthetic fixture and
-    the field states are stood in for (tst_localres_ui drives the real machinery)."""
-    with desktop() as app:
-        controls = app._controls
-        build = tutorial.hotspots_map_fit_tutorial()
-        build.loader = lambda d: d.load_map_model_demo()
-        controls._start_tutorial(build)
-        process_events()
-        assert progress(app) == "Step 1 / 5"
+    """Pair on screen, deficit field up, a bad residue then a good one selected,
+    colouring up, contracts read — the coach side of the map-fit walkthrough. The
+    real tutorial fetches 7BV2/EMD-30210; the suite must run offline, so the loader
+    is swapped for the synthetic fixture, the guided residues are repointed at its
+    numbering, and the field states are stood in for (tst_localres_ui drives the
+    real machinery)."""
+    old = (tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ)
+    tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ = 30, 40
+    try:
+        with desktop() as app:
+            controls = app._controls
+            build = tutorial.hotspots_map_fit_tutorial()
+            build.loader = lambda d: d.load_map_model_demo()
+            controls._start_tutorial(build)
+            process_events()
+            assert progress(app) == "Step 1 / 7"
 
-        controls._maybe_advance_tutorial()      # the pair is on screen
-        assert progress(app) == "Step 2 / 5"
+            controls._maybe_advance_tutorial()      # the pair is on screen
+            assert progress(app) == "Step 2 / 7"
 
-        vid = app._volumes[0]["id"]
-        app._volume_entry(vid)["cc_field_on"] = True
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 5"
+            vid = app._volumes[0]["id"]
+            app._volume_entry(vid)["cc_field_on"] = True
+            controls._maybe_advance_tutorial()
+            assert progress(app) == "Step 3 / 7"
 
-        controls._tutorial_next()               # reading the threshold
-        assert progress(app) == "Step 4 / 5"
+            def pick(resseq):
+                mid = app._active_model_id
+                atoms = app._model_entry(mid)["session"].model \
+                    .get_hierarchy().atoms()
+                app._scene_selection[mid] = [
+                    i for i, a in enumerate(atoms)
+                    if a.parent().parent().resseq_as_int() == resseq]
 
-        app._volume_entry(vid)["color_by_cc"] = True
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 5 / 5"
-        assert app._viewport.coach_next.text() == "Finish"
+            pick(30)                                # the guided bad residue
+            controls._maybe_advance_tutorial()
+            assert progress(app) == "Step 4 / 7"
 
-        controls._tutorial_next()
-        assert app._viewport.coach_bar.isHidden()
+            pick(40)                                # then the healthy one
+            controls._maybe_advance_tutorial()
+            assert progress(app) == "Step 5 / 7"
+
+            controls._tutorial_next()               # reading the threshold
+            assert progress(app) == "Step 6 / 7"
+
+            app._volume_entry(vid)["color_by_cc"] = True
+            controls._maybe_advance_tutorial()
+            assert progress(app) == "Step 7 / 7"
+            assert app._viewport.coach_next.text() == "Finish"
+
+            controls._tutorial_next()
+            assert app._viewport.coach_bar.isHidden()
+    finally:
+        tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ = old
 
 
 def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():

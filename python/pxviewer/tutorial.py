@@ -163,8 +163,12 @@ def _fetch_cryoem_pair(desktop: Any) -> None:
 
 
 def _fetch_cryoem_pair_displaced(desktop: Any) -> None:
+    # The map opens translucent: this loader stages scenes whose story is told *over*
+    # the map (a glowing deficit cloud, a displaced helix), and at full opacity a
+    # zoomed-in view is walls of surface with the story invisible behind them.
     desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB,
-                                 displace=(CRYOEM_DISPLACED, CRYOEM_SHIFT))
+                                 displace=(CRYOEM_DISPLACED, CRYOEM_SHIFT),
+                                 map_opacity=0.45)
 
 
 def _pair_loaded(cw: Any) -> bool:
@@ -401,6 +405,38 @@ def _cc_coloring_on(cw: Any) -> bool:
     return any(v.get("color_by_cc") for v in cw._desktop._volumes)
 
 
+#: The guided residues of the map-fit tutorial: one inside the deliberately displaced
+#: helix, one from a well-fit stretch (window CC ~0.85 as deposited) for contrast.
+CRYOEM_BAD_RESSEQ = 598
+CRYOEM_GOOD_RESSEQ = 768
+
+
+def _residue_selected(cw: Any, resseq: int) -> bool:
+    desktop = cw._desktop
+    mid = desktop._active_model_id
+    entry = desktop._model_entry(mid) if mid else None
+    picked = list(desktop._scene_selection.get(mid) or [])[:600]
+    if entry is None or not picked:
+        return False
+    model = getattr(entry["session"], "model", None)
+    if model is None:
+        return False
+    atoms = model.get_hierarchy().atoms()
+    try:
+        return any(atoms[i].parent().parent().resseq_as_int() == resseq
+                   for i in picked)
+    except Exception:  # pragma: no cover - stale indices; predicates fail silent
+        return False
+
+
+def _bad_residue_selected(cw: Any) -> bool:
+    return _residue_selected(cw, CRYOEM_BAD_RESSEQ)
+
+
+def _good_residue_selected(cw: Any) -> bool:
+    return _residue_selected(cw, CRYOEM_GOOD_RESSEQ)
+
+
 def hotspots_map_fit_tutorial() -> Tutorial:
     """Where does the model fail to explain its map? The voxel-local map-model CC,
     walked through both of its presentations on real deposited data — with a helix
@@ -428,12 +464,28 @@ def hotspots_map_fit_tutorial() -> Tutorial:
             target=lambda cw: cw._cc_field_check,
         ),
         Step(
+            "Go to the damage. Type **chain A and resseq 598** into the Selection box "
+            "and press Enter — that residue sits in the helix we displaced.\n\nLook "
+            "at what agreement failure looks like up close: the sticks sit *outside* "
+            "the grey density, and the glowing cloud wraps them. The field and your "
+            "eyes are saying the same thing — the model here does not explain the "
+            "map.",
+            done=_bad_residue_selected,
+        ),
+        Step(
+            "Now a healthy residue for contrast: select **chain A and resseq 768**. "
+            "Sticks nested inside their density, no glow — this is what a local CC "
+            "around 0.85 looks like, and it is most of the molecule.\n\nThat is the "
+            "field's whole job: triage. Dark means move on; glow means stop and "
+            "look.",
+            done=_good_residue_selected,
+        ),
+        Step(
             "The slider beside the checkbox now reads **Deficit threshold**, in "
             "1 − CC: it starts at a data-driven default — roughly the worst sixth of "
             "the molecule — so drag it up to keep only the worst regions, or down to "
             "see milder disagreement haze in. The quality preset redraws the cloud "
-            "smoother or faster.\n\nClick into a glowing region and judge it like any "
-            "hotspot: the field says *look here*, the density says what to do.",
+            "smoother or faster.",
         ),
         Step(
             "The same field has a second presentation: select the **map** in the "
