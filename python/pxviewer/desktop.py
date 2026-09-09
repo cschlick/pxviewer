@@ -3831,20 +3831,30 @@ class ControlsWindow:
             # otherwise re-fire this handler with _CUSTOM_COLOR and reopen the dialog the
             # instant it closed.
             combo.blockSignals(True)
-            if dialog.exec() == QColorDialog.DialogCode.Accepted:
-                name = dialog.selectedColor().name()  # '#rrggbb', which Mol* decodes
-                committed["value"] = name
+            accepted = dialog.exec() == QColorDialog.DialogCode.Accepted
+            name = dialog.selectedColor().name() if accepted else revert_to
+            if accepted:
+                committed["value"] = name             # '#rrggbb', which Mol* decodes
+            import shiboken6
+
+            if not shiboken6.isValid(combo):
+                # The live preview can rebuild the appearance pane under this handler:
+                # applying a colour while a colour-by-CC/resolution theme is on turns
+                # that flag off, which emits loaded-changed, which rebuilds the pane
+                # and deletes the combo mid-``exec()``. The rebuilt pane already shows
+                # the entry's current state; only the final apply/undo remains to do.
+                on_pick(name)
+                return
+            if accepted:
                 at = combo.count() - 1
                 combo.insertItem(at, swatch(name), name, name)
                 combo.setCurrentIndex(at)
-                applied = name
             else:
                 # Cancelled: undo the preview and put the selection back where it was.
                 back = combo.findData(revert_to)
                 combo.setCurrentIndex(back if back >= 0 else 0)
-                applied = revert_to
             combo.blockSignals(False)
-            on_pick(applied)
+            on_pick(name)
 
         combo.currentIndexChanged.connect(picked)
         row.addWidget(combo, stretch=1)

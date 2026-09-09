@@ -666,6 +666,83 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
         dispose(app)
 
 
+def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
+    """The Custom… dialog previews live, and applying a colour while a colour-by
+    theme is on turns the theme off — which emits loaded-changed, rebuilds the
+    appearance pane, and deletes the combo the handler is standing on, mid-exec().
+    That must degrade to apply-and-return, not a dead-widget RuntimeError (a real
+    crash: RuntimeError in the handler, then a segfault on quit)."""
+    import PySide6.QtWidgets as QtW
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QColorDialog as RealDialog
+
+    from pxviewer.desktop import _CUSTOM_COLOR
+
+    picked_hex = "#123456"
+
+    class WheelDialog:
+        ColorDialogOption = RealDialog.ColorDialogOption
+        DialogCode = RealDialog.DialogCode
+
+        def __init__(self, *_a, **_k):
+            self._cb = None
+
+        def setWindowTitle(self, *_a):
+            pass
+
+        def setOption(self, *_a):
+            pass
+
+        class _Sig:
+            def __init__(self, outer):
+                self._outer = outer
+
+            def connect(self, cb):
+                self._outer._cb = cb
+
+        @property
+        def currentColorChanged(self):
+            return WheelDialog._Sig(self)
+
+        def exec(self):
+            self._cb(QColor(picked_hex))   # live preview: theme off -> pane rebuilt
+            process_events()               # deleteLater lands, as the modal loop would
+            return RealDialog.DialogCode.Accepted
+
+        def selectedColor(self):
+            return QColor(picked_hex)
+
+    with pinned_resolution_map() as ctx:
+        app, controls = ctx.app, ctx.app._controls
+        full = app._volume_entry(ctx.full_vid)
+        assert full["color_by_resolution"]
+
+        # Qt swallows an exception raised in a signal handler — it prints and carries
+        # on, which is exactly how the real crash presented (a traceback in the
+        # terminal, then a segfault on quit). Catch it at the hook, or this exercise
+        # would pass with the bug present.
+        import sys
+
+        hook_errors = []
+        old_hook = sys.excepthook
+        sys.excepthook = lambda _t, value, _tb: hook_errors.append(value)
+        real = QtW.QColorDialog
+        QtW.QColorDialog = WheelDialog
+        try:
+            controls._update_appearance("volume", ctx.full_vid)
+            combo = next(c for c in controls._appearance_box.findChildren(QtW.QComboBox)
+                         if c.count() and c.itemData(c.count() - 1) == _CUSTOM_COLOR)
+            combo.setCurrentIndex(combo.findData(_CUSTOM_COLOR))   # opens the picker
+            process_events()
+        finally:
+            QtW.QColorDialog = real
+            sys.excepthook = old_hook
+
+        assert not hook_errors, hook_errors
+        assert full["color"] == picked_hex
+        assert not full["color_by_resolution"]     # the theme stepped aside cleanly
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
