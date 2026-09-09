@@ -2673,6 +2673,17 @@ async function applyCootBindings(plugin: PluginContext) {
     // setAttribs, not setProps: bindings live in the trackball's *attribs*
     // (DefaultTrackballControlsAttribs), and are not among its params — so setProps
     // cannot reach them and quietly does nothing.
+    // No auto-adjusted zoom bounds. Mol* re-derives the trackball's min/maxDistance
+    // from the *visible* bounding sphere whenever a scene commit requests a camera
+    // reset -- and a commit that momentarily has nothing visible (mid-reload, or
+    // while a colour-by surface is being built after its plain contour was parked)
+    // latches maxDistance at the empty-scene floor of 20 A without ever resetting
+    // the camera, leaving zoom-out walled there for the rest of the session. Our
+    // scenes are molecular scale and the app does its own framing, so the static
+    // defaults (0.01 .. 1e150) are the honest bounds.
+    plugin.canvas3d.setProps({
+        trackball: { autoAdjustMinMaxDistance: { name: 'off', params: {} } },
+    } as any);
     plugin.canvas3d.setAttribs({
         trackball: {
             bindings: {
@@ -3720,6 +3731,21 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 return { sx: (pr[0] - vp.x) / vp.width, sy: 1 - (pr[1] - vp.y) / vp.height };
             };
             viewer.onMeasure = (kind, atoms) => ws.send(JSON.stringify({ type: 'measure', kind, atoms }));
+            // Harness hook: the camera's zoom-relevant state, for tests that must see why
+            // a zoom gesture is (or is not) taking effect. Read-only.
+            (window as any).__cameraState = () => {
+                const cam = plugin.canvas3d?.camera;
+                if (!cam) return null;
+                const scene: any = (plugin.canvas3d as any).boundingSphere;
+                return JSON.stringify({
+                    distance: Vec3.distance(cam.position, cam.target),
+                    radiusMax: cam.state.radiusMax,
+                    radius: cam.state.radius,
+                    minNear: cam.state.minNear,
+                    fog: cam.state.fog,
+                    sceneRadius: scene?.radius,
+                });
+            };
             building = false;
             for (const frame of pendingCoordinates.splice(0)) {
                 if (frame.kind === 'full') await viewer.update(frame.coords);
