@@ -181,12 +181,13 @@ Run **Tutorials ▸ Look at local resolution** twice.
      teal, unmistakably not the hotspot or resolution schemes; picking a flat colour
      restores the plain contour; after moving the model, picking a colour and then
      Map-model CC again recomputes against the new positions.
-7. The other presentation: on the same map's pane tick **Map-model CC field (3-D)**.
+7. The other presentation: on the **Hotspots** tab tick **Map-model CC deficit field**.
    - **Watch for:** the map keeps its ordinary contour and a cloud appears over the
      scene — nothing where the fit is good, blue through purple to pink where it is
-     not, hugging the model (never a box-filling haze); the Hotspots tab's threshold
-     slider and quality preset drive it; unticking removes it cleanly; running Find
-     hotspots' 3-D field replaces it and the checkbox unticks itself.
+     not, hugging the model (never a box-filling haze); the threshold slider beside
+     it relabels to **Deficit threshold** and visibly re-levels the cloud; the
+     quality preset redraws it; unticking removes it cleanly; ticking **Show in
+     3-D** for severity steps it aside and the checkbox unticks itself (and back).
 
 ## Pass 7 — Tutorials sweep (15 min)
 

@@ -2820,6 +2820,22 @@ class ControlsWindow:
         field_row.addWidget(quality)
         layout.addLayout(field_row)
 
+        # The other optional field: the map-model CC deficit, living here so the
+        # threshold and quality controls beside it are the one place field tools live.
+        # (The same CC data can instead repaint the map itself: Color ▸ Map-model CC
+        # on the map's pane.)
+        cc_check = QCheckBox("Map-model CC deficit field")
+        cc_check.setToolTip(
+            "Draw where the model fails to explain its paired map, as a cloud over "
+            "the scene: nothing where the fit is good, blue through purple to pink "
+            "where it is not. Needs a map in the model's group. Computed against the "
+            "model as it stands — untick and re-tick after moving it. One field at a "
+            "time: this and the severity field share the cloud, so showing one steps "
+            "the other aside.")
+        cc_check.toggled.connect(self._on_cc_field)
+        self._cc_field_check = cc_check
+        layout.addWidget(cc_check)
+
         # One absolute threshold controls both looks: the density's opacity knee or the
         # contour's isosurface level. The slider is an integer, so it carries the scale it is
         # currently expressing (see _set_threshold_scale) rather than a fixed 10x.
@@ -2842,7 +2858,7 @@ class ControlsWindow:
         for w in self._hotspot_knee_widgets:
             w.setVisible(False)  # shown while either 3-D style is up
         layout.addLayout(knee_row)
-        self._set_threshold_scale(concern=False)
+        self._set_threshold_scale(mode="severity")
 
         self._hotspot_summary = QLabel("Not computed yet.")
         self._hotspot_summary.setStyleSheet("color: palette(placeholder-text);")
@@ -2865,18 +2881,18 @@ class ControlsWindow:
         except Exception as exc:
             self._set_status(str(exc))
 
-    def _set_threshold_scale(self, *, concern: bool) -> None:
+    def _set_threshold_scale(self, *, mode: str = "severity") -> None:
         """Point the threshold slider at one field's units, and say which they are.
 
-        Concern is bounded to [0, 1] and its interesting range is narrow, so it gets 0.01
-        steps; severity runs to the display cap in 0.1 steps. The label carries the unit
-        because the same widget expresses both, and a slider reading 0.5 means very different
-        things on the two scales.
+        Concern and the CC deficit are bounded to [0, 1] and their interesting ranges
+        are narrow, so they get 0.01 steps; severity runs to the display cap in 0.1
+        steps. The label carries the unit because the same widget expresses all three,
+        and a slider reading 0.5 means very different things across the scales.
         """
         slider = self._hotspot_knee_slider
         was = slider.value() / self._hotspot_knee_scale
         slider.blockSignals(True)
-        if concern:
+        if mode == "concern":
             self._hotspot_knee_scale, self._hotspot_knee_digits = 100.0, 2
             self._hotspot_knee_label.setText("Concern threshold:")
             slider.setRange(0, 100)
@@ -2884,6 +2900,14 @@ class ControlsWindow:
                 "Density: where the field starts to become visible. Contour: the shell's "
                 "level.\nAbsolute bounded concern: 0.5 is yellow, 0.75 orange, 1.0 red, in "
                 "every structure and every metric.")
+        elif mode == "deficit":
+            self._hotspot_knee_scale, self._hotspot_knee_digits = 100.0, 2
+            self._hotspot_knee_label.setText("Deficit threshold:")
+            slider.setRange(0, 100)
+            slider.setToolTip(
+                "Where the deficit cloud starts to become visible, in 1 − CC: 0.25 "
+                "shows everything the map and model agree on less than CC 0.75; raise "
+                "it to keep only the worst-explained regions.")
         else:
             self._hotspot_knee_scale, self._hotspot_knee_digits = 10.0, 1
             self._hotspot_knee_label.setText("Severity threshold:")
@@ -2928,7 +2952,7 @@ class ControlsWindow:
         self._hotspot_style.setEnabled(True)
         self._hotspot_quality_combo.setEnabled(True)
         # Match the slider to the imported contract before showing the value it now means.
-        self._set_threshold_scale(concern=True)
+        self._set_threshold_scale(mode="concern")
         if imported is not None:
             self._hotspot_knee_slider.blockSignals(True)
             self._hotspot_knee_slider.setValue(
@@ -2939,9 +2963,71 @@ class ControlsWindow:
         for widget in self._hotspot_knee_widgets:
             widget.setVisible(True)
 
+    def _on_cc_field(self, on: bool) -> None:
+        """The deficit-field checkbox: compute/show or clear, then re-aim the shared
+        field controls (threshold scale, style, quality) at whichever field is up."""
+        try:
+            self._desktop.set_cc_field_for_model(bool(on))
+        except Exception as exc:
+            self._set_status(str(exc))
+            self._cc_field_check.blockSignals(True)
+            self._cc_field_check.setChecked(False)
+            self._cc_field_check.blockSignals(False)
+            return
+        if on and self._hotspot_show3d.isChecked():
+            # The severity field was just stepped aside (the two share the cloud).
+            self._hotspot_show3d.blockSignals(True)
+            self._hotspot_show3d.setChecked(False)
+            self._hotspot_show3d.blockSignals(False)
+        self._sync_cc_field_controls()
+
+    def _sync_cc_field_controls(self) -> None:
+        """Aim the shared field controls at the deficit cloud (or hand them back)."""
+        on = self._cc_field_check.isChecked()
+        severity_on = self._hotspot_show3d.isChecked()
+        # The deficit is density-only; quality applies to any cloud.
+        self._hotspot_style.setEnabled(severity_on and not on)
+        self._hotspot_quality_combo.setEnabled(
+            on or (severity_on and self._hotspot_style.currentData() == "cloud"))
+        if on:
+            self._set_threshold_scale(mode="deficit")
+            slider = self._hotspot_knee_slider
+            slider.blockSignals(True)
+            slider.setValue(int(round(
+                DesktopApp._CC_FIELD_CUT * self._hotspot_knee_scale)))
+            slider.blockSignals(False)
+            self._hotspot_knee_value.setText(
+                f"{DesktopApp._CC_FIELD_CUT:.{self._hotspot_knee_digits}f}")
+        else:
+            entry = self._desktop._model_entry(self._desktop._active_model_id)
+            self._set_threshold_scale(
+                mode="concern" if entry and entry.get("concern") else "severity")
+        for w in self._hotspot_knee_widgets:
+            w.setVisible(on or severity_on)
+
+    def _sync_cc_field_from_state(self) -> None:
+        """Make the checkbox truthful after anything that moved the field under it —
+        a model switch, the severity field displacing the shared cloud, an unload."""
+        desktop = self._desktop
+        entry = desktop._model_entry(desktop._active_model_id)
+        on = bool(entry and any(
+            v.get("cc_field_on") and v.get("group") == entry.get("group")
+            for v in desktop._volumes))
+        if on != self._cc_field_check.isChecked():
+            self._cc_field_check.blockSignals(True)
+            self._cc_field_check.setChecked(on)
+            self._cc_field_check.blockSignals(False)
+            self._sync_cc_field_controls()
+
     def _on_hotspot_field_changed(self, *_args) -> None:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
         on = self._hotspot_show3d.isChecked()
+        if on and self._cc_field_check.isChecked():
+            # The severity field displaces the deficit cloud (shared slot); say so.
+            self._cc_field_check.blockSignals(True)
+            self._cc_field_check.setChecked(False)
+            self._cc_field_check.blockSignals(False)
+            self._set_threshold_scale(mode="severity")
         entry = self._desktop._model_entry(self._desktop._active_model_id)
         self._hotspot_style.setEnabled(on)
         # Quality is cloud-only; the absolute threshold controls both cloud and contour.
@@ -2995,7 +3081,7 @@ class ControlsWindow:
         """A computed score finished (GUI thread): fill the residue table, worst first."""
         _mid, result, columns, rows = payload
         # A computed score supersedes any import, so the slider goes back to severity units.
-        self._set_threshold_scale(concern=False)
+        self._set_threshold_scale(mode="severity")
         self._hotspot_summary.setText(result.summary)
         self._hotspot_show3d.setEnabled(True)
         if self._hotspot_show3d.isChecked():
@@ -3467,25 +3553,8 @@ class ControlsWindow:
                 _set_color,
                 themes=themes or None,
                 title="Map color")
-            if mmm is not None and mmm.model() is not None:
-                # The CC field's other presentation: a 3-D deficit cloud over the
-                # scene while the map keeps its ordinary look — the alternative to
-                # repainting the surface via the Color theme above.
-                from PySide6.QtWidgets import QCheckBox
-
-                cc_field = QCheckBox("Map-model CC field (3-D)")
-                cc_field.setChecked(bool(it.get("cc_field_on")))
-                cc_field.setToolTip(
-                    "Draw where the model fails to explain this map as a cloud over "
-                    "the scene — pink glows at poor fit, fading out where the fit is "
-                    "good — while the map keeps its ordinary contour.\n"
-                    "Computed against the model as it stands (untick and re-tick to "
-                    "recompute after it moves). One cloud at a time: this borrows the "
-                    "Hotspots cloud's slot, threshold slider and quality preset.")
-                cc_field.toggled.connect(
-                    lambda on, vid=vid:
-                    self._safe(lambda: self._desktop.set_cc_field(vid, on)))
-                self._appearance_layout.addWidget(cc_field)
+            # (The CC field's *cloud* presentation lives on the Hotspots tab, beside
+            # the threshold and quality controls that drive it — see _build_hotspots_tab.)
             if live.get("negative_color"):
                 # A difference map draws a second contour at -level; its color is as
                 # much the user's as the positive one — and both are carried into the
@@ -5783,6 +5852,7 @@ class ControlsWindow:
         self._update_appearance(kind, ident)
         self._update_ligand_panel()  # markers/maps may have changed
         self._refresh_edits_list()   # active model or its edits may have changed
+        self._sync_cc_field_from_state()  # the deficit-field checkbox stays truthful
         # The selection box describes one model's selection; when that model was
         # removed, the text would read as a live selection of nothing. Clear it and
         # let the label state what is actually selected now.
@@ -7736,7 +7806,13 @@ class DesktopApp:
             return
         self._cloud_quality = quality
         entry = self._model_entry(self._active_model_id)
-        if entry is not None and entry.get("hotspot_cloud"):
+        if entry is None or not entry.get("hotspot_cloud"):
+            return
+        if entry.get("hotspot_cloud") == "cc":
+            vid = next((v["id"] for v in self._volumes if v.get("cc_field_on")), None)
+            if vid is not None:
+                self._show_cc_cloud(vid)   # re-encode the deficit at the new grid
+        else:
             self.show_hotspot_field(entry["id"], on=True, style="cloud")
 
     def open_hotspot_volume(self, path: Any, mid: Optional[str] = None, *,
@@ -7999,14 +8075,17 @@ class DesktopApp:
         from . import concern, hotspots
 
         imported = entry.get("concern")
-        if imported is not None:
+        # The CC deficit cloud is already on a [0, 1] scale (1 − CC, cap 1.0), like
+        # imported concern; only the computed severity needs the cap division.
+        unit_scale = imported is not None or entry.get("hotspot_cloud") == "cc"
+        if unit_scale:
             level = min(1.0, max(0.0, float(level)))
         else:
             level = min(hotspots.SEVERITY_CAP, max(0.0, float(level)))
         self._hotspot_knee = level
         if entry.get("hotspot_cloud"):
             entry["session"].set_hotspot_opacity(
-                level if imported is not None else level / hotspots.SEVERITY_CAP)
+                level if unit_scale else level / hotspots.SEVERITY_CAP)
         else:
             vid = entry.get("hotspot_volume")
             if vid is not None:
@@ -10787,6 +10866,21 @@ class DesktopApp:
                      if m.get("group") == full.get("group")
                      and getattr(m["session"], "model", None) is not None), None)
 
+    def set_cc_field_for_model(self, on: bool, mid: Optional[str] = None) -> None:
+        """The Hotspots tab's handle on the deficit cloud: resolve the active model's
+        paired map and delegate to :meth:`set_cc_field`. Prefers the primary map over
+        a difference map when the group holds both (an X-ray phasing does)."""
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        maps = [v for v in self._volumes
+                if v.get("group") == entry.get("group") and not v.get("is_resolution")]
+        if not maps:
+            raise ValueError("the active model has no paired map — "
+                             "fetch them together, or Make maps")
+        vid = next((v["id"] for v in maps if not v.get("negative_color")), maps[0]["id"])
+        self.set_cc_field(vid, on)
+
     def _show_cc_cloud(self, vid: str) -> None:
         """Encode the pinned CC field as a deficit cloud and stream it (GUI thread)."""
         from . import hotspots
@@ -10834,7 +10928,9 @@ class DesktopApp:
         self._clear_hotspot_field(model_entry)   # one cloud at a time (shared slot)
         session.set_hotspot_anchors(None, colors=self._CC_FIELD_STOPS)
         session.show_hotspot_volume(payload)
-        model_entry["hotspot_cloud"] = True      # the existing teardown paths own it
+        # "cc" (truthy for every existing hotspot_cloud check) marks the slot's tenant,
+        # so the threshold and quality controls know they are driving a [0, 1] deficit.
+        model_entry["hotspot_cloud"] = "cc"
         full["cc_field_on"] = True
         self._emit_loaded_changed()
         self._status(f"{full['name']}: CC deficit field — pink is density the model "

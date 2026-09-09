@@ -631,15 +631,33 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
             lambda anchors, colors=None: ramps.append((anchors, colors))
         app.set_cc_field(vid, True)          # cc_map already pinned: no recompute
         assert full["cc_field_on"] and not full["color_by_cc"]
-        assert model_entry.get("hotspot_cloud")
+        assert model_entry.get("hotspot_cloud") == "cc"   # the slot names its tenant
         assert clouds and ramps[-1] == (None, DesktopApp._CC_FIELD_STOPS)
         # The payload's grid is the deficit in [0, 1] with the cut in the header.
         cut = struct.unpack_from("<f", clouds[-1])[0]
         assert abs(cut - DesktopApp._CC_FIELD_CUT) < 1e-6
         assert np.frombuffer(clouds[-1], dtype="<f4", offset=68).max() <= 1.0
 
+        # The Hotspots tab's controls drive it: the checkbox reflects the state, and
+        # the threshold slider speaks deficit units — a knee of 0.5 reaches the wire
+        # as 0.5, not divided by the severity cap.
+        process_events()
+        assert app._controls._cc_field_check.isChecked()
+        knees = []
+        model_entry["session"].set_hotspot_opacity = knees.append
+        app.set_hotspot_threshold(model_entry["id"], 0.5)
+        assert knees == [0.5]
+
         app.set_cc_field(vid, False)
         assert not full["cc_field_on"] and not model_entry.get("hotspot_cloud")
+        process_events()
+        assert not app._controls._cc_field_check.isChecked()
+
+        # The tab's own toggle resolves the paired map itself.
+        app.set_cc_field_for_model(True)
+        assert full["cc_field_on"]
+        app.set_cc_field_for_model(False)
+        assert not full["cc_field_on"]
 
         # The field's lifecycle rides its map.
         app.remove_volume(vid)
