@@ -141,14 +141,50 @@ def open_model_tutorial() -> Tutorial:
     ], loader=lambda d: _load_bundled(d, "1ubq.pdb"))
 
 
+#: The real cryo-EM pair the map+model tutorials fetch: the SARS-CoV-2 polymerase
+#: complex (nsp12–nsp7–nsp8) with template-primer RNA and remdesivir, at 2.5 Å
+#: (PDB 7BV2 / EMD-30210). Chosen deliberately small — a 28 MB map on a 192³ grid —
+#: so the download is short; both files are cached in the working directory. Real
+#: deposited data on principle: a synthetic density computed from the model has no
+#: noise floor and near-perfect correlation everywhere, and teaches habits the first
+#: real map immediately punishes (the X-ray demo learned this the hard way).
+CRYOEM_PDB_ID = "7bv2"
+CRYOEM_EMDB = "30210"
+#: The stretch the refinement tutorial pushes out of its density — rigidly, one
+#: translation for the whole selection, so every bond length stays exact and Mol*'s
+#: distance-based bond perception keeps drawing it correctly. A well-ordered helix
+#: (mean atom CC 0.85 as deposited), so the displacement is unambiguous.
+CRYOEM_DISPLACED = "chain A and resseq 592:605"
+CRYOEM_SHIFT = (1.4, 1.2, 1.0)   # ~2.1 Å
+
+
+def _fetch_cryoem_pair(desktop: Any) -> None:
+    desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB)
+
+
+def _fetch_cryoem_pair_displaced(desktop: Any) -> None:
+    desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB,
+                                 displace=(CRYOEM_DISPLACED, CRYOEM_SHIFT))
+
+
+def _pair_loaded(cw: Any) -> bool:
+    """A model and a map that share a group are both on screen."""
+    desktop = cw._desktop
+    model_groups = {m.get("group") for m in desktop._models if m.get("group")}
+    return any(v.get("group") in model_groups for v in desktop._volumes)
+
+
 def map_model_tutorial() -> Tutorial:
-    """A model paired with density — the everyday working scene."""
+    """A model paired with density — the everyday working scene, on real data."""
     return Tutorial("A model with its map", [
         Step(
-            "**1UBQ is loaded with a map computed from it** — a stand-in for the "
-            "experimental density you would normally have. Model and map arrive paired, "
-            "so tools that need both (refinement, Q-score, tugging) know which map "
-            "belongs to which model.",
+            "Real deposited data is downloading: **7BV2**, the SARS-CoV-2 polymerase "
+            "with template-primer RNA and remdesivir, and its 2.5 Å cryo-EM "
+            "reconstruction **EMD-30210** — about 28 MB, kept in your working "
+            "directory so the next run is instant.\n\nModel and map load *paired*, so "
+            "tools that need both (refinement, Q-score, tugging) know which map "
+            "belongs to which model. The coach moves on when both are on screen.",
+            done=_pair_loaded,
         ),
         Step(
             "The map's surface is a contour: select the map in the object list and drag "
@@ -161,7 +197,7 @@ def map_model_tutorial() -> Tutorial:
             "mesh, clipping, and colourings — a cryo-EM map with half-maps can be "
             "coloured by local resolution from its **Color** dropdown.",
         ),
-    ], loader=lambda d: d.load_map_model_demo())
+    ], loader=_fetch_cryoem_pair)
 
 
 def _active_model_entry(cw: Any):
@@ -400,14 +436,18 @@ def _minimizing(cw: Any) -> bool:
 
 
 def cryo_em_refinement_tutorial() -> Tutorial:
-    """Real-space refine a model into a cryo-EM density — pxviewer's take on Phenix's
-    real_space_refine, self-contained (map computed from the model, no external data)."""
+    """Real-space refine a model into a real cryo-EM density — pxviewer's take on
+    Phenix's real_space_refine, on deposited data (7BV2 / EMD-30210)."""
     return Tutorial("Real-space refine into cryo-EM density", [
         Step(
             "Cryo-EM refinement (phenix's `real_space_refine`) slides a model into a 3D "
             "density map — a gradient-driven minimization, not against reflections but "
-            "against the map itself.\n\n**Loaded:** a model sitting slightly *off* its "
-            "own density, waiting to be pushed back in.",
+            "against the map itself.\n\n**Downloading 7BV2 and its 2.5 Å map** (cached "
+            "after the first run). One well-ordered helix of the polymerase has been "
+            "pushed ~2 Å out of its density — rigidly, so its geometry is intact; it "
+            "simply sits in the wrong place. That is exactly the state refinement "
+            "fixes.",
+            done=_pair_loaded,
         ),
         Step(
             "Real-space refine it: on the **Tools** tab, in **Minimization**, tick **Into "
@@ -424,7 +464,7 @@ def cryo_em_refinement_tutorial() -> Tutorial:
             "the map here is the target, fixed.",
             target=lambda cw: cw._minimize_map_check,
         ),
-    ], loader=lambda d: d.load_real_space_refinement_demo())
+    ], loader=_fetch_cryoem_pair_displaced)
 
 
 def _live_difference_seen(cw: Any) -> bool:

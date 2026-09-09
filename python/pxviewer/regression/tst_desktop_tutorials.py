@@ -664,17 +664,23 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
 
 
 def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
-    """The demo loads a model sitting *off* a density computed from it, paired as one
-    group. Real-space refinement settles it back in, and the map-model correlation climbs
-    -- which is the claim the whole demo exists to make."""
+    """A model sitting *off* its density, paired as one group; real-space refinement
+    settles it back in and the map-model correlation climbs -- the claim the tutorial
+    exists to make.
+
+    The real tutorial fetches deposited data (7BV2 / EMD-30210) and rigidly displaces
+    one helix; the suite must run offline, so the coach is exercised over the synthetic
+    fixture instead -- the same shape (a paired model off its density) driving the same
+    steps and predicates."""
     if not have("mmtbx.monomer_library.pdb_interpretation", "iotbx.map_model_manager"):
         print("    (skipped: pdb_interpretation / map_model_manager not available)")
         return
 
     with desktop() as app:
         controls = app._controls
-        # Starting it loads the demo -- the shaken model and the density it belongs to.
-        controls._start_tutorial(tutorial.cryo_em_refinement_tutorial())
+        build = tutorial.cryo_em_refinement_tutorial()
+        build.loader = lambda d: d.load_real_space_refinement_demo()
+        controls._start_tutorial(build)
         process_events()
         assert progress(app) == "Step 1 / 3"
 
@@ -684,7 +690,7 @@ def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
         mmm = app.group_mmm(gid)
         assert gid is not None and mmm is not None
         assert app.map_for_model() is not None
-        controls._tutorial_next()                     # orientation step
+        controls._maybe_advance_tutorial()   # step 1 waits on the pair; it is on screen
         assert progress(app) == "Step 2 / 3"
 
         mmm.set_resolution(3.0)

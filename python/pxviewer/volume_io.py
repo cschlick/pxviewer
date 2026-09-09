@@ -461,10 +461,17 @@ def local_map_model_cc(
     cov = g(exp * calc) - m_exp * m_calc
     var_exp = g(exp * exp) - m_exp * m_exp
     var_calc = g(calc * calc) - m_calc * m_calc
-    # Locally flat in either map means the correlation is 0/0 — solvent against nothing.
-    # The floor is relative to each map's global variance, so it needs no absolute scale.
+    # Where is the correlation *defined*? The model map is the gate: it is zero away
+    # from the model (plus FFT ripple), so its local variance traces the molecular
+    # envelope — a floor of 1% of its global variance keeps ~the envelope and drops
+    # the rest. The experimental map cannot gate anything on real data: it has noise
+    # variance everywhere, and the old permissive floor (1e-4 on both) declared half
+    # a real box "defined" and full of deficit-1.0 noise-vs-nothing correlations —
+    # measured on EMD-30210: 94% of defined voxels above deficit 0.4, median 1.0,
+    # while the atoms themselves sat at a sensible CC 0.77-0.85. Its floor stays as
+    # a 0/0 guard only.
     floor_exp = 1e-4 * float(exp.var())
-    floor_calc = 1e-4 * float(calc.var())
+    floor_calc = 1e-2 * float(calc.var())
     with np.errstate(invalid="ignore", divide="ignore"):
         cc = cov / np.sqrt(np.maximum(var_exp, floor_exp)
                            * np.maximum(var_calc, floor_calc))

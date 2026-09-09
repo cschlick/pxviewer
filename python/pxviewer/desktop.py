@@ -2991,13 +2991,8 @@ class ControlsWindow:
             on or (severity_on and self._hotspot_style.currentData() == "cloud"))
         if on:
             self._set_threshold_scale(mode="deficit")
-            slider = self._hotspot_knee_slider
-            slider.blockSignals(True)
-            slider.setValue(int(round(
-                DesktopApp._CC_FIELD_CUT * self._hotspot_knee_scale)))
-            slider.blockSignals(False)
-            self._hotspot_knee_value.setText(
-                f"{DesktopApp._CC_FIELD_CUT:.{self._hotspot_knee_digits}f}")
+            self._cc_seed_applied = None    # a fresh field takes a fresh default
+            self._seed_cc_threshold()
         else:
             entry = self._desktop._model_entry(self._desktop._active_model_id)
             self._set_threshold_scale(
@@ -3018,6 +3013,38 @@ class ControlsWindow:
             self._cc_field_check.setChecked(on)
             self._cc_field_check.blockSignals(False)
             self._sync_cc_field_controls()
+        elif on:
+            # The cloud may have (re)landed with a data-driven default threshold;
+            # follow it unless the user has moved the slider themselves.
+            self._seed_cc_threshold()
+
+    def _seed_cc_threshold(self) -> None:
+        """Put the slider at the deficit field's default threshold — data-driven, so
+        it is only known once the cloud lands — without ever overriding a value the
+        user has chosen (a re-seed applies only while the slider still sits where the
+        last seed put it)."""
+        desktop = self._desktop
+        entry = desktop._model_entry(desktop._active_model_id)
+        cut = None
+        if entry is not None:
+            for v in desktop._volumes:
+                if v.get("cc_field_on") and v.get("group") == entry.get("group"):
+                    cut = v.get("cc_field_cut")
+                    break
+        if cut is None:
+            cut = DesktopApp._CC_FIELD_CUT
+        slider = self._hotspot_knee_slider
+        seeded = getattr(self, "_cc_seed_applied", None)
+        if seeded is not None and slider.value() != seeded:
+            return                     # the user moved it; their value stands
+        target = int(round(float(cut) * self._hotspot_knee_scale))
+        if slider.value() != target:
+            slider.blockSignals(True)
+            slider.setValue(target)
+            slider.blockSignals(False)
+            self._hotspot_knee_value.setText(
+                f"{float(cut):.{self._hotspot_knee_digits}f}")
+        self._cc_seed_applied = target
 
     def _on_hotspot_field_changed(self, *_args) -> None:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
@@ -10833,13 +10860,18 @@ class DesktopApp:
     #: and kept pink for anti-correlation nothing real reaches.
     _CC_FIELD_STOPS = [(0x2DD4BF, 0.0), (0x3B82F6, 0.25), (0x6366F1, 0.45),
                        (0xA855F7, 0.60), (0xEC4899, 0.75)]
-    #: Where the deficit cloud starts to become visible, in deficit units. 0.4 by
-    #: default — every real structure carries a broad mildly-imperfect envelope
-    #: (deficit ~0.25–0.4), and starting below it shrouds the severe cores in a
-    #: uniform haze; the slider goes lower for anyone who wants the haze back.
-    #: (A gamma/log remap of the displayed values was tried instead and reverted:
-    #: applied consistently to values, stops, cut and knee alike it is exactly a
-    #: no-op, and applied inconsistently it makes the slider lie.)
+    #: The floor for where the deficit cloud starts to become visible, in deficit
+    #: units. The working default is data-driven — the 85th percentile of the
+    #: defined deficit, floored here — because the deficit distribution is
+    #: map-dependent: on a synthetic self-map the envelope sits near 0 and 0.40
+    #: shows exactly the damage, while on real data (measured on EMD-30210) the
+    #: windowed CC over the molecular envelope has median ~0.25 and a fixed 0.40
+    #: shrouded the entire molecule. "The worst ~15% of the envelope" is what a
+    #: where-to-look field means on any map; the slider stays in honest linear
+    #: 1 − CC and goes wherever the user likes. (A gamma/log remap of the
+    #: displayed values was tried instead and reverted: applied consistently to
+    #: values, stops, cut and knee alike it is exactly a no-op, and applied
+    #: inconsistently it makes the slider lie.)
     _CC_FIELD_CUT = 0.40
 
     def set_cc_field(self, vid: str, on: bool) -> None:
@@ -10933,12 +10965,26 @@ class DesktopApp:
                 for o, n, s in zip(origin, (nx, ny, nz), spacing)]
         gx, gy, gz = np.meshgrid(*axes, indexing="ij")
         voxels = np.column_stack([gx.ravel(), gy.ravel(), gz.ravel()])
-        reach = 4.0
+        # 2.5 A: atom cores only. At 4 A the mask's boundary shell — where the window
+        # always straddles the envelope edge and CC decays regardless of fit — wrapped
+        # every real structure in a deficit shroud; at 2.5 A the background p85 is
+        # ~0.32 on EMD-30210 while a 2 A-displaced helix reads ~0.58, which is the
+        # separation the field exists to show.
+        reach = 2.5
         dist, _idx = cKDTree(xyz).query(voxels, distance_upper_bound=reach)
         deficit = deficit * np.isfinite(dist).reshape(deficit.shape)
+        # The data-driven default threshold: the worst ~15% of the defined envelope
+        # (floored at _CC_FIELD_CUT, capped short of saturation). See the constant's
+        # note for the measured reason a fixed cut cannot serve both synthetic and
+        # real maps.
+        defined = deficit[deficit > 0.0]
+        cut = self._CC_FIELD_CUT
+        if defined.size:
+            cut = float(min(max(cut, np.percentile(defined, 85)), 0.95))
+        full["cc_field_cut"] = cut
         payload = hotspots.encode_severity_box(
             deficit, spacing, origin, steps_per_cell=cloud_steps,
-            cap=1.0, cut=self._CC_FIELD_CUT)
+            cap=1.0, cut=cut)
         session = model_entry["session"]
         self._clear_hotspot_field(model_entry)   # one cloud at a time (shared slot)
         session.set_hotspot_anchors(None, colors=self._CC_FIELD_STOPS)
@@ -11646,10 +11692,11 @@ class DesktopApp:
         self._status(f"Volume demo: {name}")
 
     def load_map_model_demo(self, *, d_min: float = 3.0) -> str:
-        """Demo: the bundled sample model + a cctbx-generated density, as one group.
-
-        The map is computed from the model (no large file to ship, no network), and
-        because it comes back as a cctbx map_model_manager it loads as a real group.
+        """Test fixture: the bundled sample model + a cctbx-generated density, as one
+        group. Offline and fast, which is why the regression suite builds pairs with
+        it — and why no tutorial may: the density is synthetic (computed from the
+        model itself, noise-free, near-perfect CC everywhere), and 1UBQ is an X-ray
+        structure. Tutorials fetch real deposited pairs (fetch_map_model_pair).
         """
         self.stop_demo()
         self._reset_interactions()
@@ -11850,12 +11897,13 @@ class DesktopApp:
         return "ligand-fitting"
 
     def load_real_space_refinement_demo(self, *, d_min: float = 3.0, shake: float = 0.5) -> str:
-        """Demo mirroring Phenix's cryo-EM real-space refinement: a model sitting slightly off
-        a density map, to be refined back into it. A cryo-EM-resolution map is computed from
-        the bundled model, then the model is *shaken* off it — so 'Minimize' with 'Into the
-        density' (gradient-driven real-space refinement, exactly what
-        phenix.real_space_refine does) pulls it back into the density. Self-contained (no
-        phenix, no dataset)."""
+        """Test fixture: a model shaken off a density computed from itself, so 'Minimize'
+        with 'Into the density' has something to visibly pull back in. Offline and fast
+        for the regression suite — and not for tutorials: the density is synthetic, the
+        structure is X-ray, and the per-atom shake breaks Mol*'s distance-based bond
+        perception (ball-and-stick renders as noise). The tutorial fetches a real
+        deposited pair and displaces one segment rigidly instead
+        (fetch_map_model_pair)."""
         self.stop_demo()
         self._reset_interactions()
 
@@ -11884,11 +11932,86 @@ class DesktopApp:
             session = self._model_session(model_data.model, SAMPLE_STRUCTURE[1])
             self._add_model(session, f"{SAMPLE_STRUCTURE[0]} (model, shaken)", group=gid)
             for vd in volumes:
-                self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (cryo-EM density)", group=gid)
+                self._add_volume(vd, f"{SAMPLE_STRUCTURE[0]} (synthetic density)", group=gid)
         self._status(
-            "Cryo-EM demo: a shaken model in its density — Minimize with 'Into the "
+            "Synthetic demo: a shaken model in its density — Minimize with 'Into the "
             "density' to real-space refine it back in")
         return "group"
+
+    def fetch_map_model_pair(self, *, pdb_id: str, emdb_number: Optional[str] = None,
+                             displace: Optional[tuple] = None,
+                             reuse_existing: bool = True) -> None:
+        """Fetch a deposited cryo-EM map and its model, and load them as one paired
+        group — real data, cached in the working directory like every other fetch.
+        Runs on a background thread; the loading is marshalled to the GUI thread.
+
+        ``displace``, for the refinement tutorial, is ``(selection, (dx, dy, dz))``:
+        the selected atoms are moved **rigidly** — one translation for the whole
+        selection — so the model visibly needs refinement while every bond length
+        inside the selection stays exact. (A random per-atom shake was tried and
+        rejected: Mol* perceives bonds by distance, and a shaken model renders
+        ball-and-stick as meaningless noise. Only the two junction bonds stretch,
+        which is precisely the honest picture of a segment sitting out of its
+        density.)
+        """
+        from . import fetch as fetchmod
+
+        target = self._work_dir
+
+        def work():
+            from .volume_io import (VolumeData, map_model_manager_from_files,
+                                    split_map_model_manager)
+
+            label = pdb_id.upper()
+            self._status(f"fetching {label} and its map…")
+            paths = fetchmod.fetch_entry(
+                entities=["model", "map"], work_dir=target, pdb_id=pdb_id,
+                emdb_number=emdb_number, progress=self._fetch_progress(),
+                reuse_existing=reuse_existing)
+            emdb = emdb_number or fetchmod.emdb_for_pdb(pdb_id)
+            contour = fetchmod.recommended_contour(emdb) if emdb else None
+            self._status(f"pairing {label} with its map…")
+            mmm = map_model_manager_from_files(
+                model_file=str(paths["model"]), map_files=[str(paths["map"])])
+            if displace is not None:
+                selection, delta = displace
+                from scitbx.array_family import flex
+
+                model = mmm.model()
+                chosen = model.selection(selection)
+                sites = model.get_sites_cart()
+                shift = flex.vec3_double(int(chosen.count(True)),
+                                         tuple(float(v) for v in delta))
+                sites = sites.set_selected(chosen, sites.select(chosen) + shift)
+                model.set_sites_cart(sites)
+            name = f"{label} (EMD-{emdb})" if emdb else label
+            model_data, volumes = split_map_model_manager(mmm, name=name)
+            volumes = [v for v in volumes if v.map_id == "map_manager"] or volumes
+
+            added = threading.Event()
+
+            def add_on_main():
+                try:
+                    gid = self._new_group(name, mmm=mmm)
+                    with self._batch_load():
+                        session = self._model_session(model_data.model, name)
+                        suffix = " (displaced)" if displace is not None else ""
+                        self._add_model(session, f"{label} model{suffix}", group=gid)
+                        for vd in volumes:
+                            iso_sigma = self._sigma_iso(vd, contour)
+                            self._add_volume(
+                                vd, f"EMD-{emdb} map" if emdb else f"{label} map",
+                                group=gid,
+                                **({"iso": iso_sigma} if iso_sigma is not None else {}))
+                    self._status(f"{label}: deposited model and map, loaded as a pair")
+                finally:
+                    added.set()
+
+            self.bridge.run_on_main.emit(add_on_main)
+            added.wait()
+
+        self.run_background(work, name="pxviewer-fetch-pair",
+                            label="Fetching map and model")
 
     def load_model_demo(self, name: str, *, fps: float = 30.0) -> None:
         """Stream an animated model demo into the viewport."""
