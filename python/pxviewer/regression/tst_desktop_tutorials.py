@@ -43,7 +43,8 @@ TUTORIAL_TITLES = [
     "A model with its map",
     "Alternate conformations",
     "Validate a structure",
-    "Find validation hotspots",
+    "Hotspots — structure",
+    "Hotspots — map fit",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
     "Look at local resolution",
@@ -631,7 +632,7 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
     """Load the demo, find hotspots, show the 3-D field, read the wrap-up."""
     with desktop() as app:
         controls = app._controls
-        controls._start_tutorial(tutorial.hotspots_tutorial())
+        controls._start_tutorial(tutorial.hotspots_structure_tutorial())
         process_events()
         assert progress(app) == "Step 1 / 5"
         assert [m["name"] for m in app._models] == ["1tec.pdb"]
@@ -655,6 +656,39 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
         # than raises on the stub score, and the coach only reads the checkbox.
         controls._hotspot_show3d.setEnabled(True)
         controls._hotspot_show3d.setChecked(True)
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 5 / 5"
+        assert app._viewport.coach_next.text() == "Finish"
+
+        controls._tutorial_next()
+        assert app._viewport.coach_bar.isHidden()
+
+
+def exercise_the_map_fit_tutorial_walks_both_presentations():
+    """Pair on screen, deficit field up, colouring up, contracts read — the coach
+    side of the map-fit walkthrough. The real tutorial fetches 7BV2/EMD-30210; the
+    suite must run offline, so the loader is swapped for the synthetic fixture and
+    the field states are stood in for (tst_localres_ui drives the real machinery)."""
+    with desktop() as app:
+        controls = app._controls
+        build = tutorial.hotspots_map_fit_tutorial()
+        build.loader = lambda d: d.load_map_model_demo()
+        controls._start_tutorial(build)
+        process_events()
+        assert progress(app) == "Step 1 / 5"
+
+        controls._maybe_advance_tutorial()      # the pair is on screen
+        assert progress(app) == "Step 2 / 5"
+
+        vid = app._volumes[0]["id"]
+        app._volume_entry(vid)["cc_field_on"] = True
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 3 / 5"
+
+        controls._tutorial_next()               # reading the threshold
+        assert progress(app) == "Step 4 / 5"
+
+        app._volume_entry(vid)["color_by_cc"] = True
         controls._maybe_advance_tutorial()
         assert progress(app) == "Step 5 / 5"
         assert app._viewport.coach_next.text() == "Finish"

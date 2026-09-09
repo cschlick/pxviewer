@@ -338,10 +338,12 @@ def _hotspots_ran(cw: Any) -> bool:
     return bool(entry and entry.get("hotspots") is not None)
 
 
-def hotspots_tutorial() -> Tutorial:
+def hotspots_structure_tutorial() -> Tutorial:
     """Aggregate the validation checks into one severity field and go where it points —
-    the judging tutorial that follows validation, on the same check-tripping structure."""
-    return Tutorial("Find validation hotspots", [
+    the judging tutorial that follows validation, on the same check-tripping structure.
+    The sibling walkthrough, hotspots_map_fit_tutorial, covers the other question:
+    not "is the geometry sound?" but "does the map agree?"."""
+    return Tutorial("Hotspots — structure", [
         Step(
             "Validation gives one table per check — but a region worth rebuilding usually "
             "trips **several** checks at once, and reading five tables to notice that is "
@@ -389,6 +391,69 @@ def hotspots_tutorial() -> Tutorial:
             "only ever navigates — it never stands alone.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
+
+
+def _cc_field_shown(cw: Any) -> bool:
+    return any(v.get("cc_field_on") for v in cw._desktop._volumes)
+
+
+def _cc_coloring_on(cw: Any) -> bool:
+    return any(v.get("color_by_cc") for v in cw._desktop._volumes)
+
+
+def hotspots_map_fit_tutorial() -> Tutorial:
+    """Where does the model fail to explain its map? The voxel-local map-model CC,
+    walked through both of its presentations on real deposited data — with a helix
+    deliberately pushed out of its density so the signal is unmistakable."""
+    return Tutorial("Hotspots — map fit", [
+        Step(
+            "The structure hotspots ask *is the geometry sound?* This tutorial asks "
+            "the other question: **does the map agree?** The tool is a voxel-local "
+            "**map-model correlation**: the model's expected density is computed on "
+            "the map's own grid and correlated with the real map over a small moving "
+            "window, everywhere at once.\n\n**Downloading 7BV2 and its 2.5 Å map** "
+            "(cached after the first run) — and one well-ordered helix has been "
+            "pushed ~2 Å out of its density on purpose, so you will see exactly what "
+            "a bad region looks like.",
+            done=_pair_loaded,
+        ),
+        Step(
+            "Open the **Hotspots** tab and tick **Map-model CC deficit field**. It "
+            "computes in the background (a few seconds), then a cloud appears over "
+            "the scene while the map keeps its ordinary contour: nothing where the "
+            "model explains the density, blue through purple to hot pink where it "
+            "does not.\n\nThe displaced helix should light up — and so may a few "
+            "honest weak spots the depositors knew about.",
+            done=_cc_field_shown,
+            target=lambda cw: cw._cc_field_check,
+        ),
+        Step(
+            "The slider beside the checkbox now reads **Deficit threshold**, in "
+            "1 − CC: it starts at a data-driven default — roughly the worst sixth of "
+            "the molecule — so drag it up to keep only the worst regions, or down to "
+            "see milder disagreement haze in. The quality preset redraws the cloud "
+            "smoother or faster.\n\nClick into a glowing region and judge it like any "
+            "hotspot: the field says *look here*, the density says what to do.",
+        ),
+        Step(
+            "The same field has a second presentation: select the **map** in the "
+            "Objects list and set its **Map color** to **Map-model CC**. Now the "
+            "map's own surface is painted by local agreement — pink where the model "
+            "fails it, teal where the fit is good — instead of a cloud over the "
+            "scene. One field, two readings; the coach moves on when the colouring "
+            "is up.",
+            done=_cc_coloring_on,
+        ),
+        Step(
+            "Two contracts to remember. The field is computed against the model **as "
+            "it stands** — after refining or dragging, untick and re-tick (or re-pick "
+            "the colouring) to recompute; nothing updates silently. And correlation "
+            "only speaks where the model makes a claim: a blob the model misses "
+            "*entirely* is a difference map's story, not this field's.\n\nThat's the "
+            "loop: find the disagreement, fix it (drag, minimize), recompute, watch "
+            "it fade.",
+        ),
+    ], loader=_fetch_cryoem_pair_displaced)
 
 
 def ligand_fitting_tutorial() -> Tutorial:
@@ -642,11 +707,12 @@ def local_resolution_tutorial() -> Tutorial:
 def all_tutorials() -> List[Tutorial]:
     """Every walkthrough offered, in menu order — looking before judging before changing:
     the three viewing ones (open a model, a model with its map, alternate conformations),
-    then the judging pair (validation, then its hotspot aggregate), then the
-    fitting/refinement group, then the restraint-edits pair (reading before writing).
-    There is no separate examples list: every bundled example is the opening scene of the
+    then the judging block (validation, then hotspots by structure and by map fit), then
+    the fitting/refinement group, then the restraint-edits pair (reading before writing).
+    There is no separate examples list: every example is the opening scene of the
     tutorial that explains it."""
     return [open_model_tutorial(), map_model_tutorial(), altlocs_tutorial(),
-            validation_tutorial(), hotspots_tutorial(), ligand_fitting_tutorial(),
+            validation_tutorial(), hotspots_structure_tutorial(),
+            hotspots_map_fit_tutorial(), ligand_fitting_tutorial(),
             cryo_em_refinement_tutorial(), local_resolution_tutorial(),
             xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]
