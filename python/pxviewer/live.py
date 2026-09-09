@@ -946,7 +946,8 @@ class LiveSession:
                 self._broadcast_text,
                 json.dumps({"type": "hotspot_opacity", "knee": float(knee)}))
 
-    def set_hotspot_anchors(self, anchors: Optional[dict]) -> None:
+    def set_hotspot_anchors(self, anchors: Optional[dict],
+                            colors: Optional[list] = None) -> None:
         """Pin where yellow, orange and red fall on the cloud's [0, 1] value scale.
 
         This is the *display contract*, not a user control: an imported concern field carries
@@ -954,15 +955,23 @@ class LiveSession:
         inferring a ramp from the opacity knee — which moves. Passing ``None`` restores the
         knee-relative ramp the computed severity field uses.
 
+        ``colors`` is an optional explicit ramp — ``[(0xRRGGBB, stop), …]`` on the same
+        [0, 1] scale — that overrides both anchor modes wholesale (the map-model CC
+        deficit cloud paints the px spectrum this way). Omitting it clears any standing
+        override, so severity and concern always get their own ramps back.
+
         Remembered and re-sent to late viewers, so a reload does not repaint the old scale.
         Thread-safe.
         """
-        self._hotspot_anchors = dict(anchors) if anchors else None
+        self._hotspot_anchors = {
+            "anchors": dict(anchors) if anchors else None,
+            "colors": [[int(c), float(s)] for c, s in colors] if colors else None,
+        }
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text,
-                json.dumps({"type": "hotspot_anchors", "anchors": self._hotspot_anchors}))
+                json.dumps({"type": "hotspot_anchors", **self._hotspot_anchors}))
 
     def clear_hotspot_volume(self) -> None:
         """Remove the severity cloud (see :meth:`show_hotspot_volume`). Thread-safe."""
@@ -2179,7 +2188,7 @@ class LiveSession:
                 # after the grid would show the wrong colours for a frame.
                 if self._hotspot_anchors is not None:
                     await self._locked_send(websocket, json.dumps(
-                        {"type": "hotspot_anchors", "anchors": self._hotspot_anchors}))
+                        {"type": "hotspot_anchors", **self._hotspot_anchors}))
                 await self._locked_send(websocket, self._last_hotspot_volume)
                 if self._hotspot_knee is not None:  # keep a slider-adjusted knee across reloads
                     await self._locked_send(websocket, json.dumps(

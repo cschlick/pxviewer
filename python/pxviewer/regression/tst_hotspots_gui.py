@@ -119,7 +119,7 @@ def exercise_a_manifest_imports_without_running_analysis():
                 np.frombuffer(payload, dtype="<f4", offset=72).max(), 0.6)
             # The viewer is told the contract rather than left to infer a ramp from the knee.
             assert entry["session"]._hotspot_anchors == {
-                "yellow": 0.5, "orange": 0.75, "red": 1.0}
+                "anchors": {"yellow": 0.5, "orange": 0.75, "red": 1.0}, "colors": None}
 
             app.set_hotspot_field_metric("clash", mid)
             assert entry["concern_metric"] == "clash"

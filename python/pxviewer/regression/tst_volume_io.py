@@ -160,6 +160,20 @@ def exercise_local_map_model_cc_agrees_where_the_model_explains_the_map():
     assert float(np.median(worse_on)) < float(np.median(on)) - 0.2
 
 
+def exercise_the_deficit_field_inverts_cc_and_keeps_the_mask():
+    """1 − CC where defined, 0 where the sentinel says flat — so the cloud glows at
+    poor fit and stays dark over solvent, and values never leave [0, 1]."""
+    from pxviewer.volume_io import cc_deficit_field
+
+    cc = np.array([[[1.0, 0.75], [0.2, -0.5]], [[0.0, 0.999], [0.5, 0.0]]])
+    bad = cc_deficit_field(cc)
+    assert bad[0, 0, 0] == 0.0                        # perfect fit: dark
+    assert abs(bad[0, 0, 1] - 0.25) < 1e-12
+    assert bad[0, 1, 1] == 1.0                        # anti-correlated: capped, bright
+    assert bad[1, 0, 0] == 0.0 and bad[1, 1, 1] == 0.0  # sentinel: dark
+    assert float(bad.min()) >= 0.0 and float(bad.max()) <= 1.0
+
+
 def exercise_encode_localres_carries_an_optional_palette():
     """The payload header says how many ramp colours follow; zero means the frontend's
     built-in resolution ramp, so a plain localres payload differs only by the count."""

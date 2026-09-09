@@ -3467,6 +3467,25 @@ class ControlsWindow:
                 _set_color,
                 themes=themes or None,
                 title="Map color")
+            if mmm is not None and mmm.model() is not None:
+                # The CC field's other presentation: a 3-D deficit cloud over the
+                # scene while the map keeps its ordinary look — the alternative to
+                # repainting the surface via the Color theme above.
+                from PySide6.QtWidgets import QCheckBox
+
+                cc_field = QCheckBox("Map-model CC field (3-D)")
+                cc_field.setChecked(bool(it.get("cc_field_on")))
+                cc_field.setToolTip(
+                    "Draw where the model fails to explain this map as a cloud over "
+                    "the scene — pink glows at poor fit, fading out where the fit is "
+                    "good — while the map keeps its ordinary contour.\n"
+                    "Computed against the model as it stands (untick and re-tick to "
+                    "recompute after it moves). One cloud at a time: this borrows the "
+                    "Hotspots cloud's slot, threshold slider and quality preset.")
+                cc_field.toggled.connect(
+                    lambda on, vid=vid:
+                    self._safe(lambda: self._desktop.set_cc_field(vid, on)))
+                self._appearance_layout.addWidget(cc_field)
             if live.get("negative_color"):
                 # A difference map draws a second contour at -level; its color is as
                 # much the user's as the positive one — and both are carried into the
@@ -8013,6 +8032,11 @@ class DesktopApp:
                 entry["session"].clear_hotspot_volume()   # the streamed cloud
             except Exception:  # pragma: no cover - defensive
                 pass
+        # The CC deficit cloud rides the same slot; whatever displaced it, the maps'
+        # checkboxes must not keep claiming it is up.
+        for volume in self._volumes:
+            if volume.get("group") == entry.get("group"):
+                volume.pop("cc_field_on", None)
 
     def set_model_interactions(self, mid: str, visible: bool) -> None:
         """Show/hide the computed non-covalent interactions overlay for a model."""
@@ -10577,9 +10601,15 @@ class DesktopApp:
         as it now stands, and a model that has since moved needs a re-pick, exactly the
         Update-maps contract. Runs on a background thread.
         """
+        self._compute_cc(vid, lambda: self.set_color_by_cc(vid, True))
+
+    def _compute_cc(self, vid: str, on_ready) -> None:
+        """Compute and pin the CC field on a background thread, then run ``on_ready``
+        on the GUI thread — the shared engine behind the two presentations (the
+        coloured-surface Color theme, and the 3-D deficit cloud)."""
         full = self._volume_entry(vid)
         if full is None:
-            raise ValueError("pick a map to colour")
+            raise ValueError("pick a map first")
         mmm = self.group_mmm(full.get("group"))
         model = mmm.model() if mmm is not None else None
         if model is None:
@@ -10603,13 +10633,19 @@ class DesktopApp:
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 self._status(f"map-model CC failed: {exc}")
                 return
-            self.bridge.run_on_main.emit(lambda: self._pin_cc_map(vid, cc))
+
+            def land():
+                self._pin_cc_map(vid, cc)
+                on_ready()
+
+            self.bridge.run_on_main.emit(land)
 
         self.run_background(work, name="pxviewer-ccmap", label="Map-model CC")
 
     def _pin_cc_map(self, full_vid: str, cc_data) -> None:
         """Add a computed CC field as a hidden volume pinned under ``full_vid``
-        (replacing any previous one), then colour the map by it."""
+        (replacing any previous one). The caller decides the presentation — the
+        coloured surface, the deficit cloud, or both."""
         full = self._volume_entry(full_vid)
         if full is None:  # the map was unloaded while we computed
             return
@@ -10628,7 +10664,6 @@ class DesktopApp:
             cc_entry["pinned_to"] = full_vid
             cc_entry["visible"] = False
         full["cc_map"] = cc_vid
-        self.set_color_by_cc(full_vid, True)
 
     def set_color_by_cc(self, full_vid: str, on: bool) -> None:
         """Toggle colouring a full map by its pinned map-model CC field. Mirrors
@@ -10700,6 +10735,110 @@ class DesktopApp:
             self._push_localres(full)
         elif full.get("color_by_cc"):
             self._push_cc(full)
+
+    #: The px spectrum as [rgb, stop] ramp stops on the deficit cloud's [0, 1] scale
+    #: (deficit = 1 − CC): faint teal where the fit is merely imperfect, through blue
+    #: and purple to hot pink where the model fails to explain the density. The stops
+    #: sit where real damage lands — a 2 Å-displaced stretch reads deficit ~0.6–0.8,
+    #: so pink starts at 0.75; a ramp anchored at the theoretical extremes painted
+    #: everything indigo and kept pink for anti-correlation nothing real reaches.
+    _CC_FIELD_STOPS = [(0x2DD4BF, 0.0), (0x3B82F6, 0.25), (0x6366F1, 0.45),
+                       (0xA855F7, 0.60), (0xEC4899, 0.75)]
+    #: Where the deficit cloud starts to become visible: CC below 1 − this shows.
+    #: Feeds encode_severity_box's cut, which seeds the Hotspots knee slider too.
+    _CC_FIELD_CUT = 0.25
+
+    def set_cc_field(self, vid: str, on: bool) -> None:
+        """The second presentation of the CC field: a 3-D deficit cloud drawn *over*
+        the scene while the map keeps its ordinary look — where the coloured-surface
+        theme (Color ▸ Map-model CC) repaints the map itself.
+
+        The cloud is the hotspot machinery with the px spectrum: the deficit
+        (``1 − CC``) rides the model session's severity-cloud slot, so it shares the
+        Hotspots tab's knee slider and quality preset, and one cloud shows at a time —
+        turning this on steps a severity cloud aside, and vice versa. Same manual
+        contract as the colouring: computed against the model as it stands.
+        """
+        full = self._volume_entry(vid)
+        if full is None:
+            raise ValueError("pick a map first")
+        model_entry = self._cc_field_model(full)
+        if not on:
+            full["cc_field_on"] = False
+            if model_entry is not None and model_entry.pop("hotspot_cloud", None):
+                session = model_entry["session"]
+                try:
+                    session.clear_hotspot_volume()
+                    session.set_hotspot_anchors(None)   # severity gets its ramp back
+                except Exception:  # pragma: no cover - defensive
+                    pass
+            self._emit_loaded_changed()
+            return
+        if model_entry is None:
+            raise ValueError("the map's group has no model to correlate against")
+        if full.get("cc_map"):
+            self._show_cc_cloud(vid)
+        else:
+            self._compute_cc(vid, lambda: self._show_cc_cloud(vid))
+
+    def _cc_field_model(self, full):
+        """The group's model entry — whose session carries the deficit cloud."""
+        return next((m for m in self._models
+                     if m.get("group") == full.get("group")
+                     and getattr(m["session"], "model", None) is not None), None)
+
+    def _show_cc_cloud(self, vid: str) -> None:
+        """Encode the pinned CC field as a deficit cloud and stream it (GUI thread)."""
+        from . import hotspots
+        from .volume_io import cc_deficit_field
+
+        full = self._volume_entry(vid)
+        model_entry = self._cc_field_model(full) if full is not None else None
+        cc_entry = self._volume_entry(full.get("cc_map")) if full is not None else None
+        if full is None or model_entry is None or cc_entry is None:
+            return  # unloaded while the compute ran
+        data = cc_entry["data"]
+        deficit = cc_deficit_field(data.array)
+        # The cloud is raymarched, so it wants the hotspot quality preset's coarser
+        # grid, not the map's own — decimate by stride (spacing scales, the Cartesian
+        # origin is preserved by expressing the grid offset in the new units).
+        cloud_spacing, cloud_steps = hotspots.CLOUD_QUALITY[
+            getattr(self, "_cloud_quality", hotspots.CLOUD_QUALITY_DEFAULT)]
+        pixels = [float(p) for p in data.pixel_sizes]
+        strides = [max(1, int(round(cloud_spacing / p))) for p in pixels]
+        deficit = deficit[::strides[0], ::strides[1], ::strides[2]]
+        spacing = [p * s for p, s in zip(pixels, strides)]
+        origin = [float(o) * p / new for o, p, new in
+                  zip(data.origin, pixels, spacing)]
+        # The deficit only means something where the model makes a claim: away from
+        # every atom the model map is empty and the windowed correlation is 0/0 noise,
+        # which hazed the entire box. Mask to atom reach — the honesty rule
+        # severity_field applies to its per-atom smear. (A blob the model *misses*
+        # entirely is a difference map's story, not a correlation's.)
+        from scipy.spatial import cKDTree
+
+        xyz = model_entry["session"].model.get_hierarchy().atoms() \
+            .extract_xyz().as_numpy_array()
+        nx, ny, nz = deficit.shape
+        axes = [(float(o) + np.arange(n)) * s
+                for o, n, s in zip(origin, (nx, ny, nz), spacing)]
+        gx, gy, gz = np.meshgrid(*axes, indexing="ij")
+        voxels = np.column_stack([gx.ravel(), gy.ravel(), gz.ravel()])
+        reach = 4.0
+        dist, _idx = cKDTree(xyz).query(voxels, distance_upper_bound=reach)
+        deficit = deficit * np.isfinite(dist).reshape(deficit.shape)
+        payload = hotspots.encode_severity_box(
+            deficit, spacing, origin, steps_per_cell=cloud_steps,
+            cap=1.0, cut=self._CC_FIELD_CUT)
+        session = model_entry["session"]
+        self._clear_hotspot_field(model_entry)   # one cloud at a time (shared slot)
+        session.set_hotspot_anchors(None, colors=self._CC_FIELD_STOPS)
+        session.show_hotspot_volume(payload)
+        model_entry["hotspot_cloud"] = True      # the existing teardown paths own it
+        full["cc_field_on"] = True
+        self._emit_loaded_changed()
+        self._status(f"{full['name']}: CC deficit field — pink is density the model "
+                     "fails to explain (threshold on the Hotspots tab)")
 
     # -- fetch from the PDB / EMDB ---------------------------------------------
 
@@ -10991,6 +11130,7 @@ class DesktopApp:
              "resolution_map": v.get("resolution_map"),
              "color_by_resolution": bool(v.get("color_by_resolution")),
              "color_by_cc": bool(v.get("color_by_cc")),
+             "cc_field_on": bool(v.get("cc_field_on")),
              "localres_downsample": v.get("localres_downsample"),
              "localres_domain": v.get("localres_domain")}
             for v in self._volumes if not v.get("is_resolution")

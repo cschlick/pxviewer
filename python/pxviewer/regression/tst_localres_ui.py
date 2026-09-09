@@ -619,6 +619,28 @@ def exercise_map_model_cc_is_an_appearance_of_the_paired_map():
         app.set_color_by_cc(vid, True)
         assert full["color_by_cc"] and not full["color_by_resolution"]
 
+        # The second presentation: the deficit cloud over the scene, riding the
+        # model session's severity-cloud slot with the px ramp — the map keeps its
+        # ordinary contour (colouring off), and the checkbox state is truthful.
+        app.set_color_by_cc(vid, False)
+        model_entry = app._cc_field_model(full)
+        assert model_entry is not None
+        clouds, ramps = [], []
+        model_entry["session"].show_hotspot_volume = clouds.append
+        model_entry["session"].set_hotspot_anchors = \
+            lambda anchors, colors=None: ramps.append((anchors, colors))
+        app.set_cc_field(vid, True)          # cc_map already pinned: no recompute
+        assert full["cc_field_on"] and not full["color_by_cc"]
+        assert model_entry.get("hotspot_cloud")
+        assert clouds and ramps[-1] == (None, DesktopApp._CC_FIELD_STOPS)
+        # The payload's grid is the deficit in [0, 1] with the cut in the header.
+        cut = struct.unpack_from("<f", clouds[-1])[0]
+        assert abs(cut - DesktopApp._CC_FIELD_CUT) < 1e-6
+        assert np.frombuffer(clouds[-1], dtype="<f4", offset=68).max() <= 1.0
+
+        app.set_cc_field(vid, False)
+        assert not full["cc_field_on"] and not model_entry.get("hotspot_cloud")
+
         # The field's lifecycle rides its map.
         app.remove_volume(vid)
         assert app._volume_entry(full["cc_map"]) is None

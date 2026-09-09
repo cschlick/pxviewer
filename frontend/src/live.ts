@@ -712,6 +712,7 @@ export class LiveViewer {
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
     // Declared colour positions for an imported concern field; undefined = derive from the cut.
     private hotspotAnchors: { yellow: number; orange: number; red: number } | undefined;
+    private hotspotColorStops: [number, number][] | undefined;  // explicit [rgb, stop] ramp (CC deficit cloud)
     private hotspotCellDim = 1.0;    // voxel size in A, sizes the empty-space jump
     private hotspotSteps = 8;        // raymarch steps per cell (the quality dial)
     private clickMode = 'off';
@@ -1653,7 +1654,9 @@ export class LiveViewer {
         // whatever the cut or the declared anchors are.
         const stop = (x: number) => Math.round(clamp01(x) * 1000) / 1000;
         const a = this.hotspotAnchors;
-        const colorList: [Color, number][] = a
+        const colorList: [Color, number][] = this.hotspotColorStops
+            ? this.hotspotColorStops.map(([rgb, s]) => [Color(rgb), stop(s)] as [Color, number])
+            : a
             ? [
                 [ColorNames.yellow, stop(a.yellow)],
                 [ColorNames.orange, stop(a.orange)],
@@ -1708,8 +1711,15 @@ export class LiveViewer {
      * cut-relative ramp the computed severity field uses. Updates in place when a cloud is
      * already up, so this can arrive before or after the grid.
      */
-    async setHotspotAnchors(anchors: { yellow: number; orange: number; red: number } | undefined) {
+    async setHotspotAnchors(
+        anchors: { yellow: number; orange: number; red: number } | undefined,
+        colors?: [number, number][],
+    ) {
         this.hotspotAnchors = anchors;
+        // An explicit [rgb, stop] ramp overrides both anchor modes wholesale — the
+        // map-model CC deficit cloud paints the px spectrum this way. Cleared whenever
+        // an anchors message arrives without one, so the severity/concern ramps return.
+        this.hotspotColorStops = colors && colors.length ? colors : undefined;
         if (!this.hotspotRepr?.ref) return;
         await this.plugin.state.data.build().to(this.hotspotRepr.ref).update(this.hotspotReprParams()).commit();
     }
@@ -3553,10 +3563,16 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await viewer.setHotspotOpacity(msg.knee);
             } else if (msg.type === 'hotspot_anchors' && viewer) {
                 const a = msg.anchors;
+                const stops = Array.isArray(msg.colors)
+                    ? (msg.colors as any[])
+                          .filter((c) => Array.isArray(c) && typeof c[0] === 'number' && typeof c[1] === 'number')
+                          .map((c) => [c[0], c[1]] as [number, number])
+                    : undefined;
                 await viewer.setHotspotAnchors(
                     a && typeof a.yellow === 'number' && typeof a.orange === 'number' && typeof a.red === 'number'
                         ? { yellow: a.yellow, orange: a.orange, red: a.red }
-                        : undefined);
+                        : undefined,
+                    stops);
             } else if (msg.type === 'structure_visible' && viewer && typeof msg.value === 'boolean') {
                 viewer.setStructureVisible(msg.value);   // hide/show this model in place
             } else if (msg.type === 'volume_visible' && typeof msg.ref === 'string' && typeof msg.value === 'boolean') {

@@ -474,6 +474,17 @@ def local_map_model_cc(
     return VolumeData.from_map_manager(out, name="map-model CC")
 
 
+def cc_deficit_field(cc: np.ndarray) -> np.ndarray:
+    """``1 − CC`` where the CC field is defined, 0 where it carries the flat-region
+    sentinel — the shape a hotspot-style cloud wants: transparent where the model
+    explains the map, glowing where it does not. (A genuine CC of exactly 0.0
+    collides with the sentinel and stays dark; real disagreement lands near 0, not
+    at it, so nothing of substance is lost.)"""
+    bad = np.clip(1.0 - np.asarray(cc, dtype=float), 0.0, 1.0)
+    bad[np.asarray(cc) == 0.0] = 0.0
+    return bad
+
+
 def local_resolution_from_half_maps(
     half_map_1: Any, half_map_2: Any, full_map: Any = None, *, d_min: Optional[float] = None,
 ) -> "VolumeData":
