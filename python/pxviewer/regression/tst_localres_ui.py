@@ -555,9 +555,15 @@ def exercise_the_computed_resolution_map_is_saved_and_reused():
 def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
     """The Custom… dialog previews live, and applying a colour while a colour-by
     theme is on turns the theme off — which emits loaded-changed, rebuilds the
-    appearance pane, and deletes the combo the handler is standing on, mid-exec().
-    That must degrade to apply-and-return, not a dead-widget RuntimeError (a real
-    crash: RuntimeError in the handler, then a segfault on quit)."""
+    appearance pane and deletes the combo the picker is standing on.
+
+    The reported crash was two bugs wearing one coat: a dead-widget RuntimeError
+    from *our* code (guarded, below), and a segfault from Qt's own -- exec() runs a
+    nested event loop, so opening the dialog from inside currentIndexChanged left
+    QComboBox's C++ emission frame on freed memory when the handler returned
+    (measured: 3 crashes in 10 runs of this file). The picker therefore opens on a
+    zero-timer, after the emission unwinds; the first assertion below pins that
+    deterministically, since the segfault it prevents is only intermittent."""
     import PySide6.QtWidgets as QtW
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QColorDialog as RealDialog
@@ -570,8 +576,11 @@ def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
         ColorDialogOption = RealDialog.ColorDialogOption
         DialogCode = RealDialog.DialogCode
 
+        opened = []          # one entry per construction, to time the opening
+
         def __init__(self, *_a, **_k):
             self._cb = None
+            WheelDialog.opened.append(True)
 
         def setWindowTitle(self, *_a):
             pass
@@ -618,12 +627,17 @@ def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
             controls._update_appearance("volume", ctx.full_vid)
             combo = next(c for c in controls._appearance_box.findChildren(QtW.QComboBox)
                          if c.count() and c.itemData(c.count() - 1) == _CUSTOM_COLOR)
-            combo.setCurrentIndex(combo.findData(_CUSTOM_COLOR))   # opens the picker
-            process_events()
+            combo.setCurrentIndex(combo.findData(_CUSTOM_COLOR))   # asks for the picker
+            # Deterministic half: the dialog must NOT have opened inside the
+            # emission -- that is what left Qt standing on a deleted combo.
+            opened_inside = list(WheelDialog.opened)
+            process_events()                                       # now it opens
         finally:
             QtW.QColorDialog = real
             sys.excepthook = old_hook
 
+        assert opened_inside == [], "the picker opened inside the signal emission"
+        assert WheelDialog.opened, "the picker never opened"
         assert not hook_errors, hook_errors
         assert full["color"] == picked_hex
         assert not full["color_by_resolution"]     # the theme stepped aside cleanly

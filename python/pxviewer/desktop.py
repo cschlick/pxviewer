@@ -3667,7 +3667,7 @@ class ControlsWindow:
         chain, …). A model gets them; a volume, whose density has nothing to color by, does
         not — but both get the swatches and the wheel, so either can be set to a flat color.
         """
-        from PySide6.QtCore import QSize, Qt
+        from PySide6.QtCore import QSize, Qt, QTimer
         from PySide6.QtGui import QColor, QIcon, QPixmap
         from PySide6.QtWidgets import QColorDialog, QComboBox, QHBoxLayout, QLabel
 
@@ -3711,6 +3711,17 @@ class ControlsWindow:
                 committed["value"] = value
                 on_pick(value)
                 return
+            # Open the picker only once this signal emission has unwound. exec() runs a
+            # nested event loop, which processes deferred deletions -- and the live
+            # preview below rebuilds the appearance pane, deleting this very combo. Doing
+            # that *inside* the emission leaves QComboBox's own C++ frame standing on
+            # freed memory when the handler returns: an intermittent segfault (measured
+            # here as one crash in three runs of the exercise below), and the other half
+            # of the crash report that produced the guard further down. Returning first
+            # means nothing is inside the combo when it goes.
+            QTimer.singleShot(0, open_picker)
+
+        def open_picker(combo=combo):
             revert_to = committed["value"]
             # Seed the wheel with the current color — but a theme name ("by chain") is not
             # one, so fall back to a swatch rather than opening on an invalid color.
