@@ -222,6 +222,84 @@ def exercise_colouring_by_map_model_cc_sends_per_atom_values():
         dispose(app)
 
 
+def exercise_every_value_colouring_gets_the_same_scale_machinery():
+    """The registry is the contract: *every* per-atom colouring -- refined properties
+    and computed ones alike -- opens with a domain and a default_domain, keeps a range
+    the user set across a re-apply, resets to its calibrated default, and shows the
+    shared Range group on the pane.
+
+    Registry-driven on purpose. The computed colourings were once kept out of the
+    scale machinery deliberately, which left a correlation spanning 0.6-0.95 painted
+    on a fixed 0-1 ramp with no way to see the variation; iterating the registry means
+    a colouring added later cannot quietly go the same way.
+    """
+    from PySide6.QtWidgets import QDoubleSpinBox
+
+    from pxviewer.desktop import _HOTSPOT_COLOR, _MODEL_VALUE_COLORS
+
+    class Field:                      # a cached hotspot score, without the minute of probe
+        def __init__(self, n):
+            self.values = np.linspace(0.0, 2.0, n)
+
+    app = app_with_map()
+    try:
+        entry = app._models[0]
+        mid = entry["id"]
+        n_atoms = entry["session"]._n_atoms
+        entry["hotspots"] = Field(n_atoms)
+
+        for colour, info in _MODEL_VALUE_COLORS.items():
+            entry.pop("attribute", None)
+            entry["color"] = None
+            app.set_model_color(mid, colour)
+            deadline = time.time() + COLOR_TIMEOUT_S
+            while time.time() < deadline and (
+                    entry.get("attribute") or {}).get("name") != colour:
+                process_events()
+                time.sleep(0.05)
+            attribute = entry.get("attribute") or {}
+            assert attribute.get("name") == colour, "%s never landed" % colour
+            assert len(attribute["values"]) == n_atoms, colour
+
+            lo, hi = attribute["domain"]
+            assert hi > lo, colour
+            assert attribute.get("default_domain") is not None, (
+                "%s has no default to Reset to" % colour)
+
+            # The range is the user's, in the same three ways for every colouring.
+            app.set_model_value_domain(mid, lo, hi + 5.0)
+            assert entry["attribute"]["domain"] == (lo, hi + 5.0), colour
+            app.set_model_value_domain(mid, hi + 5.0, lo)          # crossed: refused
+            assert entry["attribute"]["domain"] == (lo, hi + 5.0), colour
+            app.fit_model_value_domain(mid)
+            fitted = entry["attribute"]["domain"]
+            assert fitted[1] > fitted[0], colour
+            app.reset_model_value_domain(mid)
+            assert entry["attribute"]["domain"] == attribute["default_domain"], colour
+
+            # ...and it survives the colouring being re-applied (a rep change, a recompute).
+            app.set_model_value_domain(mid, lo, hi + 5.0)
+            getattr(app, info["method"])(mid)
+            deadline = time.time() + COLOR_TIMEOUT_S
+            while time.time() < deadline and \
+                    entry["attribute"]["domain"] != (lo, hi + 5.0):
+                process_events()
+                time.sleep(0.05)
+            assert entry["attribute"]["domain"] == (lo, hi + 5.0), (
+                "%s clobbered the user's range on re-apply" % colour)
+
+            # The pane offers the shared Range group, labelled for this colouring.
+            app._controls._update_appearance("model", mid, force=True)
+            process_events()
+            spins = [w for w in app._controls._appearance_box.findChildren(QDoubleSpinBox)
+                     if w.objectName().startswith("value-domain-")]
+            assert len(spins) == 2, "no Range group for %s" % colour
+            assert {round(sp.value(), 2) for sp in spins} == {
+                round(lo, 2), round(hi + 5.0, 2)}, colour
+    finally:
+        dispose(app)
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.

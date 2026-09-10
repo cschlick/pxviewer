@@ -58,19 +58,31 @@ _CC_COLOR = "mapcc"
 #: surface and on atoms, and a figure can put the two side by side on one legend.
 _VALUE_PALETTE = ["#2166ac", "#67a9cf", "#d1e5f0", "#fddbc7", "#ef8a62", "#b2182b"]
 
-#: Model colourings whose scale the user can set: per-atom properties mapped through
-#: an explicit (lo, hi) domain, exactly like the map's local-resolution range. The
-#: calibrated colourings (Q-score, hotspot severity) are deliberately absent -- their
-#: domains carry meaning and are not the user's to move.
-_MODEL_VALUE_COLORS = {
-    "bfactor": {"label": "B-factor", "unit": " Å²"},
-    "occupancy": {"label": "Occupancy", "unit": ""},
-}
 # Color a model by aggregated validation severity (see hotspots.py and the Hotspots tab).
 _HOTSPOT_COLOR = "hotspot"
-# Colors that are computed per-atom arrays rather than Mol* theme names. They travel on
-# entry["attribute"] and are applied by _apply_model_rep's attribute branch.
-_ATTRIBUTE_COLORS = frozenset({_QSCORE_COLOR, _CC_COLOR, _HOTSPOT_COLOR})
+
+#: **Every** per-atom value colouring, and the single place that says so. These are not
+#: Mol* themes: each is an array of numbers travelling on ``entry["attribute"]``, drawn
+#: by _apply_model_rep's attribute branch through an explicit (lo, hi) domain and
+#: palette -- so each one gets the same user-settable Range group the map's
+#: local-resolution scale has, and ``method`` names the routine that computes it.
+#:
+#: The calibrated ones (Q-score, map-model CC, severity) were once kept out of this
+#: registry, on the reasoning that their domains carry meaning and are not the user's
+#: to move. That protected comparability by *prohibition*, and cost the thing the
+#: scale is for: a correlation whose values all sit between 0.6 and 0.95 is a
+#: uniformly teal molecule on a 0..1 ramp, with no way to see the variation. The
+#: default domain still carries the calibration and Reset is one click away, which
+#: keeps the same colour meaning the same thing by default without pretending the
+#: user has nothing to say about it.
+_MODEL_VALUE_COLORS = {
+    "bfactor": {"label": "B-factor", "unit": " Å²", "method": "color_model_by_property"},
+    "occupancy": {"label": "Occupancy", "unit": "", "method": "color_model_by_property"},
+    _QSCORE_COLOR: {"label": "Q-score", "unit": "", "method": "color_model_by_qscore"},
+    _CC_COLOR: {"label": "Map-model CC", "unit": "", "method": "color_model_by_mapcc"},
+    _HOTSPOT_COLOR: {"label": "Hotspot severity", "unit": "",
+                     "method": "color_model_by_hotspots"},
+}
 # Default opacity knee for the severity cloud, in severity units: the outlier cut.
 _HOTSPOT_KNEE_DEFAULT = 1.0
 
@@ -3885,12 +3897,16 @@ class ControlsWindow:
         lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
         lo_spin.setObjectName("value-domain-lo")
         hi_spin.setObjectName("value-domain-hi")
-        for sp in (lo_spin, hi_spin):
-            sp.setRange(0.0, 9999.0)
-            sp.setDecimals(2)
-            sp.setSingleStep(0.1)
-            sp.setSuffix(unit)
         lo0, hi0 = domain or (0.0, 1.0)
+        # A correlation runs to -1, so the floor cannot be zero the way a B-factor's or a
+        # resolution's may as well be; and a quantity living inside a couple of units
+        # (occupancy, Q-score, CC) needs a finer wheel than one spanning tens.
+        step = 0.01 if (float(hi0) - float(lo0)) <= 2.0 else 0.1
+        for sp in (lo_spin, hi_spin):
+            sp.setRange(-9999.0, 9999.0)
+            sp.setDecimals(2)
+            sp.setSingleStep(step)
+            sp.setSuffix(unit)
         lo_spin.setValue(float(lo0))
         hi_spin.setValue(float(hi0))
 
@@ -7116,14 +7132,15 @@ class DesktopApp:
             session.set_attribute(attribute["name"], values)
             session.color_by(attribute["name"], type=rep, palette=attribute["palette"],
                              domain=attribute["domain"], on=main_on)
-            # The attribute API replaces the representation list. Additional default layers
-            # remain visible with their ordinary coloring; the primary layer carries the
-            # computed scalar coloring.
+            # The attribute API replaces the representation list, so the model's other
+            # layers are added back — carrying the same colouring. A value colouring is a
+            # statement about the atoms, not about one representation of them: drawing a
+            # B-factor cartoon threaded with element-coloured sticks says two different
+            # things about the same atom, and the legend belongs to neither.
             for extra in reps[1:]:
-                kwargs = self._model_color_kwargs(entry, extra)
-                if main_on is not None:
-                    kwargs["on"] = main_on
-                session.add_representation(extra, **kwargs)
+                session.color_by(attribute["name"], type=extra,
+                                 palette=attribute["palette"],
+                                 domain=attribute["domain"], on=main_on, replace=False)
             self._add_context_layer(entry, session, on)
             return
         for i, layer in enumerate(reps):
@@ -7156,7 +7173,7 @@ class DesktopApp:
             if not context:
                 return
         attribute = entry.get("attribute")
-        if entry.get("color") in _ATTRIBUTE_COLORS and attribute is not None:
+        if entry.get("color") in _MODEL_VALUE_COLORS and attribute is not None:
             # A computed colouring (map-model CC, Q-score, hotspot severity) must not
             # stop at the neighbourhood's edge: the sticks around a selection are
             # exactly the atoms being judged, and element colours there made the
@@ -7175,7 +7192,7 @@ class DesktopApp:
         """How to color a model's representation: an explicit user color wins; else the
         palette default (carbon-tint for atoms, uniform for ribbons); else the theme default."""
         explicit = entry.get("color")
-        if explicit in _ATTRIBUTE_COLORS:
+        if explicit in _MODEL_VALUE_COLORS:
             # Chosen but not computed yet (or it failed): Mol* has no such theme, so fall
             # through to the default rather than handing it a name it cannot resolve.
             explicit = None
@@ -7422,30 +7439,39 @@ class DesktopApp:
         if entry is None or entry.get("color") == color:
             return
         entry["color"] = color
-        if color == _QSCORE_COLOR:
-            self.color_model_by_qscore(mid)
-            return
-        if color == _CC_COLOR:
-            self.color_model_by_mapcc(mid)
-            return
-        if color in _MODEL_VALUE_COLORS:
-            self.color_model_by_property(mid, color)
-            return
-        if color == _HOTSPOT_COLOR:
-            self.color_model_by_hotspots(mid)
+        info = _MODEL_VALUE_COLORS.get(color)
+        if info is not None:
+            getattr(self, info["method"])(mid)
             return
         # Leaving a computed color drops the values it colored by: they belong to one model
         # (and for Q-score/hotspots, to one pairing with a map), not to the entry forever.
         entry.pop("attribute", None)
         self._apply_model_rep(entry)
 
-    def color_model_by_property(self, mid: str, kind: str) -> None:
+    @staticmethod
+    def _opening_domain(entry, name: str, default) -> tuple:
+        """``(domain, default_domain)`` for a value colouring about to be applied.
+
+        The range the user last set for *this* colouring on *this* model survives a
+        re-apply (a representation change, a recompute); anything else opens at the
+        calibrated default, which is also where Reset goes. Shared by all five
+        colourings so "the scale sticks" means one thing.
+        """
+        default = (float(default[0]), float(default[1]))
+        previous = entry.get("attribute") or {}
+        kept = previous.get("domain") if previous.get("name") == name else None
+        return (tuple(float(v) for v in kept) if kept else default), default
+
+    def color_model_by_property(self, mid: str, kind: Optional[str] = None) -> None:
         """Color a model by a refined per-atom number (B-factor or occupancy), through
         the attribute path so the scale is explicit and the user's to set."""
         entry = self._model_entry(mid)
         model = getattr(entry["session"], "model", None) if entry else None
         if entry is None:
             return
+        # Dispatched from the registry, which calls every colouring with just the model
+        # id; the colour already on the entry says which property is meant.
+        kind = kind or entry.get("color")
         if model is None:
             self._warn("this model has no atoms to colour by")
             return
@@ -7460,12 +7486,10 @@ class DesktopApp:
             if hi <= lo:
                 hi = lo + 0.1
             default = (round(lo, 2), round(hi, 2))
-        previous = entry.get("attribute")
-        kept = (previous or {}).get("domain") if (previous or {}).get("name") == kind else None
+        domain, default = self._opening_domain(entry, kind, default)
         entry["attribute"] = {
             "name": kind, "values": values,
-            # The stored range survives re-selection; a fresh pick starts at the default.
-            "domain": kept or default, "default_domain": default,
+            "domain": domain, "default_domain": default,
             "palette": _VALUE_PALETTE,
         }
         entry["color"] = kind
@@ -7545,8 +7569,10 @@ class DesktopApp:
                 # color while this ran — either way these values are no longer wanted.
                 if current is None or current.get("color") != _QSCORE_COLOR:
                     return
+                domain, default = self._opening_domain(current, _QSCORE_COLOR, DOMAIN)
                 current["attribute"] = {"name": _QSCORE_COLOR, "values": values,
-                                        "domain": DOMAIN, "palette": PALETTE}
+                                        "domain": domain, "default_domain": default,
+                                        "palette": PALETTE}
                 self._apply_model_rep(current)
                 finite = values[np.isfinite(values)]
                 if finite.size:
@@ -7611,10 +7637,12 @@ class DesktopApp:
                 # color while this ran — either way these values are no longer wanted.
                 if current is None or current.get("color") != _CC_COLOR:
                     return
+                domain, default = self._opening_domain(
+                    current, _CC_COLOR, self._CC_MODEL_DOMAIN)
                 current["attribute"] = {
                     "name": _CC_COLOR, "values": values,
                     "residue_values": residue_values,
-                    "domain": self._CC_MODEL_DOMAIN,
+                    "domain": domain, "default_domain": default,
                     "palette": self._CC_MODEL_PALETTE}
                 self._apply_model_rep(current)
                 finite = values[np.isfinite(values)]
@@ -7677,10 +7705,13 @@ class DesktopApp:
                 current.pop("hotspot_metric", None)  # a new score starts on Combined
                 current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
                 current["color"] = _HOTSPOT_COLOR
+                domain, default = self._opening_domain(
+                    current, _HOTSPOT_COLOR, hotspots.DOMAIN)
                 current["attribute"] = {
                     "name": _HOTSPOT_COLOR, "values": result.values,
                     "residue_values": residue_values,
-                    "domain": hotspots.DOMAIN, "palette": palette,
+                    "domain": domain, "default_domain": default,
+                    "palette": palette,
                 }
                 self._apply_model_rep(current)
                 self._emit_loaded_changed()
@@ -7776,11 +7807,12 @@ class DesktopApp:
         # Reuse the background-matched palette from when it was computed; fall back to the
         # default only if this model was scored before that was recorded.
         palette = entry.get("hotspot_palette") or hotspots.PALETTE
+        domain, default = self._opening_domain(entry, _HOTSPOT_COLOR, hotspots.DOMAIN)
         entry["attribute"] = {
             "name": _HOTSPOT_COLOR, "values": result.values,
             "residue_values": (hotspots.residue_broadcast(model, result.values)
                                if model is not None else None),
-            "domain": hotspots.DOMAIN, "palette": palette,
+            "domain": domain, "default_domain": default, "palette": palette,
         }
         self._apply_model_rep(entry)
 
