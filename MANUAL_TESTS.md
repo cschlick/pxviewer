@@ -174,13 +174,14 @@ Run **Tutorials ▸ Look at local resolution** twice.
 5. Second run of the tutorial.
    - **Watch for:** the saved resolution map loads from disk — seconds, not the
      original computation.
-6. Map-model CC: run **Tutorials ▸ Hotspots — map fit** (downloads 7BV2 + its map,
-   cached after the first run).
-   - **Watch for:** the coach waits for the real download; setting the model's Color
-     to **By map-model CC** paints atoms teal→pink in a few seconds and the guided
-     residues read as narrated (598 pink and out of density, 768 teal and nested);
-     rotation stays fluid throughout — this colouring replaced two volume
-     presentations that did not; picking another colour and re-picking recomputes.
+6. Map-model CC: run **Tutorials ▸ Real-space refine into cryo-EM density** (it loads
+   7BV2 + its map with one helix displaced), then set the model's **Color** to
+   **By map-model CC**.
+   - **Watch for:** it computes in a few seconds and paints atoms teal→pink on the
+     0–1 correlation scale; the displaced helix reads pink against a teal molecule;
+     rotation stays fluid; selecting a residue keeps the CC colours on the
+     neighbourhood sticks (not element colours); picking another colour and
+     re-picking recomputes against the model as it now stands.
 
 ## Pass 7 — Tutorials sweep (15 min)
 

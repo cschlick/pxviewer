@@ -43,8 +43,7 @@ TUTORIAL_TITLES = [
     "A model with its map",
     "Alternate conformations",
     "Validate a structure",
-    "Hotspots — structure",
-    "Hotspots — map fit",
+    "Find validation hotspots",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
     "Look at local resolution",
@@ -632,7 +631,7 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
     """Load the demo, find hotspots, show the 3-D field, read the wrap-up."""
     with desktop() as app:
         controls = app._controls
-        controls._start_tutorial(tutorial.hotspots_structure_tutorial())
+        controls._start_tutorial(tutorial.hotspots_tutorial())
         process_events()
         assert progress(app) == "Step 1 / 5"
         assert [m["name"] for m in app._models] == ["1tec.pdb"]
@@ -662,55 +661,6 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
 
         controls._tutorial_next()
         assert app._viewport.coach_bar.isHidden()
-
-
-def exercise_the_map_fit_tutorial_walks_the_colouring():
-    """Pair on screen, model coloured by CC, a bad residue then a good one selected,
-    contracts read -- the coach side of the map-fit walkthrough. The real tutorial
-    fetches 7BV2/EMD-30210; the suite must run offline, so the loader is swapped for
-    the synthetic fixture, the guided residues are repointed at its numbering, and
-    the colouring is stood in for (tst_qscore drives the real computation)."""
-    old = (tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ)
-    tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ = 30, 40
-    try:
-        with desktop() as app:
-            controls = app._controls
-            build = tutorial.hotspots_map_fit_tutorial()
-            build.loader = lambda d: d.load_map_model_demo()
-            controls._start_tutorial(build)
-            process_events()
-            assert progress(app) == "Step 1 / 5"
-
-            controls._maybe_advance_tutorial()      # the pair is on screen
-            assert progress(app) == "Step 2 / 5"
-
-            entry = app._models[0]
-            entry["color"] = "mapcc"
-            entry["attribute"] = {"name": "mapcc"}
-            controls._maybe_advance_tutorial()
-            assert progress(app) == "Step 3 / 5"
-
-            def pick(resseq):
-                mid = app._active_model_id
-                atoms = app._model_entry(mid)["session"].model \
-                    .get_hierarchy().atoms()
-                app._scene_selection[mid] = [
-                    i for i, a in enumerate(atoms)
-                    if a.parent().parent().resseq_as_int() == resseq]
-
-            pick(30)                                # the guided bad residue
-            controls._maybe_advance_tutorial()
-            assert progress(app) == "Step 4 / 5"
-
-            pick(40)                                # then the healthy one
-            controls._maybe_advance_tutorial()
-            assert progress(app) == "Step 5 / 5"
-            assert app._viewport.coach_next.text() == "Finish"
-
-            controls._tutorial_next()
-            assert app._viewport.coach_bar.isHidden()
-    finally:
-        tutorial.CRYOEM_BAD_RESSEQ, tutorial.CRYOEM_GOOD_RESSEQ = old
 
 
 def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():

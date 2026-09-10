@@ -163,9 +163,9 @@ def _fetch_cryoem_pair(desktop: Any) -> None:
 
 
 def _fetch_cryoem_pair_displaced(desktop: Any) -> None:
-    # The map opens translucent: this loader stages scenes whose story is told *over*
-    # the map (a glowing deficit cloud, a displaced helix), and at full opacity a
-    # zoomed-in view is walls of surface with the story invisible behind them.
+    # The map opens translucent and neutral grey: the story here is a displaced
+    # segment seen *against* its density, and at full opacity a zoomed-in view is
+    # walls of surface with the model invisible behind them.
     desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB,
                                  displace=(CRYOEM_DISPLACED, CRYOEM_SHIFT),
                                  map_opacity=0.45, map_color="#b0b0b0")
@@ -342,12 +342,10 @@ def _hotspots_ran(cw: Any) -> bool:
     return bool(entry and entry.get("hotspots") is not None)
 
 
-def hotspots_structure_tutorial() -> Tutorial:
+def hotspots_tutorial() -> Tutorial:
     """Aggregate the validation checks into one severity field and go where it points —
-    the judging tutorial that follows validation, on the same check-tripping structure.
-    The sibling walkthrough, hotspots_map_fit_tutorial, covers the other question:
-    not "is the geometry sound?" but "does the map agree?"."""
-    return Tutorial("Hotspots — structure", [
+    the judging tutorial that follows validation, on the same check-tripping structure."""
+    return Tutorial("Find validation hotspots", [
         Step(
             "Validation gives one table per check — but a region worth rebuilding usually "
             "trips **several** checks at once, and reading five tables to notice that is "
@@ -395,97 +393,6 @@ def hotspots_structure_tutorial() -> Tutorial:
             "only ever navigates — it never stands alone.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
-
-
-def _cc_model_coloured(cw: Any) -> bool:
-    """The map-model CC colouring is actually applied (values landed), not merely picked."""
-    return any(m.get("color") == "mapcc"
-               and (m.get("attribute") or {}).get("name") == "mapcc"
-               for m in cw._desktop._models)
-
-
-#: The guided residues of the map-fit tutorial: one inside the deliberately displaced
-#: helix, one from a well-fit stretch (window CC ~0.85 as deposited) for contrast.
-CRYOEM_BAD_RESSEQ = 598
-CRYOEM_GOOD_RESSEQ = 768
-
-
-def _residue_selected(cw: Any, resseq: int) -> bool:
-    desktop = cw._desktop
-    mid = desktop._active_model_id
-    entry = desktop._model_entry(mid) if mid else None
-    picked = list(desktop._scene_selection.get(mid) or [])[:600]
-    if entry is None or not picked:
-        return False
-    model = getattr(entry["session"], "model", None)
-    if model is None:
-        return False
-    atoms = model.get_hierarchy().atoms()
-    try:
-        return any(atoms[i].parent().parent().resseq_as_int() == resseq
-                   for i in picked)
-    except Exception:  # pragma: no cover - stale indices; predicates fail silent
-        return False
-
-
-def _bad_residue_selected(cw: Any) -> bool:
-    return _residue_selected(cw, CRYOEM_BAD_RESSEQ)
-
-
-def _good_residue_selected(cw: Any) -> bool:
-    return _residue_selected(cw, CRYOEM_GOOD_RESSEQ)
-
-
-def hotspots_map_fit_tutorial() -> Tutorial:
-    """Where does the model fail to explain its map? The voxel-local map-model CC,
-    walked through both of its presentations on real deposited data — with a helix
-    deliberately pushed out of its density so the signal is unmistakable."""
-    return Tutorial("Hotspots — map fit", [
-        Step(
-            "The structure hotspots ask *is the geometry sound?* This tutorial asks "
-            "the other question: **does the map agree?** The tool is per-atom "
-            "**map-model correlation**: cctbx computes the density the model predicts "
-            "and correlates it with the real map around every atom.\n\n**Downloading "
-            "7BV2 and its 2.5 Å map** (cached after the first run) — and one "
-            "well-ordered helix has been pushed ~2 Å out of its density on purpose, "
-            "so you will see exactly what a bad region looks like.",
-            done=_pair_loaded,
-        ),
-        Step(
-            "Select the **model** in the Objects list and set its **Color** to "
-            "**By map-model CC**. It computes in the background (a few seconds), "
-            "then every atom is painted by how well the map agrees with it — calm "
-            "teal where the fit is good, through blue and purple, to hot pink where "
-            "the map disagrees. The scale is the correlation itself, 0 to 1, so the "
-            "same colour means the same thing on every structure.",
-            done=_cc_model_coloured,
-        ),
-        Step(
-            "Go to the damage. Type **chain A and resseq 598** into the Selection box "
-            "and press Enter — that residue sits in the helix we displaced.\n\nThe "
-            "sticks sit *outside* the grey density, and they are painted pink and "
-            "purple: the colouring and your eyes are saying the same thing — the "
-            "model here does not explain the map.",
-            done=_bad_residue_selected,
-        ),
-        Step(
-            "Now a healthy residue for contrast: select **chain A and resseq 768**. "
-            "Sticks nested inside their density, painted teal and blue — this is "
-            "what a local CC around 0.85 looks like, and it is most of the "
-            "molecule.\n\nThat is the colouring's whole job: triage. Teal means move "
-            "on; pink means stop and look.",
-            done=_good_residue_selected,
-        ),
-        Step(
-            "Two contracts to remember. The colouring is computed against the model "
-            "**as it stands** — after refining or dragging, pick another colour and "
-            "then **By map-model CC** again to recompute; nothing updates silently. "
-            "And correlation only speaks where the model makes a claim: a blob the "
-            "model misses *entirely* is a difference map's story, not this "
-            "colouring's.\n\nThat's the loop: find the disagreement, fix it (drag, "
-            "minimize), recompute, watch the pink fade.",
-        ),
-    ], loader=_fetch_cryoem_pair_displaced)
 
 
 def ligand_fitting_tutorial() -> Tutorial:
@@ -739,12 +646,11 @@ def local_resolution_tutorial() -> Tutorial:
 def all_tutorials() -> List[Tutorial]:
     """Every walkthrough offered, in menu order — looking before judging before changing:
     the three viewing ones (open a model, a model with its map, alternate conformations),
-    then the judging block (validation, then hotspots by structure and by map fit), then
+    then the judging pair (validation, then its hotspot aggregate), then
     the fitting/refinement group, then the restraint-edits pair (reading before writing).
     There is no separate examples list: every example is the opening scene of the
     tutorial that explains it."""
     return [open_model_tutorial(), map_model_tutorial(), altlocs_tutorial(),
-            validation_tutorial(), hotspots_structure_tutorial(),
-            hotspots_map_fit_tutorial(), ligand_fitting_tutorial(),
+            validation_tutorial(), hotspots_tutorial(), ligand_fitting_tutorial(),
             cryo_em_refinement_tutorial(), local_resolution_tutorial(),
             xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]

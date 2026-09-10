@@ -11644,12 +11644,13 @@ class DesktopApp:
                                 group=gid,
                                 **({"iso": iso_sigma} if iso_sigma is not None else {}))
                             if map_opacity is not None:
-                                # A curated scene (the map-fit tutorial): the story is
-                                # told over the map, so it opens translucent.
+                                # A curated scene (the refinement tutorial): the story
+                                # is a model seen against its density, so the map opens
+                                # translucent rather than as walls of surface.
                                 self.set_volume_opacity(new_vid, float(map_opacity))
                             if map_color is not None:
                                 # ...and neutral: the default palette rotates, and a
-                                # randomly pink map reads as the CC ramp's "bad".
+                                # randomly coloured map competes with a coloured model.
                                 self.set_volume_color(new_vid, map_color)
                     self._status(f"{label}: deposited model and map, loaded as a pair")
                 finally:
