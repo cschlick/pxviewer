@@ -43,7 +43,7 @@ TUTORIAL_TITLES = [
     "A model with its map",
     "Alternate conformations",
     "Validate a structure",
-    "Find validation hotspots",
+    "Hotspots",
     "Fit a ligand into density",
     "Real-space refine into cryo-EM density",
     "Look at local resolution",

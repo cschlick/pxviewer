@@ -345,7 +345,7 @@ def _hotspots_ran(cw: Any) -> bool:
 def hotspots_tutorial() -> Tutorial:
     """Aggregate the validation checks into one severity field and go where it points —
     the judging tutorial that follows validation, on the same check-tripping structure."""
-    return Tutorial("Find validation hotspots", [
+    return Tutorial("Hotspots", [
         Step(
             "Validation gives one table per check — but a region worth rebuilding usually "
             "trips **several** checks at once, and reading five tables to notice that is "
