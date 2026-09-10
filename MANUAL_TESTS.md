@@ -174,20 +174,13 @@ Run **Tutorials ▸ Look at local resolution** twice.
 5. Second run of the tutorial.
    - **Watch for:** the saved resolution map loads from disk — seconds, not the
      original computation.
-6. Map-model CC: load a map+model pair (the cryo-EM refine demo works), then on the
-   map's pane pick Color ▸ **Map-model CC**.
-   - **Watch for:** a background compute announces itself, then the map recolours in
-     the px spectrum — poorly-fit regions pink/magenta through purple to well-fit
-     teal, unmistakably not the hotspot or resolution schemes; picking a flat colour
-     restores the plain contour; after moving the model, picking a colour and then
-     Map-model CC again recomputes against the new positions.
-7. The other presentation: on the **Hotspots** tab tick **Map-model CC deficit field**.
-   - **Watch for:** the map keeps its ordinary contour and a cloud appears over the
-     scene — nothing where the fit is good, blue through purple to pink where it is
-     not, hugging the model (never a box-filling haze); the threshold slider beside
-     it relabels to **Deficit threshold** and visibly re-levels the cloud; the
-     quality preset redraws it; unticking removes it cleanly; ticking **Show in
-     3-D** for severity steps it aside and the checkbox unticks itself (and back).
+6. Map-model CC: run **Tutorials ▸ Hotspots — map fit** (downloads 7BV2 + its map,
+   cached after the first run).
+   - **Watch for:** the coach waits for the real download; setting the model's Color
+     to **By map-model CC** paints atoms teal→pink in a few seconds and the guided
+     residues read as narrated (598 pink and out of density, 768 teal and nested);
+     rotation stays fluid throughout — this colouring replaced two volume
+     presentations that did not; picking another colour and re-picking recomputes.
 
 ## Pass 7 — Tutorials sweep (15 min)
 

@@ -131,49 +131,6 @@ def exercise_masking_leaves_the_real_map_alone():
     assert occupied(kept) < 0.5 * occupied(before)
 
 
-def exercise_local_map_model_cc_agrees_where_the_model_explains_the_map():
-    """A map generated from the model correlates ~1 everywhere the field is defined, and
-    shaking the model drops it — the two behaviours that make the field a fit signal
-    rather than noise. Flat regions carry the 0.0 mask sentinel, values stay in [-1, 1]."""
-    from scitbx.array_family import flex
-
-    from pxviewer.volume_io import local_map_model_cc
-
-    mmm = synthetic_mmm()
-    vol = VolumeData.from_map_manager(mmm.map_manager())
-    model = mmm.model()
-
-    cc = local_map_model_cc(vol, model, d_min=3.0)
-    a = cc.array
-    assert a.shape == vol.array.shape
-    assert float(a.max()) <= 1.0 and float(a.min()) >= -1.0
-    on = a[a != 0.0]
-    assert on.size and float(np.median(on)) > 0.95
-
-    shaken = model.deep_copy()
-    rng = np.random.default_rng(3)
-    sites = shaken.get_sites_cart()
-    shaken.set_sites_cart(sites + flex.vec3_double(
-        (1.5 * rng.standard_normal((sites.size(), 3))).tolist()))
-    worse = local_map_model_cc(vol, shaken, d_min=3.0).array
-    worse_on = worse[worse != 0.0]
-    assert float(np.median(worse_on)) < float(np.median(on)) - 0.2
-
-
-def exercise_the_deficit_field_inverts_cc_and_keeps_the_mask():
-    """1 − CC where defined, 0 where the sentinel says flat — so the cloud glows at
-    poor fit and stays dark over solvent, and values never leave [0, 1]."""
-    from pxviewer.volume_io import cc_deficit_field
-
-    cc = np.array([[[1.0, 0.75], [0.2, -0.5]], [[0.0, 0.999], [0.5, 0.0]]])
-    bad = cc_deficit_field(cc)
-    assert bad[0, 0, 0] == 0.0                        # perfect fit: dark
-    assert abs(bad[0, 0, 1] - 0.25) < 1e-12
-    assert bad[0, 1, 1] == 1.0                        # anti-correlated: capped, bright
-    assert bad[1, 0, 0] == 0.0 and bad[1, 1, 1] == 0.0  # sentinel: dark
-    assert float(bad.min()) >= 0.0 and float(bad.max()) <= 1.0
-
-
 def exercise_encode_localres_carries_an_optional_palette():
     """The payload header says how many ramp colours follow; zero means the frontend's
     built-in resolution ramp, so a plain localres payload differs only by the count."""

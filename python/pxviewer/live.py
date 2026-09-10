@@ -1673,6 +1673,7 @@ class LiveSession:
         domain: Optional[tuple] = None,
         on: Any = None,
         id: Optional[str] = None,
+        replace: bool = True,
     ) -> str:
         """Color atoms by a per-atom attribute, mapped through a color scale.
 
@@ -1684,8 +1685,10 @@ class LiveSession:
         Non-finite values render in the theme's missing color.
 
         This sets a single representation of ``type`` (optionally limited to ``on``),
-        replacing any current ones — like :meth:`set_representation`. Returns the
-        representation id. The coloring is replayed to viewers that connect later.
+        replacing any current ones — like :meth:`set_representation` — unless
+        ``replace=False``, which *adds* the attribute-colored layer alongside what is
+        already drawn (the selection-neighbourhood layer over a value-coloured model).
+        Returns the representation id. The coloring is replayed to late viewers.
         """
         values = self._resolve_attribute(attribute)
         if domain is None:
@@ -1710,7 +1713,8 @@ class LiveSession:
             + key_bytes + b"\x00" * pad + f32.tobytes()
         )
 
-        self._representations.clear()
+        if replace:
+            self._representations.clear()
         spec = self._make_repr_spec(type, None, None, None, on, None, None, id)
         spec["color"] = "attribute"
         spec["attribute"] = {

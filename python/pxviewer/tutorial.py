@@ -168,7 +168,7 @@ def _fetch_cryoem_pair_displaced(desktop: Any) -> None:
     # zoomed-in view is walls of surface with the story invisible behind them.
     desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB,
                                  displace=(CRYOEM_DISPLACED, CRYOEM_SHIFT),
-                                 map_opacity=0.45)
+                                 map_opacity=0.45, map_color="#b0b0b0")
 
 
 def _pair_loaded(cw: Any) -> bool:
@@ -397,12 +397,11 @@ def hotspots_structure_tutorial() -> Tutorial:
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
 
 
-def _cc_field_shown(cw: Any) -> bool:
-    return any(v.get("cc_field_on") for v in cw._desktop._volumes)
-
-
-def _cc_coloring_on(cw: Any) -> bool:
-    return any(v.get("color_by_cc") for v in cw._desktop._volumes)
+def _cc_model_coloured(cw: Any) -> bool:
+    """The map-model CC colouring is actually applied (values landed), not merely picked."""
+    return any(m.get("color") == "mapcc"
+               and (m.get("attribute") or {}).get("name") == "mapcc"
+               for m in cw._desktop._models)
 
 
 #: The guided residues of the map-fit tutorial: one inside the deliberately displaced
@@ -444,66 +443,47 @@ def hotspots_map_fit_tutorial() -> Tutorial:
     return Tutorial("Hotspots — map fit", [
         Step(
             "The structure hotspots ask *is the geometry sound?* This tutorial asks "
-            "the other question: **does the map agree?** The tool is a voxel-local "
-            "**map-model correlation**: the model's expected density is computed on "
-            "the map's own grid and correlated with the real map over a small moving "
-            "window, everywhere at once.\n\n**Downloading 7BV2 and its 2.5 Å map** "
-            "(cached after the first run) — and one well-ordered helix has been "
-            "pushed ~2 Å out of its density on purpose, so you will see exactly what "
-            "a bad region looks like.",
+            "the other question: **does the map agree?** The tool is per-atom "
+            "**map-model correlation**: cctbx computes the density the model predicts "
+            "and correlates it with the real map around every atom.\n\n**Downloading "
+            "7BV2 and its 2.5 Å map** (cached after the first run) — and one "
+            "well-ordered helix has been pushed ~2 Å out of its density on purpose, "
+            "so you will see exactly what a bad region looks like.",
             done=_pair_loaded,
         ),
         Step(
-            "Open the **Hotspots** tab and tick **Map-model CC deficit field**. It "
-            "computes in the background (a few seconds), then a cloud appears over "
-            "the scene while the map keeps its ordinary contour: nothing where the "
-            "model explains the density, blue through purple to hot pink where it "
-            "does not.\n\nThe displaced helix should light up — and so may a few "
-            "honest weak spots the depositors knew about.",
-            done=_cc_field_shown,
-            target=lambda cw: cw._cc_field_check,
+            "Select the **model** in the Objects list and set its **Color** to "
+            "**By map-model CC**. It computes in the background (a few seconds), "
+            "then every atom is painted by how well the map agrees with it — calm "
+            "teal where the fit is good, through blue and purple, to hot pink where "
+            "the map disagrees. The scale is the correlation itself, 0 to 1, so the "
+            "same colour means the same thing on every structure.",
+            done=_cc_model_coloured,
         ),
         Step(
             "Go to the damage. Type **chain A and resseq 598** into the Selection box "
-            "and press Enter — that residue sits in the helix we displaced.\n\nLook "
-            "at what agreement failure looks like up close: the sticks sit *outside* "
-            "the grey density, and the glowing cloud wraps them. The field and your "
-            "eyes are saying the same thing — the model here does not explain the "
-            "map.",
+            "and press Enter — that residue sits in the helix we displaced.\n\nThe "
+            "sticks sit *outside* the grey density, and they are painted pink and "
+            "purple: the colouring and your eyes are saying the same thing — the "
+            "model here does not explain the map.",
             done=_bad_residue_selected,
         ),
         Step(
             "Now a healthy residue for contrast: select **chain A and resseq 768**. "
-            "Sticks nested inside their density, no glow — this is what a local CC "
-            "around 0.85 looks like, and it is most of the molecule.\n\nThat is the "
-            "field's whole job: triage. Dark means move on; glow means stop and "
-            "look.",
+            "Sticks nested inside their density, painted teal and blue — this is "
+            "what a local CC around 0.85 looks like, and it is most of the "
+            "molecule.\n\nThat is the colouring's whole job: triage. Teal means move "
+            "on; pink means stop and look.",
             done=_good_residue_selected,
         ),
         Step(
-            "The slider beside the checkbox now reads **Deficit threshold**, in "
-            "1 − CC: it starts at a data-driven default — roughly the worst sixth of "
-            "the molecule — so drag it up to keep only the worst regions, or down to "
-            "see milder disagreement haze in. The quality preset redraws the cloud "
-            "smoother or faster.",
-        ),
-        Step(
-            "The same field has a second presentation: select the **map** in the "
-            "Objects list and set its **Map color** to **Map-model CC**. Now the "
-            "map's own surface is painted by local agreement — pink where the model "
-            "fails it, teal where the fit is good — instead of a cloud over the "
-            "scene. One field, two readings; the coach moves on when the colouring "
-            "is up.",
-            done=_cc_coloring_on,
-        ),
-        Step(
-            "Two contracts to remember. The field is computed against the model **as "
-            "it stands** — after refining or dragging, untick and re-tick (or re-pick "
-            "the colouring) to recompute; nothing updates silently. And correlation "
-            "only speaks where the model makes a claim: a blob the model misses "
-            "*entirely* is a difference map's story, not this field's.\n\nThat's the "
-            "loop: find the disagreement, fix it (drag, minimize), recompute, watch "
-            "it fade.",
+            "Two contracts to remember. The colouring is computed against the model "
+            "**as it stands** — after refining or dragging, pick another colour and "
+            "then **By map-model CC** again to recompute; nothing updates silently. "
+            "And correlation only speaks where the model makes a claim: a blob the "
+            "model misses *entirely* is a difference map's story, not this "
+            "colouring's.\n\nThat's the loop: find the disagreement, fix it (drag, "
+            "minimize), recompute, watch the pink fade.",
         ),
     ], loader=_fetch_cryoem_pair_displaced)
 

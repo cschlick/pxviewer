@@ -170,6 +170,58 @@ def exercise_leaving_qscore_drops_the_values_it_coloured_by():
         dispose(app)
 
 
+def exercise_colouring_by_map_model_cc_needs_a_map():
+    """Map-model CC follows Q-score's contract exactly: with no paired map the choice
+    is refused and reverted, with a status line saying why."""
+    from pxviewer.desktop import _CC_COLOR
+    from pxviewer.live import LiveSession
+
+    app = DesktopApp(port=0)
+    app._webapp.start()
+    try:
+        said = []
+        app.bridge.status_changed.connect(said.append)
+        mid = app._add_model(LiveSession.from_sites([[0, 0, 0], [1, 0, 0]]), "no map")
+
+        app.set_model_color(mid, _CC_COLOR)
+
+        entry = app._model_entry(mid)
+        assert entry["color"] is None
+        assert entry.get("attribute") is None
+        assert any("map-model CC needs a map" in s for s in said)
+    finally:
+        dispose(app)
+
+
+def exercise_colouring_by_map_model_cc_sends_per_atom_values():
+    """Per-atom CC (cctbx's mmtbx.maps.correlation) through the attribute path, on the
+    correlation's own absolute [0, 1] domain with the px spectrum, plus per-residue
+    means so a cartoon can show it too. On the synthetic pair — a map computed from
+    the model itself — the correlation is near-perfect, which pins the atom order."""
+    from pxviewer.desktop import _CC_COLOR, DesktopApp as _App
+
+    app = app_with_map()
+    try:
+        entry = app._models[0]
+        app.set_model_color(entry["id"], _CC_COLOR)
+        assert wait_for_attribute(app, entry), "map-model CC never landed"
+
+        session = entry["session"]
+        values = np.asarray(entry["attribute"]["values"], dtype=float)
+        assert values.size == session._n_atoms
+        finite = values[np.isfinite(values)]
+        assert finite.size and float(np.median(finite)) > 0.9   # self-map: near-perfect
+        assert entry["attribute"]["residue_values"] is not None
+
+        spec = list(session._representations.values())[0]
+        assert spec["color"] == "attribute"
+        assert spec["attribute"]["name"] == _CC_COLOR
+        assert list(spec["attribute"]["domain"]) == [0.0, 1.0]
+        assert spec["attribute"]["palette"] == _App._CC_MODEL_PALETTE
+    finally:
+        dispose(app)
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.

@@ -380,14 +380,19 @@ def score(model: Any, *, mmm: Any = None, fit: str = "qscore", p: float = P_NORM
                     summary=summary, missing=missing)
 
 
-def residue_broadcast(model: Any, values: np.ndarray) -> np.ndarray:
-    """``values`` with every atom of a residue raised to that residue's worst value.
+def residue_broadcast(model: Any, values: np.ndarray, *, reduce=max) -> np.ndarray:
+    """``values`` with every atom of a residue set to that residue's worst value.
 
     Per-atom severity is the right thing to *compute* — a rotamer outlier implicates the side
     chain and not the backbone, and saying so is the whole point of Rule 1. But a cartoon or
     ribbon draws no side chains, so on those representations the rotamer component would be
-    invisible: the atoms carrying it are not on screen. Broadcasting the residue max is what
-    a ribbon can actually show, and it loses nothing the ribbon could have drawn anyway.
+    invisible: the atoms carrying it are not on screen. Broadcasting the residue's worst is
+    what a ribbon can actually show, and it loses nothing the ribbon could have drawn anyway.
+
+    "Worst" is metric-directional, which is what ``reduce`` selects: severity's worst is
+    its ``max`` (the default), a correlation's worst is its ``min`` — a displaced helix
+    with one side-chain atom brushing a neighbour's density must not broadcast that lucky
+    atom's high CC over the whole residue and paint the damage as a good fit.
 
     Used for display only; the per-atom field is what the table and the components report.
     """
@@ -397,7 +402,7 @@ def residue_broadcast(model: Any, values: np.ndarray) -> np.ndarray:
     for i, atom in enumerate(model.get_hierarchy().atoms_with_labels()):
         by_residue.setdefault((atom.chain_id, atom.resid(), atom.altloc), []).append(i)
     for indices in by_residue.values():
-        worst = max(values[i] for i in indices)
+        worst = reduce(values[i] for i in indices)
         for i in indices:
             out[i] = worst
     return out
