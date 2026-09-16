@@ -1451,6 +1451,18 @@ class ControlsWindow:
         self._mode_chip.setToolTip("The armed mouse mode — what a click in the viewport does")
         self._mode_chip.setVisible(False)
         status_row.addWidget(self._mode_chip)
+        # The camera trio, together: step out, step in, then reframe. The wheel is the
+        # contour level here (Coot's binding), so zoom otherwise needs ctrl+wheel or a
+        # right-drag -- fine on a trackpad, awkward on a plain mouse, and invisible to
+        # anyone who has not read the mouse help.
+        self._zoom_out_btn = self._make_icon_button(
+            "zoom-out", "Zoom out", "Zoom out one step (the camera keeps its target)")
+        self._zoom_out_btn.clicked.connect(lambda: self._desktop.zoom_view(1))
+        status_row.addWidget(self._zoom_out_btn)
+        self._zoom_in_btn = self._make_icon_button(
+            "zoom-in", "Zoom in", "Zoom in one step (the camera keeps its target)")
+        self._zoom_in_btn.clicked.connect(lambda: self._desktop.zoom_view(-1))
+        status_row.addWidget(self._zoom_in_btn)
         self._reset_view_btn = self._make_icon_button(
             "fullscreen", "Reset view",
             "Reset the view — reframe the camera to fit the whole scene")
@@ -9342,6 +9354,22 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             control.reset_view()
+
+    #: One press of a zoom button, as a multiple of the camera's current distance.
+    #: Big enough that a single click reads as motion, small enough that holding a
+    #: course across several presses stays controllable.
+    ZOOM_STEP = 1.25
+
+    def zoom_view(self, direction: int) -> None:
+        """Zoom the viewport in (``direction`` < 0) or out (> 0) by one step.
+
+        The counterpart to the wheel, which is bound to the contour level here (Coot's
+        binding) and so cannot serve as zoom -- and to ctrl+wheel, which a trackpad has
+        but a plain mouse makes awkward. The camera keeps its target and orientation.
+        """
+        control = self._control_session()
+        if control is not None:
+            control.zoom_view(self.ZOOM_STEP if direction > 0 else 1.0 / self.ZOOM_STEP)
 
     # -- performance debugging -------------------------------------------
 

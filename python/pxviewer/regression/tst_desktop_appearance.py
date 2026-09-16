@@ -787,10 +787,11 @@ def exercise_scene_actions_are_icon_buttons():
         controls = app._controls
         tips = ("Open a structure", "Guided tutorials", "Save the focused",
                 "Pair an unpaired", "Remove the highlighted",
-                "Reset the view", "Save a picture")
+                "Reset the view", "Save a picture",
+                "Zoom in one step", "Zoom out one step")
         buttons = [b for b in controls.widget().findChildren(QPushButton)
                    if b.toolTip().startswith(tips)]
-        assert len(buttons) == 7
+        assert len(buttons) == 9
         assert all(not b.icon().isNull() and b.text() == "" for b in buttons)
 
         assert controls._tabs.widget(1).isAncestorOf(controls._localres_btn)   # Tools

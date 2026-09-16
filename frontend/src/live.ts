@@ -3507,6 +3507,27 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
                 plugin.managers.camera.reset();  // reframe the whole scene, default orientation
+            } else if (msg.type === 'zoom' && typeof msg.factor === 'number') {
+                // Step the camera along its own view direction, keeping the target and
+                // orientation exactly as they are: a zoom button must not re-frame or
+                // re-centre the way Reset view does -- you press it to look closer at
+                // what you are already looking at.
+                const cam = plugin.canvas3d?.camera;
+                if (cam) {
+                    const eye = Vec3.sub(Vec3(), cam.position, cam.target);
+                    const distance = Vec3.magnitude(eye);
+                    // Bounded by the scene, not by absolute numbers: stepping in must stop
+                    // before the camera is inside the atom it is looking at, and stepping
+                    // out before the structure is a dot. The trackball's own clamps are
+                    // deliberately wide open (see applyCootBindings).
+                    const radius = plugin.canvas3d?.boundingSphere.radius || 10;
+                    const next = Math.min(Math.max(distance * msg.factor, radius * 0.05),
+                                          radius * 40);
+                    if (Math.abs(next - distance) > 1e-6) {
+                        Vec3.setMagnitude(eye, eye, next);
+                        cam.setState({ position: Vec3.add(Vec3(), cam.target, eye) }, 120);
+                    }
+                }
             } else if (msg.type === 'focus-surroundings') {
                 const enabled = !!msg.enabled;
                 await plugin.state.updateBehavior(StructureFocusRepresentation, (params: any) => ({

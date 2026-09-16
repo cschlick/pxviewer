@@ -716,6 +716,17 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def zoom_view(self, factor: float) -> None:
+        """Step the camera in (factor < 1) or out (factor > 1) along its view direction.
+
+        Deliberately not a reframe: the target and orientation are left alone, so this
+        answers "closer, please" without moving what is being looked at. Thread-safe.
+        """
+        message = json.dumps({"type": "zoom", "factor": float(factor)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_perf_prefs(self, **prefs: Any) -> None:
         """Push debug render overrides to the viewer (see the frontend PerfMonitor).
 
