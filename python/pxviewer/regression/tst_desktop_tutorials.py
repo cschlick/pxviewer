@@ -651,11 +651,13 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
         controls._tutorial_next()                     # reading the worklist
         assert progress(app) == "Step 4 / 5"
 
-        # Step 4: the 3-D field toggle. The real toggle: its handler reports rather
-        # than raises on the stub score, and the coach only reads the checkbox.
-        controls._hotspot_show3d.setEnabled(True)
-        controls._hotspot_show3d.setChecked(True)
+        # Step 4 describes the 3-D field rather than asking for it: the field is on by
+        # default, so a step whose predicate was "is the box ticked?" would tick itself
+        # off the moment it was reached and teach nothing.
+        assert controls._hotspot_show3d.isChecked(), "the 3-D field is not on by default"
         controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 4 / 5", "a describing step advanced on its own"
+        controls._tutorial_next()
         assert progress(app) == "Step 5 / 5"
         assert app._viewport.coach_next.text() == "Finish"
 

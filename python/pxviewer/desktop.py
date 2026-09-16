@@ -2816,6 +2816,12 @@ class ControlsWindow:
             "Per-atom color only shows the surface, so a buried hotspot stays hidden; a 3-D "
             "field is visible through the structure.")
         show3d.setEnabled(False)  # nothing to draw until a score exists
+        # On by default: the field is the thing per-atom colour cannot show (a buried
+        # hotspot sits behind the atoms in front of it), and leaving it off meant the
+        # first run showed only the half of the answer that was already visible. Set
+        # before the signal is connected -- the handler reads the style and quality
+        # widgets, which are built further down this method.
+        show3d.setChecked(True)
         show3d.toggled.connect(self._on_hotspot_field_changed)
         self._hotspot_show3d = show3d
         field_row.addWidget(show3d)

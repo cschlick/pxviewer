@@ -376,13 +376,13 @@ def hotspots_tutorial() -> Tutorial:
             "read its component columns for *why* it lit up.",
         ),
         Step(
-            "Surface color has a blind spot: a **buried** hotspot is hidden behind the "
-            "atoms in front of it. Tick **Show in 3-D** to draw severity as a field "
-            "around the model, visible *through* the structure.\n\n**Density** shades "
-            "every voxel by its own value; **Contour** draws a shell at the threshold; "
-            "the **threshold** slider keeps only regions above it. Same absolute scale "
-            "as the atom colors.",
-            done=lambda cw: cw._hotspot_show3d.isChecked(),
+            "The cloud around the model is the same severity as a **3-D field** — "
+            "because surface colour has a blind spot: a **buried** hotspot is hidden "
+            "behind the atoms in front of it, and a field is visible *through* the "
+            "structure.\n\nIt is on by default (**Show in 3-D**, untick to drop it). "
+            "**Density** shades every voxel by its own value; **Contour** draws a shell "
+            "at the threshold; the **threshold** slider keeps only regions above it — "
+            "all on the same absolute scale as the atom colours.",
             target=lambda cw: cw._hotspot_show3d,
         ),
         Step(
