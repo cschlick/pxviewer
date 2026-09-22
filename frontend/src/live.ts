@@ -2885,6 +2885,13 @@ async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boo
     // waits for the cell, so this also works when replayed just after a scene reload.
     const repr = await findVolumeReprCell(plugin, ref);
     if (repr) setSubtreeVisibility(plugin.state.data, repr.transform.ref, !visible);
+    // ...and its negative lobe, which is the same map. A difference map is drawn as two
+    // contours at +level and -level; hiding only the positive one left the red half on
+    // screen with nothing in the object list still claiming to own it. Colour is the one
+    // thing the two deliberately do NOT share (see setVolumeColor); level, opacity and
+    // now visibility all belong to the map, not to one of its lobes.
+    const negative = findVolumeNegativeReprCell(plugin, ref);
+    if (negative) setSubtreeVisibility(plugin.state.data, negative.transform.ref, !visible);
 }
 
 async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {

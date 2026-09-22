@@ -127,6 +127,12 @@ Open a map (or the cryo-EM tutorial data).
    - **Watch for:** density away from the molecule disappears; the refined-against map
      is unaffected (minimize still behaves).
 
+6. Make a difference map (Tools ▸ Map tools ▸ **Difference**, or phase one with Make
+   maps), then untick its row's eye.
+   - **Watch for:** ONE row appears for it, not two — a difference map is one map drawn
+     at +level and −level; and its eye hides **both** the green and the red contour.
+     Red left on screen with nothing in the list owning it is the bug this checks.
+
 ## Pass 5 — Selection and oriented focus (10 min)
 
 Load a protein (1ubq works).
