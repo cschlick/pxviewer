@@ -138,31 +138,24 @@ BANNER_MAX_COLUMNS = 38
 #: entry: textwrap owns every line break, because hand-broken prose re-wrapped to the
 #: pane's width breaks twice and reads like a ransom note.
 CONSOLE_NAMES = [
-    ("session", "The active model as the viewer sees it: selecting, colouring, "
-                "representations, measurements. Follows whichever model is active, "
-                "so it re-binds when you switch models."),
-    ("app", "The desktop itself: every object loaded, and every action the panels "
-            "can take — loading, fetching, validation, minimization, maps."),
-    ("api", "A categorised map of everything session can do, each with a one-line "
-            "description. Type api for all of it, or api.find(\"color\") to search."),
-    ("np", "numpy, already imported."),
+    ("session", "The active model as the viewer sees it: selection, colour, "
+                "representations, measurements. Re-binds when you switch models."),
+    ("app", "The desktop: every object loaded, and every action the panels take — "
+            "loading, validation, minimization, maps."),
+    ("api", "A categorised map of everything session can do. Type api, or "
+            "api.find(\"color\")."),
 ]
 
 #: The cctbx objects underneath, and the exact expression that reaches each. Every one
 #: is runnable as written with no argument to invent -- which the old banner's
-#: ``app.group_mmm(g)`` was not, and that is what this replaced.
+#: ``app.group_mmm(g)`` was not, and that is what this replaced. Descriptions are kept
+#: short enough to sit on one line at the pane's width: the whole guide has to fit on
+#: screen without scrolling, or it is back to being something nobody reads.
 CONSOLE_CCTBX = [
-    ("session.model", "mmtbx model manager for the active model"),
-    ("app.model_mmm()", "its cctbx map_model_manager, or None"),
-    ("app.map_for_model()", "the map data it is paired with, or None"),
+    ("session.model", "the mmtbx model"),
+    ("app.model_mmm()", "its map_model_manager, or None"),
+    ("app.map_for_model()", "the map data, or None"),
     ("session.model.get_sites_cart()", "coordinates, as flex"),
-]
-
-#: Ways to look something up, rather than things that are bound.
-CONSOLE_EXPLORING = [
-    ("session.<Tab>", "complete a name"),
-    ("obj?", "help on anything"),
-    ("help(obj)", "the same, Python's way"),
 ]
 
 
@@ -176,20 +169,24 @@ def console_help(width: int = BANNER_MAX_COLUMNS) -> str:
 
     def wrapped(text, indent):
         pad = " " * indent
-        return textwrap.wrap(text, max(width, indent + 12),
-                             initial_indent=pad, subsequent_indent=pad) or [pad.rstrip()]
+        return textwrap.wrap(
+            text, max(width, indent + 12),
+            initial_indent=pad, subsequent_indent=pad,
+            # "Re-binds" split across two lines, and an over-long expression would be
+            # chopped mid-token: both read as typos rather than as wrapping.
+            break_on_hyphens=False, break_long_words=False) or [pad.rstrip()]
 
-    out = wrapped("pxviewer console: an IPython shell with the running app in scope.", 0)
+    # No preamble: the banner above already said what this is, and every line here
+    # costs one the guide needs to stay on a single screen.
+    out = []
     for name, description in CONSOLE_NAMES:
-        out += [""] + [name] + wrapped(description, 2)
+        out += ([name] if not out else ["", name]) + wrapped(description, 2)
     out += ["", "cctbx objects underneath:"]
     for expression, description in CONSOLE_CCTBX:
         out += ["  " + expression] + wrapped(description, 4)
-    out += ["", "Looking things up:"]
-    for expression, description in CONSOLE_EXPLORING:
-        out += ["  " + expression] + wrapped(description, 4)
-    out += [""] + wrapped("Anything you change here shows in the viewport "
-                          "immediately.", 0)
+    # Nothing trails the list. The guide has to land on one screen alongside the
+    # banner, the echoed call and the next prompt -- measured at 34 rows in the pane --
+    # and a closing flourish is the first thing worth the two lines it costs.
     return "\n".join(out) + "\n"
 
 
