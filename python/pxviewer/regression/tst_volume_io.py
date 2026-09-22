@@ -131,6 +131,36 @@ def exercise_masking_leaves_the_real_map_alone():
     assert occupied(kept) < 0.5 * occupied(before)
 
 
+def exercise_a_real_space_difference_is_flat_until_the_model_is_wrong():
+    """The two claims that make the subtraction worth showing.
+
+    A model in its own map must difference to *nothing* -- that is the test of the
+    scaling, and a gain or background left unfitted would put a pedestal of fake
+    density over the whole box. Move some of that model and the difference must answer
+    at both signs: positive where the map has density the model no longer accounts
+    for, negative where the model sits with no map under it.
+    """
+    from scitbx.array_family import flex
+
+    from pxviewer.volume_io import real_space_difference_map
+
+    mmm = synthetic_mmm()
+    volume = VolumeData.from_map_manager(mmm.map_manager())
+
+    flat = real_space_difference_map(volume, mmm.model(), d_min=3.0).array
+    assert abs(flat).max() < 1e-6 * max(abs(volume.array).max(), 1e-9), (
+        "a model in its own map left %.3g of difference behind" % abs(flat).max())
+
+    moved = mmm.model().deep_copy()
+    sites = moved.get_sites_cart()
+    moved.set_sites_cart(sites + flex.vec3_double(sites.size(), (1.5, 1.0, 0.5)))
+    signed = real_space_difference_map(volume, moved, d_min=3.0).array
+    sigma = signed.std()
+    assert sigma > 0
+    assert signed.max() / sigma > 3.0, "no unexplained density where the model left"
+    assert signed.min() / sigma < -3.0, "no negative where the model sits unsupported"
+
+
 def exercise_encode_localres_carries_an_optional_palette():
     """The payload header says how many ramp colours follow; zero means the frontend's
     built-in resolution ramp, so a plain localres payload differs only by the count."""

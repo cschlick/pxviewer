@@ -1840,14 +1840,22 @@ class ControlsWindow:
 
         map_tools = QGroupBox("Map tools")
         map_layout = QVBoxLayout(map_tools)
-        map_layout.addWidget(QLabel(
-            "Calculate local resolution from two half-maps, then colour the map by it:"))
+        map_layout.addWidget(QLabel("Maps computed from what you already have:"))
         self._localres_btn = self._make_icon_button(
             "palette", "Local res",
             "Calculate local resolution from two half-maps and colour the map by it")
         self._localres_btn.clicked.connect(self._on_localres_wizard)
         map_row = QHBoxLayout()
         map_row.addWidget(self._localres_btn)
+        self._rs_diff_btn = self._make_icon_button(
+            "combine", "Difference",
+            "Real-space difference map: the density the model predicts, subtracted from "
+            "the map. Green is density the model does not account for, red is model with "
+            "no map under it — the mFo-DFc reading, but computed from a map and a model "
+            "alone, with no reflections to phase.")
+        self._rs_diff_btn.clicked.connect(self._on_real_space_difference)
+        self._register_busy_button(self._rs_diff_btn, "Real-space difference")
+        map_row.addWidget(self._rs_diff_btn)
         map_row.addStretch(1)
         map_layout.addLayout(map_row)
         layout.addWidget(map_tools)
@@ -4654,6 +4662,12 @@ class ControlsWindow:
                 pdb_id=pdb_id, emdb_number=emdb_number, entities=entities)
         except Exception as exc:
             QMessageBox.warning(self._window, "Could not fetch", str(exc))
+
+    def _on_real_space_difference(self) -> None:
+        try:
+            self._desktop.compute_real_space_difference()
+        except Exception as exc:
+            self._set_status(str(exc))
 
     def _on_localres_wizard(self) -> None:
         """Colour a map by local resolution computed from its two half-maps.
@@ -9345,6 +9359,62 @@ class DesktopApp:
         self._tug_model = None
         self._tug_session = None
         self._tug_last = None
+
+    def compute_real_space_difference(self, mid: Optional[str] = None) -> None:
+        """Subtract the model's predicted density from its map, and add the result.
+
+        The difference map you can have without reflections — which in cryo-EM is the
+        only kind there is. Read exactly like mFo-DFc (green: density the model does not
+        account for; red: model with nothing under it), and styled as one, so a reader
+        who knows the convention needs to learn nothing new.
+
+        Runs on a background thread: generating the model's density and fitting it to
+        the map takes seconds on a real box.
+        """
+        entry = self._model_entry(mid or self._active_model_id)
+        if entry is None:
+            raise ValueError("load a model first")
+        model = getattr(entry["session"], "model", None)
+        mmm = self.model_mmm(entry["id"])
+        if model is None or mmm is None or mmm.map_manager() is None:
+            raise ValueError("a real-space difference needs a model paired with a map — "
+                             "fetch them together, or pair them")
+        name, gid = entry["name"], entry.get("group")
+
+        def work():
+            from .volume_io import VolumeData, real_space_difference_map
+
+            self._status(f"computing the real-space difference for {name}…")
+            try:
+                d_min = float(mmm.resolution())
+            except Exception:  # pragma: no cover - estimator quirks
+                d_min = 3.0
+            try:
+                data = real_space_difference_map(
+                    VolumeData.from_map_manager(mmm.map_manager()), model, d_min=d_min)
+            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
+                self._status(f"real-space difference failed: {exc}")
+                return
+            added = threading.Event()
+
+            def add_on_main():
+                try:
+                    from .reflections import MAP_STYLE
+
+                    colour, iso, negative = MAP_STYLE[True]   # a difference map is a
+                    self._add_volume(                          # difference map, however made
+                        data, f"{name} · real-space difference", group=gid,
+                        color=colour, iso=iso, negative_color=negative, style="mesh")
+                    self._status(f"{name}: real-space difference at ±{iso:g}σ "
+                                 "(green unexplained density, red unsupported model)")
+                finally:
+                    added.set()
+
+            self.bridge.run_on_main.emit(add_on_main)
+            added.wait()
+
+        self.run_background(work, name="pxviewer-rs-difference",
+                            label="Real-space difference")
 
     def model_mmm(self, mid: Optional[str] = None) -> Any:
         """The cctbx ``map_model_manager`` a model belongs to, or None (active by default).

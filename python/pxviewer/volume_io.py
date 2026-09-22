@@ -412,6 +412,74 @@ def encode_localres(
     return header + _encode_affine_grid(surface_map) + _encode_affine_grid(color_map)
 
 
+def real_space_difference_map(map_data: Any, model: Any, *, d_min: float,
+                              reach: float = 3.0) -> "VolumeData":
+    """An observed-minus-calculated difference map, computed in real space.
+
+    The reciprocal-space mFo-DFc map needs reflections to phase; this needs only a map
+    and a model, which is the usual situation in cryo-EM. cctbx computes the density the
+    model predicts on the experimental map's own grid
+    (``map_model_manager.generate_map``), and the two are subtracted — so positive
+    density is what the map has and the model does not account for, and negative is
+    model with no map under it.
+
+    The subtraction is only meaningful once the two are on one scale, and that fit is
+    the whole difficulty. Two things make it honest:
+
+    * **Gain and background together.** ``exp ≈ k·calc + b`` is solved by least squares
+      rather than scaling alone: a map with a non-zero solvent level (most deposited
+      cryo-EM maps) would otherwise leave that offset in the difference everywhere, and
+      a flat pedestal is indistinguishable from real unmodelled density.
+    * **Fitted where the model speaks.** Only voxels within ``reach`` of an atom are
+      used to fit k and b. The model map is zero across the solvent, so including it
+      would drive the fit to match empty space against noise — the same reasoning that
+      gates the map-model CC field.
+
+    Returned on the experimental grid, so it overlays the map it came from.
+    """
+    import numpy as np
+    from iotbx.map_model_manager import map_model_manager
+    from scipy.spatial import cKDTree
+
+    mm = getattr(map_data, "map_manager", map_data)
+    model = model.deep_copy()
+    scattering = model.get_scattering_table() or "electron"
+    model.setup_scattering_dictionaries(scattering_table=scattering)
+    mmm = map_model_manager(map_manager=mm.deep_copy(), model=model)
+    mmm.generate_map(model=model, d_min=float(d_min), map_id="model_map",
+                     scattering_table=scattering)
+
+    exp = mm.map_data().as_numpy_array().astype(np.float64)
+    calc = mmm.get_map_manager_by_id("model_map").map_data().as_numpy_array().astype(
+        np.float64)
+
+    # Where the model makes a claim: the voxels the fit is allowed to see.
+    xyz = model.get_hierarchy().atoms().extract_xyz().as_numpy_array()
+    spacing = [float(p) for p in mm.pixel_sizes()]
+    origin = [float(o) for o in mm.map_data().origin()]
+    axes = [(o + np.arange(n)) * s
+            for o, n, s in zip(origin, exp.shape, spacing)]
+    grid = np.meshgrid(*axes, indexing="ij")
+    voxels = np.column_stack([g.ravel() for g in grid])
+    distance, _index = cKDTree(xyz).query(voxels, distance_upper_bound=float(reach))
+    near = np.isfinite(distance).reshape(exp.shape)
+
+    if near.any():
+        a, b_obs = calc[near], exp[near]
+        design = np.column_stack([a, np.ones_like(a)])
+        (gain, offset), *_ = np.linalg.lstsq(design, b_obs, rcond=None)
+    else:  # pragma: no cover - a model with no atoms near its own map
+        gain, offset = 1.0, 0.0
+
+    difference = exp - (gain * calc + offset)
+
+    from cctbx.array_family import flex
+
+    out = mm.customized_copy(
+        map_data=flex.double(np.ascontiguousarray(difference)))
+    return VolumeData.from_map_manager(out, name="real-space difference")
+
+
 def local_resolution_from_half_maps(
     half_map_1: Any, half_map_2: Any, full_map: Any = None, *, d_min: Optional[float] = None,
 ) -> "VolumeData":

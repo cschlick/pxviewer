@@ -643,6 +643,56 @@ def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
         assert not full["color_by_resolution"]     # the theme stepped aside cleanly
 
 
+def exercise_a_real_space_difference_is_added_as_a_difference_map():
+    """Map tools' other product. It needs a map paired with a model -- there is nothing
+    to subtract otherwise, so the choice is refused with a reason rather than producing
+    an empty map -- and what it adds is a *difference map*, however it was computed: the
+    same green/red at 3 sigma a phased mFo-DFc gets, in the model's own group, so a
+    reader who knows the convention learns nothing new."""
+    import time
+
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.reflections import MAP_STYLE
+    from pxviewer.regression.tst_utils import data_path, dispose
+
+    # With no map there is nothing to subtract from.
+    app = DesktopApp(port=0)
+    try:
+        app._webapp.start()
+        app._add_model(LiveSession.from_model_file(data_path("1ubq.pdb")), "lonely")
+        try:
+            app.compute_real_space_difference()
+            raise AssertionError("a model with no map should refuse")
+        except ValueError as exc:
+            assert "paired" in str(exc), exc
+    finally:
+        dispose(app)
+
+    app = DesktopApp(port=0)
+    try:
+        app._webapp.start()
+        app.load_map_model_demo(d_min=4.0)      # coarse: quicker to generate
+        entry = app._models[0]
+        before = len(app._volumes)
+
+        app.compute_real_space_difference()
+        deadline = time.time() + 600
+        while time.time() < deadline and len(app._volumes) == before:
+            process_events()
+            time.sleep(0.05)
+        assert len(app._volumes) == before + 1, "the difference map never landed"
+
+        colour, iso, negative = MAP_STYLE[True]
+        added = app._volumes[-1]
+        assert added["color"] == colour and added["negative_color"] == negative
+        assert added["iso"] == iso
+        assert added["group"] == entry["group"], "it left its model's group"
+        assert "difference" in added["name"]
+    finally:
+        dispose(app)
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
