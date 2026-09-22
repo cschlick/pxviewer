@@ -1852,33 +1852,7 @@ class ControlsWindow:
         map_layout.addLayout(map_row)
         layout.addWidget(map_tools)
 
-        layout.addWidget(self._build_refine_drag_group())
-
-        # Minimize is the whole model at once; a refine drag is the neighbourhood under the
-        # pointer. Two different actions, so two boxes — sharing one is what let a second,
-        # differently-named "pull into density" option grow up beside the first.
-        minimization = QGroupBox("Minimization")
-        ming = QVBoxLayout(minimization)
-        ming.addWidget(QLabel("Relax the whole model onto ideal geometry:"))
-        self._minimize_map_check = QCheckBox("Into the density")
-        self._minimize_map_check.setToolTip(_INTO_DENSITY_TIP)
-        ming.addWidget(self._minimize_map_check)
-        min_row = QHBoxLayout()
-        self._minimize_btn = self._make_icon_button(
-            "play", "Minimize",
-            "Minimize the active model against its geometry restraints (no map), "
-            "streaming each step into the viewport as it runs")
-        self._minimize_btn.clicked.connect(self._on_minimize)
-        min_row.addWidget(self._minimize_btn)
-        self._minimize_stop_btn = self._make_icon_button(
-            "pause", "Stop", "Halt the run, keeping the progress so far")
-        self._minimize_stop_btn.setEnabled(False)
-        self._minimize_stop_btn.clicked.connect(lambda: self._desktop.stop_minimization())
-        min_row.addWidget(self._minimize_stop_btn)
-        self._on_minimizing_changed(False)  # paint the idle look (Minimize green, Stop quiet)
-        min_row.addStretch()
-        ming.addLayout(min_row)
-        layout.addWidget(minimization)
+        layout.addWidget(self._build_refine_group())
 
         # Last, and in this order: these two are tall (a list, four inputs) and reached
         # occasionally, where the boxes above are the everyday ones. Refine drag in
@@ -1902,45 +1876,121 @@ class ControlsWindow:
         scroll.setWidget(tab)
         return scroll
 
-    def _build_refine_drag_group(self):
-        """Refine drag — the arm switch and every option that shapes it, in one box.
+    #: Width of the driver labels in the Refine box, so the two action rows line up
+    #: under one another and read as two ways of driving one thing.
+    _DRIVER_LABEL_WIDTH = 86
 
-        These options used to be a "Drag atoms" group over on the Settings tab, whose hint
-        label had to open with "Enable Refine drag on the Tools tab": a panel giving
-        directions to its own switch, which is a panel admitting it is in the wrong place.
-        The rule the Selection pane already states applies here — the option belongs beside
-        the control it modifies.
+    def _driver_label(self, text: str):
+        """The left-hand name of a Refine driver: fixed width, so the two rows align and
+        neither label swallows the space a hidden summary leaves behind."""
+        from PySide6.QtWidgets import QLabel, QSizePolicy
 
-        Disarmed, the box is one row: the switch and a summary of what a drag would do.
-        Arming it reveals the options. That keeps the tab short without burying anything,
-        since the settings are only actionable while the mode they shape is on.
+        label = QLabel(text)
+        label.setFixedWidth(self._DRIVER_LABEL_WIDTH)
+        label.setSizePolicy(QSizePolicy.Policy.Fixed, label.sizePolicy().verticalPolicy())
+        return label
+
+    def _build_refine_group(self):
+        """Refine — one box, because it is one engine driven two ways.
+
+        Minimize relaxes the whole model; a drag relaxes the neighbourhood under the
+        pointer. They were two boxes, which is how "Into the density" came to be offered
+        twice as two unrelated-looking checkboxes, and how "does the map answer back"
+        (the live difference map) ended up filed under one of them. The shared question
+        is asked once, at the top; then a row per driver, each with a summary of what it
+        would do; then the drag's own knobs, folded until it is armed.
+
+        Two rules from elsewhere in the panel survive the merge: an option belongs beside
+        the control it modifies (these knobs were once on Settings, in a group whose hint
+        had to open by giving directions to its own switch), and a summary line is what a
+        folded box owes the reader.
         """
         from PySide6.QtWidgets import (
-            QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel, QSpinBox,
-            QVBoxLayout, QWidget,
+            QCheckBox, QComboBox, QDoubleSpinBox, QFrame, QGroupBox, QHBoxLayout, QLabel,
+            QSpinBox, QVBoxLayout, QWidget,
         )
 
-        box = QGroupBox("Refine drag")
+        box = QGroupBox("Refine")
         dg = QVBoxLayout(box)
+        dg.addWidget(QLabel("Relax the model onto ideal geometry — all of it, or the "
+                            "neighbourhood under the pointer."))
+
+        # The shared question, asked once. Two boxes rather than one switch because the
+        # two operations really can differ -- a predictable geometry-only tug while the
+        # whole-model relax uses the map is a reasonable way to work -- but they are one
+        # idea, so they share a label and a tooltip and sit on one row.
+        density_row = QHBoxLayout()
+        density_label = QLabel("Into the density:")
+        density_label.setToolTip(_INTO_DENSITY_TIP)
+        density_row.addWidget(density_label)
+        self._minimize_map_check = QCheckBox("whole model")
+        self._minimize_map_check.setToolTip(_INTO_DENSITY_TIP)
+        self._minimize_map_check.toggled.connect(
+            lambda _on: self._refresh_minimize_summary())
+        density_row.addWidget(self._minimize_map_check)
+        self._tug_density_check = QCheckBox("drag")
+        self._tug_density_check.setToolTip(_INTO_DENSITY_TIP)
+        self._tug_density_check.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_tug_into_density(on)))
+        density_row.addWidget(self._tug_density_check)
+        density_row.addStretch()
+        dg.addLayout(density_row)
+
+        rule = QFrame()
+        rule.setFrameShape(QFrame.Shape.HLine)
+        rule.setFrameShadow(QFrame.Shadow.Sunken)
+        dg.addWidget(rule)
+
+        whole_row = QHBoxLayout()
+        whole_row.addWidget(self._driver_label("Whole model"))
+        self._minimize_btn = self._make_icon_button(
+            "play", "Minimize",
+            "Minimize the active model against its geometry restraints (no map), "
+            "streaming each step into the viewport as it runs")
+        self._minimize_btn.clicked.connect(self._on_minimize)
+        whole_row.addWidget(self._minimize_btn)
+        self._minimize_stop_btn = self._make_icon_button(
+            "pause", "Stop", "Halt the run, keeping the progress so far")
+        self._minimize_stop_btn.setEnabled(False)
+        self._minimize_stop_btn.clicked.connect(lambda: self._desktop.stop_minimization())
+        whole_row.addWidget(self._minimize_stop_btn)
+        self._on_minimizing_changed(False)  # paint the idle look (Minimize green, Stop quiet)
+        # The drag has always said what it would do; the other driver owes the same.
+        self._minimize_summary = QLabel("")
+        self._minimize_summary.setWordWrap(True)
+        self._minimize_summary.setStyleSheet("color: palette(placeholder-text);")
+        whole_row.addWidget(self._minimize_summary, stretch=1)
+        whole_row.addStretch()
+        dg.addLayout(whole_row)
+        self._refresh_minimize_summary()
 
         arm_row = QHBoxLayout()
+        arm_row.addWidget(self._driver_label("Drag"))
         self._refine_drag_btn = self._make_icon_button(
             "hand", "Refine drag",
             "Drag any atom or bond to pull it and the model bends to follow — a local "
             "minimization under the pointer. Mutually exclusive with Pick.  (Ctrl+R)",
             checkable=True)
         self._refine_drag_btn.toggled.connect(self._on_toggle_refine_drag)
+        # Arming hides the summary beside it (the unfolded options say the same thing),
+        # and a QHBoxLayout hands a hidden widget's space to whatever can grow — which
+        # stretched this button across the row. It is a button; keep it button-sized.
+        from PySide6.QtWidgets import QSizePolicy
+
+        self._refine_drag_btn.setSizePolicy(QSizePolicy.Policy.Fixed,
+                                            self._refine_drag_btn.sizePolicy().verticalPolicy())
         arm_row.addWidget(self._refine_drag_btn)
         # What a drag would do, in one line, for when the controls below are folded away.
         self._tug_summary = QLabel("")
         self._tug_summary.setWordWrap(True)
         self._tug_summary.setStyleSheet("color: palette(placeholder-text);")
         arm_row.addWidget(self._tug_summary, stretch=1)
+        arm_row.addStretch()
         dg.addLayout(arm_row)
 
         self._tug_options = QWidget()
         og = QVBoxLayout(self._tug_options)
-        og.setContentsMargins(0, 0, 0, 0)
+        og.setContentsMargins(self._DRIVER_LABEL_WIDTH, 0, 0, 0)
         dg.addWidget(self._tug_options)
 
         # What a drag lets move — Coot's refine scopes. A sphere (whole residues within a
@@ -1997,11 +2047,6 @@ class ControlsWindow:
         radius_spin.valueChanged.connect(lambda _v: _apply_scope())
         flank_spin.valueChanged.connect(lambda _v: _apply_scope())
 
-        self._tug_density_check = QCheckBox("Into the density")
-        self._tug_density_check.setToolTip(_INTO_DENSITY_TIP)
-        self._tug_density_check.toggled.connect(lambda on: self._safe(
-            lambda: self._desktop.set_tug_into_density(on)))
-        og.addWidget(self._tug_density_check)
         self._tug_continuous_check = QCheckBox("Keep minimizing while dragging")
         self._tug_continuous_check.setToolTip(
             "While dragging, the model keeps relaxing the whole time — a gentle living "
@@ -2422,6 +2467,21 @@ class ControlsWindow:
                 "Load a model and a map together to pair them, then minimize into density.")
         else:
             self._minimize_map_check.setToolTip(_INTO_DENSITY_TIP)
+        self._refresh_minimize_summary()
+
+    def _refresh_minimize_summary(self) -> None:
+        """One line saying what Minimize would do — the drag's summary, for the other
+        driver. Only what is actually in force: the density pull is reported when it is
+        both asked for and available, since an unavailable option is a promise the run
+        cannot keep."""
+        summary = getattr(self, "_minimize_summary", None)
+        if summary is None:      # during construction, before the row exists
+            return
+        check = self._minimize_map_check
+        bits = ["ideal geometry"]
+        if check.isChecked() and check.isEnabled():
+            bits.append("into density")
+        summary.setText(" · ".join(bits))
 
     def _update_tug_maps_after(self) -> None:
         """Re-phasing after a drag needs reflections already phased against the model.

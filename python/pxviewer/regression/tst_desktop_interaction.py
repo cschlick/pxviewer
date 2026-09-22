@@ -192,13 +192,16 @@ def exercise_the_refine_drag_options_live_with_the_switch_that_arms_them():
         titles = [b.title() for b in settings.findChildren(type(controls._appearance_box))]
         assert "Drag atoms" not in titles, titles
 
-        # ... and the Tools tab does, around the switch.
+        # ... and the Tools tab does, around the switch. One box, because minimize and
+        # a drag are one engine driven two ways: both drivers and every option that
+        # shapes either live inside it.
         tools = controls._tabs.widget(controls._tab_labels.index("Tools"))
         box = next(b for b in tools.findChildren(type(controls._appearance_box))
-                   if b.title() == "Refine drag")
+                   if b.title() == "Refine")
         for w in (controls._refine_drag_btn, controls._tug_density_check,
                   controls._tug_continuous_check, controls._tug_livemap_check,
-                  controls._tug_maps_check):
+                  controls._tug_maps_check, controls._minimize_btn,
+                  controls._minimize_map_check):
             assert box.isAncestorOf(w), w
 
         # Folded until armed, and the summary says what a drag would do either way.
@@ -217,15 +220,24 @@ def exercise_the_refine_drag_options_live_with_the_switch_that_arms_them():
         assert controls._tug_summary.text() == "sphere 8 Å · step per move"
 
 
-def exercise_the_density_pull_has_one_name_in_both_places():
+def exercise_the_density_pull_is_named_once_for_both_drivers():
     """Minimize and a refine drag can each be pulled by the map. It is one idea, and it
-    had two labels -- 'Use map' beside Minimize, 'Into the density' beside the drag --
-    which read as two unrelated features."""
+    was offered twice -- first under two labels ('Use map' beside Minimize, 'Into the
+    density' beside the drag), then under one label twice over, in two boxes forty lines
+    apart. Now the idea is named once and the boxes name the two drivers, so the two
+    can still differ without reading as unrelated features."""
+    from PySide6.QtWidgets import QLabel
+
     from pxviewer.desktop import _INTO_DENSITY_TIP
 
     with bare_desktop() as app:
         controls = app._controls
-        assert controls._minimize_map_check.text() == controls._tug_density_check.text()
+        # The two checkboxes name operations, not the idea...
+        assert controls._minimize_map_check.text() == "whole model"
+        assert controls._tug_density_check.text() == "drag"
+        # ...and the idea is named once, on a label they share a row with.
+        box = controls._minimize_map_check.parentWidget()
+        assert any(l.text() == "Into the density:" for l in box.findChildren(QLabel))
 
         # Nothing loaded, so each carries its own note about what to do first.
         assert "pair" in controls._minimize_map_check.toolTip().lower()
