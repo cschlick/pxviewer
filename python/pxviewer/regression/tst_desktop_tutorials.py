@@ -926,8 +926,10 @@ def exercise_the_get_menu_lists_the_online_examples_and_tutorials():
 
         tabs = controls.widget().findChild(QTabWidget)
         # Tabs are icon-only, so the label lives in the tooltip.
+        # Hotspots is not among them: it is a view of validation (same checks, same
+        # analysis) and lives as a sub-tab there rather than beside Scene and Tools.
         assert [tabs.tabToolTip(i) for i in range(5)] == [
-            "Scene", "Tools", "Validation", "Hotspots", "Geometry"]
+            "Scene", "Tools", "Validation", "Geometry", "Console"]
         assert all(not tabs.tabIcon(i).isNull() for i in range(tabs.count()))
 
 

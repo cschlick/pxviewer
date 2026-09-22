@@ -30,8 +30,8 @@ Automated coverage is documented in `TESTING.md`; nothing here replaces it.
 2. With macOS set to **dark** appearance, launch again.
    - **Watch for:** the app is fully light regardless — no dark panels, no
      half-light/half-dark mix, no unreadable text anywhere. Dark mode is pinned off.
-3. Look over the right panel: seven icon tabs — Scene, Tools, Validation, Hotspots,
-   Geometry, Console, Settings.
+3. Look over the right panel: six icon tabs — Scene, Tools, Validation, Geometry,
+   Console, Settings (Hotspots is a sub-tab of Validation, not a tab of its own).
    - **Watch for:** tabs share the full bar width with no dead grey strip on the right;
      icons are crisp (not blurry — a HiDPI regression); the selected tab's underline is
      visible; hovering shows a label.
@@ -228,7 +228,7 @@ Load the X-ray demo or a model with restraints available.
    - **Watch for:** the built ligand appears at the marker as its own object; the
      unknown ligand *offers* restraint inference rather than failing mutely — from
      Minimize and drag too, not only the Geometry tab.
-6. Hotspots tab: run it on the loaded structure.
+6. Validation ▸ **Hotspots** sub-tab: run it on the loaded structure.
    - **Watch for:** results render; overshoot behaviour matches expectations from the
      pinned footprints; no layout breakage in its panel.
 

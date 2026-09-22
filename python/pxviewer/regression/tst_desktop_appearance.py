@@ -972,12 +972,17 @@ def exercise_the_level_slider_reaches_past_the_hottest_voxel():
 
 
 def exercise_the_tabs_share_the_full_bar_width():
-    """Seven icon tabs span the bar edge to edge, not left-huddled beside grey space."""
+    """The icon tabs span the bar edge to edge, not left-huddled beside grey space.
+
+    The count is asserted loosely on purpose -- it has already changed once (Hotspots
+    moved into Validation as a sub-tab) and the property under test is the filling,
+    not the number.
+    """
     with desktop() as app:
         process_events()
         bar = app._controls._tabs.tabBar()
         count = bar.count()
-        assert count >= 7, "expected the seven main tabs, found %d" % count
+        assert count >= 5, "expected the main tabs, found %d" % count
         total = sum(bar.tabRect(i).width() for i in range(count))
         # Rounding leaves a few px; anything more is the old left-tight layout.
         assert total >= bar.width() - count, (

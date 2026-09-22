@@ -1383,7 +1383,6 @@ class ControlsWindow:
             (self._build_scene_tab(), "Scene", "layers"),
             (self._build_tools_tab(), "Tools", "wrench"),
             (self._build_validation_tab(), "Validation", "award"),
-            (self._build_hotspots_tab(), "Hotspots", "flame"),
             (self._build_geometry_tab(), "Geometry", "drafting-compass"),
             (self._build_console_tab(), "Console", "square-terminal"),
             (self._build_settings_tab(), "Settings", "sliders-horizontal"),
@@ -2568,13 +2567,16 @@ class ControlsWindow:
         self._stale_warning.setVisible(False)
         layout.addWidget(self._stale_warning)
 
-        # One results area: a tab per validator, (re)built as runs complete, with the
-        # always-present Clashes & contacts tab last — it holds overlay toggles rather
-        # than a results table, so until its analysis runs it stays out of the way.
+        # One results area: a tab per validator, (re)built as runs complete, then two
+        # always-present tabs at the end — Clashes & contacts (overlay toggles rather
+        # than a results table) and Hotspots (the aggregate over these same checks,
+        # demoted from a top-level tab: it is a *view* of validation, sharing its
+        # expensive analysis, and did not earn a place beside Scene and Tools).
         self._validation_subtabs = QTabWidget()
         self._validation_subtabs.setDocumentMode(True)
         self._clashes_page = self._build_clashes_page()
         self._validation_subtabs.addTab(self._clashes_page, "Clashes && contacts")
+        self._validation_subtabs.addTab(self._build_hotspots_tab(), "Hotspots")
         layout.addWidget(self._validation_subtabs, stretch=1)
         self._sync_all_markup_button()  # nothing drawn yet, so it starts disabled
         return tab
@@ -2715,7 +2717,7 @@ class ControlsWindow:
 
     def _on_validation_ready(self, payload) -> None:
         """Validation finished (GUI thread): rebuild a sub-tab per result, keeping the
-        always-present Clashes & contacts tab in place as the last tab.
+        always-present tail — Clashes & contacts, then Hotspots — in place.
 
         ``draw_markers`` (default True for an explicit Run validation) is False when the tab is
         being populated as a side effect of a hotspot run — the tables fill in, but the markup
@@ -2724,7 +2726,7 @@ class ControlsWindow:
         mid, results, draw_markers = (*payload, True)[:3]
         tabs = self._validation_subtabs
         current = tabs.tabText(tabs.currentIndex())  # preserve the selected validator
-        while tabs.count() > 1:  # drop the previous run's validator tabs; keep Clashes (last)
+        while tabs.count() > 2:  # drop the run's validator tabs; keep Clashes + Hotspots
             page = tabs.widget(0)
             tabs.removeTab(0)
             page.deleteLater()
@@ -2739,7 +2741,7 @@ class ControlsWindow:
         # which a run of per-residue checks says nothing about.
         if results:
             tabs.setCurrentIndex(0)
-            for i in range(tabs.count() - 1):
+            for i in range(tabs.count() - 2):
                 if tabs.tabText(i) == current:
                     tabs.setCurrentIndex(i)
                     break
@@ -5336,15 +5338,23 @@ class ControlsWindow:
             self._hl_overlay.hide()
 
     def _reveal_widget_tab(self, widget) -> None:
-        """If ``widget`` lives on one of the tabs, switch to that tab so it is visible."""
-        tabs = getattr(self, "_tabs", None)
-        if tabs is None:
-            return
-        for i in range(tabs.count()):
-            page = tabs.widget(i)
-            if page is widget or page.isAncestorOf(widget):
-                tabs.setCurrentIndex(i)
-                return
+        """Switch every tab bar between ``widget`` and the panel so it is visible.
+
+        Walked from the widget upward rather than reading self._tabs: a coach target
+        can sit inside a *nested* tab row (the Hotspots controls live in a Validation
+        sub-tab), and revealing only the top level would flash a control on a page
+        that is not showing."""
+        from PySide6.QtWidgets import QTabWidget
+
+        node = widget.parentWidget() if widget is not None else None
+        while node is not None:
+            if isinstance(node, QTabWidget):
+                for i in range(node.count()):
+                    page = node.widget(i)
+                    if page is widget or page.isAncestorOf(widget):
+                        node.setCurrentIndex(i)
+                        break
+            node = node.parentWidget()
 
     def reflect_dock_state(self, floating: bool) -> None:
         """Keep the dock/detach button in step with the panel's state: maximize-2 to detach

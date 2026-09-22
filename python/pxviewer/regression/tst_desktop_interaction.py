@@ -1075,11 +1075,15 @@ def exercise_validation_subtabs_and_row_focus():
         app._controls._on_validation_ready((mid, [result]))
 
         tabs = app._controls._validation_subtabs
-        # Validators come first and a run lands on its own results; Clashes & contacts
-        # is the permanent LAST tab, out of the way until its analysis is queued.
-        assert tabs.count() == 2
+        # Validators come first and a run lands on its own results; the permanent pair
+        # -- Clashes & contacts, then Hotspots -- sits at the end, out of the way until
+        # asked for. A run must rebuild the validator tabs without taking those two
+        # with it: they own live widgets (overlay toggles, the whole hotspot panel),
+        # and deleteLater on the wrong page leaves the controls dangling.
+        assert tabs.count() == 3
         assert tabs.tabText(0) == "Ramachandran"
-        assert tabs.tabText(tabs.count() - 1).startswith("Clashes")
+        assert [tabs.tabText(i) for i in (1, 2)][0].startswith("Clashes")
+        assert tabs.tabText(2) == "Hotspots"
         assert tabs.currentIndex() == 0
 
         table = tabs.widget(0).findChild(QTableWidget)
