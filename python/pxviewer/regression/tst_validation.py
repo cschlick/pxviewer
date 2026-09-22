@@ -138,6 +138,28 @@ def exercise_rama_z_on_ubiquitin():
     assert [row[0] for row in result.rows] == ["Helix", "Sheet", "Loop", "Whole"]
 
 
+def exercise_every_validator_labels_its_tab_and_explains_its_columns():
+    """Two things a results table cannot supply for itself.
+
+    A short tab label, because eight sub-tabs across the panel elide to "Cbeta devi..."
+    otherwise; and one sentence saying what the numbers *are*. A column of "0.041" or
+    "26.39" is unreadable without knowing whether it is Angstrom, degrees, a percentage
+    of a reference distribution or a standard deviation -- and every one of those units
+    is in play across these six validators. Registry-driven, so a validator added later
+    cannot ship a table of bare numbers.
+    """
+    structure = model()
+    for result in validation.run_all(structure):
+        assert result.tab, "%s has no short tab label" % result.key
+        assert len(result.tab) <= 12, (result.key, result.tab)
+        assert isinstance(result.notes, str) and len(result.notes) > 40, (
+            "%s does not say what its columns mean" % result.key)
+        # The sentence has to name units or a threshold to be worth the space.
+        assert any(word in result.notes for word in
+                   ("degrees", "Angstrom", "percentage", "%", "standard deviations",
+                    "0 to 1")), (result.key, result.notes)
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

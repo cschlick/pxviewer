@@ -35,6 +35,14 @@ class ValidationResult:
                  a dict with ``kind`` (vectors/dots/balls/triangles), ``color`` and
                  the geometry for that kind. Empty for whole-model metrics.
     ``summary``  a one-line summary string (counts / percentages).
+    ``tab``      a short label for the results tab; falls back to ``title``. Eight
+                 sub-tabs across a panel is not much per label, and an elided
+                 "Cbeta devi..." names nothing.
+    ``notes``    one sentence saying what the columns *are* -- the units and the
+                 threshold. A table of bare numbers ("0.041", "26.39") cannot be read
+                 without knowing whether they are Angstrom, degrees, percentages of a
+                 reference distribution or standard deviations, and the tab is where
+                 the reader is when the question arises.
     """
 
     key: str
@@ -43,6 +51,8 @@ class ValidationResult:
     rows: List[list]
     markup: List[dict]
     summary: str
+    tab: str = ""
+    notes: str = ""
 
 
 class ValidatorSpec(NamedTuple):

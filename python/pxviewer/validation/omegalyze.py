@@ -59,4 +59,10 @@ def run(model: Any) -> ValidationResult:
         rows=rows,
         markup=parse_kinemage(result.as_kinemage()),  # filled cis/twisted triangles
         summary=summary,
+        tab="Omega",
+        notes=(
+            "omega is the peptide bond's dihedral in degrees: about 180 is trans, about "
+            "0 is cis, and anything between is twisted. Cis non-proline and twisted "
+            "peptides are rare enough to be worth checking."
+        ),
     )

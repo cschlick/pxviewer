@@ -2456,9 +2456,13 @@ class ControlsWindow:
 
         page = QWidget()
         ag = QVBoxLayout(page)
-        hint = QLabel("MolProbity all-atom contacts. Tick 'Clashes & contacts' above and "
-                      "run — it adds hydrogens (reduce2) as a new object, runs probe2, "
-                      "and these overlays light up:")
+        hint = QLabel(
+            "<b>Clashes &amp; contacts</b> — tick it in the checks above and press play: it "
+            "adds hydrogens (reduce2) as a new object, runs probe2, and these overlays light "
+            "up. There is no table here because probe's answer is the dots themselves: green "
+            "and blue are favourable contacts, and the red spikes are <b>overlaps</b>, drawn "
+            "where two atoms interpenetrate by more than 0.4 Å — the length of a spike is "
+            "that overlap.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(placeholder-text);")
         ag.addWidget(hint)
@@ -2527,6 +2531,15 @@ class ControlsWindow:
             "object (hiding the original), then run probe2 for MolProbity contacts and "
             "clashes. The heaviest check, so it starts unticked.")
         checks.addWidget(self._clashes_check, (len(self._check_boxes) + 1) // 2, 0, 1, 2)
+        self._hotspots_check = QCheckBox("Hotspot severity (aggregate of the above)")
+        self._hotspots_check.setToolTip(
+            "Queue the severity aggregate: the ticked checks combined into one per-atom "
+            "field, colouring the model and drawing where they agree in 3-D.\n"
+            "It reuses the analysis the other checks already build, so ticking it beside "
+            "them costs the aggregation and little else. Results land in the Hotspots "
+            "sub-tab.")
+        checks.addWidget(self._hotspots_check,
+                         (len(self._check_boxes) + 1) // 2 + 1, 0, 1, 2)
         layout.addLayout(checks)
 
         # Per-validator Markers checkboxes, rebuilt with the sub-tabs on every run. The probe
@@ -2575,8 +2588,10 @@ class ControlsWindow:
         self._validation_subtabs = QTabWidget()
         self._validation_subtabs.setDocumentMode(True)
         self._clashes_page = self._build_clashes_page()
-        self._validation_subtabs.addTab(self._clashes_page, "Clashes && contacts")
-        self._validation_subtabs.addTab(self._build_hotspots_tab(), "Hotspots")
+        # Short labels: eight tabs across this panel leaves little room each, and an
+        # elided "Clashes & cont..." names nothing. Each page opens with its full name.
+        self._validation_subtabs.addTab(self._clashes_page, "Clashes")
+        self._validation_subtabs.addTab(self._build_hotspots_tab(), "Hot")
         layout.addWidget(self._validation_subtabs, stretch=1)
         self._sync_all_markup_button()  # nothing drawn yet, so it starts disabled
         return tab
@@ -2628,10 +2643,19 @@ class ControlsWindow:
 
         page = QWidget()
         v = QVBoxLayout(page)
-        summary = QLabel(result.summary)
-        summary.setStyleSheet("color: palette(placeholder-text);")
-        summary.setWordWrap(True)
-        v.addWidget(summary)
+        # The full name first: the tab above is abbreviated to fit eight of them across
+        # the panel, so this is where "Cbeta" is spelled out.
+        heading = self._wrapped_label(f"<b>{result.title}</b> — {result.summary}")
+        heading.setStyleSheet("color: palette(placeholder-text);")
+        v.addWidget(heading)
+        if result.notes:
+            # What the numbers in this table are. A column of "0.041" or "26.39" is
+            # unreadable without knowing whether it is Angstrom, degrees, a percentage
+            # of a reference distribution or a standard deviation -- and this tab is
+            # where the reader is standing when the question occurs to them.
+            notes = self._wrapped_label(result.notes)
+            notes.setStyleSheet("color: palette(placeholder-text);")
+            v.addWidget(notes)
 
         # Above the table and on by default: the markup is the point of the tab, so it
         # shows as soon as the results do. Connected before setChecked so that initial
@@ -2704,7 +2728,8 @@ class ControlsWindow:
         try:
             self._desktop.run_validation(
                 keys=[key for key, box in self._check_boxes if box.isChecked()],
-                clashes=self._clashes_check.isChecked())
+                clashes=self._clashes_check.isChecked(),
+                hotspots=self._hotspots_check.isChecked())
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -2735,7 +2760,7 @@ class ControlsWindow:
         self._marker_checks.clear()
         for pos, result in enumerate(results):
             tabs.insertTab(pos, self._build_validation_section(mid, result, draw_markers),
-                           result.title)
+                           result.tab or result.title)
         # Land on the freshest thing: the same validator the user was reading when it is
         # part of this run, otherwise the first result — never the Clashes toggles page,
         # which a run of per-residue checks says nothing about.
@@ -2764,14 +2789,14 @@ class ControlsWindow:
         layout = QVBoxLayout(tab)
         layout.setSpacing(10)
 
-        intro = QLabel(
-            "Find hotspots scores this model itself, on the severity scale where 1.0 is the "
-            "outlier cut. Open volume… imports bounded concern fields from Hotspots, where "
-            "concern controls both hue and opacity on a fixed 0–1 scale. The combined field "
-            "means where to look, not model quality; component fields say which validation "
-            "source raised the concern. A model shows one or the other, never both — the two "
-            "scales are not interchangeable.")
-        intro.setWordWrap(True)
+        # One paragraph, like every other sub-tab's: a longer one was clipped by the
+        # panel, and what belongs to the import button now lives on the import button.
+        intro = self._wrapped_label(
+            "<b>severity</b> is scaled so <b>1.0 is exactly the outlier cut</b> of "
+            "whichever check raised it (Ramachandran 0.05%, rotamer 0.3%, clash 0.4 Å "
+            "overlap), and each step of 1.0 is a decade less likely again. The component "
+            "columns carry each check's own severity on that same scale — the combined "
+            "value only ranks, and is not a quality score.")
         layout.addWidget(intro)
 
         # Off by default: adding hydrogens (reduce2) and probing three times as many atoms is
@@ -2789,17 +2814,17 @@ class ControlsWindow:
         self._desktop._hotspot_hydrogens = False
         layout.addWidget(hydrogens)
 
+        # No run button here: hotspots is queued with the checks it aggregates, on the
+        # run row above. Import is not a check, so it keeps its button.
         action_row = QHBoxLayout()
-        find = QPushButton("Find hotspots")
-        find.setToolTip("Score the active model and color it by severity (background thread).")
-        find.clicked.connect(self._on_find_hotspots)
-        self._hotspot_btn = find
-        self._register_busy_button(find, "Finding hotspots")
-        action_row.addWidget(find)
         open_volume = QPushButton("Open volume…")
         open_volume.setToolTip(
             "Open a Hotspots JSON manifest (recommended), or one bounded-concern CCP4 map "
-            "with its sibling percentile map. No validation or map-model calculation runs.")
+            "with its sibling percentile map. No validation or map-model calculation "
+            "runs.\n\nThis imports bounded *concern* from the Hotspots generator: a "
+            "different quantity from the severity computed here, on a fixed 0–1 scale. A "
+            "model shows one or the other, never both — the two scales are not "
+            "interchangeable.")
         open_volume.clicked.connect(self._on_open_hotspot_volume)
         self._hotspot_open_btn = open_volume
         action_row.addWidget(open_volume)
@@ -2895,13 +2920,18 @@ class ControlsWindow:
         table.itemSelectionChanged.connect(self._on_hotspot_row_selected)
         self._hotspot_table = table
         layout.addWidget(table, stretch=1)
-        return tab
+        # Scrolled, like the Tools and Scene tabs: this page is a paragraph, three
+        # rows of controls, a slider, a summary and a table, and it is now a sub-tab
+        # inside a tab. When the panel is shorter than that, a plain layout compresses
+        # its widgets into each other -- the units paragraph rendered over the
+        # hydrogens checkbox -- where scrolling keeps every one at its natural size.
+        from PySide6.QtWidgets import QScrollArea
 
-    def _on_find_hotspots(self) -> None:
-        try:
-            self._desktop.compute_hotspots()
-        except Exception as exc:
-            self._set_status(str(exc))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setWidget(tab)
+        return scroll
 
     def _set_threshold_scale(self, *, mode: str = "severity") -> None:
         """Point the threshold slider at one field's units, and say which they are.
@@ -5066,6 +5096,48 @@ class ControlsWindow:
                 widget.setStyleSheet("")
                 widget.setStyleSheet(qss)
         self._retint_icons()
+
+    @staticmethod
+    def _wrapped_label(text: str):
+        """A word-wrapped QLabel that is actually given the height its text needs.
+
+        ``QLabel.heightForWidth`` under-reports a wrapped paragraph by a line at some
+        widths — measured here at 410px: it returns 80 where laying the same text out
+        needs 88 — so the label is sized a line short and the last sentence is
+        silently clipped. Nothing warns; the paragraph simply ends mid-word, which is
+        how the hotspot units note lost its conclusion. So the height is measured from
+        the laid-out document and kept in step with whatever width we are given.
+        """
+        import math
+
+        from PySide6.QtGui import QTextDocument
+        from PySide6.QtWidgets import QLabel, QSizePolicy
+
+        class _Wrapped(QLabel):
+            def resizeEvent(self, event):
+                super().resizeEvent(event)
+                width = max(1, self.contentsRect().width())
+                doc = QTextDocument()
+                doc.setDefaultFont(self.font())
+                # Qt::mightBeRichText is not exposed in PySide6; these labels are
+                # authored here, so a tag is the whole test.
+                content = self.text()
+                if "<" in content and ">" in content:
+                    doc.setHtml(content)
+                else:
+                    doc.setPlainText(content)
+                doc.setTextWidth(width)
+                needed = int(math.ceil(doc.size().height()))
+                if needed != self.minimumHeight():
+                    self.setMinimumHeight(needed)   # guarded: a relayout loop otherwise
+
+        label = _Wrapped(text)
+        label.setWordWrap(True)
+        policy = label.sizePolicy()
+        policy.setVerticalPolicy(QSizePolicy.Policy.Minimum)
+        policy.setHeightForWidth(True)
+        label.setSizePolicy(policy)
+        return label
 
     def _make_icon_button(self, icon_name, fallback_text, tooltip, *, checkable=False,
                           icon_size=18, square=False):
@@ -7690,8 +7762,10 @@ class DesktopApp:
     def compute_hotspots(self, mid: Optional[str] = None) -> None:
         """Aggregate the validation metrics into one per-atom severity field, and color by it.
 
-        Hotspots are geometry-only: Ramachandran, rotamer, and clash severity. Runs on a
-        thread because probe2 plus the two mmtbx validators takes seconds.
+        The programmatic entry point. Interactively, hotspots is one more box in the
+        Validation tab's run queue — it aggregates the very checks queued beside it, so
+        a separate button would have run the same analysis twice and asked the user to
+        choose between two spellings of one action.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
@@ -7703,56 +7777,68 @@ class DesktopApp:
         analysis = self._model_analysis(entry)  # shared with, and populates, the Validation tab
 
         def work() -> None:
-            from . import hotspots
-
-            try:
-                self._status(f"finding hotspots in {name}…")
-                result = hotspots.score(
-                    model, fit="none", analysis=analysis,
-                    use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
-                columns = hotspots.residue_columns(result)
-                rows = hotspots.residue_rows(model, result)
-            except Exception as exc:  # pragma: no cover - validator/runtime errors
-                self._status(f"hotspots failed: {exc}")
-                return
-            # Ask the browser its background so clean atoms can be colored to match and fade
-            # into it. Off the GUI thread (it blocks on a round-trip); None -> a light default.
-            palette = hotspots.hotspot_palette(entry["session"].background_color())
-            residue_values = hotspots.residue_broadcast(model, result.values)
-
-            def apply_on_main() -> None:
-                current = self._model_entry(mid)
-                if current is None:  # unloaded while we worked
-                    return
-                # A newly computed score supersedes any imported concern field — the mirror
-                # of open_hotspot_volume dropping a computed score. Severity and concern are
-                # different quantities (see pxviewer.concern); a model shows one or the other.
-                self._drop_imported_concern(current)
-                self._hotspot_knee = hotspots.FIELD_ISO
-                current["hotspots"] = result
-                current.pop("hotspot_metric", None)  # a new score starts on Combined
-                current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
-                current["color"] = _HOTSPOT_COLOR
-                domain, default = self._opening_domain(
-                    current, _HOTSPOT_COLOR, hotspots.DOMAIN)
-                current["attribute"] = {
-                    "name": _HOTSPOT_COLOR, "values": result.values,
-                    "residue_values": residue_values,
-                    "domain": domain, "default_domain": default,
-                    "palette": palette,
-                }
-                self._apply_model_rep(current)
-                self._emit_loaded_changed()
-                self._status(f"{name}: {result.summary}")
-                self.bridge.hotspots_ready.emit((mid, result, columns, rows))
-
-            self.bridge.run_on_main.emit(apply_on_main)
-            # Finding hotspots already ran Ramachandran and rotamers; spend the little extra to
-            # run the remaining validators (reusing that shared analysis) so the Validation tab
-            # is populated too — the user asked for one, they get both.
+            self._hotspots_work(mid, name, model, analysis)
+            # Finding hotspots already ran Ramachandran and rotamers; spend the little
+            # extra to run the remaining validators (reusing that shared analysis) so
+            # the Validation tab is populated too.
             self._populate_validation_from_analysis(mid, model, analysis)
 
         self.run_background(work, name="pxviewer-hotspots", label="Finding hotspots")
+
+    def _hotspots_work(self, mid, name, model, analysis) -> None:
+        """Score the severity field and colour by it (background thread).
+
+        Shared by :meth:`compute_hotspots` and the validation queue, so ticking hotspots
+        beside the per-residue checks costs the aggregation and nothing more: the
+        analysis those checks already built is handed straight in.
+        """
+        entry = self._model_entry(mid)
+        if entry is None:
+            return
+        from . import hotspots
+
+        try:
+            self._status(f"finding hotspots in {name}…")
+            result = hotspots.score(
+                model, fit="none", analysis=analysis,
+                use_hydrogens=getattr(self, "_hotspot_hydrogens", False))
+            columns = hotspots.residue_columns(result)
+            rows = hotspots.residue_rows(model, result)
+        except Exception as exc:  # pragma: no cover - validator/runtime errors
+            self._status(f"hotspots failed: {exc}")
+            return
+        # Ask the browser its background so clean atoms can be colored to match and fade
+        # into it. Off the GUI thread (it blocks on a round-trip); None -> a light default.
+        palette = hotspots.hotspot_palette(entry["session"].background_color())
+        residue_values = hotspots.residue_broadcast(model, result.values)
+
+        def apply_on_main() -> None:
+            current = self._model_entry(mid)
+            if current is None:  # unloaded while we worked
+                return
+            # A newly computed score supersedes any imported concern field — the mirror
+            # of open_hotspot_volume dropping a computed score. Severity and concern are
+            # different quantities (see pxviewer.concern); a model shows one or the other.
+            self._drop_imported_concern(current)
+            self._hotspot_knee = hotspots.FIELD_ISO
+            current["hotspots"] = result
+            current.pop("hotspot_metric", None)  # a new score starts on Combined
+            current["hotspot_palette"] = palette  # kept so a menu re-apply reuses it
+            current["color"] = _HOTSPOT_COLOR
+            domain, default = self._opening_domain(
+                current, _HOTSPOT_COLOR, hotspots.DOMAIN)
+            current["attribute"] = {
+                "name": _HOTSPOT_COLOR, "values": result.values,
+                "residue_values": residue_values,
+                "domain": domain, "default_domain": default,
+                "palette": palette,
+            }
+            self._apply_model_rep(current)
+            self._emit_loaded_changed()
+            self._status(f"{name}: {result.summary}")
+            self.bridge.hotspots_ready.emit((mid, result, columns, rows))
+
+        self.bridge.run_on_main.emit(apply_on_main)
 
     def _populate_validation_from_analysis(self, mid: str, model, analysis) -> None:
         """Fill the Validation tab from a just-finished hotspot run, reusing its shared analysis
@@ -8273,14 +8359,17 @@ class DesktopApp:
         else:
             session.clear_probe_dots(channel=channel)
 
-    def run_validation(self, keys=None, clashes: bool = False) -> None:
+    def run_validation(self, keys=None, clashes: bool = False,
+                       hotspots: bool = False) -> None:
         """Run the checked MolProbity validations on the active model as one background
         job, handing results to the Validation tab as each lands.
 
         ``keys`` selects the per-residue validators (``None`` runs every registered
         one; an empty list runs none); ``clashes`` appends the all-atom contact
         analysis (reduce2 + probe2), by far the heaviest check and the one that adds a
-        hydrogenated sibling object. Everything checked runs sequentially on one
+        hydrogenated sibling object; ``hotspots`` appends the severity aggregate over
+        the checks themselves, which is nearly free once they have run and is why it
+        belongs in this queue rather than behind a button of its own. Everything checked runs sequentially on one
         thread because the checks share the per-model analysis cache, whose expensive
         lazy steps (reduce2, probe) are not re-entrant — two concurrent checks would
         race to hydrogenate the same model.
@@ -8291,7 +8380,7 @@ class DesktopApp:
         model = getattr(entry["session"], "model", None)
         if model is None:
             raise ValueError("the active object has no cctbx model")
-        if keys is not None and not keys and not clashes:
+        if keys is not None and not keys and not clashes and not hotspots:
             raise ValueError("no validations checked")
         mid, name = entry["id"], entry["name"]
         # reduce2 and probe are the two expensive steps in the whole validation stack, and
@@ -8302,6 +8391,8 @@ class DesktopApp:
         def work():
             if keys is None or keys:
                 self._validation_work(mid, name, model, analysis, keys)
+            if hotspots:
+                self._hotspots_work(mid, name, model, analysis)
             if clashes:
                 self._clashes_work(name, mid, analysis)
 
@@ -8328,11 +8419,10 @@ class DesktopApp:
         self._status(f"{name}: {len(results)} validators, {total} markers")
         self.bridge.validation_ready.emit((mid, results))
         self._refresh_validation_staleness()  # fresh results: clear any stale warning
-        # Fill the Hotspots tab too, on the same shared analysis. Both features need
-        # reduce2 and probe — the expensive part — so doing it here means the user pays
-        # once whichever button they pressed, instead of again on the next tab.
-        self._status(f"{name}: scoring hotspots from the same analysis…")
-        self._populate_hotspots_from_analysis(mid, model, analysis)
+        # The Hotspots sub-tab is deliberately NOT filled here. It used to be, on the
+        # grounds that the analysis was already paid for -- but hotspots is now a box in
+        # the same queue, and quietly producing results for a check the user did not
+        # tick makes the queue lie about what it ran.
 
     def set_validation_markers(self, key: str, visible: bool) -> None:
         """Toggle a validator's MolProbity markup on the active model, redrawing from

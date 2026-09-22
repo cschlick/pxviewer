@@ -47,4 +47,11 @@ def run(model: Any) -> ValidationResult:
         rows=rows,
         markup=[],  # whole-model metric: nothing to anchor per residue
         summary=summary,
+        tab="Rama-Z",
+        notes=(
+            "a whole-model score per secondary-structure class, in standard deviations "
+            "from the mean of well-refined structures: 0 is typical and |Z| above 2 is "
+            "worth a look, either way (too tight is as odd as too loose). std_err is "
+            "its uncertainty."
+        ),
     )

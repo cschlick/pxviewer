@@ -1081,9 +1081,11 @@ def exercise_validation_subtabs_and_row_focus():
         # with it: they own live widgets (overlay toggles, the whole hotspot panel),
         # and deleteLater on the wrong page leaves the controls dangling.
         assert tabs.count() == 3
+        # A result that names no short label falls back to its title (this synthetic
+        # one does); the real validators all define one -- see tst_validation.
         assert tabs.tabText(0) == "Ramachandran"
-        assert [tabs.tabText(i) for i in (1, 2)][0].startswith("Clashes")
-        assert tabs.tabText(2) == "Hotspots"
+        assert tabs.tabText(1) == "Clashes"
+        assert tabs.tabText(2) == "Hot"
         assert tabs.currentIndex() == 0
 
         table = tabs.widget(0).findChild(QTableWidget)
@@ -1178,33 +1180,42 @@ def exercise_one_button_shows_and_hides_every_validation_overlay():
 
 
 def exercise_the_play_button_queues_exactly_the_ticked_checks():
-    """One play button runs whatever is ticked: the per-residue validators go by key,
-    Clashes & contacts (the reduce2 + probe2 analysis) by flag. Running with nothing
-    ticked reports rather than crashing or silently doing everything."""
+    """One play button runs whatever is ticked: the per-residue validators by key,
+    Clashes & contacts (reduce2 + probe2) and Hotspot severity (the aggregate over
+    those same checks) by flag. Running with nothing ticked reports rather than
+    crashing or silently doing everything."""
     with desktop() as app:
         controls = app._controls
         calls = []
-        app.run_validation = lambda keys=None, clashes=False: calls.append((keys, clashes))
+        app.run_validation = (lambda keys=None, clashes=False, hotspots=False:
+                              calls.append((keys, clashes, hotspots)))
 
-        # Fresh install: every per-residue check ticked, the heavy clashes one not.
+        # Fresh install: every per-residue check ticked, the two heavier ones not.
         controls._on_run_validation()
-        keys, clashes = calls[-1]
+        keys, clashes, hotspots = calls[-1]
         assert keys == [key for key, _box in controls._check_boxes]
-        assert len(keys) >= 4 and not clashes
+        assert len(keys) >= 4 and not clashes and not hotspots
 
-        # A subset plus clashes goes through exactly as ticked.
+        # A subset plus both add-ons goes through exactly as ticked.
         for key, box in controls._check_boxes:
             box.setChecked(key == "ramachandran")
         controls._clashes_check.setChecked(True)
+        controls._hotspots_check.setChecked(True)
         controls._on_run_validation()
-        assert calls[-1] == (["ramachandran"], True)
+        assert calls[-1] == (["ramachandran"], True, True)
 
-        # Nothing ticked: the real runner refuses and the handler reports it.
-        del app.run_validation                      # back to the class's method
-        ubiquitin(app)
-        controls._clashes_check.setChecked(False)
+        # Hotspots alone is a legitimate run: it aggregates whatever the analysis holds,
+        # so an empty key list with it ticked must not be refused as "nothing ticked".
         for _key, box in controls._check_boxes:
             box.setChecked(False)
+        controls._clashes_check.setChecked(False)
+        controls._on_run_validation()
+        assert calls[-1] == ([], False, True)
+
+        # Nothing at all ticked: the real runner refuses and the handler reports it.
+        del app.run_validation                      # back to the class's method
+        ubiquitin(app)
+        controls._hotspots_check.setChecked(False)
         controls._on_run_validation()               # must not raise
         assert not app._model_entry(app._active_model_id).get("validation")
 
@@ -1255,25 +1266,30 @@ def exercise_a_running_operation_disables_only_its_own_button():
 
     with desktop() as app:
         controls = app._controls
-        find, validate = controls._hotspot_btn, controls._validate_btn
-        assert find.isEnabled() and validate.isEnabled()
+        # The validation run is the busy button here: hotspots lost its own (it is queued
+        # with the checks it aggregates), the ligand build starts disabled until there is
+        # a marker to build at, and Minimize is deliberately never registered -- it drives
+        # its own enabled state from minimizing_changed. The picture button stands in for
+        # "an unrelated action", being one nothing ever disables.
+        run, unrelated = controls._validate_btn, controls._picture_btn
+        assert run.isEnabled() and unrelated.isEnabled()
 
         gate = threading.Event()
-        app.run_background(lambda: gate.wait(10), name="t-hs", label="Finding hotspots")
+        app.run_background(lambda: gate.wait(10), name="t-hs", label="Running validation")
         settle()
-        assert not find.isEnabled()        # cannot queue a second one
-        assert validate.isEnabled()        # an unrelated action is still offered
+        assert not run.isEnabled()         # cannot queue a second one
+        assert unrelated.isEnabled()       # an unrelated action is still offered
 
         gate.set()
         settle()
-        assert find.isEnabled()
+        assert run.isEnabled()
 
         def boom():
             raise RuntimeError("worker failed")
 
-        app.run_background(boom, name="t-boom", label="Finding hotspots")
+        app.run_background(boom, name="t-boom", label="Running validation")
         settle()
-        assert find.isEnabled()
+        assert run.isEnabled()
 
 
 # -- atom-precision work ------------------------------------------------------

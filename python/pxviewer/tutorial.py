@@ -358,14 +358,15 @@ def hotspots_tutorial() -> Tutorial:
             "tutorial uses, tripping every check.",
         ),
         Step(
-            "Open the **Hotspots** tab (the flame) and click **Find hotspots**. It runs "
-            "in the background and colors the model by severity when done.\n\nThe fast "
-            "pass finds heavy-atom clashes only; the checkbox above adds hydrogens first "
-            "(reduce2 — the MolProbity clashscore treatment, much slower). Either way, "
-            "one run also fills the **Validation** tab: the two share the expensive "
-            "analysis, so whichever button you press, you get both.",
+            "On the **Validation** tab, tick **Hotspot severity** in the list of checks "
+            "and press **play**. It runs in the background and colours the model by "
+            "severity when done — and because it aggregates the very checks queued "
+            "beside it, ticking them too costs almost nothing extra.\n\nThe fast pass "
+            "finds heavy-atom clashes only; **Use hydrogens for clashes**, on the "
+            "Hotspots sub-tab, adds them first (reduce2 — the MolProbity clashscore "
+            "treatment, much slower).",
             done=_hotspots_ran,
-            target=lambda cw: cw._hotspot_btn,
+            target=lambda cw: cw._hotspots_check,
         ),
         Step(
             "The model is now colored by severity on an **absolute** scale — clean atoms "

@@ -79,4 +79,11 @@ def run(model: Any) -> ValidationResult:
         # outlier/disfavored/CA-geom vectors + the score wheels and their outlines
         markup=parse_kinemage(result.as_kinemage()),
         summary=summary,
+        tab="CaBLAM",
+        notes=(
+            "cablam and ca_geom are probabilities from 0 to 1 against CaBLAM's backbone "
+            "reference, so lower is less likely: below 0.05 is disfavoured and below "
+            "0.01 an outlier. ca_geom judges the CA trace itself; type names whichever "
+            "was raised."
+        ),
     )

@@ -44,4 +44,10 @@ def run(model: Any) -> ValidationResult:
         rows=rows,
         markup=parse_kinemage(result.as_kinemage()),  # magenta ball + dot scatter
         summary=summary,
+        tab="Cbeta",
+        notes=(
+            "deviation is how far the modelled C-beta sits from where the backbone puts "
+            "it, in Angstrom — above 0.25 A is an outlier. dihedral is N-CA-CB, in "
+            "degrees."
+        ),
     )
