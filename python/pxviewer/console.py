@@ -116,24 +116,100 @@ class EmbeddedConsole:
 
 
 def default_banner() -> str:
-    """The greeting shown at the top of the console.
+    """The greeting shown at the top of the console: one line, and where to read more.
 
-    It says what the two names in scope actually are and where the cctbx objects live.
-    Anyone reading it is already in the console and knows what it is, so it does not
-    spend its first line saying so.
+    It used to be the whole guide, compressed into the pane's width — which is how it
+    came to advertise ``app.group_mmm(g)`` without ever saying what ``g`` was or how to
+    get one. Four lines cannot both name a thing and explain it, so the banner now
+    names one thing (:func:`console_help`) and the explaining happens there, at a
+    length that can afford to be clear.
     """
-    return (
-        "session  the active model, live\n"
-        "app      the desktop, everything in it\n"
-        "cctbx    session.model → mmtbx model\n"
-        "         app.group_mmm(g) → map+model\n"
-        "\n"
-        "api  every command · session.<Tab>\n"
-        "obj?  help on anything\n"
-    )
+    return "help() — what you can do here\n"
 
 
 #: The console sits in the controls pane, which is a third of the screen — about 38
-#: monospace columns. A banner wider than that wraps mid-sentence and reads as a mess,
-#: which is worse than saying less. test_console_banner_fits_the_pane holds this.
+#: monospace columns. Anything wider wraps mid-sentence and reads as a mess, which is
+#: worse than saying less. Holds for the banner and for help() alike.
 BANNER_MAX_COLUMNS = 38
+
+
+#: What the console binds, and what each one is *for*. Kept as data so the help text
+#: and the test that checks it describes reality read the same list. One string per
+#: entry: textwrap owns every line break, because hand-broken prose re-wrapped to the
+#: pane's width breaks twice and reads like a ransom note.
+CONSOLE_NAMES = [
+    ("session", "The active model as the viewer sees it: selecting, colouring, "
+                "representations, measurements. Follows whichever model is active, "
+                "so it re-binds when you switch models."),
+    ("app", "The desktop itself: every object loaded, and every action the panels "
+            "can take — loading, fetching, validation, minimization, maps."),
+    ("api", "A categorised map of everything session can do, each with a one-line "
+            "description. Type api for all of it, or api.find(\"color\") to search."),
+    ("np", "numpy, already imported."),
+]
+
+#: The cctbx objects underneath, and the exact expression that reaches each. Every one
+#: is runnable as written with no argument to invent -- which the old banner's
+#: ``app.group_mmm(g)`` was not, and that is what this replaced.
+CONSOLE_CCTBX = [
+    ("session.model", "mmtbx model manager for the active model"),
+    ("app.model_mmm()", "its cctbx map_model_manager, or None"),
+    ("app.map_for_model()", "the map data it is paired with, or None"),
+    ("session.model.get_sites_cart()", "coordinates, as flex"),
+]
+
+#: Ways to look something up, rather than things that are bound.
+CONSOLE_EXPLORING = [
+    ("session.<Tab>", "complete a name"),
+    ("obj?", "help on anything"),
+    ("help(obj)", "the same, Python's way"),
+]
+
+
+def console_help(width: int = BANNER_MAX_COLUMNS) -> str:
+    """The console's guide: what is bound, what each thing is, and how to reach cctbx.
+
+    Wrapped to ``width`` because this prints into the controls pane, where prose that
+    wraps mid-word is worse than prose that says less.
+    """
+    import textwrap
+
+    def wrapped(text, indent):
+        pad = " " * indent
+        return textwrap.wrap(text, max(width, indent + 12),
+                             initial_indent=pad, subsequent_indent=pad) or [pad.rstrip()]
+
+    out = wrapped("pxviewer console: an IPython shell with the running app in scope.", 0)
+    for name, description in CONSOLE_NAMES:
+        out += [""] + [name] + wrapped(description, 2)
+    out += ["", "cctbx objects underneath:"]
+    for expression, description in CONSOLE_CCTBX:
+        out += ["  " + expression] + wrapped(description, 4)
+    out += ["", "Looking things up:"]
+    for expression, description in CONSOLE_EXPLORING:
+        out += ["  " + expression] + wrapped(description, 4)
+    out += [""] + wrapped("Anything you change here shows in the viewport "
+                          "immediately.", 0)
+    return "\n".join(out) + "\n"
+
+
+class ConsoleHelp:
+    """``help`` in the console: the guide when called bare, Python's help otherwise.
+
+    Bound over the builtin deliberately, but without taking anything away — ``help()``
+    is what someone types when they want to know what this console *is*, and
+    ``help(obj)`` is what they type when they want the docstring of one thing. The
+    builtin only answers the second, so this answers the first and hands the second
+    straight back to it.
+    """
+
+    def __repr__(self) -> str:      # bare `help` at the prompt, no parentheses
+        return console_help()
+
+    def __call__(self, *args, **kwargs):
+        if not args and not kwargs:
+            print(console_help())
+            return None
+        import pydoc
+
+        return pydoc.help(*args, **kwargs)

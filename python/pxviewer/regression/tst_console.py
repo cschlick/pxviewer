@@ -50,26 +50,75 @@ def exercise_the_console_suppresses_the_kernel_banner():
         console.shutdown()
 
 
-def exercise_the_banner_fits_the_pane():
-    """The console sits in the controls pane -- about 38 monospace columns. A wider banner
-    wraps mid-sentence, which reads as a mess and is worse than saying less."""
-    from pxviewer.console import BANNER_MAX_COLUMNS, default_banner
+def exercise_the_banner_and_the_guide_fit_the_pane():
+    """The console sits in the controls pane -- about 38 monospace columns. Anything
+    wider wraps mid-sentence, which reads as a mess and is worse than saying less.
+    Holds for the one-line banner and for the guide it points at."""
+    from pxviewer.console import BANNER_MAX_COLUMNS, console_help, default_banner
 
-    too_wide = [l for l in default_banner().splitlines()
-                if len(l) > BANNER_MAX_COLUMNS]
-    assert not too_wide, "these wrap in the console: %s" % too_wide
+    for name, text in (("banner", default_banner()), ("help()", console_help())):
+        too_wide = [l for l in text.splitlines() if len(l) > BANNER_MAX_COLUMNS]
+        assert not too_wide, "these wrap in the console (%s): %s" % (name, too_wide)
 
 
-def exercise_the_banner_points_at_the_names_in_scope():
-    """It names what is actually bound, and where the cctbx objects are: a banner that
-    advertises something not there, or that returns None, is worse than none."""
+def exercise_the_banner_points_at_the_guide():
+    """One line, naming the one thing to type. It used to be the whole guide squeezed
+    into the pane's width, which is how it came to advertise app.group_mmm(g) with no
+    way to obtain g."""
     from pxviewer.console import default_banner
 
     banner = default_banner()
-    assert "session" in banner and "app" in banner
-    assert "session.model" in banner        # the cctbx mmtbx.model.manager
-    assert "group_mmm" in banner            # the cctbx map_model_manager
-    assert "numpy" not in banner and "np =" not in banner
+    assert "help()" in banner
+    assert len(banner.strip().splitlines()) == 1, banner
+    assert "group_mmm" not in banner
+
+
+def exercise_the_guide_runs_what_it_advertises():
+    """Every cctbx expression in the guide is runnable *as written* against a real
+    session -- no placeholder argument to invent. The old banner's app.group_mmm(g)
+    was not, which is the whole reason this exists."""
+    from pxviewer.console import CONSOLE_CCTBX, console_help
+    from pxviewer.desktop import DesktopApp
+    from pxviewer.live import LiveSession
+    from pxviewer.regression.tst_utils import data_path, dispose
+
+    app = DesktopApp(port=0)
+    try:
+        app._add_model(LiveSession.from_model_file(data_path("1ubq.pdb")), "1ubq")
+        session = app.active_model_session()
+        scope = {"app": app, "session": session}
+        for expression, _description in CONSOLE_CCTBX:
+            eval(expression, {}, scope)          # noqa: S307 - our own literals
+            assert expression in console_help(), expression
+        # And the one the guide leans on hardest actually answers for a lone model:
+        # None (no map), not an exception about a missing group.
+        assert app.model_mmm() is None
+    finally:
+        dispose(app)
+
+
+def exercise_bare_help_is_the_guide_and_help_of_a_thing_is_pythons():
+    """Binding over the builtin has to take nothing away: help() is what someone types
+    to learn what this console is, help(obj) is what they type for one docstring."""
+    import contextlib
+    import io
+
+    from pxviewer.console import ConsoleHelp
+
+    helper = ConsoleHelp()
+    assert "cctbx objects underneath" in repr(helper)       # bare `help`, no parens
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        helper()
+    assert "cctbx objects underneath" in buf.getvalue()
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        helper(dict.get)
+    text = buf.getvalue()
+    assert "cctbx objects underneath" not in text, "help(obj) hijacked by the guide"
+    assert "get" in text.lower()
 
 
 def run():

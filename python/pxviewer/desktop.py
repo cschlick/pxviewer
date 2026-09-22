@@ -4326,6 +4326,9 @@ class ControlsWindow:
                 "session": self._desktop.active_model_session(),
                 "np": np,
                 "api": ApiGuide(LiveSession),
+                # Over the builtin, and taking nothing from it: bare help() is the
+                # console's guide, help(obj) is still Python's (see ConsoleHelp).
+                "help": console_mod.ConsoleHelp(),
             }
             self._console = console_mod.EmbeddedConsole(
                 namespace, banner=console_mod.default_banner()
@@ -9282,6 +9285,17 @@ class DesktopApp:
         self._tug_model = None
         self._tug_session = None
         self._tug_last = None
+
+    def model_mmm(self, mid: Optional[str] = None) -> Any:
+        """The cctbx ``map_model_manager`` a model belongs to, or None (active by default).
+
+        The console's way in to cctbx. :meth:`group_mmm` wants a *group* id, which
+        nothing public hands out — so the console's own banner ended up advertising
+        ``app.group_mmm(g)`` with no way to obtain ``g``. This asks the question people
+        actually have: give me the manager for this model.
+        """
+        entry = self._model_entry(self._active_model_id if mid is None else mid)
+        return self.group_mmm(entry.get("group")) if entry is not None else None
 
     def map_for_model(self, mid: Optional[str] = None) -> Any:
         """The map this model is paired with, or None.
