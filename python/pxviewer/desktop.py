@@ -1841,14 +1841,14 @@ class ControlsWindow:
         map_tools = QGroupBox("Map tools")
         map_layout = QVBoxLayout(map_tools)
         map_layout.addWidget(QLabel("Maps computed from what you already have:"))
-        self._localres_btn = self._make_icon_button(
-            "palette", "Local res",
+        self._localres_btn = self._make_text_button(
+            "Local resolution",
             "Calculate local resolution from two half-maps and colour the map by it")
         self._localres_btn.clicked.connect(self._on_localres_wizard)
         map_row = QHBoxLayout()
         map_row.addWidget(self._localres_btn)
-        self._rs_diff_btn = self._make_icon_button(
-            "combine", "Difference",
+        self._rs_diff_btn = self._make_text_button(
+            "Difference",
             "Real-space difference map: the density the model predicts, subtracted from "
             "the map. Green is density the model does not account for, red is model with "
             "no map under it — the mFo-DFc reading, but computed from a map and a model "
@@ -5298,6 +5298,24 @@ class ControlsWindow:
         if square:
             side = icon_size + 16
             b.setFixedSize(side, side)
+        return b
+
+    def _make_text_button(self, text, tooltip, *, checkable=False):
+        """A button that says what it does, styled like the icon buttons beside it.
+
+        For actions no glyph names honestly. "Difference" and "Local resolution" are
+        whole operations with wordy results; a picture of either is a guess the reader
+        has to decode, and the two we had were a merge symbol and a palette. Deliberate
+        text, rather than the text :meth:`_make_icon_button` falls back to when an icon
+        asset happens to be missing -- which is how this row ended up with one worded
+        button beside one glyph.
+        """
+        from PySide6.QtWidgets import QPushButton
+
+        b = QPushButton(text)
+        b.setCheckable(checkable)
+        b.setStyleSheet(_icon_button_base_qss())
+        b.setToolTip(tooltip)
         return b
 
     def _on_help(self) -> None:

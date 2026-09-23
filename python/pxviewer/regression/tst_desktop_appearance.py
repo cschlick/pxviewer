@@ -1031,8 +1031,14 @@ def exercise_scene_actions_are_icon_buttons():
         assert len(buttons) == 9
         assert all(not b.icon().isNull() and b.text() == "" for b in buttons)
 
+        # Map tools say what they do in words -- deliberately, not as the fallback
+        # _make_icon_button uses when an asset is missing, which is how this row came to
+        # have one worded button beside one glyph. Neither operation has an honest
+        # picture: the guesses were a merge symbol and a palette.
         assert controls._tabs.widget(1).isAncestorOf(controls._localres_btn)   # Tools
-        assert controls._localres_btn.text() == "Local res"
+        for button in (controls._localres_btn, controls._rs_diff_btn):
+            assert button.text() in ("Local resolution", "Difference"), button.text()
+            assert button.icon().isNull(), "%s took an icon" % button.text()
         assert not controls._tabs.isAncestorOf(controls._reset_view_btn)   # utility row
         assert not controls._tabs.isAncestorOf(controls._picture_btn)
 
