@@ -132,6 +132,17 @@ Open a map (or the cryo-EM tutorial data).
    - **Watch for:** ONE row appears for it, not two — a difference map is one map drawn
      at +level and −level; and its eye hides **both** the green and the red contour.
      Red left on screen with nothing in the list owning it is the bug this checks.
+7. With the difference map focused, drag the **Level** slider.
+   - **Watch for:** both contours tighten together, and the **− level** row below
+     follows it — one number shown in two places, which is the classic ±3σ reading.
+8. Now drag the **− level** slider on its own.
+   - **Watch for:** only the red contour changes; **Link** lights up; the main Level
+     slider no longer drags the red one along. Click **Link** and the red contour snaps
+     back to the green one's level and the button greys out again.
+9. Untick **Negative contour**.
+   - **Watch for:** the red contour goes, the green stays, and the − level row greys
+     out. Toggle the map's own eye off and on — the red must **stay** off, because
+     "just the green one" is a reading of the map, not a half-hidden object.
 
 ## Pass 5 — Selection and oriented focus (10 min)
 

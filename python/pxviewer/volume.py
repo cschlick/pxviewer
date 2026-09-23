@@ -51,8 +51,12 @@ class Volume:
     #: A second isosurface at the negative of ``isosurface_value``, in its own color.
     #: A difference map is only readable as a pair — green where the density wants more
     #: than the model has, red where it wants less — so both contours are one object,
-    #: sharing one download and one level.
+    #: sharing one download.
     negative_color: str | None = None
+    #: The magnitude the negative contour sits at, when it should not simply mirror
+    #: ``isosurface_value``. The two features are not obliged to be equally strong, so a
+    #: level that reads the green well can over- or under-contour the red.
+    negative_isosurface_value: float | None = None
     opacity: float | None = 1.0
     style: VolumeStyle | None = "surface"
     position: tuple[float, float, float] | None = None
@@ -235,7 +239,9 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         # A sibling of the first, so the map is downloaded and parsed once.
         negative_kwargs = dict(repr_kwargs)
         key = "absolute_isovalue" if volume.isosurface_kind == "absolute" else "relative_isovalue"
-        negative_kwargs[key] = -volume.isosurface_value
+        magnitude = (volume.isosurface_value if volume.negative_isosurface_value is None
+                     else volume.negative_isosurface_value)
+        negative_kwargs[key] = -magnitude
         negative = mvs_volume.representation(**negative_kwargs, ref=f"{ref}{NEGATIVE_REF_SUFFIX}")
         negative = negative.color(color=volume.negative_color)
         if volume.opacity is not None:

@@ -211,6 +211,52 @@ def exercise_a_reshown_volume_is_not_replayed():
         run_client(scenario)
 
 
+def exercise_the_negative_contour_is_addressable_on_its_own():
+    """A difference map's two contours share a download and an object row, but they are
+    two readings -- unexplained density, and a model on nothing -- so each has to be
+    reachable alone: its own level, and its own on/off."""
+    with session() as live:
+        async def scenario():
+            async with client(live) as ws:
+                live.set_volume_negative_iso("vol1", 1.8)
+                assert await next_text(ws, "volume_negative_iso") == {
+                    "type": "volume_negative_iso", "ref": "vol1", "value": 1.8}
+
+                # None re-links it to the positive level; the viewer reads that level off
+                # the positive contour rather than being told it again.
+                live.set_volume_negative_iso("vol1", None)
+                assert await next_text(ws, "volume_negative_iso") == {
+                    "type": "volume_negative_iso", "ref": "vol1", "value": None}
+
+                live.set_volume_negative_visible("vol1", False)
+                assert await next_text(ws, "volume_negative_visible") == {
+                    "type": "volume_negative_visible", "ref": "vol1", "value": False}
+
+        run_client(scenario)
+
+
+def exercise_a_detached_negative_contour_survives_a_late_client():
+    """The viewer keeps its own copy of the detached level, because the scroll wheel
+    changes the positive one without the panel in the loop -- and a viewport reload is a
+    new client, which would otherwise re-mirror it. Only the off state of the switch
+    replays: on is the scene's default, as for any volume."""
+    with session() as live:
+        live.set_volume_negative_iso("vol30", 1.25)
+        live.set_volume_negative_visible("vol31", False)
+        live.set_volume_negative_visible("vol32", False)
+        live.set_volume_negative_visible("vol32", True)        # back to the default
+
+        async def scenario():
+            async with client(live) as ws:
+                assert await next_text(ws, "volume_negative_iso") == {
+                    "type": "volume_negative_iso", "ref": "vol30", "value": 1.25}
+                message = await next_text(ws, "volume_negative_visible")
+                assert message["ref"] == "vol31", (
+                    "replayed a negative contour that is shown: %r" % message)
+
+        run_client(scenario)
+
+
 def exercise_a_level_change_is_one_float_not_a_regrid():
     """set_localres_iso sends the number; the grids stay where they already are.
 

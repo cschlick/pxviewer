@@ -116,6 +116,26 @@ def exercise_a_difference_map_is_drawn_at_both_signs():
     assert colors == ["green", "red"]
 
 
+def exercise_a_detached_negative_contour_keeps_its_own_level():
+    """The two contours mirror by default, but they answer different questions -- density
+    the model does not account for, versus a model sitting on nothing -- and are not
+    obliged to be equally strong. A level that reads one can over-contour the other, so
+    the negative side can be given a magnitude of its own and the scene must compose it
+    there rather than at minus the positive level."""
+    if not have("molviewspec"):
+        print("  skipping: molviewspec not available")
+        return
+    from pxviewer.volume import Volume
+
+    nodes = scene_tree(Volume(url="d.map", ref="v1", isosurface_value=3.0,
+                              color="green", negative_color="red",
+                              negative_isosurface_value=1.8))
+    reprs = [n for n in nodes if n["kind"] == "volume_representation"]
+    assert [r["params"]["relative_isovalue"] for r in reprs] == [3.0, -1.8]
+    # Still one download and one parse: detaching a level does not split the object.
+    assert len([n for n in nodes if n["kind"] == "download"]) == 1
+
+
 def exercise_a_regular_map_has_one_contour():
     """Only difference maps have a negative side worth drawing; a 2Fo-Fc map's would be
     noise, and a second isosurface is not free."""

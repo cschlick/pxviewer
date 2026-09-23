@@ -485,6 +485,12 @@ class LiveSession:
         # render skip broadcast in place, but every viewport reload connects a *new*
         # client -- without replay, each reload silently redraws every hidden map.
         self._volume_visibility: Dict[str, bool] = {}
+        # A difference map's negative contour, when it has been detached from the
+        # positive one: ref -> magnitude in sigma, and the refs whose negative contour
+        # is switched off. Both are replayed to late clients for the same reason the
+        # visibility map is (a viewport reload is a new client).
+        self._volume_negative_iso: Dict[str, float] = {}
+        self._volume_negative_hidden: Dict[str, bool] = {}
         # The localres display-resolution factor, replayed to late clients *before* the
         # payload so the first build already uses it (control messages are applied ahead
         # of the queued binary payload on the client).
@@ -1147,6 +1153,34 @@ class LiveSession:
         replay, every reload redrew every hidden map. Thread-safe."""
         self._volume_visibility[str(ref)] = bool(visible)
         message = json.dumps({"type": "volume_visible", "ref": str(ref), "value": bool(visible)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_negative_visible(self, ref: str, visible: bool) -> None:
+        """Show or hide only a difference map's negative contour, by reference.
+
+        Half a difference map is a legitimate thing to want on screen, so this is
+        independent of the map's own visibility and survives it being toggled. Recorded
+        and replayed to late clients. Thread-safe."""
+        self._volume_negative_hidden[str(ref)] = not bool(visible)
+        message = json.dumps(
+            {"type": "volume_negative_visible", "ref": str(ref), "value": bool(visible)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_negative_iso(self, ref: str, value: Optional[float]) -> None:
+        """Give a difference map's negative contour its own level (a magnitude in sigma),
+        or ``None`` to put it back to mirroring the positive one.
+
+        Recorded and replayed to late clients. Thread-safe."""
+        if value is None:
+            self._volume_negative_iso.pop(str(ref), None)
+        else:
+            self._volume_negative_iso[str(ref)] = float(value)
+        message = json.dumps({"type": "volume_negative_iso", "ref": str(ref),
+                              "value": None if value is None else float(value)})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -2176,6 +2210,15 @@ class LiveSession:
                 if not shown:
                     await self._locked_send(websocket, json.dumps(
                         {"type": "volume_visible", "ref": ref, "value": False}))
+            # A detached negative level is composed into the scene, but the viewer keeps
+            # its own copy to serve wheel-driven level changes -- so it has to be told.
+            for ref, level in list(self._volume_negative_iso.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_negative_iso", "ref": ref, "value": level}))
+            for ref, hidden in list(self._volume_negative_hidden.items()):
+                if hidden:
+                    await self._locked_send(websocket, json.dumps(
+                        {"type": "volume_negative_visible", "ref": ref, "value": False}))
             if self._clashes:
                 await self._locked_send(
                     websocket, json.dumps({"type": "clashes", "action": "set", "pairs": self._clashes})

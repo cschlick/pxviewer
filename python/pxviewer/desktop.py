@@ -3384,6 +3384,7 @@ class ControlsWindow:
         self._clear_layout(self._appearance_layout)
         self._focused = (kind, ident) if it else (None, None)
         self._iso_row = None  # rebuilt below only when a volume is focused
+        self._neg_iso_row = None  # ...and only a difference map gets this one
         if it is None:
             # Reset the title too: leaving the old object's name over an empty-state hint
             # made the pane look like it was still editing something.
@@ -3605,9 +3606,15 @@ class ControlsWindow:
             def _set_iso(v, it=it):
                 it["iso"] = v
                 self._safe(lambda: self._desktop.set_volume_iso(vid, v))
+                # While the negative contour is linked it *is* this level, so its widgets
+                # come along: the panel must never show two numbers for one setting.
+                if self._neg_iso_row is not None and it.get("negative_iso") is None:
+                    self._show_iso_value(self._neg_iso_row, v)
 
             self._iso_row = self._add_iso_row(live.get("iso"), _set_iso,
                                               max_sigma=live.get("max_sigma"))
+            if live.get("negative_color"):
+                self._neg_iso_row = self._add_negative_contour_rows(vid, it, live)
 
             def _set_clip(front, back, it=it):
                 it["clip"] = (front, back)
@@ -3651,6 +3658,83 @@ class ControlsWindow:
         self._safe(lambda: self._desktop.set_volume_scroll_target(
             it["id"] if it["kind"] == "volume" else None))
 
+    @staticmethod
+    def _show_iso_value(row, value) -> None:
+        """Move a level row's widgets to ``value`` without emitting a change.
+
+        Used wherever the level moved somewhere else and the panel is only catching up —
+        the viewport wheel, or a linked negative contour following the positive one.
+        Writing it back would round-trip the change that caused it.
+        """
+        row["syncing"]["on"] = True
+        try:
+            row["slider"].setValue(
+                min(row["slider"].maximum(), int(round(value / _ISO_RESOLUTION))))
+            row["spin"].setValue(value)
+        finally:
+            row["syncing"]["on"] = False
+
+    def _add_negative_contour_rows(self, vid, it, live):
+        """A difference map's negative contour: its own switch, and its own level.
+
+        Both answer complaints about the pair being welded together. The red contour is a
+        different finding from the green one — density the model does not account for
+        versus a model sitting on nothing — and the two are not obliged to be equally
+        strong, so one knob driving both means a level that reads one over-contours the
+        other. Switching the red off is the other half: "just show me the green" is a
+        reading of a difference map, not a half-hidden object.
+
+        The level stays *linked* until the user touches it, so a difference map still
+        opens contoured at ±3 sigma and behaves exactly as it always did for anyone who
+        never reaches for this row. "Link" puts it back.
+        """
+        from PySide6.QtWidgets import QCheckBox, QPushButton
+
+        shown = bool(live.get("negative_visible", True))
+        detached = live.get("negative_iso") is not None
+        it["negative_iso"] = live.get("negative_iso")
+
+        check = QCheckBox("Negative contour")
+        check.setChecked(shown)
+        check.setToolTip(
+            "Draw the second contour, at the other sign. Off leaves only the positive "
+            "one — which is the map read for unexplained density alone.")
+        self._appearance_layout.addWidget(check)
+
+        link = QPushButton("Link")
+        link.setToolTip("Put the negative contour back to the level above.")
+        link.setEnabled(detached)
+
+        def _set_neg_iso(v, it=it):
+            it["negative_iso"] = float(v)
+            link.setEnabled(True)
+            self._safe(lambda: self._desktop.set_volume_negative_iso(vid, float(v)))
+
+        row = self._add_iso_row(
+            live.get("negative_iso") if detached else live.get("iso"), _set_neg_iso,
+            max_sigma=live.get("max_sigma"), label="− level", tail=link)
+        row["slider"].setEnabled(shown)
+        row["spin"].setEnabled(shown)
+        link.setEnabled(detached and shown)
+
+        def _relink(_=False, it=it):
+            it["negative_iso"] = None
+            link.setEnabled(False)
+            self._show_iso_value(row, it.get("iso") or 0.0)
+            self._safe(lambda: self._desktop.set_volume_negative_iso(vid, None))
+
+        def _toggle(state, it=it):
+            on = bool(state)
+            it["negative_visible"] = on
+            row["slider"].setEnabled(on)
+            row["spin"].setEnabled(on)
+            link.setEnabled(on and it.get("negative_iso") is not None)
+            self._safe(lambda: self._desktop.set_volume_negative_visible(vid, on))
+
+        link.clicked.connect(_relink)
+        check.toggled.connect(_toggle)
+        return row
+
     def _on_volume_iso_changed(self, payload) -> None:
         """A contour level was changed in the viewport (the wheel): show it here.
 
@@ -3663,15 +3747,9 @@ class ControlsWindow:
         item = self._find_item("volume", vid)
         if item is not None and not item.get("visible", True):
             return  # a hidden map is parked at an empty contour; ignore stray wheel echoes
-        row = self._iso_row
-        row["syncing"]["on"] = True
-        try:
-            row["slider"].setValue(
-                min(row["slider"].maximum(), int(round(value / _ISO_RESOLUTION))))
-            row["spin"].setValue(value)
-        finally:
-            row["syncing"]["on"] = False
-        item = self._find_item("volume", vid)
+        self._show_iso_value(self._iso_row, value)
+        if self._neg_iso_row is not None and (item or {}).get("negative_iso") is None:
+            self._show_iso_value(self._neg_iso_row, value)  # linked: it moved too
         if item is not None:
             item["iso"] = value
 
@@ -4053,7 +4131,8 @@ class ControlsWindow:
         self._appearance_layout.addWidget(group)
         return group
 
-    def _add_iso_row(self, current, on_change, max_sigma=None):
+    def _add_iso_row(self, current, on_change, max_sigma=None, label="Level",
+                     tail=None):
         """Contour level: a slider to hunt with, a spinbox for the exact value.
 
         Both are wanted. The slider is how you actually find a level — you watch the map,
@@ -4082,7 +4161,7 @@ class ControlsWindow:
 
         value = DEFAULT_ISO_SIGMA if current is None else float(current)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Level"))
+        row.addWidget(QLabel(label))
         # (The scroll wheel adjusts this — said once in the gesture legend at the bottom
         # and in the spin box's tooltip, rather than a chip that eats space on every map.)
 
@@ -4128,6 +4207,8 @@ class ControlsWindow:
         spin.valueChanged.connect(from_spin)
         row.addWidget(slider, stretch=1)
         row.addWidget(spin)
+        if tail is not None:
+            row.addWidget(tail)
         self._appearance_layout.addLayout(row)
         return {"slider": slider, "spin": spin, "syncing": syncing}
 
@@ -7154,6 +7235,7 @@ class DesktopApp:
                 # would mean something different for every structure.
                 isosurface_kind=v.get("iso_kind", "relative"), isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
+                negative_isosurface_value=v.get("negative_iso"),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
             ))
@@ -10031,6 +10113,50 @@ class DesktopApp:
         self._volume_command(vid, "negative_color", color,
                              lambda c, ref, v: c.set_volume_negative_color(ref, v))
 
+    def set_volume_negative_iso(self, vid: str, value: Optional[float]) -> None:
+        """Give a difference map's negative contour its own level, in sigma, live.
+
+        ``value`` is a *magnitude* -- the same number the Level control shows, applied at
+        the other sign -- and ``None`` re-links it to the positive level. The two are
+        linked until this is called with a number, so the default reading of a difference
+        map ("contour at 3 sigma", both ways) is unchanged for anyone who never touches
+        the second control.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None or not entry.get("negative_color"):
+            return
+        value = None if value is None else float(value)
+        if entry.get("negative_iso") == value:
+            return
+        entry["negative_iso"] = value
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_negative_iso(
+                    entry["ref"],
+                    None if value is None else self._iso_for_wire(entry, value))
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def set_volume_negative_visible(self, vid: str, visible: bool) -> None:
+        """Show or hide only a difference map's negative contour.
+
+        Independent of the map's own visibility: "just the green one" is a reading of a
+        difference map, not a half-hidden object, so it survives the map being toggled.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None or not entry.get("negative_color"):
+            return
+        if entry.get("negative_visible", True) == bool(visible):
+            return
+        entry["negative_visible"] = bool(visible)
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_negative_visible(entry["ref"], bool(visible))
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     def save_screenshot(self, path: str) -> None:
         """Render the viewport and write it to ``path`` as a PNG.
 
@@ -10074,7 +10200,8 @@ class DesktopApp:
             return {}
         out = {key: entry.get(key)
                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
-                           "radius")}
+                           "radius", "negative_color", "negative_iso")}
+        out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
         # The Level slider spans up to here, so its right end genuinely empties the map.
         try:
@@ -10404,6 +10531,10 @@ class DesktopApp:
             "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": style, "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color, "iso_kind": iso_kind,
+            # A difference map's negative contour: None means it mirrors the level above,
+            # which is the classic reading and stays true until the user reaches for the
+            # second control. Its own on/off, so half a difference map can be shown.
+            "negative_iso": None, "negative_visible": True,
         })
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()

@@ -28,7 +28,7 @@ QAPP = qt_application()
 from PySide6.QtCore import Qt                        # noqa: E402
 from PySide6.QtGui import QColor, QPalette           # noqa: E402
 from PySide6.QtWidgets import (                      # noqa: E402
-    QApplication, QComboBox, QLabel, QPushButton)
+    QApplication, QCheckBox, QComboBox, QLabel, QPushButton)
 
 from pxviewer.desktop import (                       # noqa: E402
     _CUSTOM_COLOR, _MODEL_REP_OPTIONS, _TREE_MAX_HEIGHT, _TREE_MIN_HEIGHT,
@@ -68,6 +68,14 @@ class Recording_session(LiveSession):
     def set_volume_visible(self, ref, visible):
         self.volume_commands.append(("visible", ref, visible))
         return super(Recording_session, self).set_volume_visible(ref, visible)
+
+    def set_volume_negative_iso(self, ref, value):
+        self.volume_commands.append(("negative_iso", ref, value))
+        return super(Recording_session, self).set_volume_negative_iso(ref, value)
+
+    def set_volume_negative_visible(self, ref, visible):
+        self.volume_commands.append(("negative_visible", ref, visible))
+        return super(Recording_session, self).set_volume_negative_visible(ref, visible)
 
 
 @contextlib.contextmanager
@@ -143,6 +151,150 @@ def exercise_volume_appearance_controls():
         controls._update_appearance(None, None)
         assert controls._iso_row is None
         assert app._volume_scroll_target is None
+
+
+def _isovalues(scene):
+    """Every contour level in a composed MVSJ scene."""
+    import json
+
+    found = []
+
+    def walk(node):
+        params = node.get("params") or {}
+        if "relative_isovalue" in params:
+            found.append(params["relative_isovalue"])
+        for child in node.get("children") or []:
+            walk(child)
+
+    walk(json.loads(scene)["root"])
+    return found
+
+
+def diff_blob(app, name="diff"):
+    """A map with a negative contour -- what a difference map is, minus the arithmetic."""
+    return app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), name,
+                           negative_color="red", color="green", iso=3.0)
+
+
+def exercise_a_difference_maps_contours_are_linked_until_one_is_touched():
+    """One slider for two contours is the classic reading of a difference map, and the
+    default stays that: ANY level change moves both, and the panel shows one number in
+    two places rather than two numbers for one setting.
+
+    But the contours answer different questions -- density the model does not account
+    for, versus a model sitting on nothing -- so they are not obliged to be equally
+    strong. Touching the second level detaches it and it stays put; "Link" re-couples it.
+    """
+    with desktop() as app:
+        app._add_model(Recording_session.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        session = app._control_session()
+        vid = diff_blob(app)
+        entry = app._volume_entry(vid)
+        assert entry["negative_iso"] is None, "it must open linked"
+
+        controls = app._controls
+        controls._update_appearance("volume", vid)
+        neg = controls._neg_iso_row
+        assert neg is not None, "a difference map gets its own level row"
+        assert neg["spin"].value() == 3.0, "linked, so it shows the positive level"
+
+        # Linked: the main level drags it along, without a command of its own -- the
+        # viewer mirrors it, so a second message would say the same thing twice.
+        session.volume_commands = []
+        controls._iso_row["spin"].setValue(4.0)
+        assert entry["iso"] == 4.0 and entry["negative_iso"] is None
+        assert neg["spin"].value() == 4.0
+        assert session.volume_commands == [("iso", entry["ref"], 4.0)]
+
+        # Touched: it detaches and the map keeps both numbers.
+        session.volume_commands = []
+        neg["spin"].setValue(1.5)
+        assert entry["negative_iso"] == 1.5
+        assert session.volume_commands == [("negative_iso", entry["ref"], 1.5)]
+        controls._iso_row["spin"].setValue(5.0)
+        assert entry["iso"] == 5.0
+        assert entry["negative_iso"] == 1.5, "the main level moved a detached contour"
+        assert neg["spin"].value() == 1.5
+
+        # ...and the scene composes it there, so a rebuild does not re-mirror it.
+        levels = sorted(_isovalues(scene_text(app)))
+        assert levels == [-1.5, 5.0], levels
+
+        # Link puts it back, and to the level that is actually showing.
+        link = next(b for b in controls._appearance_box.findChildren(QPushButton)
+                    if b.text() == "Link")
+        assert link.isEnabled()
+        session.volume_commands = []
+        link.click()
+        assert entry["negative_iso"] is None
+        assert neg["spin"].value() == 5.0
+        assert not link.isEnabled()
+        # None, not the number: the viewer reads the level off the positive contour, so
+        # the two genuinely agree rather than agreeing to the panel's rounding.
+        assert session.volume_commands == [("negative_iso", entry["ref"], None)]
+
+
+def exercise_the_negative_contour_has_its_own_switch():
+    """"Just the green one" is a reading of a difference map, not a half-hidden object,
+    so it is independent of the map's own eye and survives it being toggled."""
+    with desktop() as app:
+        app._can_hide = True
+        app._add_model(Recording_session.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        session = app._control_session()
+        vid = diff_blob(app)
+        entry = app._volume_entry(vid)
+        assert entry["negative_visible"] is True
+
+        controls = app._controls
+
+        def switch():
+            return next(c for c in controls._appearance_box.findChildren(QCheckBox)
+                        if c.text() == "Negative contour")
+
+        controls._update_appearance("volume", vid)
+        assert switch().isChecked()
+
+        session.volume_commands = []
+        switch().setChecked(False)
+        assert entry["negative_visible"] is False
+        assert session.volume_commands == [("negative_visible", entry["ref"], False)]
+        # The level row goes with it: contouring something not drawn means nothing.
+        assert not controls._neg_iso_row["spin"].isEnabled()
+
+        # The map's own visibility is a separate axis, and neither reaches the other.
+        app.set_volume_visible(vid, False)
+        assert entry["negative_visible"] is False
+        app.set_volume_visible(vid, True)
+        assert entry["negative_visible"] is False, (
+            "showing the map undid a deliberate 'just the positive contour'")
+
+        # A rebuilt pane reads the switch back off the map, not off its own default.
+        controls._update_appearance("volume", vid, force=True)
+        assert not switch().isChecked()
+        assert not controls._neg_iso_row["spin"].isEnabled()
+
+        switch().setChecked(True)
+        assert entry["negative_visible"] is True
+        assert controls._neg_iso_row["spin"].isEnabled()
+
+
+def exercise_a_plain_map_has_no_negative_contour_controls():
+    """They are the difference map's, and a map with one contour has nothing to
+    decouple -- two dead rows on every 2Fo-Fc map would be worse than none."""
+    with desktop() as app:
+        vid = blob(app)
+        controls = app._controls
+        controls._update_appearance("volume", vid)
+        assert controls._iso_row is not None
+        assert controls._neg_iso_row is None
+        assert not [c for c in controls._appearance_box.findChildren(QCheckBox)
+                    if c.text() == "Negative contour"]
+        # And the setters refuse it rather than inventing a contour that is not drawn.
+        app.set_volume_negative_iso(vid, 2.0)
+        app.set_volume_negative_visible(vid, False)
+        entry = app._volume_entry(vid)
+        assert entry.get("negative_iso") is None
+        assert entry.get("negative_visible", True) is True
 
 
 def exercise_a_contour_changed_in_the_viewport_is_not_echoed_back():

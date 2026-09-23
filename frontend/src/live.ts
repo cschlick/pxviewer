@@ -2854,24 +2854,80 @@ async function setVolumeStyle(plugin: PluginContext, ref: string, style: string)
     });
 }
 
-/** Contour level, in sigma. Mol* does the sigma scaling, so the value means the same
- *  thing for any map — which is why a fixed slider range works.
+/** Per-map state for the negative contour, held here because the level also moves from
+ *  the scroll wheel (which knows only the map it is over, not what the panel has set).
  *
- *  A difference map's second contour takes the negative of it: one level, read both
- *  ways, which is what "contour at 3 sigma" means for such a map.
+ *  `negativeIsoOverride` holds a *magnitude*: present means the negative contour has been
+ *  detached and sits at minus that, absent means it mirrors the positive level — which is
+ *  the default, and what "contour at 3 sigma" classically means for a difference map.
+ *  `negativeHidden` is the same idea for visibility: half a difference map is a legitimate
+ *  thing to want on screen, so hiding the red one must survive the map being toggled.
+ *  Both are re-asserted by the desktop after a scene reload; these copies serve the
+ *  viewer-side changes in between.
  */
-async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (!repr) return;
-    const setTo = (v: number) => (old: any) => {
+const negativeIsoOverride = new Map<string, number>();
+const negativeHidden = new Set<string>();
+
+function isoParams(v: number) {
+    return (old: any) => {
         if (old.type?.name === 'isosurface') {
             old.type.params.isoValue = { kind: 'relative', relativeValue: v };
         }
     };
-    const build = plugin.state.data.build().to(repr.transform.ref).update(setTo(value));
+}
+
+/** Contour level, in sigma. Mol* does the sigma scaling, so the value means the same
+ *  thing for any map — which is why a fixed slider range works.
+ *
+ *  A difference map's second contour follows at the negative of it, unless it has been
+ *  given a level of its own (see setVolumeNegativeIso).
+ */
+async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
+    const repr = await findVolumeReprCell(plugin, ref);
+    if (!repr) return;
+    const build = plugin.state.data.build().to(repr.transform.ref).update(isoParams(value));
     const negative = findVolumeNegativeReprCell(plugin, ref);
-    if (negative) build.to(negative.transform.ref).update(setTo(-value));
+    if (negative) {
+        build.to(negative.transform.ref)
+            .update(isoParams(-(negativeIsoOverride.get(ref) ?? value)));
+    }
     await build.commit();
+}
+
+/** Give a difference map's negative contour its own level (a magnitude in sigma), or
+ *  `null` to put it back to mirroring the positive one.
+ *
+ *  The two features a difference map shows are not obliged to be equally strong, and one
+ *  knob driving both at once means a level that reads the green well over-contours the
+ *  red, or the reverse. */
+async function setVolumeNegativeIso(plugin: PluginContext, ref: string, value: number | null) {
+    if (value === null) negativeIsoOverride.delete(ref);
+    else negativeIsoOverride.set(ref, value);
+    const negative = findVolumeNegativeReprCell(plugin, ref);
+    if (!negative) return;
+    let magnitude = value;
+    if (magnitude === null) {
+        // Re-linked: read the level off the positive contour rather than trusting a
+        // number from the panel, so the two genuinely agree afterwards.
+        const repr = await findVolumeReprCell(plugin, ref);
+        const iso = repr?.transform?.params?.type?.params?.isoValue;
+        if (iso === undefined) return;
+        magnitude = typeof iso.relativeValue === 'number' ? iso.relativeValue : null;
+        if (magnitude === null) return;
+    }
+    await plugin.state.data.build().to(negative.transform.ref)
+        .update(isoParams(-magnitude)).commit();
+}
+
+/** Show or hide only a difference map's negative contour. */
+async function setVolumeNegativeVisible(plugin: PluginContext, ref: string, visible: boolean) {
+    if (visible) negativeHidden.delete(ref);
+    else negativeHidden.add(ref);
+    const negative = findVolumeNegativeReprCell(plugin, ref);
+    if (!negative) return;
+    const repr = await findVolumeReprCell(plugin, ref);
+    const mapShown = repr ? repr.state?.isHidden !== true : true;
+    setSubtreeVisibility(plugin.state.data, negative.transform.ref, !(visible && mapShown));
 }
 
 async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
@@ -2888,10 +2944,16 @@ async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boo
     // ...and its negative lobe, which is the same map. A difference map is drawn as two
     // contours at +level and -level; hiding only the positive one left the red half on
     // screen with nothing in the object list still claiming to own it. Colour is the one
-    // thing the two deliberately do NOT share (see setVolumeColor); level, opacity and
-    // now visibility all belong to the map, not to one of its lobes.
+    // thing the two deliberately do NOT share (see setVolumeColor); opacity and
+    // visibility belong to the map, not to one of its lobes.
+    //
+    // A negative contour switched off on its own stays off: showing the map again must
+    // not undo a deliberate "just the green one, please".
     const negative = findVolumeNegativeReprCell(plugin, ref);
-    if (negative) setSubtreeVisibility(plugin.state.data, negative.transform.ref, !visible);
+    if (negative) {
+        setSubtreeVisibility(plugin.state.data, negative.transform.ref,
+                             !(visible && !negativeHidden.has(ref)));
+    }
 }
 
 async function setVolumeColor(plugin: PluginContext, ref: string, color: string) {
@@ -3665,6 +3727,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 }
             } else if (msg.type === 'volume_iso' && typeof msg.ref === 'string' && typeof msg.value === 'number') {
                 await setVolumeIso(plugin, msg.ref, msg.value);
+            } else if (msg.type === 'volume_negative_iso' && typeof msg.ref === 'string') {
+                await setVolumeNegativeIso(
+                    plugin, msg.ref, typeof msg.value === 'number' ? msg.value : null);
+            } else if (msg.type === 'volume_negative_visible' && typeof msg.ref === 'string'
+                       && typeof msg.value === 'boolean') {
+                await setVolumeNegativeVisible(plugin, msg.ref, msg.value);
                 if (msg.ref === isoScrollTarget) isoScrollValue = msg.value;
             } else if (msg.type === 'volume_scroll_target') {
                 isoScrollTarget = typeof msg.ref === 'string' ? msg.ref : null;
