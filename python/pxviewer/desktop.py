@@ -3188,21 +3188,42 @@ class ControlsWindow:
         viewer = QGroupBox("Viewer")
         vg = QVBoxLayout(viewer)
 
-        # How much density a map from reflections opens with. 15 A is a starting point,
-        # not a convention we can point at, so it is adjustable rather than baked in.
-        # Any map's own radius is on its Appearance pane; this is only what new ones get.
+        # How much density any map draws around the view center. One setting for all of
+        # them, not a property of each: bounding is a statement about how much density
+        # you want to look at, and having it on some maps and not others left contours
+        # behaving differently with nothing on screen to say why. 15 A is a starting
+        # point, not a convention we can point at, so it is adjustable rather than baked
+        # in. Applies to what is open as well as to what opens next.
+        from PySide6.QtWidgets import QCheckBox
+
+        current = self._desktop.view_radius
         radius_row = QHBoxLayout()
-        radius_row.addWidget(QLabel("Map radius for new maps:"))
+        radius_check = QCheckBox("Draw map density within")
+        radius_check.setChecked(current is not None)
         radius_spin = QDoubleSpinBox()
         radius_spin.setRange(1.0, 200.0)
         radius_spin.setDecimals(0)
         radius_spin.setSingleStep(5.0)
-        radius_spin.setSuffix(" Å")
-        radius_spin.setValue(self._desktop.view_radius_default)
-        radius_spin.setToolTip(
-            "How much density around the view center a map made from reflections opens "
-            "with. Each map's own radius is on its Appearance pane.")
-        radius_spin.valueChanged.connect(self._desktop.set_view_radius_default)
+        radius_spin.setSuffix(" Å of the view center")
+        radius_spin.setValue(_VIEW_RADIUS_DEFAULT if current is None else float(current))
+        radius_spin.setEnabled(current is not None)
+        tip = ("How much density every map draws around the middle of the view. It "
+               "follows the view and edits nothing — the maps stay whole, they are "
+               "just not all drawn at once. Unticked, every map is drawn in full.")
+        radius_check.setToolTip(tip)
+        radius_spin.setToolTip(tip)
+
+        def _apply_radius():
+            self._safe(lambda: self._desktop.set_view_radius(
+                radius_spin.value() if radius_check.isChecked() else None))
+
+        def _radius_toggled(on):
+            radius_spin.setEnabled(bool(on))
+            _apply_radius()
+
+        radius_check.toggled.connect(_radius_toggled)
+        radius_spin.valueChanged.connect(lambda _v: _apply_radius())
+        radius_row.addWidget(radius_check)
         radius_row.addWidget(radius_spin)
         radius_row.addStretch()
         vg.addLayout(radius_row)
@@ -3610,12 +3631,6 @@ class ControlsWindow:
 
             self._add_clip_row(live.get("clip"), _set_clip)
 
-            def _set_radius(radius, it=it):
-                it["radius"] = radius
-                self._safe(lambda: self._desktop.set_volume_radius(vid, radius))
-
-            self._add_radius_row(live.get("radius"), _set_radius)
-
             def _set_mask(radius, it=it):
                 it["mask_radius"] = radius
                 self._safe(lambda: self._desktop.set_volume_mask(vid, radius))
@@ -3775,43 +3790,6 @@ class ControlsWindow:
         row.addWidget(button)
         row.addWidget(combo, stretch=1)
         self._appearance_layout.addLayout(row)
-
-    def _add_radius_row(self, current, on_change):
-        """How much density to draw around the view center.
-
-        The map is untouched — this only stops it being drawn everywhere at once, which
-        is what Coot's map radius is for. It follows the view, so it is closer to
-        clipping than to the mask above it.
-        """
-        from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QHBoxLayout, QLabel
-
-        row = QHBoxLayout()
-        lab = QLabel("Radius")
-        lab.setMinimumWidth(80)
-        row.addWidget(lab)
-        check = QCheckBox("within")
-        check.setToolTip("Draw only the density near the middle of the view.")
-        check.setChecked(current is not None)
-        spin = QDoubleSpinBox()
-        spin.setRange(1.0, 200.0)
-        spin.setDecimals(0)
-        spin.setSingleStep(5.0)
-        spin.setSuffix(" Å")
-        spin.setValue(_VIEW_RADIUS_DEFAULT if current is None else float(current))
-        spin.setEnabled(current is not None)
-
-        def toggled(on):
-            spin.setEnabled(on)
-            on_change(spin.value() if on else None)
-
-        check.toggled.connect(toggled)
-        spin.valueChanged.connect(
-            lambda v: on_change(v) if check.isChecked() else None)
-        row.addWidget(check)
-        row.addWidget(spin)
-        row.addStretch()
-        self._appearance_layout.addLayout(row)
-        return {"check": check, "spin": spin}
 
     def _add_mask_row(self, current, enabled, on_change):
         """Hide density away from the model: a switch and the distance.
@@ -6444,8 +6422,12 @@ class DesktopApp:
         # user seen one of these yet?" — which is what the X-ray tutorial waits on, and what
         # distinguishes a drag that recomputed density from one that merely happened.
         self._diff_boxes = 0
-        # The radius new maps from reflections open with (Settings changes it).
-        self.view_radius_default: float = _VIEW_RADIUS_DEFAULT
+        # How much density any map draws around the view center -- None for all of it.
+        # One setting for every map, not a property of each: bounding is a statement
+        # about how much density you want to look at, and having it on some maps and
+        # not others left contours on screen that behaved differently for no visible
+        # reason. Settings changes it; it applies to what is open and to what opens next.
+        self.view_radius: Optional[float] = _VIEW_RADIUS_DEFAULT
 
         self.bridge = _make_bridge()
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
@@ -9485,13 +9467,7 @@ class DesktopApp:
                     colour, iso, negative = MAP_STYLE[True]   # a difference map is a
                     self._add_volume(                          # difference map, however made
                         data, f"{name} · real-space difference", group=gid,
-                        color=colour, iso=iso, negative_color=negative, style="mesh",
-                        # Opened near the view centre, exactly as a phased difference map
-                        # is. Without it this one meshed its whole box -- twice, since it
-                        # has two contours -- and every nudge of the Level slider paid for
-                        # all of it. The Radius row lifts it for anyone who wants the
-                        # whole box.
-                        radius=self.view_radius_default)
+                        color=colour, iso=iso, negative_color=negative, style="mesh")
                     self._status(f"{name}: real-space difference at ±{iso:g}σ "
                                  "(green unexplained density, red unsupported model)")
                 finally:
@@ -10267,13 +10243,23 @@ class DesktopApp:
         entry["clip"] = clip
         self._send_volume_clip(entry)
 
-    def set_view_radius_default(self, radius: float) -> None:
-        """How much density a map made from reflections opens with.
+    def set_view_radius(self, radius: Optional[float]) -> None:
+        """How much density every map draws around the view center (None = all of it).
 
-        Only what *new* maps get: a map already on screen has its own radius, which the
-        user may have set, and reaching in to change it would be presumptuous.
+        One setting for all of them. It used to be per map, set at creation from a
+        "for new maps" default that reached nothing already open -- so a map from
+        reflections opened bounded, one loaded from a file did not, and a difference map
+        made later followed whichever rule was current. The result was contours that
+        behaved differently with nothing on screen to say why.
+
+        A crystallographic map fills the unit cell and a cryo-EM box is mostly solvent;
+        drawing all of either buries the model. This is the control Coot has for that,
+        and it follows the view rather than editing the map (see set_volume_radius, the
+        per-map primitive this drives).
         """
-        self.view_radius_default = float(radius)
+        self.view_radius = None if radius is None else float(radius)
+        for entry in list(self._volumes):
+            self.set_volume_radius(entry["id"], self.view_radius)
 
     def set_default_model_representation(self, rep: str, shown: bool) -> bool:
         """Persist whether newly opened models include a representation layer."""
@@ -10555,16 +10541,19 @@ class DesktopApp:
 
     def _add_volume(self, data, name: str, *, group: Optional[str] = None,
                     color: Optional[str] = None, iso: Optional[float] = None,
-                    radius: Optional[float] = None,
                     negative_color: Optional[str] = None,
                     iso_kind: str = "relative", style: str = "surface") -> str:
         """Register + show a volume: write its map (via cctbx) and compose the scene.
 
         ``color``/``iso`` override the defaults for maps that have a convention — a
         difference map is green at 3 sigma whatever color the palette is up to.
-        ``radius`` limits drawing to near the view center (see :meth:`set_volume_radius`).
         ``negative_color`` draws a second contour at the negative of the level, which is
         how a difference map is read (see MAP_STYLE).
+
+        Every map opens at the session's view radius (:meth:`set_view_radius`). It is not
+        a per-caller choice: bounding is one setting for every map, and letting each
+        creation path pick its own is what made a map from reflections open bounded and
+        one loaded from a file not.
         """
         self._volume_counter += 1
         vid = f"volume-{self._volume_counter}"
@@ -10577,7 +10566,8 @@ class DesktopApp:
             # map draws a random default from the session's current palette group.
             "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": style, "clip": (0.0, 1.0), "mask_radius": None,
-            "radius": radius, "negative_color": negative_color, "iso_kind": iso_kind,
+            "radius": self.view_radius, "negative_color": negative_color,
+            "iso_kind": iso_kind,
             # A difference map's negative contour is an object in its own right: its own
             # row in the panel, its own pane. Only the level has a tie to the map's --
             # None means "linked", which is the classic +/-n sigma reading and the
@@ -11586,7 +11576,7 @@ class DesktopApp:
                                 mmm.get_map_manager_by_id(map_type),
                                 name=map_type, map_id=map_type),
                             map_type, group=gid, color=color, iso=iso,
-                            radius=self.view_radius_default, negative_color=negative,
+                            negative_color=negative,
                             style="mesh")  # chickenwire: difference lobes stay visible
                 self._status(
                     f"{rentry['name']}: R-work {out['r_work']:.4f}, R-free {out['r_free']:.4f}"
@@ -11738,11 +11728,8 @@ class DesktopApp:
                 color, iso, negative = MAP_STYLE[is_diff]
                 volume = VolumeData.from_map_manager(
                     map_from_coefficients(coefficients), name=root_label(label))
-                # A map from reflections fills the unit cell: open it with a radius,
-                # or the model is lost inside a wall of density.
                 self._add_volume(volume, root_label(label), group=gid,
-                                 color=color, iso=iso, radius=self.view_radius_default,
-                                 negative_color=negative,
+                                 color=color, iso=iso, negative_color=negative,
                                  style="mesh")  # chickenwire, as Make maps makes them
                 made.append(root_label(label))
         self._status(f"Loaded {name} — {data.summary()}; maps: {', '.join(made)}")

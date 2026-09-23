@@ -181,7 +181,8 @@ class Walk(object):
             return None
         vid = volume["id"]
         which = self.rng.choice(
-            ["color", "iso", "opacity", "style", "clip", "radius", "mask"])
+            ["color", "iso", "opacity", "style", "clip", "radius", "mask",
+             "negative"])
         if which == "color":
             self.app.set_volume_color(
                 vid, self.rng.choice(["gold", "salmon", "#3fa9f5"]))
@@ -196,7 +197,19 @@ class Walk(object):
             front, back = sorted((self.rng.random(), self.rng.random()))
             self.app.set_volume_clip(vid, front, back)
         elif which == "radius":
-            self.app.set_volume_radius(vid, self.rng.choice([None, 10.0, 20.0]))
+            # The global bounding control, which is the only one the GUI offers --
+            # set_volume_radius is the per-map primitive underneath it.
+            self.app.set_view_radius(self.rng.choice([None, 10.0, 20.0]))
+        elif which == "negative":
+            # A difference map's negative contour is its own row with its own tools;
+            # they are refused on a map that draws only one contour.
+            self.app.set_volume_negative_visible(vid, self.rng.random() < 0.5)
+            self.app.set_volume_negative_color(vid, self.rng.choice(["red", "crimson"]))
+            self.app.set_volume_negative_opacity(vid, round(self.rng.uniform(0.2, 1.0), 2))
+            self.app.set_volume_negative_style(
+                vid, self.rng.choice(["surface", "mesh"]))
+            self.app.set_volume_negative_iso(
+                vid, self.rng.choice([None, 1.0, 2.5]))
         elif which == "mask":
             # Only valid when paired. Hitting the refusal is fine -- it is the documented
             # behaviour, and reaching it from a random state is worth doing.

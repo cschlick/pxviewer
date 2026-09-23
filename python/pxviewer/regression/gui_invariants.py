@@ -63,8 +63,15 @@ def _focus_is_valid(app) -> None:
         return
     entry = {"model": app._model_entry, "volume": app._volume_entry,
              "reflections": app._reflection_entry,
-             "marker": app._marker_entry}.get(kind, lambda _i: None)(ident)
+             "marker": app._marker_entry,
+             # A negative-contour row carries its map's id.
+             "negative": app._volume_entry}.get(kind, lambda _i: None)(ident)
     assert entry is not None, f"focused {kind} {ident} no longer exists"
+    if kind == "negative":
+        # ...and the pane edits a contour, so the map must still draw one. A map that
+        # stopped being a difference map leaves this pane editing nothing.
+        assert entry.get("negative_color"), (
+            f"focused the negative contour of {ident}, which draws only one contour")
 
 
 def _active_model_is_valid(app) -> None:
@@ -113,10 +120,18 @@ def _summary_round_trips(app) -> None:
     rebuilt from it without error."""
     summary = app._loaded_summary()
     resolve = {"model": app._model_entry, "volume": app._volume_entry,
-               "reflections": app._reflection_entry, "marker": app._marker_entry}
+               "reflections": app._reflection_entry, "marker": app._marker_entry,
+               # A difference map's negative contour is its own row, carrying the id of
+               # the map it is drawn from -- so it resolves to that map's entry.
+               "negative": app._volume_entry}
     for item in summary["items"]:
         assert resolve[item["kind"]](item["id"]) is not None, \
             f"summary lists {item['kind']} {item['id']} which does not exist"
+        if item["kind"] == "negative":
+            entry = app._volume_entry(item["id"])
+            assert entry.get("negative_color"), (
+                f"a negative-contour row for {item['id']}, which draws only one contour")
+            assert item["pinned_to"] == item["id"], "it did not nest under its map"
     group_ids = {g["id"] for g in summary["groups"]}
     assert group_ids == set(app._groups), "summary groups disagree with the registry"
     # Rebuilding the tree from the summary must not raise.
@@ -137,6 +152,16 @@ def _appearance_values_are_well_formed(app) -> None:
         assert 0.0 <= v["opacity"] <= 1.0, f"volume {v['id']} opacity {v['opacity']} out of range"
         assert _well_formed_clip(v["clip"]), f"volume {v['id']} clip {v['clip']} malformed"
         assert v["radius"] is None or v["radius"] > 0, f"volume {v['id']} radius {v['radius']}"
+        # Bounding is one setting for every map (see set_view_radius); a map drawn at
+        # some radius of its own is the unevenness that control exists to end.
+        assert v["radius"] == app.view_radius, (
+            f"volume {v['id']} radius {v['radius']} is not the view radius "
+            f"{app.view_radius}")
+        if v.get("negative_color"):
+            assert 0.0 <= v["negative_opacity"] <= 1.0, (
+                f"volume {v['id']} negative_opacity {v['negative_opacity']} out of range")
+            assert v["negative_iso"] is None or v["negative_iso"] >= 0, (
+                f"volume {v['id']} negative_iso {v['negative_iso']} < 0")
         assert v["mask_radius"] is None or v["mask_radius"] > 0, \
             f"volume {v['id']} mask_radius {v['mask_radius']}"
     for m in app._models:

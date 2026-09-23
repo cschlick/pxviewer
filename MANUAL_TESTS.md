@@ -126,6 +126,13 @@ Open a map (or the cryo-EM tutorial data).
 5. Pair the model with its map (Pair button) and use masking in Tools.
    - **Watch for:** density away from the molecule disappears; the refined-against map
      is unaffected (minimize still behaves).
+5a. With several maps open — one from a file, one from reflections, a difference map —
+   change **Settings ▸ Viewer ▸ Draw map density within**, then untick it.
+   - **Watch for:** every map follows, including the ones already open and the ones that
+     came from different places. Bounding is one setting for all of them; a map drawn at
+     some radius of its own, or one that ignores the control because it was made before
+     the setting changed, is the unevenness this replaced. There is no per-map Radius row
+     any more.
 
 6. Make a difference map (Tools ▸ Map tools ▸ **Difference**, or phase one with Make
    maps).

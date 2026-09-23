@@ -176,23 +176,42 @@ def exercise_difference_maps_get_a_negative_contour():
         assert app._write_volume_scene() is not None
 
 
-def exercise_maps_from_reflections_open_with_a_view_radius():
-    """A map made from reflections fills the unit cell, so drawing all of it buries the
-    model in density -- Coot has a radius for exactly this. A map read from a file is
-    already a box around its subject, so it gets none."""
+def exercise_every_map_draws_at_the_one_view_radius():
+    """Bounding is one setting for every map, not a property of each.
+
+    A crystallographic map fills the unit cell and a cryo-EM box is mostly solvent;
+    drawing all of either buries the model, which is what Coot's map radius is for. It
+    used to be set per map at creation, from a "for new maps" default that reached
+    nothing already open -- so a map from reflections opened bounded, one loaded from a
+    file did not, and a difference map made later followed whichever rule was current.
+    Contours behaved differently with nothing on screen to say why.
+    """
     from pxviewer.volume_io import VolumeData
 
     with desktop() as app, mtz(coefficients=True) as path:
+        assert app.view_radius == _VIEW_RADIUS_DEFAULT
         app.load_file(path)
+        # However it was made: from reflections...
         assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
-
+        # ...or read straight from a file.
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "cryoem")
-        assert app._volume_entry(vid)["radius"] is None
+        assert app._volume_entry(vid)["radius"] == _VIEW_RADIUS_DEFAULT
 
+        # Changing it reaches what is already open, not just what opens next.
+        app.set_view_radius(30.0)
+        assert all(v["radius"] == 30.0 for v in app._volumes)
+        assert app._add_volume(
+            VolumeData.from_numpy(np.ones((8, 8, 8))), "later") is not None
+        assert all(v["radius"] == 30.0 for v in app._volumes)
+
+        # Off means every map is drawn in full -- again, all of them.
+        app.set_view_radius(None)
+        assert all(v["radius"] is None for v in app._volumes)
+        assert app.view_radius is None
+
+        # The per-map primitive is still there for the API; the GUI drives the global.
         app.set_volume_radius(vid, 20.0)
         assert app.volume_appearance(vid)["radius"] == 20.0
-        app.set_volume_radius(vid, None)
-        assert app.volume_appearance(vid)["radius"] is None
 
 
 # -- phasing ------------------------------------------------------------------

@@ -687,11 +687,11 @@ def exercise_a_real_space_difference_is_added_as_a_difference_map():
         added = app._volumes[-1]
         assert added["color"] == colour and added["negative_color"] == negative
         assert added["iso"] == iso
-        # Drawn near the view centre, like a phased difference map. It has two contours
+        # Drawn at the session's view radius, like every other map. It has two contours
         # over a full box, so meshing all of it made every nudge of the Level slider
         # cost the whole map twice.
-        assert added["radius"] == app.view_radius_default, (
-            "the real-space difference map opened without a view radius")
+        assert added["radius"] == app.view_radius, (
+            "the real-space difference map opened outside the one view radius")
         assert added["group"] == entry["group"], "it left its model's group"
         assert "difference" in added["name"]
     finally:
