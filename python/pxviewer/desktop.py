@@ -10054,9 +10054,19 @@ class DesktopApp:
     def set_volume_iso(self, vid: str, value: float) -> None:
         """Set a volume's contour level, in sigma, live.
 
-        A hidden map is parked at an empty contour (that is how it hides), so a level
-        change is stored but not pushed — pushing it would bring the map back. It takes
-        effect when the map is shown again."""
+        Pushed even while the map is hidden. This used to return early, on the reading
+        that a hidden map "is parked at an empty contour, so pushing the level would
+        bring it back" -- true of the old implementation, but hiding has been a render
+        skip on the isosurface for a long time (see :meth:`set_volume_visible`), and
+        updating the level of something not being drawn is invisible until it is.
+
+        Holding it back was worse than useless, because of the guard just below: the
+        level was stored on the entry but never sent, so the entry and the viewer
+        disagreed, and every later attempt to set that same number was swallowed as
+        "already there". The Level control then did nothing at all until it was nudged
+        to some *other* value -- which is exactly what "the controls stopped responding"
+        looks like from the outside.
+        """
         entry = self._volume_entry(vid)
         value = float(value)
         if entry is None or entry.get("iso") == value:
@@ -10072,8 +10082,6 @@ class DesktopApp:
             if session is not None:
                 surface = self._display_map_data(entry)
                 session.set_localres_iso(self._absolute_iso(entry, surface))
-            return
-        if not entry["visible"]:
             return
         control = self._control_session()
         if control is not None:

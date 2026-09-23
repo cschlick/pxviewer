@@ -2903,7 +2903,7 @@ async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
 async function setVolumeNegativeIso(plugin: PluginContext, ref: string, value: number | null) {
     if (value === null) negativeIsoOverride.delete(ref);
     else negativeIsoOverride.set(ref, value);
-    const negative = findVolumeNegativeReprCell(plugin, ref);
+    const negative = await awaitVolumeNegativeReprCell(plugin, ref);
     if (!negative) return;
     let magnitude = value;
     if (magnitude === null) {
@@ -2923,7 +2923,7 @@ async function setVolumeNegativeIso(plugin: PluginContext, ref: string, value: n
 async function setVolumeNegativeVisible(plugin: PluginContext, ref: string, visible: boolean) {
     if (visible) negativeHidden.delete(ref);
     else negativeHidden.add(ref);
-    const negative = findVolumeNegativeReprCell(plugin, ref);
+    const negative = await awaitVolumeNegativeReprCell(plugin, ref);
     if (!negative) return;
     const repr = await findVolumeReprCell(plugin, ref);
     const mapShown = repr ? repr.state?.isHidden !== true : true;
@@ -3105,6 +3105,25 @@ async function findVolumeReprCell(plugin: PluginContext, ref: string) {
 /** A volume's negative contour, when it has one (only difference maps do). */
 function findVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
     return findCellByTag(plugin, `mvs-ref:${ref}${NEGATIVE_SUFFIX}`);
+}
+
+/** The same, but waiting for the cell the way findVolumeReprCell does.
+ *
+ *  Only for the messages the desktop sends exclusively for difference maps, where the
+ *  cell is known to be on its way. Those are replayed to a late client, and a viewport
+ *  reload is a late client: the replay lands BEFORE the new scene has been parsed, so
+ *  the synchronous lookup missed and the setting was silently dropped -- a negative
+ *  contour switched off came back on the next scene rebuild. Anything that runs for
+ *  ordinary maps too must keep using the synchronous form, or every plain map would
+ *  stall the apply chain for five seconds waiting for a contour it does not have.
+ */
+async function awaitVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
+    for (let i = 0; i < 200; i++) {
+        const cell = findVolumeNegativeReprCell(plugin, ref);
+        if (cell) return cell;
+        await new Promise((r) => setTimeout(r, 25));
+    }
+    return undefined;
 }
 
 // -- tugging -------------------------------------------------------------
@@ -3823,6 +3842,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 const grab = (c: any) => c && {
                     iso: c.transform?.params?.type?.params?.isoValue,
                     status: c.status,
+                    // Whether this lobe is actually being drawn. A difference map has two,
+                    // each hideable on its own, and "is it on screen" is otherwise only
+                    // answerable by counting pixels.
+                    hidden: c.state?.isHidden === true,
                 };
                 let stats: any = null;
                 let cur: any = cell;

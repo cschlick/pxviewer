@@ -143,6 +143,18 @@ Open a map (or the cryo-EM tutorial data).
    - **Watch for:** the red contour goes, the green stays, and the − level row greys
      out. Toggle the map's own eye off and on — the red must **stay** off, because
      "just the green one" is a reading of the map, not a half-hidden object.
+10. With the negative contour still unticked, load any file (a scene rebuild).
+   - **Watch for:** the red contour stays off. Its replay reaches the viewer before the
+     new scene has been parsed, so a lookup that does not wait for the contour silently
+     drops the setting and the red comes back.
+11. Untick the map's eye, drag the **Level** slider somewhere clearly different, then
+   tick the eye again.
+   - **Watch for:** the map returns contoured at the level you left the slider on, not
+     the one it had when you hid it. If it returns at the old level, the panel and the
+     viewer now disagree and the Level control is **dead** at that number until nudged
+     to a different one — which is what "the controls stopped responding" looks like.
+     ``window.__dumpVol('<ref>')`` in the viewport console reports each contour's live
+     level and whether it is hidden.
 
 ## Pass 5 — Selection and oriented focus (10 min)
 

@@ -297,6 +297,43 @@ def exercise_a_plain_map_has_no_negative_contour_controls():
         assert entry.get("negative_visible", True) is True
 
 
+def exercise_a_level_set_while_hidden_still_reaches_the_viewer():
+    """Hiding is a render skip on the isosurface, so a hidden map's level can be set
+    like any other -- the change is simply invisible until the map is shown.
+
+    This used to return early, on the older reading that a hidden map "is parked at an
+    empty contour, so pushing the level would bring it back". Holding it back was worse
+    than doing nothing: the level was stored on the entry but never sent, so the entry
+    and the viewer disagreed, and the "already at this value" guard then swallowed every
+    later attempt to set that same number. The Level control went permanently dead at
+    whatever figure it was showing, and only a nudge to some *other* value revived it --
+    which from the outside reads as "the controls stopped responding".
+    """
+    with desktop() as app:
+        app._can_hide = True
+        app._add_model(Recording_session.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
+        session = app._control_session()
+        vid = blob(app)
+        entry = app._volume_entry(vid)
+
+        app.set_volume_visible(vid, False)
+        session.volume_commands = []
+        app.set_volume_iso(vid, 4.0)
+        assert entry["iso"] == 4.0
+        assert session.volume_commands == [("iso", entry["ref"], 4.0)], (
+            "a level set while hidden never reached the viewer: %r"
+            % session.volume_commands)
+
+        # ...so when it is shown again, the viewer is already at the level the panel
+        # claims, and the guard below is telling the truth rather than deadening it.
+        app.set_volume_visible(vid, True)
+        session.volume_commands = []
+        app.set_volume_iso(vid, 4.0)
+        assert session.volume_commands == [], "re-sent a level the viewer already had"
+        app.set_volume_iso(vid, 3.9)
+        assert session.volume_commands == [("iso", entry["ref"], 3.9)]
+
+
 def exercise_a_contour_changed_in_the_viewport_is_not_echoed_back():
     """The wheel is applied in the viewer, so the level arrives here after the fact. The
     widgets must follow it without writing it back -- an echo fights the scroll."""
