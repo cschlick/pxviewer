@@ -193,6 +193,13 @@ Load a protein (1ubq works).
 5. Press space repeatedly (residue navigation), then shift/space back.
    - **Watch for:** each step lands oriented the same way as typed selections; stepping
      honours the clip checkbox; no drift or roll accumulating over many steps.
+5a. Click a row in any table — a validation sub-tab, the bonds or angles table, the
+   atoms table — then press space repeatedly, and shift/space back.
+   - **Watch for:** the *selection* walks the table a row at a time and the viewport
+     follows each row, rather than the model stepping along the chain underneath a list
+     that never moves. It stops at the first and last row: running off the end of a
+     worklist should be visible, and the model jumping at that moment would read as a
+     bug. Click the viewport again and space goes back to walking residues.
 6. Pick atoms in the viewport; watch the description label and atoms table. Select rows
    in the atoms table instead.
    - **Watch for:** both directions agree; the label counts what you actually picked;

@@ -4029,6 +4029,10 @@ class ControlsWindow:
             ("scroll", "Contour level"),
             ("Ctrl + R", "Arm / disarm Refine drag"),
             ("Refine drag mode", "Pull and minimize an atom"),
+            # Space did not appear here at all, and now that what it steps depends on
+            # what has focus it needs saying (see DesktopApp.step_next).
+            ("space", "Next residue — or next row, in a table"),
+            ("shift + space", "The previous one"),
         ]
         for r, (gesture, action) in enumerate(bindings):
             chip = self._gesture_chip(gesture)
@@ -6508,18 +6512,18 @@ class DesktopApp:
         self._main.installEventFilter(self._close_filter)
         self._app.aboutToQuit.connect(self.stop)
 
-        # Space / Shift+Space step the focused residue forward / back along its chain,
-        # from either window.
+        # Space / Shift+Space step to the next / previous one, from either window --
+        # where "one" is whatever you are working in (see step_next).
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QKeySequence, QShortcut
 
         for _w in (self._viewport.widget(), self._controls.widget()):
             nxt = QShortcut(QKeySequence(Qt.Key.Key_Space), _w)
             nxt.setContext(Qt.ShortcutContext.WindowShortcut)
-            nxt.activated.connect(lambda: self.advance_residue(1))
+            nxt.activated.connect(lambda: self.step_next(1))
             prv = QShortcut(QKeySequence("Shift+Space"), _w)
             prv.setContext(Qt.ShortcutContext.WindowShortcut)
-            prv.activated.connect(lambda: self.advance_residue(-1))
+            prv.activated.connect(lambda: self.step_next(-1))
             # Refine drag is a mode you leave and re-enter constantly while fitting, and
             # its switch is a tab away from the viewport where it is used.
             tug = QShortcut(QKeySequence("Ctrl+R"), _w)
@@ -12509,6 +12513,42 @@ class DesktopApp:
         self._select_fragment(entry["id"], entry["session"], entry, list(atoms),
                               focus=focus, clip=clip, context=context)
         return f"chain {key[0]} and resid {key[1]}"
+
+    def step_next(self, step: int = 1) -> None:
+        """Space / Shift+Space: the next thing, where "thing" is whatever has focus.
+
+        In a table -- validation outliers, restraints, atoms -- it is the next row, so a
+        worklist can be walked from the space bar without moving the hand to the arrow
+        keys. Every one of these tables already acts on its *selection* (focus that
+        residue, highlight those atoms), so moving the selection is the whole gesture.
+
+        Anywhere else it is the next residue along the chain, which is what the key has
+        always done. The two never competed for the key so much as the residue one
+        simply won: the shortcut is window-wide, so it fired over a focused table too,
+        and stepping a list of outliers moved the model instead of the list.
+
+        It stops at the ends of a table rather than wrapping or falling through to the
+        residue walk: running off the end of a worklist should be visible, and having
+        the model jump at that moment would read as a bug.
+        """
+        from PySide6.QtWidgets import QTableView
+
+        view = self._app.focusWidget() if self._app is not None else None
+        model = view.model() if isinstance(view, QTableView) else None
+        rows = 0 if model is None else model.rowCount()
+        if rows:
+            row = view.currentIndex().row()
+            if row < 0:
+                row = 0
+            elif view.selectionModel().hasSelection():
+                row = max(0, min(rows - 1, row + step))
+            # else: focused but nothing selected yet -- Qt gives a freshly focused table
+            # a current row without selecting it, and stepping off it would silently
+            # skip the row the user can see is highlighted. Select that one first.
+            view.selectRow(row)              # selection is what these tables act on
+            view.scrollTo(model.index(row, 0))
+            return
+        self.advance_residue(step)
 
     def advance_residue(self, step: int = 1) -> None:
         """Move the focused residue to the next/previous one in its chain (space-bar

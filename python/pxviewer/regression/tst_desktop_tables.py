@@ -340,6 +340,47 @@ def exercise_geometry_restraints_populate_the_tables():
         dispose(app)
 
 
+def exercise_space_steps_the_restraint_and_atom_tables():
+    """The same key, in the tables this file is about.
+
+    Stepping a list of bonds is the case the gesture was asked for, and these two views
+    are plain QTableViews over their own models rather than the QTableWidget the
+    validation results use -- so the rule has to be about tables, not about one builder.
+    """
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    app = ubiquitin_desktop()
+    try:
+        app._main.show()
+        process_events()
+        app._app.setActiveWindow(app._main)
+        for view in (app._controls._restraint_tabs["bond"]["view"],
+                     app._controls._atom_view):
+            rows = view.model().rowCount()
+            assert rows > 3
+            view.setCurrentIndex(view.model().index(0, 0))   # also selects it
+            view.setFocus()
+            process_events()
+            assert app._app.focusWidget() is view
+
+            app.step_next(1)
+            assert view.currentIndex().row() == 1
+            assert [i.row() for i in view.selectionModel().selectedRows()] == [1], (
+                "the row is current but not selected, and selection is what these act on")
+            app.step_next(-1)
+            assert view.currentIndex().row() == 0
+            app.step_next(-1)
+            assert view.currentIndex().row() == 0     # stops at the top
+
+            view.setCurrentIndex(view.model().index(rows - 1, 0))
+            app.step_next(1)
+            assert view.currentIndex().row() == rows - 1   # ...and at the bottom
+    finally:
+        dispose(app)
+
+
 def zn_site_desktop(with_edits=True):
     """An app with the Zn site loaded, its user-supplied edits applied, and the restraint
     tables built -- the one shipped combination that has more than one restraint origin."""

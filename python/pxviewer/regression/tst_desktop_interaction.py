@@ -1374,6 +1374,70 @@ def exercise_residue_orientation_and_space_navigation():
         app.advance_residue(-1)
         assert app._focused_residue == ("A", "13")
 
+        # With nothing table-shaped focused, the key still walks the chain -- step_next
+        # is what the shortcut is actually wired to.
+        app.step_next(1)
+        assert app._focused_residue == ("A", "14")
+        app.step_next(-1)
+        assert app._focused_residue == ("A", "13")
+
+
+def exercise_space_steps_the_focused_table_a_row_at_a_time():
+    """Space means "the next one", and what counts as one is whatever has focus.
+
+    Walking a worklist -- outliers, restraints, atoms -- is the common thing to do with
+    these tables, and every one of them acts on its selection, so moving the selection
+    is the whole gesture. The residue walk used to win unconditionally: the shortcut is
+    window-wide, so it fired over a focused table too and stepping a list of outliers
+    moved the model instead of the list.
+    """
+    from pxviewer.validation import ValidationResult
+
+    with desktop() as app:
+        mid = ubiquitin(app)
+        rows = [["A", "  13 ", "ILE"], ["A", "  14 ", "THR"], ["A", "  15 ", "GLU"]]
+        app._controls._on_validation_ready((mid, [ValidationResult(
+            key="ramachandran", title="Ramachandran",
+            columns=["chain", "resid", "res"], rows=rows, markup=[],
+            summary="3 residues")]))
+        table = app._controls._validation_subtabs.widget(0).findChild(QTableWidget)
+        # Focus is a window property, so the window has to be up for the table to hold it.
+        app._main.show()
+        process_events()
+        app._app.setActiveWindow(app._main)
+        table.setFocus()
+        process_events()
+        assert app._app.focusWidget() is table, "the table never took focus"
+
+        # Qt gives a freshly focused table a current row without selecting it, so the
+        # first press lands on the row the user can see highlighted rather than
+        # stepping straight past it.
+        assert not table.selectionModel().hasSelection()
+        app.step_next(1)
+        assert table.currentRow() == 0
+        # ...and the row's own handler ran, so the viewport followed the selection.
+        assert app._controls._select_expr.text() == "chain A and resid 13"
+
+        app.step_next(1)
+        assert table.currentRow() == 1
+        assert app._controls._select_expr.text() == "chain A and resid 14"
+        app.step_next(-1)
+        assert table.currentRow() == 0
+
+        # It stops at the ends rather than wrapping or falling through to the residue
+        # walk -- running off a worklist should be visible, and the model jumping at
+        # that moment would read as a bug.
+        app.step_next(-1)
+        assert table.currentRow() == 0
+        focused = app._focused_residue
+        for _ in range(5):
+            app.step_next(1)
+        assert table.currentRow() == len(rows) - 1
+        app.step_next(1)
+        assert table.currentRow() == len(rows) - 1
+        assert app._focused_residue == focused or app._focused_residue == ("A", "15"), (
+            "running off the end of the table walked the chain instead")
+
 
 # -- showing and hiding parts of a model --------------------------------------
 
