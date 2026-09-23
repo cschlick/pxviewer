@@ -189,22 +189,23 @@ def exercise_every_map_draws_at_the_one_view_radius():
     from pxviewer.volume_io import VolumeData
 
     with desktop() as app, mtz(coefficients=True) as path:
-        assert app.view_radius == _VIEW_RADIUS_DEFAULT
+        # Off to begin with: a map is drawn as it is until it is asked to be bounded.
+        assert app.view_radius is None
         app.load_file(path)
         # However it was made: from reflections...
-        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
+        assert all(v["radius"] is None for v in app._volumes)
         # ...or read straight from a file.
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "cryoem")
-        assert app._volume_entry(vid)["radius"] == _VIEW_RADIUS_DEFAULT
+        assert app._volume_entry(vid)["radius"] is None
 
-        # Changing it reaches what is already open, not just what opens next.
-        app.set_view_radius(30.0)
-        assert all(v["radius"] == 30.0 for v in app._volumes)
+        # Turning it on reaches what is already open, not just what opens next.
+        app.set_view_radius(_VIEW_RADIUS_DEFAULT)
+        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
         assert app._add_volume(
             VolumeData.from_numpy(np.ones((8, 8, 8))), "later") is not None
-        assert all(v["radius"] == 30.0 for v in app._volumes)
+        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
 
-        # Off means every map is drawn in full -- again, all of them.
+        # ...and off again draws every map in full -- again, all of them.
         app.set_view_radius(None)
         assert all(v["radius"] is None for v in app._volumes)
         assert app.view_radius is None

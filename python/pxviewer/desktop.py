@@ -3204,14 +3204,16 @@ class ControlsWindow:
         radius_spin.setRange(1.0, 200.0)
         radius_spin.setDecimals(0)
         radius_spin.setSingleStep(5.0)
-        radius_spin.setSuffix(" Å of the view center")
+        radius_spin.setSuffix(" Å")
         radius_spin.setValue(_VIEW_RADIUS_DEFAULT if current is None else float(current))
         radius_spin.setEnabled(current is not None)
+        radius_tail = QLabel("of the view center")
         tip = ("How much density every map draws around the middle of the view. It "
                "follows the view and edits nothing — the maps stay whole, they are "
                "just not all drawn at once. Unticked, every map is drawn in full.")
         radius_check.setToolTip(tip)
         radius_spin.setToolTip(tip)
+        radius_tail.setToolTip(tip)
 
         def _apply_radius():
             self._safe(lambda: self._desktop.set_view_radius(
@@ -3219,12 +3221,17 @@ class ControlsWindow:
 
         def _radius_toggled(on):
             radius_spin.setEnabled(bool(on))
+            radius_tail.setEnabled(bool(on))
             _apply_radius()
 
         radius_check.toggled.connect(_radius_toggled)
         radius_spin.valueChanged.connect(lambda _v: _apply_radius())
         radius_row.addWidget(radius_check)
         radius_row.addWidget(radius_spin)
+        # The units belong in the box; the rest of the sentence does not — words inside
+        # an editable spin read as part of the value.
+        radius_tail.setEnabled(current is not None)
+        radius_row.addWidget(radius_tail)
         radius_row.addStretch()
         vg.addLayout(radius_row)
 
@@ -6422,12 +6429,13 @@ class DesktopApp:
         # user seen one of these yet?" — which is what the X-ray tutorial waits on, and what
         # distinguishes a drag that recomputed density from one that merely happened.
         self._diff_boxes = 0
-        # How much density any map draws around the view center -- None for all of it.
+        # How much density any map draws around the view center -- None for all of it,
+        # which is the default: a map is drawn as it is until asked otherwise.
         # One setting for every map, not a property of each: bounding is a statement
         # about how much density you want to look at, and having it on some maps and
         # not others left contours on screen that behaved differently for no visible
         # reason. Settings changes it; it applies to what is open and to what opens next.
-        self.view_radius: Optional[float] = _VIEW_RADIUS_DEFAULT
+        self.view_radius: Optional[float] = None
 
         self.bridge = _make_bridge()
         # Workers marshal GUI-thread work (e.g. adding a model) via this signal;
