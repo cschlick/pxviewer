@@ -9486,7 +9486,13 @@ class DesktopApp:
                     colour, iso, negative = MAP_STYLE[True]   # a difference map is a
                     self._add_volume(                          # difference map, however made
                         data, f"{name} · real-space difference", group=gid,
-                        color=colour, iso=iso, negative_color=negative, style="mesh")
+                        color=colour, iso=iso, negative_color=negative, style="mesh",
+                        # Opened near the view centre, exactly as a phased difference map
+                        # is. Without it this one meshed its whole box -- twice, since it
+                        # has two contours -- and every nudge of the Level slider paid for
+                        # all of it. The Radius row lifts it for anyone who wants the
+                        # whole box.
+                        radius=self.view_radius_default)
                     self._status(f"{name}: real-space difference at ±{iso:g}σ "
                                  "(green unexplained density, red unsupported model)")
                 finally:

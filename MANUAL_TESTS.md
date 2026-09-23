@@ -155,6 +155,14 @@ Open a map (or the cryo-EM tutorial data).
      to a different one — which is what "the controls stopped responding" looks like.
      ``window.__dumpVol('<ref>')`` in the viewport console reports each contour's live
      level and whether it is hidden.
+12. Drag the **Level** slider right across its range in one sweep, on the biggest map
+   you have.
+   - **Watch for:** the map follows the handle and stops when you let go. It must not
+     keep working through the levels you dragged past — on a real box that is minutes
+     of it "clicking its way" towards your setpoint. To check the mechanism rather than
+     the feel, read ``window.__isoApplied()`` in the viewport console before and after
+     one sweep: one sweep emits ~56 level changes, and the viewer should draw a handful,
+     not all of them. (Measured on the same sweep: 55 drawn before coalescing, 4 after.)
 
 ## Pass 5 — Selection and oriented focus (10 min)
 

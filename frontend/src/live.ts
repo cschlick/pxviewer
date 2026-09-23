@@ -2868,6 +2868,12 @@ async function setVolumeStyle(plugin: PluginContext, ref: string, style: string)
 const negativeIsoOverride = new Map<string, number>();
 const negativeHidden = new Set<string>();
 
+/** How many contour levels have actually been drawn. A slider drag sends one per step;
+ *  this counts the ones the viewer paid for, which is the whole question when the
+ *  complaint is that a map takes minutes to reach the level you let go at. Read as
+ *  `window.__isoApplied` (see the harness hooks). */
+let isoApplied = 0;
+
 function isoParams(v: number) {
     return (old: any) => {
         if (old.type?.name === 'isosurface') {
@@ -2885,6 +2891,7 @@ function isoParams(v: number) {
 async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
+    isoApplied += 1;
     const build = plugin.state.data.build().to(repr.transform.ref).update(isoParams(value));
     const negative = findVolumeNegativeReprCell(plugin, ref);
     if (negative) {
@@ -3304,6 +3311,34 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         applyChain = applyChain.then(work).catch(
             (e) => console.warn('pxviewer: applying a viewer update failed:', e));
         return applyChain;
+    };
+
+    // Values that are only worth drawing at their newest: a slider being dragged.
+    //
+    // One sweep of the Level slider emits a change per step -- measured at 56 -- and each
+    // one re-meshes an isosurface (both lobes, for a difference map). Queued in order,
+    // the viewer spends its time drawing levels the user has already moved past, and on a
+    // real map that is minutes of it "clicking its way" towards where the slider was let
+    // go. Every value but the last is stale before it is applied, so superseded ones are
+    // dropped rather than queued. The scroll wheel has always done this for itself (see
+    // flushIso); this is the same rule for everything the panel drives.
+    const latestTargets = new Map<string, any>();
+    const latestRunning = new Set<string>();
+
+    const applyLatest = (key: string, value: any, apply: (v: any) => Promise<void>) => {
+        latestTargets.set(key, value);
+        if (latestRunning.has(key)) return;      // a pump is already chasing this key
+        latestRunning.add(key);
+        void (async () => {
+            for (;;) {
+                // Nothing awaits between the check and the take, so a value arriving
+                // mid-flight is always either picked up here or starts a fresh pump.
+                if (!latestTargets.has(key)) { latestRunning.delete(key); return; }
+                const target = latestTargets.get(key);
+                latestTargets.delete(key);
+                await serializeApply(() => apply(target));
+            }
+        })();
     };
 
     // Volumes clipped by this connection (models carry their own slab on the viewer).
@@ -3745,10 +3780,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     await viewer.setSlab(slab);
                 }
             } else if (msg.type === 'volume_iso' && typeof msg.ref === 'string' && typeof msg.value === 'number') {
-                await setVolumeIso(plugin, msg.ref, msg.value);
+                const ref = msg.ref;
+                applyLatest(`iso:${ref}`, msg.value, (v) => setVolumeIso(plugin, ref, v));
             } else if (msg.type === 'volume_negative_iso' && typeof msg.ref === 'string') {
-                await setVolumeNegativeIso(
-                    plugin, msg.ref, typeof msg.value === 'number' ? msg.value : null);
+                const ref = msg.ref;
+                applyLatest(`negiso:${ref}`, typeof msg.value === 'number' ? msg.value : null,
+                            (v) => setVolumeNegativeIso(plugin, ref, v));
             } else if (msg.type === 'volume_negative_visible' && typeof msg.ref === 'string'
                        && typeof msg.value === 'boolean') {
                 await setVolumeNegativeVisible(plugin, msg.ref, msg.value);
@@ -3836,6 +3873,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             });
             viewer.serialize = serializeApply;  // subscription-driven work joins the apply chain
             viewer.onSelectionChange = (indices) => ws.send(JSON.stringify({ type: 'mouse-selection', indices }));
+            (window as any).__isoApplied = () => isoApplied;
             (window as any).__dumpVol = (ref: string) => {
                 const cell = findCellByTag(plugin, `mvs-ref:${ref}-repr`);
                 const neg = findVolumeNegativeReprCell(plugin, ref);
