@@ -1170,6 +1170,24 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
+    def set_volume_negative_style(self, ref: str, style: str) -> None:
+        """Change a difference map's negative-contour style (surface or mesh). The
+        contour is its own row in the object panel, so this is its own setting rather
+        than the map's. Thread-safe."""
+        message = json.dumps(
+            {"type": "volume_negative_style", "ref": str(ref), "style": str(style)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
+    def set_volume_negative_opacity(self, ref: str, opacity: float) -> None:
+        """Change a difference map's negative-contour opacity. Thread-safe."""
+        message = json.dumps({"type": "volume_negative_opacity", "ref": str(ref),
+                              "opacity": float(opacity)})
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._broadcast_text, message)
+
     def set_volume_negative_iso(self, ref: str, value: Optional[float]) -> None:
         """Give a difference map's negative contour its own level (a magnitude in sigma),
         or ``None`` to put it back to mirroring the positive one.

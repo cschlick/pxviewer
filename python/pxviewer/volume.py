@@ -57,6 +57,11 @@ class Volume:
     #: ``isosurface_value``. The two features are not obliged to be equally strong, so a
     #: level that reads the green well can over- or under-contour the red.
     negative_isosurface_value: float | None = None
+    #: The negative contour's own opacity and style. It is a row of its own in the object
+    #: panel with a pane of its own, so these belong to the contour, not to the map; None
+    #: falls back to the map's.
+    negative_opacity: float | None = None
+    negative_style: VolumeStyle | None = None
     opacity: float | None = 1.0
     style: VolumeStyle | None = "surface"
     position: tuple[float, float, float] | None = None
@@ -242,10 +247,16 @@ def _build_volume(builder: Any, volume: Volume, ref: str) -> str:
         magnitude = (volume.isosurface_value if volume.negative_isosurface_value is None
                      else volume.negative_isosurface_value)
         negative_kwargs[key] = -magnitude
+        style = volume.negative_style or volume.style
+        if volume.representation == "isosurface" and style is not None:
+            negative_kwargs["show_wireframe"] = style in ("mesh", "wireframe")
+            negative_kwargs["show_faces"] = style == "surface"
         negative = mvs_volume.representation(**negative_kwargs, ref=f"{ref}{NEGATIVE_REF_SUFFIX}")
         negative = negative.color(color=volume.negative_color)
-        if volume.opacity is not None:
-            negative = negative.opacity(opacity=volume.opacity)
+        opacity = (volume.opacity if volume.negative_opacity is None
+                   else volume.negative_opacity)
+        if opacity is not None:
+            negative = negative.opacity(opacity=opacity)
         if volume.clip is not None:
             negative = negative.clip(**volume.clip)
 

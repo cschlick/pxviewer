@@ -2826,32 +2826,49 @@ const STYLE_VISUALS: Record<string, string[]> = {
     wireframe: ['wireframe'],   // legacy alias for 'mesh'
 };
 
-/** Update a volume's representation params in place — no scene rebuild, so this is
- *  cheap enough to drive from a slider being dragged.
+/** Update one representation cell's params in place — no scene rebuild, so this is cheap
+ *  enough to drive from a slider being dragged.
  *
- *  Applies to both contours of a difference map: they are one object, and anything but
- *  the level (which mirrors) and the color (which differs) is shared.
+ *  Per contour, not per map. A difference map's two contours each have a row of their
+ *  own in the object panel and a pane of their own, so style and opacity belong to the
+ *  contour the user is editing; only what is genuinely one map (which part of the box is
+ *  drawn, and at what sampling) is still shared.
  */
-async function updateVolumeRepr(plugin: PluginContext, ref: string, mutate: (old: any) => void) {
-    const repr = await findVolumeReprCell(plugin, ref);
-    if (!repr) return;
-    const build = plugin.state.data.build().to(repr.transform.ref).update(mutate);
-    const negative = findVolumeNegativeReprCell(plugin, ref);
-    if (negative) build.to(negative.transform.ref).update(mutate);
-    await build.commit();
+async function updateReprCell(plugin: PluginContext, cell: any, mutate: (old: any) => void) {
+    if (!cell) return;
+    await plugin.state.data.build().to(cell.transform.ref).update(mutate).commit();
 }
 
-async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
+function styleMutation(style: string) {
     const visuals = STYLE_VISUALS[style.toLowerCase()];
     if (!visuals) {
         console.warn('Unknown volume style:', style);
-        return;
+        return undefined;
     }
-    await updateVolumeRepr(plugin, ref, (old: any) => {
-        if (old.type?.name === 'isosurface') {
-            old.type.params.visuals = visuals;
-        }
-    });
+    return (old: any) => {
+        if (old.type?.name === 'isosurface') old.type.params.visuals = visuals;
+    };
+}
+
+const opacityMutation = (opacity: number) => (old: any) => {
+    if (old.type?.name === 'isosurface') old.type.params.alpha = opacity;
+};
+
+async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
+    const mutate = styleMutation(style);
+    if (mutate) await updateReprCell(plugin, await findVolumeReprCell(plugin, ref), mutate);
+}
+
+async function setVolumeNegativeStyle(plugin: PluginContext, ref: string, style: string) {
+    const mutate = styleMutation(style);
+    if (mutate) {
+        await updateReprCell(plugin, await awaitVolumeNegativeReprCell(plugin, ref), mutate);
+    }
+}
+
+async function setVolumeNegativeOpacity(plugin: PluginContext, ref: string, opacity: number) {
+    await updateReprCell(plugin, await awaitVolumeNegativeReprCell(plugin, ref),
+                         opacityMutation(opacity));
 }
 
 /** Per-map state for the negative contour, held here because the level also moves from
@@ -2938,9 +2955,8 @@ async function setVolumeNegativeVisible(plugin: PluginContext, ref: string, visi
 }
 
 async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: number) {
-    await updateVolumeRepr(plugin, ref, (old: any) => {
-        if (old.type?.name === 'isosurface') old.type.params.alpha = opacity;
-    });
+    await updateReprCell(plugin, await findVolumeReprCell(plugin, ref),
+                         opacityMutation(opacity));
 }
 
 async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boolean) {
@@ -3725,10 +3741,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await setVolumeColor(plugin, msg.ref, msg.color);
             } else if (msg.type === 'volume_negative_color' && typeof msg.ref === 'string' && typeof msg.color === 'string') {
                 await setVolumeNegativeColor(plugin, msg.ref, msg.color);
+            } else if (msg.type === 'volume_negative_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
+                await setVolumeNegativeStyle(plugin, msg.ref, msg.style);
+            } else if (msg.type === 'volume_negative_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
+                const ref = msg.ref;
+                applyLatest(`negopacity:${ref}`, msg.opacity,
+                            (v) => setVolumeNegativeOpacity(plugin, ref, v));
             } else if (msg.type === 'volume_reload' && typeof msg.ref === 'string') {
                 await reloadVolumeData(plugin, msg.ref);
             } else if (msg.type === 'volume_opacity' && typeof msg.ref === 'string' && typeof msg.opacity === 'number') {
-                await setVolumeOpacity(plugin, msg.ref, msg.opacity);
+                const ref = msg.ref;   // a slider too: only its newest value is worth drawing
+                applyLatest(`opacity:${ref}`, msg.opacity,
+                            (v) => setVolumeOpacity(plugin, ref, v));
             } else if (msg.type === 'volume_style' && typeof msg.ref === 'string' && typeof msg.style === 'string') {
                 await setVolumeStyle(plugin, msg.ref, msg.style);
             } else if (msg.type === 'camera-state') {

@@ -128,22 +128,24 @@ Open a map (or the cryo-EM tutorial data).
      is unaffected (minimize still behaves).
 
 6. Make a difference map (Tools ▸ Map tools ▸ **Difference**, or phase one with Make
-   maps), then untick its row's eye.
-   - **Watch for:** ONE row appears for it, not two — a difference map is one map drawn
-     at +level and −level; and its eye hides **both** the green and the red contour.
-     Red left on screen with nothing in the list owning it is the bug this checks.
-7. With the difference map focused, drag the **Level** slider.
-   - **Watch for:** both contours tighten together, and the **− level** row below
-     follows it — one number shown in two places, which is the classic ±3σ reading.
-8. Now drag the **− level** slider on its own.
-   - **Watch for:** only the red contour changes; **Link** lights up; the main Level
-     slider no longer drags the red one along. Click **Link** and the red contour snaps
-     back to the green one's level and the button greys out again.
-9. Untick **Negative contour**.
-   - **Watch for:** the red contour goes, the green stays, and the − level row greys
-     out. Toggle the map's own eye off and on — the red must **stay** off, because
-     "just the green one" is a reading of the map, not a half-hidden object.
-10. With the negative contour still unticked, load any file (a scene rebuild).
+   maps).
+   - **Watch for:** TWO rows appear — the map, and **negative contour** nested under it,
+     each with its own eye. Every contour on screen is owned by a row: anything drawn
+     that no row can hide and no slider can reach is the bug this checks.
+7. Untick the **negative contour** row's eye.
+   - **Watch for:** the red goes, the green stays. Now toggle the *map's* eye off and on
+     — the red must **stay** off, because "just the green one" is a reading of the map,
+     not a half-hidden object.
+8. Select the **negative contour** row.
+   - **Watch for:** its own pane — Style, Color, Opacity, and a Level under
+     **Link level with positive map**. Change its Style and Opacity and confirm the
+     green contour does not move: with a row each, a control on one that silently
+     changed the other would be a lie.
+9. Untick **Link level with positive map**, then drag that pane's **Level**.
+   - **Watch for:** only the red contour changes. Select the map's row and drag its
+     Level — only the green changes. Re-tick the link and the red jumps to the map's
+     level *as it stands now*, not as it was when you unlinked.
+10. With the negative contour hidden, load any file (a scene rebuild).
    - **Watch for:** the red contour stays off. Its replay reaches the viewer before the
      new scene has been parsed, so a lookup that does not wait for the contour silently
      drops the setting and the red comes back.

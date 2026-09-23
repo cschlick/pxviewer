@@ -3358,6 +3358,10 @@ class ControlsWindow:
             live = self._desktop.volume_appearance(it["id"])
             # Whether a mask is offered depends on the map's pairing, not on the map itself.
             extra = self._desktop.can_mask_volume(it["id"])
+        elif it["kind"] == "negative":
+            # Same source: the negative contour's settings live on its map's entry. The
+            # map's level counts too, because a linked contour shows it.
+            live = self._desktop.volume_appearance(it["id"])
         elif it["kind"] == "reflections":
             # The "Make maps" row lists the *other* objects (unpaired models), so it can go
             # stale even when these reflections have not changed at all.
@@ -3541,6 +3545,8 @@ class ControlsWindow:
                 export.clicked.connect(
                     lambda _=False, d=mid, nm=it["name"]: self._on_export_ligand(d, nm))
                 self._appearance_layout.addWidget(export)
+        elif it["kind"] == "negative":
+            self._build_negative_pane(it["id"], add_combo)
         else:  # volume
             vid = it["id"]
             # Read the live values, not this snapshot: the level in particular can have
@@ -3586,17 +3592,6 @@ class ControlsWindow:
                 themes=([("Local resolution", "localres")]
                         if it.get("resolution_map") else None),
                 title="Map color")
-            if live.get("negative_color"):
-                # A difference map draws a second contour at -level; its color is as
-                # much the user's as the positive one — and both are carried into the
-                # live recalc window (see show_map_box).
-                def _set_negative(color, it=it):
-                    self._safe(
-                        lambda: self._desktop.set_volume_negative_color(vid, color))
-
-                self._add_color_row(live.get("negative_color"), _set_negative,
-                                    title="Negative-contour color", label="− color")
-
             def _set_opacity(v, it=it):
                 it["opacity"] = v
                 self._safe(lambda: self._desktop.set_volume_opacity(vid, v))
@@ -3606,15 +3601,8 @@ class ControlsWindow:
             def _set_iso(v, it=it):
                 it["iso"] = v
                 self._safe(lambda: self._desktop.set_volume_iso(vid, v))
-                # While the negative contour is linked it *is* this level, so its widgets
-                # come along: the panel must never show two numbers for one setting.
-                if self._neg_iso_row is not None and it.get("negative_iso") is None:
-                    self._show_iso_value(self._neg_iso_row, v)
-
             self._iso_row = self._add_iso_row(live.get("iso"), _set_iso,
                                               max_sigma=live.get("max_sigma"))
-            if live.get("negative_color"):
-                self._neg_iso_row = self._add_negative_contour_rows(vid, it, live)
 
             def _set_clip(front, back, it=it):
                 it["clip"] = (front, back)
@@ -3655,6 +3643,10 @@ class ControlsWindow:
 
         # The wheel contours whatever the Level slider above is showing, so the
         # target follows the focused object (and is cleared when it is not a volume).
+        # Deliberately not aimed at a focused *negative contour*: the wheel drives the
+        # map's own level, and turning it while that pane is open would move the other
+        # contour -- exactly the "something moved and I cannot tell what" this row exists
+        # to end. Its level has a slider; the wheel stays with the map.
         self._safe(lambda: self._desktop.set_volume_scroll_target(
             it["id"] if it["kind"] == "volume" else None))
 
@@ -3674,66 +3666,69 @@ class ControlsWindow:
         finally:
             row["syncing"]["on"] = False
 
-    def _add_negative_contour_rows(self, vid, it, live):
-        """A difference map's negative contour: its own switch, and its own level.
+    def _build_negative_pane(self, vid, add_combo):
+        """The pane for a difference map's negative contour, which is its own object.
 
-        Both answer complaints about the pair being welded together. The red contour is a
-        different finding from the green one — density the model does not account for
-        versus a model sitting on nothing — and the two are not obliged to be equally
-        strong, so one knob driving both means a level that reads one over-contours the
-        other. Switching the red off is the other half: "just show me the green" is a
-        reading of a difference map, not a half-hidden object.
+        It has a row of its own in the panel, so it gets the tools of any drawn thing:
+        style, colour, opacity, and a level. Only what is genuinely one map stays on the
+        map's own pane -- which part of the box is drawn, and at what sampling.
 
-        The level stays *linked* until the user touches it, so a difference map still
-        opens contoured at ±3 sigma and behaves exactly as it always did for anyone who
-        never reaches for this row. "Link" puts it back.
+        The level is the one tie. "Link level with positive map" is on by default, which
+        is the classic +/-n sigma reading of a difference map; unticking it lets the two
+        contours sit at strengths of their own, because the features they answer to --
+        density the model does not account for, and a model sitting on nothing -- are
+        not obliged to be equally strong.
         """
-        from PySide6.QtWidgets import QCheckBox, QPushButton
+        from PySide6.QtWidgets import QCheckBox
 
-        shown = bool(live.get("negative_visible", True))
-        detached = live.get("negative_iso") is not None
-        it["negative_iso"] = live.get("negative_iso")
+        live = self._desktop.volume_appearance(vid)
+        linked = live.get("negative_iso") is None
 
-        check = QCheckBox("Negative contour")
-        check.setChecked(shown)
+        add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("negative_style"),
+                  lambda v: self._safe(
+                      lambda: self._desktop.set_volume_negative_style(vid, v)))
+        self._add_color_row(
+            live.get("negative_color"),
+            lambda c: self._safe(
+                lambda: self._desktop.set_volume_negative_color(vid, c)),
+            title="Negative-contour color")
+        self._add_opacity_row(
+            live.get("negative_opacity"),
+            lambda v: self._safe(
+                lambda: self._desktop.set_volume_negative_opacity(vid, v)))
+
+        check = QCheckBox("Link level with positive map")
+        check.setChecked(linked)
         check.setToolTip(
-            "Draw the second contour, at the other sign. Off leaves only the positive "
-            "one — which is the map read for unexplained density alone.")
+            "Contour both halves of the difference at the same strength — the usual "
+            "reading. Untick to give this contour a level of its own.")
         self._appearance_layout.addWidget(check)
 
-        link = QPushButton("Link")
-        link.setToolTip("Put the negative contour back to the level above.")
-        link.setEnabled(detached)
-
-        def _set_neg_iso(v, it=it):
-            it["negative_iso"] = float(v)
-            link.setEnabled(True)
+        def _set_neg_iso(v):
+            if check.isChecked():
+                return      # linked: this row is only reporting the map's level
             self._safe(lambda: self._desktop.set_volume_negative_iso(vid, float(v)))
 
-        row = self._add_iso_row(
-            live.get("negative_iso") if detached else live.get("iso"), _set_neg_iso,
-            max_sigma=live.get("max_sigma"), label="− level", tail=link)
-        row["slider"].setEnabled(shown)
-        row["spin"].setEnabled(shown)
-        link.setEnabled(detached and shown)
+        row = self._add_iso_row(live.get("iso") if linked else live.get("negative_iso"),
+                                _set_neg_iso, max_sigma=live.get("max_sigma"))
+        row["slider"].setEnabled(not linked)
+        row["spin"].setEnabled(not linked)
 
-        def _relink(_=False, it=it):
-            it["negative_iso"] = None
-            link.setEnabled(False)
-            self._show_iso_value(row, it.get("iso") or 0.0)
-            self._safe(lambda: self._desktop.set_volume_negative_iso(vid, None))
-
-        def _toggle(state, it=it):
+        def _toggle(state):
             on = bool(state)
-            it["negative_visible"] = on
-            row["slider"].setEnabled(on)
-            row["spin"].setEnabled(on)
-            link.setEnabled(on and it.get("negative_iso") is not None)
-            self._safe(lambda: self._desktop.set_volume_negative_visible(vid, on))
+            row["slider"].setEnabled(not on)
+            row["spin"].setEnabled(not on)
+            if on:
+                # Back to the map's level, and show the number it is actually going to.
+                self._show_iso_value(row, self._desktop.volume_appearance(vid).get("iso")
+                                     or 0.0)
+                self._safe(lambda: self._desktop.set_volume_negative_iso(vid, None))
+            else:
+                self._safe(lambda: self._desktop.set_volume_negative_iso(
+                    vid, float(row["spin"].value())))
 
-        link.clicked.connect(_relink)
         check.toggled.connect(_toggle)
-        return row
+        self._neg_iso_row = row
 
     def _on_volume_iso_changed(self, payload) -> None:
         """A contour level was changed in the viewport (the wheel): show it here.
@@ -3748,8 +3743,6 @@ class ControlsWindow:
         if item is not None and not item.get("visible", True):
             return  # a hidden map is parked at an empty contour; ignore stray wheel echoes
         self._show_iso_value(self._iso_row, value)
-        if self._neg_iso_row is not None and (item or {}).get("negative_iso") is None:
-            self._show_iso_value(self._neg_iso_row, value)  # linked: it moved too
         if item is not None:
             item["iso"] = value
 
@@ -5977,7 +5970,7 @@ class ControlsWindow:
                 node.setData(0, Qt.ItemDataRole.UserRole, (it["kind"], it["id"]))
                 if it["visible"] is None:
                     pass  # reflections: nothing drawable, so no eye to click
-                elif it["kind"] in ("model", "volume") and not self._desktop._can_hide:
+                elif it["kind"] in ("model", "volume", "negative") and not self._desktop._can_hide:
                     # Hiding is disabled on software WebGL (this VM's SwiftShader). The
                     # original reason — "hiding segfaults the software renderer" — turned out
                     # to be a misread of the object-tree use-after-free (the tree rebuilding
@@ -6120,6 +6113,10 @@ class ControlsWindow:
             self._desktop.set_model_visible(ident, visible)
         elif kind == "volume":
             self._desktop.set_volume_visible(ident, visible)
+        elif kind == "negative":
+            # Its own eye, independent of its map's: "just the green one" is a reading of
+            # a difference map, and it survives the map being toggled.
+            self._desktop.set_volume_negative_visible(ident, visible)
         elif kind == "marker":
             self._desktop.set_marker_visible(ident, visible)
         # reflections have no visibility to change
@@ -6147,7 +6144,7 @@ class ControlsWindow:
         it = self._find_item(kind, ident)
         if it is None or it.get("visible") is None:
             return  # group header, or reflections: nothing drawable to toggle
-        if kind in ("model", "volume") and not self._desktop._can_hide:
+        if kind in ("model", "volume", "negative") and not self._desktop._can_hide:
             self._desktop._warn("Hiding needs hardware WebGL — not available on software "
                                 "rendering.")
             return
@@ -7236,6 +7233,8 @@ class DesktopApp:
                 isosurface_kind=v.get("iso_kind", "relative"), isosurface_value=v["iso"],
                 color=v["color"], negative_color=v.get("negative_color"),
                 negative_isosurface_value=v.get("negative_iso"),
+                negative_opacity=v.get("negative_opacity"),
+                negative_style=v.get("negative_style"),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
             ))
@@ -10127,6 +10126,36 @@ class DesktopApp:
         self._volume_command(vid, "negative_color", color,
                              lambda c, ref, v: c.set_volume_negative_color(ref, v))
 
+    def set_volume_negative_style(self, vid: str, style: str) -> None:
+        """Set a difference map's negative-contour style (surface or mesh) live."""
+        self._negative_command(vid, "negative_style", str(style),
+                               lambda c, ref, v: c.set_volume_negative_style(ref, v))
+
+    def set_volume_negative_opacity(self, vid: str, value: float) -> None:
+        """Set a difference map's negative-contour opacity (0-1) live."""
+        self._negative_command(vid, "negative_opacity", float(value),
+                               lambda c, ref, v: c.set_volume_negative_opacity(ref, v))
+
+    def _negative_command(self, vid: str, key: str, value, send) -> None:
+        """Record a negative-contour appearance change and push it live.
+
+        The map-level twin of :meth:`_volume_command`, with one extra guard: a map with
+        no negative contour has no such setting to change, and inventing one would put a
+        value on the entry that nothing draws.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None or not entry.get("negative_color"):
+            return
+        if entry.get(key) == value:
+            return
+        entry[key] = value
+        control = self._control_session()
+        if control is not None:
+            try:
+                send(control, entry["ref"], value)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     def set_volume_negative_iso(self, vid: str, value: Optional[float]) -> None:
         """Give a difference map's negative contour its own level, in sigma, live.
 
@@ -10170,6 +10199,9 @@ class DesktopApp:
                 control.set_volume_negative_visible(entry["ref"], bool(visible))
             except Exception:  # pragma: no cover - defensive
                 pass
+        # The contour has a row of its own, so its eye has to follow it -- the same
+        # refresh a map's own visibility does.
+        self._emit_loaded_changed()
 
     def save_screenshot(self, path: str) -> None:
         """Render the viewport and write it to ``path`` as a PNG.
@@ -10214,7 +10246,8 @@ class DesktopApp:
             return {}
         out = {key: entry.get(key)
                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
-                           "radius", "negative_color", "negative_iso")}
+                           "radius", "negative_color", "negative_iso",
+                           "negative_opacity", "negative_style")}
         out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
         # The Level slider spans up to here, so its right end genuinely empties the map.
@@ -10545,10 +10578,12 @@ class DesktopApp:
             "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": style, "clip": (0.0, 1.0), "mask_radius": None,
             "radius": radius, "negative_color": negative_color, "iso_kind": iso_kind,
-            # A difference map's negative contour: None means it mirrors the level above,
-            # which is the classic reading and stays true until the user reaches for the
-            # second control. Its own on/off, so half a difference map can be shown.
+            # A difference map's negative contour is an object in its own right: its own
+            # row in the panel, its own pane. Only the level has a tie to the map's --
+            # None means "linked", which is the classic +/-n sigma reading and the
+            # default. The rest start as the map's and go their own way from there.
             "negative_iso": None, "negative_visible": True,
+            "negative_opacity": 1.0, "negative_style": style,
         })
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()
@@ -11384,6 +11419,22 @@ class DesktopApp:
              "localres_downsample": v.get("localres_downsample"),
              "localres_domain": v.get("localres_domain")}
             for v in self._volumes if not v.get("is_resolution")
+        ] + [
+            # A difference map's negative contour, as its own row nested under its map.
+            #
+            # It used to have none: a second contour drawn from the map's own row, which
+            # left density on screen that no row owned, no eye could hide on its own and
+            # no Level slider reached -- "there are maps visible that no level slider
+            # affects, and I can't tell which is which". One drawn thing, one row.
+            {"kind": "negative", "id": v["id"], "name": "negative contour",
+             "visible": v.get("negative_visible", True), "active": False,
+             "group": v["group"], "pinned_to": v["id"],
+             "style": v.get("negative_style"), "color": v.get("negative_color"),
+             "opacity": v.get("negative_opacity"),
+             "iso": v["iso"] if v.get("negative_iso") is None else v["negative_iso"],
+             "linked": v.get("negative_iso") is None}
+            for v in self._volumes
+            if v.get("negative_color") and not v.get("is_resolution")
         ] + [
             # visible=None: not drawable, so the tree gives it no visibility box.
             {"kind": "reflections", "id": r["id"], "name": r["name"], "visible": None,
