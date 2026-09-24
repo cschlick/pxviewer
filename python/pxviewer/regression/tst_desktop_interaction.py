@@ -30,6 +30,7 @@ QAPP = qt_application()
 
 from PySide6.QtCore import QEvent, QPointF, Qt      # noqa: E402
 from PySide6.QtGui import QMouseEvent               # noqa: E402
+from PySide6.QtTest import QTest                   # noqa: E402
 from PySide6.QtWidgets import (                     # noqa: E402
     QApplication, QCheckBox, QComboBox, QTableWidget)
 
@@ -1380,6 +1381,75 @@ def exercise_residue_orientation_and_space_navigation():
         assert app._focused_residue == ("A", "14")
         app.step_next(-1)
         assert app._focused_residue == ("A", "13")
+
+
+def exercise_the_navigation_keys_are_registered_once_per_window():
+    """Two QShortcuts on one sequence in one window are AMBIGUOUS: Qt emits
+    activatedAmbiguously and fires neither handler.
+
+    They used to be created per pane -- viewport and controls -- which was fine while
+    those were separate windows. The controls became a dock inside the main window, both
+    panes started reporting the same window(), and every one of these keys went silently
+    dead: space, shift+space and Ctrl+R. Nothing failed, nothing logged; the keys just
+    stopped doing anything. Counting them is the cheap guard, because the failure is a
+    duplicate registration rather than a broken handler.
+    """
+    from PySide6.QtGui import QShortcut
+
+    with desktop() as app:
+        panes = (app._viewport.widget(), app._controls.widget())
+        windows = {id(w.window()) for w in panes}
+        for window_id in windows:
+            window = next(w.window() for w in panes if id(w.window()) == window_id)
+            keys = [sc.key().toString() for sc in window.findChildren(QShortcut)]
+            for sequence in ("Space", "Shift+Space", "Ctrl+R"):
+                assert keys.count(sequence) == 1, (
+                    "%s is registered %d times in one window; duplicates are ambiguous "
+                    "and fire nothing" % (sequence, keys.count(sequence)))
+
+
+def exercise_the_space_key_itself_steps_the_focused_table():
+    """Driving the key, not the handler.
+
+    The handler test below calls step_next directly, which says nothing about whether
+    the key reaches it -- and for a while it did not (see the exercise above). This one
+    presses space.
+    """
+    from pxviewer.validation import ValidationResult
+
+    with desktop() as app:
+        mid = ubiquitin(app)
+        app._controls._on_validation_ready((mid, [ValidationResult(
+            key="ramachandran", title="Ramachandran",
+            columns=["chain", "resid", "res"],
+            rows=[["A", "  13 ", "ILE"], ["A", "  14 ", "THR"], ["A", "  15 ", "GLU"]],
+            markup=[], summary="3 residues")]))
+        app._main.show()
+        process_events()
+        app._app.setActiveWindow(app._main)
+        table = app._controls._validation_subtabs.widget(0).findChild(QTableWidget)
+        table.setFocus()
+        table.selectRow(0)
+        process_events()
+        assert app._app.focusWidget() is table
+
+        QTest.keyClick(table, Qt.Key.Key_Space)
+        process_events()
+        assert table.currentRow() == 1, "the space key never reached step_next"
+        QTest.keyClick(table, Qt.Key.Key_Space, Qt.KeyboardModifier.ShiftModifier)
+        process_events()
+        assert table.currentRow() == 0
+
+        # And where a space means a space, it still types one: the shortcut must not
+        # eat text entry. (Qt offers the focus widget a ShortcutOverride first, and a
+        # line edit claims printable keys -- but that is a claim worth checking.)
+        box = app._controls._select_expr
+        box.clear()
+        box.setFocus()
+        process_events()
+        QTest.keyClicks(box, "chain A")
+        process_events()
+        assert box.text() == "chain A", repr(box.text())
 
 
 def exercise_space_steps_the_focused_table_a_row_at_a_time():

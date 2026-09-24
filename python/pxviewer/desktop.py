@@ -6517,16 +6517,27 @@ class DesktopApp:
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QKeySequence, QShortcut
 
+        # One set per *window*, not per pane. The controls are a dock inside the main
+        # window, so both panes live in the same window, and two WindowShortcuts on the
+        # same sequence there are AMBIGUOUS: Qt emits activatedAmbiguously and fires
+        # neither. Every one of these keys was dead -- space, shift+space and Ctrl+R --
+        # from the moment the controls pane became a dock. Deduplicated by window, and
+        # parented to the window itself so the context says what it means.
+        windows = []
         for _w in (self._viewport.widget(), self._controls.widget()):
-            nxt = QShortcut(QKeySequence(Qt.Key.Key_Space), _w)
+            window = _w.window()
+            if any(w is window for w in windows):
+                continue
+            windows.append(window)
+            nxt = QShortcut(QKeySequence(Qt.Key.Key_Space), window)
             nxt.setContext(Qt.ShortcutContext.WindowShortcut)
             nxt.activated.connect(lambda: self.step_next(1))
-            prv = QShortcut(QKeySequence("Shift+Space"), _w)
+            prv = QShortcut(QKeySequence("Shift+Space"), window)
             prv.setContext(Qt.ShortcutContext.WindowShortcut)
             prv.activated.connect(lambda: self.step_next(-1))
             # Refine drag is a mode you leave and re-enter constantly while fitting, and
             # its switch is a tab away from the viewport where it is used.
-            tug = QShortcut(QKeySequence("Ctrl+R"), _w)
+            tug = QShortcut(QKeySequence("Ctrl+R"), window)
             tug.setContext(Qt.ShortcutContext.WindowShortcut)
             tug.activated.connect(self._controls._refine_drag_btn.click)
 
