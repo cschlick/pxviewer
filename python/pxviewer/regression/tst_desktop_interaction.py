@@ -1071,6 +1071,51 @@ def exercise_the_selection_pane_describes_picked_atoms():
         assert controls._selection_label.text() == "None"
 
 
+def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
+    """'Clip to selection' is the only control the selection's clip sphere has, so
+    it is also the off switch: unticking it lifts what a selection already applied.
+    And because stepping a table row is just selecting, the same checkbox governs
+    whether a stepped row clips."""
+    with desktop() as app:
+        mid = ubiquitin(app)
+        controls = app._controls
+        entry = app._model_entry(mid)
+
+        app.select_by_expression("resseq 5")        # clip is on by default
+        assert entry["_auto_clip"] is True
+        assert None in entry["session"]._clips
+
+        controls._clip_on_select.setChecked(False)
+        assert "_auto_clip" not in entry
+        assert None not in entry["session"]._clips
+
+        controls._clip_on_select.setChecked(True)   # leave the toggle as found
+        assert None not in entry["session"]._clips  # checking does not re-clip
+
+        # Stepping a table row is a selection, so it answers to the same checkbox.
+        model, view = controls._component_model, controls._component_view
+        view.selectRow(1)
+        controls._push_component_selection_to_viewer()   # the debounced slot
+        assert entry["_auto_clip"] is True
+        assert None in entry["session"]._clips
+
+        controls._clip_on_select.setChecked(False)       # lifts it again...
+        assert "_auto_clip" not in entry
+        view.selectRow(2)                                # ...and stays lifted
+        controls._push_component_selection_to_viewer()
+        assert "_auto_clip" not in entry
+        assert None not in entry["session"]._clips
+        controls._clip_on_select.setChecked(True)
+
+        # The atoms table steps the same pipeline, one atom at a time.
+        atom_model, atom_view = controls._atom_model, controls._atom_view
+        atom_view.selectRow(0)
+        controls._push_table_selection_to_viewer()
+        assert entry["_auto_clip"] is True
+        assert app._scene_selection.get(mid) == [atom_model.row_atom(0)]
+        controls._clip_on_select.setChecked(False)
+
+
 def exercise_validation_subtabs_and_row_focus():
     """Each result becomes a sub-tab, and selecting a whole row focuses that residue,
     resolved to atom indices on the active model."""

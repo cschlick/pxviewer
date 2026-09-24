@@ -231,6 +231,55 @@ def exercise_the_table_follows_the_active_model_but_can_be_pinned():
         assert controls._table_model_id == b
 
 
+# -- the components table -----------------------------------------------------
+
+
+def exercise_the_components_table_lists_residues_and_steps_them():
+    """The residue walk, as a table: rows are the model's residue groups, and a
+    selected row makes the same selection a space-bar step or a residue click
+    makes -- the scene selection, the focused residue, the atoms-table rows."""
+    from types import SimpleNamespace
+
+    app = ubiquitin_desktop()
+    try:
+        controls = app._controls
+        model = controls._component_model
+        view = controls._component_view
+        mid = controls._table_model_id
+        assert mid == app._active_model_id
+
+        # 1UBQ: 76 protein residues then its waters -- components means all of them.
+        assert model.rowCount() == 134
+        assert headers_of(model) == ["#", "chain", "resname", "resid", "atoms"]
+        assert [model.data(model.index(0, c)) for c in (1, 2, 3)] == ["A", "MET", "1"]
+        assert model.data(model.index(133, 2)) == "HOH"
+
+        app._main.show()
+        process_events()
+        app._app.setActiveWindow(app._main)
+        view.setCurrentIndex(model.index(0, 0))          # also selects it
+        view.setFocus()
+        process_events()
+        assert app._app.focusWidget() is view
+
+        app.step_next(1)
+        assert view.currentIndex().row() == 1
+        app._controls._push_component_selection_to_viewer()  # the debounced slot
+        assert app._scene_selection.get(mid) == model.row_atoms(1)
+        assert app._focused_residue == model.row_label(1) == ("A", "2")
+
+        # A scene-level selection marks the component row it touches...
+        app._on_model_selection(mid, SimpleNamespace(indices=list(model.row_atoms(9))))
+        assert [i.row() for i in view.selectionModel().selectedRows()] == [9]
+        # ...and the shared filter collapses the list to it.
+        controls._filter_selection_check.setChecked(True)
+        assert model.is_filtered() and model.rowCount() == 1
+        controls._filter_selection_check.setChecked(False)
+        assert model.rowCount() == 134
+    finally:
+        dispose(app)
+
+
 # -- the restraint table ------------------------------------------------------
 
 

@@ -30,7 +30,7 @@ Automated coverage is documented in `TESTING.md`; nothing here replaces it.
 2. With macOS set to **dark** appearance, launch again.
    - **Watch for:** the app is fully light regardless — no dark panels, no
      half-light/half-dark mix, no unreadable text anywhere. Dark mode is pinned off.
-3. Look over the right panel: six icon tabs — Scene, Tools, Validation, Geometry,
+3. Look over the right panel: six icon tabs — Scene, Geometry, Validation, Tools,
    Console, Settings (Hotspots is a sub-tab of Validation, not a tab of its own).
    - **Watch for:** tabs share the full bar width with no dead grey strip on the right;
      icons are crisp (not blurry — a HiDPI regression); the selected tab's underline is
@@ -183,8 +183,11 @@ Load a protein (1ubq works).
    - **Watch for:** the residue fills most of the frame; backbone N on the left, C on
      the right, side chain pointing up; nothing important lands offscreen; near/far
      clipping isolates the residue from the rest of the molecule.
-2. Uncheck **Clip to selection**, apply again.
-   - **Watch for:** same framing, but the whole structure stays visible around it.
+2. With a clip applied, uncheck **Clip to selection** without applying anything new.
+   - **Watch for:** the surrounding structure reappears immediately — the checkbox is
+     also the release for a clip a selection (or a table row) already applied. Apply
+     again: same framing, but the whole structure stays visible around it. Re-check
+     it and apply once more to confirm selections clip again.
 3. Uncheck **Focus on selection**, apply a different residue.
    - **Watch for:** the selection highlights but the camera stays put.
 4. Select a helix or a whole chain (e.g. `resseq 20:35`).
@@ -200,6 +203,10 @@ Load a protein (1ubq works).
      that never moves. It stops at the first and last row: running off the end of a
      worklist should be visible, and the model jumping at that moment would read as a
      bug. Click the viewport again and space goes back to walking residues.
+   - **Watch for:** each row is a real selection — the Components/Atoms rows frame,
+     isolate and dress the neighbourhood exactly as the Selection pane's Focus /
+     Clip / Neighborhood checkboxes say, so stepping the list clips only while
+     **Clip to selection** is checked.
 6. Pick atoms in the viewport; watch the description label and atoms table. Select rows
    in the atoms table instead.
    - **Watch for:** both directions agree; the label counts what you actually picked;
@@ -265,9 +272,12 @@ Load the X-ray demo or a model with restraints available.
    - **Watch for:** the two modes are mutually exclusive (buttons show it); dragging
      moves atoms — it never *also* selects; with the X-ray demo, the difference map
      updates live in a box around the drag; arming a drag pauses a running minimize.
-3. Geometry tab: Atoms subtab and each restraint subtab; click rows.
-   - **Watch for:** tables fill, sort, and follow the active model; clicking a restraint
-     row marks it in the viewport in ball-and-stick.
+3. Geometry tab: Components, Atoms, and each restraint subtab; click rows, then
+   step them with Space.
+   - **Watch for:** Components lists one row per residue and stepping walks the
+     residues (the row is the same selection a residue click makes); Atoms steps
+     one atom at a time; tables fill, sort, and follow the active model; clicking
+     a restraint row marks it in the viewport in ball-and-stick.
 4. Validation tab: press play with the default ticks; open every subtab; click rows.
    Then tick **Clashes & contacts** and run again.
    - **Watch for:** results appear per-section; only ticked checks produce subtabs;

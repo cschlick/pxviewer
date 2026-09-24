@@ -887,6 +887,138 @@ def _make_atom_table_model():
     return AtomTableModel()
 
 
+def _make_component_table_model():
+    """A QAbstractTableModel over a session's components (built lazily post-Qt).
+
+    Rows are residue groups in hierarchy order -- protein residues, ligands,
+    waters, ions: the unit the residue walk steps in, as a list it can be
+    stepped through like every other table here. Each row keeps its atom
+    indices so a selection pushes straight to the viewer, and an atom->row
+    owner map so a viewer selection can mark the rows it touches.
+    """
+    from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
+    class ComponentTableModel(QAbstractTableModel):
+        def __init__(self):
+            super().__init__()
+            self._headers = ["#", "chain", "resname", "resid", "atoms"]
+            self._rows: list = []   # (chain, resname, resid, [atom indices])
+            self._owner = None      # atom index -> component index (numpy, -1 = none)
+            self._filter: Optional[list] = None  # None = all rows; else visible components
+
+        def set_session(self, session) -> None:
+            self.beginResetModel()
+            self._filter = None
+            self._rows = []
+            self._owner = None
+            model = getattr(session, "model", None)
+            if model is not None:
+                hierarchy = model.get_hierarchy()
+                self._owner = np.full(hierarchy.atoms_size(), -1, dtype=np.int64)
+                for model_ in hierarchy.models():
+                    for chain in model_.chains():
+                        cid = chain.id.strip()
+                        for rg in chain.residue_groups():
+                            idxs = [int(a.i_seq) for a in rg.atoms()]
+                            if not idxs:
+                                continue
+                            resname = rg.atom_groups()[0].resname.strip()
+                            self._owner[idxs] = len(self._rows)
+                            self._rows.append((cid, resname, rg.resid().strip(), idxs))
+            else:
+                arrays = getattr(getattr(session, "_data", None), "arrays", None)
+                if arrays is not None and len(arrays) > 0:
+                    # No hierarchy: group consecutive atoms by their residue labels.
+                    self._owner = np.full(len(arrays), -1, dtype=np.int64)
+                    prev = object()
+                    for i in range(len(arrays)):
+                        key = (arrays.chain[i], int(arrays.resseq[i]), arrays.resname[i])
+                        if key != prev:
+                            prev = key
+                            self._rows.append(
+                                (arrays.chain[i], arrays.resname[i],
+                                 str(int(arrays.resseq[i])), [i]))
+                        else:
+                            self._rows[-1][3].append(i)
+                        self._owner[i] = len(self._rows) - 1
+            self.endResetModel()
+
+        def set_filter(self, components) -> None:
+            """Restrict the visible rows to these component indices; None = all."""
+            self.beginResetModel()
+            if components is None:
+                self._filter = None
+            else:
+                self._filter = [c for c in sorted({int(c) for c in components})
+                                if 0 <= c < len(self._rows)]
+            self.endResetModel()
+
+        def is_filtered(self) -> bool:
+            return self._filter is not None
+
+        def row_component(self, row: int) -> int:
+            """The underlying component index for a view row (identity unless filtered)."""
+            return row if self._filter is None else self._filter[row]
+
+        def row_atoms(self, row: int) -> list:
+            return self._rows[self.row_component(row)][3]
+
+        def row_label(self, row: int):
+            """The ``(chain, resid)`` a view row names -- the residue-walk key."""
+            chain, _resname, resid, _atoms = self._rows[self.row_component(row)]
+            return chain, resid
+
+        def components_with_atoms(self, atoms) -> list:
+            """Component indices (not view rows) containing any of ``atoms``."""
+            if self._owner is None:
+                return []
+            return sorted({int(self._owner[a]) for a in atoms
+                           if 0 <= a < len(self._owner) and self._owner[a] >= 0})
+
+        def rows_with_atoms(self, atoms) -> list:
+            """View rows whose component contains any of ``atoms``."""
+            comps = self.components_with_atoms(atoms)
+            if self._filter is None:
+                return comps
+            pos = {c: r for r, c in enumerate(self._filter)}
+            return sorted(pos[c] for c in comps if c in pos)
+
+        def rowCount(self, parent=QModelIndex()):
+            if parent.isValid():
+                return 0
+            return len(self._rows) if self._filter is None else len(self._filter)
+
+        def columnCount(self, parent=QModelIndex()):
+            return 0 if parent.isValid() else len(self._headers)
+
+        def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+            if not index.isValid():
+                return None
+            comp = self.row_component(index.row())
+            chain, resname, resid, atoms = self._rows[comp]
+            col = index.column()
+            if role == Qt.ItemDataRole.DisplayRole:
+                if col == 0:
+                    return str(comp)
+                if col == 1:
+                    return chain
+                if col == 2:
+                    return resname
+                if col == 3:
+                    return resid
+                return str(len(atoms))
+            if role == Qt.ItemDataRole.TextAlignmentRole and col in (0, 3, 4):
+                return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            return None
+
+        def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+            if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+                return self._headers[section]
+            return None
+
+    return ComponentTableModel()
+
+
 def _atom_label_fn(session):
     """A ``i_seq -> "chain/resnameresseq/name"`` labeller from a session's columns."""
     arrays = getattr(getattr(session, "_data", None), "arrays", None)
@@ -1381,9 +1513,9 @@ class ControlsWindow:
         tint = self._btn_tint
         specs = [
             (self._build_scene_tab(), "Scene", "layers"),
-            (self._build_tools_tab(), "Tools", "wrench"),
-            (self._build_validation_tab(), "Validation", "award"),
             (self._build_geometry_tab(), "Geometry", "drafting-compass"),
+            (self._build_validation_tab(), "Validation", "award"),
+            (self._build_tools_tab(), "Tools", "wrench"),
             (self._build_console_tab(), "Console", "square-terminal"),
             (self._build_settings_tab(), "Settings", "sliders-horizontal"),
         ]
@@ -1699,20 +1831,20 @@ class ControlsWindow:
                 "selection/focus_on_apply", "true" if on else "false"))
         sl.addWidget(self._focus_on_select)
 
-        # Whether the focus also clips a slab around the selection. On by default --
-        # the slab is what isolates the named atoms from everything in front of and
+        # Whether the focus also clips a sphere around the selection. On by default --
+        # the sphere is what isolates the named atoms from everything in front of and
         # behind them -- but sometimes the surroundings are the point, so it is a
-        # choice, made where the behaviour happens.
+        # choice, made where the behaviour happens. The sphere has no other control,
+        # so unchecking also lifts a standing one (see _on_clip_on_select_toggled).
         self._clip_on_select = QCheckBox("Clip to selection")
         self._clip_on_select.setToolTip(
-            "Clip the view to a slab that just contains the selected atoms; "
-            "uncheck to keep the whole scene visible around them.")
+            "Clip the view to a sphere that just contains the selected atoms; "
+            "uncheck to keep the whole scene visible around them — and to lift a "
+            "clip a selection already applied.")
         self._clip_on_select.setChecked(
             str(self._desktop._settings.value("selection/clip_on_apply", "true")).lower()
             != "false")
-        self._clip_on_select.toggled.connect(
-            lambda on: self._desktop._settings.setValue(
-                "selection/clip_on_apply", "true" if on else "false"))
+        self._clip_on_select.toggled.connect(self._on_clip_on_select_toggled)
         sl.addWidget(self._clip_on_select)
 
         self._context_on_select = QCheckBox("Neighborhood in ball-and-stick")
@@ -4220,9 +4352,9 @@ class ControlsWindow:
         # (atoms -> selected atoms; each restraint -> restraints within the selection).
         self._filter_selection_check = QCheckBox("Show only the selection")
         self._filter_selection_check.setToolTip(
-            "Collapse every Geometry table to the current selection: the Atoms table "
-            "to the selected atoms, and each restraint table to the restraints whose "
-            "atoms are all selected."
+            "Collapse every Geometry table to the current selection: the Components "
+            "table to the residues it touches, the Atoms table to the selected atoms, "
+            "and each restraint table to the restraints whose atoms are all selected."
         )
         self._filter_selection_check.toggled.connect(self._on_filter_toggled)
 
@@ -4251,6 +4383,7 @@ class ControlsWindow:
 
         subtabs = QTabWidget()
         self._geo_subtabs = subtabs
+        subtabs.addTab(self._build_components_subtab(), "Components")
         subtabs.addTab(self._build_atoms_subtab(), "Atoms")
         self._restraint_subtab_start = subtabs.count()
         for key, label, columns in CATEGORIES:
@@ -4308,6 +4441,21 @@ class ControlsWindow:
     def _on_geometry_subtab_changed(self, index: int) -> None:
         if index >= self._restraint_subtab_start:  # a restraint tab
             self._ensure_restraints()
+        # Space steps the focused table; the table you can see is the one that
+        # should answer, without having to click into it first.
+        view = self._geometry_subtab_view(index)
+        if view is not None:
+            view.setFocus()
+
+    def _geometry_subtab_view(self, index: int):
+        """The table a Geometry sub-tab is about, if it has one."""
+        if index == 0:
+            return self._component_view
+        if index == 1:
+            return self._atom_view
+        infos = list(self._restraint_tabs.values())
+        restraint = index - self._restraint_subtab_start
+        return infos[restraint]["view"] if 0 <= restraint < len(infos) else None
 
     def _viewing_restraint_tab(self) -> bool:
         return self._geo_subtabs.currentIndex() >= self._restraint_subtab_start
@@ -4478,6 +4626,52 @@ class ControlsWindow:
         if self._console is not None:
             self._console.shutdown()
             self._console = None
+
+    def _build_components_subtab(self):
+        """The Components table: every residue group in the model, one row each.
+
+        The residue walk rendered as a list -- stepping it with Space is the
+        same gesture as anywhere else, and a picked or typed residue lights its
+        row here. Follows the same model as the Atoms table (the Model dropdown
+        there governs every Geometry table).
+        """
+        from PySide6.QtCore import QTimer
+        from PySide6.QtWidgets import (
+            QAbstractItemView,
+            QLabel,
+            QTableView,
+            QVBoxLayout,
+            QWidget,
+        )
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setSpacing(6)
+
+        self._components_count = QLabel("No structure loaded")
+        layout.addWidget(self._components_count)
+
+        self._component_model = _make_component_table_model()
+        view = QTableView()
+        self._component_view = view
+        view.setModel(self._component_model)
+        view.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        view.verticalHeader().setVisible(False)  # the "#" column is the component index
+        view.setAlternatingRowColors(True)
+        view.setWordWrap(False)
+        view.horizontalHeader().setStretchLastSection(True)
+        view.selectionModel().selectionChanged.connect(
+            lambda *_: self._on_component_selection_changed())
+        layout.addWidget(view, stretch=1)
+
+        # Table -> viewer selection is debounced so a drag doesn't flood the socket.
+        self._component_sync_timer = QTimer()
+        self._component_sync_timer.setSingleShot(True)
+        self._component_sync_timer.setInterval(60)
+        self._component_sync_timer.timeout.connect(self._push_component_selection_to_viewer)
+        return tab
 
     def _build_atoms_subtab(self):
         from PySide6.QtCore import QTimer
@@ -5093,6 +5287,14 @@ class ControlsWindow:
             self._set_status(f"Exported {Path(coord).name} + {Path(restraints).name}")
         except Exception as exc:
             QMessageBox.warning(self._window, "Export failed", str(exc))
+
+    def _on_clip_on_select_toggled(self, on: bool) -> None:
+        """The checkbox is also the removal control for a clip a selection already
+        applied: the sphere has no other UI, so turning it off lifts it."""
+        self._desktop._settings.setValue(
+            "selection/clip_on_apply", "true" if on else "false")
+        if not on:
+            self._desktop.lift_auto_clips()
 
     def _on_select_expression(self) -> None:
         self._run_selection(self._select_expr.text())
@@ -5712,6 +5914,48 @@ class ControlsWindow:
         """The current selection restricted to the model the table is showing."""
         return self._scene_selection.get(self._table_model_id, [])
 
+    def _apply_component_selection(self) -> None:
+        """Reflect the table model's selection in the Components list: filter the
+        rows, or mark the components the selection touches."""
+        indices = self._table_selection_indices()
+        if self._filter_selection_check.isChecked():
+            with self._table_sync_suppressed():
+                self._component_model.set_filter(
+                    self._component_model.components_with_atoms(indices))
+            self._update_components_count()
+        else:
+            if self._component_model.is_filtered():
+                with self._table_sync_suppressed():
+                    self._component_model.set_filter(None)
+                self._update_components_count()
+            self._select_component_rows(indices)
+
+    def _select_component_rows(self, atom_indices) -> None:
+        """Mark the components the atoms belong to, without echoing back to the viewer."""
+        from PySide6.QtCore import QItemSelection, QItemSelectionModel
+
+        model = self._component_model
+        view = self._component_view
+        sm = view.selectionModel()
+        with self._table_sync_suppressed():
+            sm.clearSelection()
+            ncols = model.columnCount()
+            rows = model.rows_with_atoms(atom_indices)
+            if rows and ncols:
+                selection = QItemSelection()
+                last = ncols - 1
+                for start, end in _runs(rows):  # contiguous ranges keep this cheap
+                    selection.select(model.index(start, 0), model.index(end, last))
+                sm.select(selection, QItemSelectionModel.SelectionFlag.Select)
+                view.scrollTo(model.index(rows[0], 0))
+
+    def _update_components_count(self) -> None:
+        n = self._component_model.rowCount()
+        if self._component_model.is_filtered():
+            self._components_count.setText(f"{n} selected component(s)")
+        else:
+            self._components_count.setText(f"{n} components" if n else "No structure loaded")
+
     def _apply_table_selection(self) -> None:
         """Reflect the table model's selection: filter the rows, or highlight them."""
         indices = self._table_selection_indices()
@@ -5731,8 +5975,9 @@ class ControlsWindow:
 
     def _apply_geometry_filter(self) -> None:
         """Apply the shared 'show only the selection' state to every Geometry table."""
-        self._apply_table_selection()   # the Atoms table
-        self._apply_restraint_filter()  # Bonds / Angles / Dihedrals / Chirality / Planarity
+        self._apply_component_selection()  # the Components table
+        self._apply_table_selection()      # the Atoms table
+        self._apply_restraint_filter()     # Bonds / Angles / Dihedrals / Chirality / Planarity
 
     def _on_restraints_changed(self, mid) -> None:
         """A model's restraints were rebuilt: drop the cache and refill the tables.
@@ -5838,7 +6083,10 @@ class ControlsWindow:
         session = self._desktop.session_for(mid)
         with self._table_sync_suppressed():
             self._atom_model.set_session(session)  # clears any filter
+            self._component_model.set_session(session)
         self._update_atoms_count()
+        self._update_components_count()
+        self._apply_component_selection()
         self._apply_table_selection()
         self._invalidate_restraints()  # geometry follows the same model
 
@@ -6211,11 +6459,71 @@ class ControlsWindow:
         if not self._suppress_table_sync:
             self._table_sync_timer.start()  # debounce a drag-select
 
+    def _on_component_selection_changed(self) -> None:
+        if not self._suppress_table_sync:
+            self._component_sync_timer.start()  # debounce a drag-select
+
+    def _selection_flags(self):
+        """The Selection pane's three checkboxes, as (focus, clip, context)."""
+        return (self._focus_on_select.isChecked(),
+                self._clip_on_select.isChecked(),
+                self._context_on_select.isChecked())
+
+    def _push_component_selection_to_viewer(self) -> None:
+        """Component rows -> the viewer: select what the rows name.
+
+        One row IS a residue, so it goes through the same pipeline as a
+        space-bar step or a clicked residue -- the focused-residue marker, the
+        scene selection, the framing -- and the atoms table echoes the same
+        atoms. Several rows select their atoms together. Like a Validation row,
+        the framing, clip sphere and neighbourhood context answer to the
+        Selection pane's checkboxes: stepping a list is still just selecting.
+        """
+        rows = [idx.row() for idx in self._component_view.selectionModel().selectedRows()]
+        mid = self._table_model_id
+        desktop = self._desktop
+        active = mid is not None and mid == desktop._active_model_id
+        focus, clip, context = self._selection_flags()
+        if len(rows) == 1 and active:
+            chain, resid = self._component_model.row_label(rows[0])
+            if desktop.focus_residue(chain, resid,
+                                     focus=focus, clip=clip,
+                                     context=context) is not None:
+                return
+        atoms = [i for r in rows for i in self._component_model.row_atoms(r)]
+        entry = desktop._model_entry(mid)
+        session = entry["session"] if entry else None
+        if session is not None and getattr(session, "model", None) is not None:
+            desktop._select_fragment(mid, session, entry, atoms,
+                                     focus=focus, clip=clip, context=context)
+            if rows and active:
+                # Keep the residue walk anchored at the last row chosen, so an
+                # unfocused Space continues from here rather than an older pick.
+                chain, resid = self._component_model.row_label(rows[-1])
+                desktop._focused_residue = (chain.strip(), resid.strip())
+        else:
+            desktop.highlight_atoms_in(mid, atoms)
+            desktop.focus_atoms_in(mid, atoms)
+
     def _push_table_selection_to_viewer(self) -> None:
+        """Atom rows -> the viewer: the same selection a clicked atom makes.
+
+        Model-backed sessions go through the fragment pipeline, so the rows
+        honour the Selection pane's checkboxes like every other selection;
+        model-less ones get the plain highlight-and-aim they always had.
+        """
         rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
         atoms = [self._atom_model.row_atom(r) for r in rows]
-        self._desktop.highlight_atoms_in(self._table_model_id, atoms)
-        self._desktop.focus_atoms_in(self._table_model_id, atoms)
+        mid = self._table_model_id
+        entry = self._desktop._model_entry(mid)
+        session = entry["session"] if entry else None
+        if session is not None and getattr(session, "model", None) is not None:
+            focus, clip, context = self._selection_flags()
+            self._desktop._select_fragment(mid, session, entry, atoms,
+                                           focus=focus, clip=clip, context=context)
+        else:
+            self._desktop.highlight_atoms_in(mid, atoms)
+            self._desktop.focus_atoms_in(mid, atoms)
 
     def _select_table_rows(self, indices) -> None:
         """Select the given atom rows in the table without echoing back to the viewer."""
@@ -12322,6 +12630,22 @@ class DesktopApp:
         self._status("Refine drag enabled — drag an atom to pull and minimize"
                      if enabled else "Refine drag disabled")
 
+    def lift_auto_clips(self) -> None:
+        """Drop every standing selection-clip sphere.
+
+        The sphere only ever exists on a selection's behalf (``_auto_clip`` is set
+        nowhere else), so the "Clip to selection" checkbox doubling as its removal
+        control is honest: turning it off lifts what it put on. A manually set slab
+        (the Appearance pane's Clipping row) is a different control's state and is
+        left alone.
+        """
+        for m in self._models:
+            try:
+                if m.pop("_auto_clip", False):
+                    m["session"].set_clip(0.0, 1.0, radius=None)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
     def clear_selection(self) -> None:
         for m in self._models:
             try:
@@ -12499,14 +12823,15 @@ class DesktopApp:
     def focus_residue(self, chain: str, resid: str, *, focus: bool = True,
                       clip: bool = False, context: bool = False):
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode
-        string) on the active model — driven by a Validation table row or space-bar
-        navigation. Routed through the same fragment pipeline as a click or a typed
-        expression, so the caller's flags (the Selection pane's checkboxes, for a
-        Validation row) govern the framing, isolation clip and neighbourhood context
-        identically. Space-bar navigation keeps the plain defaults: frame it, touch
-        nothing else. Returns the equivalent selection expression (for the selection
-        box), or ``None`` when the residue names no atoms. The residue->atom-index
-        map is built once from the model and cached on the model entry."""
+        string) on the active model — driven by a Validation or Components table
+        row or space-bar navigation. Routed through the same fragment pipeline as a
+        click or a typed expression, so the caller's flags (the Selection pane's
+        checkboxes, for a table row) govern the framing, isolation clip and
+        neighbourhood context identically. Space-bar navigation keeps the plain
+        defaults: frame it, touch nothing else. Returns the equivalent selection
+        expression (for the selection box), or ``None`` when the residue names no
+        atoms. The residue->atom-index map is built once from the model and cached
+        on the model entry."""
         entry = self._model_entry(self._active_model_id)
         if entry is None:
             return None

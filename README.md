@@ -492,11 +492,15 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
 - **File** — open a model (read by cctbx) or a volume, and manage *loaded models*.
   Several models can be shown at once (check to show/hide) or switched between; the
   selected row is the *active* model.
+- **Geometry ▸ Components** — the model's residue groups (residues, ligands,
+  waters), one per row. Selecting a row is the same selection a residue click or
+  a space-bar step makes; Space steps the list a residue at a time.
 - **Geometry ▸ Atoms** — a virtualised table of every per-atom attribute (fast at
   100k+ atoms). A **Model** dropdown picks which model's atoms it shows (it follows
   the active model, or pin it to another); **Show only selected atoms** collapses it
   to the current selection. Selecting rows highlights those atoms in the viewport,
-  and picking atoms in the viewport selects their rows.
+  and picking atoms in the viewport selects their rows. Space steps one atom at a
+  time.
 - **Geometry ▸ Bonds / Angles / Dihedrals / Chirality / Planarity** — the model's
   cctbx geometry restraints, one virtualised table per type. Each row is a restraint
   (its atoms, ideal, model, delta, sigma, residual), read straight from the cctbx
