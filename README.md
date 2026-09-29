@@ -504,8 +504,9 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
 - **Geometry ▸ Bonds / Angles / Dihedrals / Chirality / Planarity** — the model's
   cctbx geometry restraints, one virtualised table per type. Each row is a restraint
   (its atoms, ideal, model, delta, sigma, residual), read straight from the cctbx
-  proxy arrays and computed on demand. Selecting a row highlights the atoms it
-  involves. Needs the monomer library (see below).
+  proxy arrays and computed on demand. Selecting a row is a real selection of the
+  atoms it involves — framed and clipped under the Selection pane's checkboxes —
+  with the measurement notation drawn on top. Needs the monomer library (see below).
 - **Console** — a live IPython shell (see below).
 - **Demos** — the built-in model and volume demos.
 

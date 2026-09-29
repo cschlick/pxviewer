@@ -185,9 +185,10 @@ Load a protein (1ubq works).
      clipping isolates the residue from the rest of the molecule.
 2. With a clip applied, uncheck **Clip to selection** without applying anything new.
    - **Watch for:** the surrounding structure reappears immediately — the checkbox is
-     also the release for a clip a selection (or a table row) already applied. Apply
-     again: same framing, but the whole structure stays visible around it. Re-check
-     it and apply once more to confirm selections clip again.
+     the clip sphere's only control, so it works on the standing selection both
+     ways: off lifts it, back on puts it right back without a fresh selection.
+     Apply a selection while unchecked: same framing, but the whole structure
+     stays visible around it.
 3. Uncheck **Focus on selection**, apply a different residue.
    - **Watch for:** the selection highlights but the camera stays put.
 4. Select a helix or a whole chain (e.g. `resseq 20:35`).
@@ -202,11 +203,17 @@ Load a protein (1ubq works).
      follows each row, rather than the model stepping along the chain underneath a list
      that never moves. It stops at the first and last row: running off the end of a
      worklist should be visible, and the model jumping at that moment would read as a
-     bug. Click the viewport again and space goes back to walking residues.
-   - **Watch for:** each row is a real selection — the Components/Atoms rows frame,
-     isolate and dress the neighbourhood exactly as the Selection pane's Focus /
-     Clip / Neighborhood checkboxes say, so stepping the list clips only while
-     **Clip to selection** is checked.
+     bug.
+   - **Watch for:** the table you last engaged *keeps* the key — switch to the Scene
+     tab or click the viewport and space still walks that table, not the residue
+     chain. The residue walk is only the default before any table has been touched;
+     switching to another table (its sub-tab, a row) is what moves the key to it.
+   - **Watch for:** each row is a real selection — Components/Atoms/restraint rows
+     alike frame, isolate and dress the neighbourhood exactly as the Selection
+     pane's Focus / Clip / Neighborhood checkboxes say, so stepping the list clips
+     only while **Clip to selection** is checked, and a restraint row's sphere
+     centres on the restraint's atoms rather than inheriting whatever a previous
+     selection left.
 6. Pick atoms in the viewport; watch the description label and atoms table. Select rows
    in the atoms table instead.
    - **Watch for:** both directions agree; the label counts what you actually picked;
@@ -247,7 +254,7 @@ Run **Tutorials ▸ Look at local resolution** twice.
 ## Pass 7 — Tutorials sweep (15 min)
 
 1. Open the Tutorials menu (graduation cap).
-   - **Watch for:** ten entries, stable order, titles match what they teach.
+   - **Watch for:** nine entries, stable order, titles match what they teach.
 2. Run **Open a model** and **Alternate conformations** to completion, doing exactly
    what each step says.
    - **Watch for:** wording matches the real UI ("Objects list", "Appearance pane" —
@@ -256,7 +263,8 @@ Run **Tutorials ▸ Look at local resolution** twice.
      height for the whole tutorial — no jiggling between steps; highlighted target
      widgets are the right ones; exiting mid-tutorial restores the normal layout.
 3. Start each remaining tutorial and complete its first step or two, including both
-   demo-data ones (cryo-EM, X-ray) and both restraint-edit ones.
+   demo-data ones (cryo-EM, X-ray) and the restraint-edits one — it should load the
+   sample PHIL, then clear it and author the same bond by hand.
    - **Watch for:** each loads its own example without touching your other loaded
      objects unexpectedly; fetch-dependent tutorials fail readably when offline.
 
@@ -277,7 +285,8 @@ Load the X-ray demo or a model with restraints available.
    - **Watch for:** Components lists one row per residue and stepping walks the
      residues (the row is the same selection a residue click makes); Atoms steps
      one atom at a time; tables fill, sort, and follow the active model; clicking
-     a restraint row marks it in the viewport in ball-and-stick.
+     a restraint row selects its atoms — marked, framed and clipped like any
+     other selection — and draws its measurement notation on top.
 4. Validation tab: press play with the default ticks; open every subtab; click rows.
    Then tick **Clashes & contacts** and run again.
    - **Watch for:** results appear per-section; only ticked checks produce subtabs;

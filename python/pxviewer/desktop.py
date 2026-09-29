@@ -829,11 +829,12 @@ def _make_atom_table_model():
             Backs the "show only selected" mode. Only the small selected subset is
             materialised, so the view stays cheap even against 100k+ atoms.
             """
+            new = (None if indices is None else
+                   [i for i in sorted({int(i) for i in indices}) if 0 <= i < self._n])
+            if new == self._filter:
+                return  # a reset clears the view's selection — only pay it on change
             self.beginResetModel()
-            if indices is None:
-                self._filter = None
-            else:
-                self._filter = [i for i in sorted({int(i) for i in indices}) if 0 <= i < self._n]
+            self._filter = new
             self.endResetModel()
 
         def is_filtered(self) -> bool:
@@ -945,12 +946,13 @@ def _make_component_table_model():
 
         def set_filter(self, components) -> None:
             """Restrict the visible rows to these component indices; None = all."""
+            new = (None if components is None else
+                   [c for c in sorted({int(c) for c in components})
+                    if 0 <= c < len(self._rows)])
+            if new == self._filter:
+                return  # a reset clears the view's selection — only pay it on change
             self.beginResetModel()
-            if components is None:
-                self._filter = None
-            else:
-                self._filter = [c for c in sorted({int(c) for c in components})
-                                if 0 <= c < len(self._rows)]
+            self._filter = new
             self.endResetModel()
 
         def is_filtered(self) -> bool:
@@ -1121,8 +1123,11 @@ def _make_restraint_table_model():
 
         def set_filter(self, indices) -> None:
             """Restrict visible rows to ``indices`` (restraint order); None = all."""
+            new = None if indices is None else sorted({int(i) for i in indices})
+            if new == self._filter:
+                return  # a reset clears the view's selection — only pay it on change
             self.beginResetModel()
-            self._filter = None if indices is None else list(indices)
+            self._filter = new
             self._memo_key, self._memo = -1, None
             self.endResetModel()
 
@@ -2392,6 +2397,7 @@ class ControlsWindow:
         remove = QPushButton("Remove")
         remove.setToolTip("Remove the selected edit")
         remove.clicked.connect(self._on_remove_edit)
+        self._edit_remove_btn = remove  # a tutorial highlight target
         clear = QPushButton("Clear")
         clear.setToolTip("Remove all edits from the active model")
         clear.clicked.connect(self._on_clear_edits)
@@ -2907,6 +2913,7 @@ class ControlsWindow:
         cols = result.columns
         if "chain" not in cols or "resid" not in cols:
             return
+        self._engage_step_view(table)
         row = table.currentRow()
         if row < 0:
             return
@@ -3293,6 +3300,7 @@ class ControlsWindow:
         row = table.currentRow()
         if not columns or row < 0:
             return
+        self._engage_step_view(table)
         chain = table.item(row, columns.index("chain"))
         resid = table.item(row, columns.index("resid"))
         if chain is not None and resid is not None:
@@ -3372,6 +3380,45 @@ class ControlsWindow:
         # Selection pane's "Neighborhood in ball-and-stick" checkbox — one treatment
         # for clicked and typed selections alike.)
         layout.addWidget(viewer)
+
+        selection = QGroupBox("Selection")
+        sg = QVBoxLayout(selection)
+
+        # The clip sphere is reach + this much: how much neighbourhood survives
+        # around a clipped selection is a taste setting, not a property of any one
+        # selection, so it lives here once. 4 A keeps a lone atom readable; a bond's
+        # own reach already covers its two atoms.
+        pad_row = QHBoxLayout()
+        pad_label = QLabel("Pad the clip sphere by")
+        pad_spin = QDoubleSpinBox()
+        pad_spin.setRange(0.0, 50.0)
+        pad_spin.setDecimals(1)
+        pad_spin.setSingleStep(1.0)
+        pad_spin.setSuffix(" Å")
+        pad_spin.setValue(float(self._desktop._settings.value(
+            "selection/clip_padding", 4.0)))
+        pad_tail = QLabel("past the selected atoms")
+        pad_tip = ("The sphere a clipped selection draws is the selection's reach "
+                   "plus this much clearance, so even a single atom keeps its "
+                   "neighbourhood in view. Applies to the next selection and "
+                   "re-fits a sphere that is standing now.")
+        pad_label.setToolTip(pad_tip)
+        pad_spin.setToolTip(pad_tip)
+        pad_tail.setToolTip(pad_tip)
+
+        def _pad_changed(value):
+            self._desktop._settings.setValue("selection/clip_padding", float(value))
+            if (self._clip_on_select.isChecked()
+                    and any(m.get("_auto_clip") for m in self._desktop._models)):
+                self._safe(self._desktop.reapply_auto_clips)
+
+        pad_spin.valueChanged.connect(_pad_changed)
+        pad_row.addWidget(pad_label)
+        pad_row.addWidget(pad_spin)
+        pad_row.addWidget(pad_tail)
+        pad_row.addStretch()
+        sg.addLayout(pad_row)
+        layout.addWidget(selection)
 
         defaults = QGroupBox("New model defaults")
         defaults_layout = QVBoxLayout(defaults)
@@ -4438,13 +4485,21 @@ class ControlsWindow:
         }
         return tab
 
+    def _engage_step_view(self, view) -> None:
+        """Remember a table as Space's target: the last one the user engaged keeps
+        the key, so leaving its tab (or clicking the viewport) does not demote the
+        worklist back to the residue walk."""
+        self._desktop._step_view = view
+
     def _on_geometry_subtab_changed(self, index: int) -> None:
         if index >= self._restraint_subtab_start:  # a restraint tab
             self._ensure_restraints()
         # Space steps the focused table; the table you can see is the one that
-        # should answer, without having to click into it first.
+        # should answer, without having to click into it first. Switching the
+        # sub-tab is itself the deliberate engagement that moves the key to it.
         view = self._geometry_subtab_view(index)
         if view is not None:
+            self._engage_step_view(view)
             view.setFocus()
 
     def _geometry_subtab_view(self, index: int):
@@ -4554,6 +4609,7 @@ class ControlsWindow:
         if self._suppress_restraint_sync:
             return
         info = self._restraint_tabs[category]
+        self._engage_step_view(info["view"])
         specs = [
             (category, tuple(int(i) for i in info["model"].i_seqs_for_row(idx.row())))
             for idx in info["view"].selectionModel().selectedRows()
@@ -5289,11 +5345,13 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Export failed", str(exc))
 
     def _on_clip_on_select_toggled(self, on: bool) -> None:
-        """The checkbox is also the removal control for a clip a selection already
-        applied: the sphere has no other UI, so turning it off lifts it."""
+        """The checkbox is the clip sphere's only control, so it works on the
+        standing selection both ways: off lifts it, on puts it back."""
         self._desktop._settings.setValue(
             "selection/clip_on_apply", "true" if on else "false")
-        if not on:
+        if on:
+            self._desktop.reapply_auto_clips()
+        else:
             self._desktop.lift_auto_clips()
 
     def _on_select_expression(self) -> None:
@@ -6482,6 +6540,7 @@ class ControlsWindow:
         rows = [idx.row() for idx in self._component_view.selectionModel().selectedRows()]
         mid = self._table_model_id
         desktop = self._desktop
+        self._engage_step_view(self._component_view)
         active = mid is not None and mid == desktop._active_model_id
         focus, clip, context = self._selection_flags()
         if len(rows) == 1 and active:
@@ -6515,6 +6574,7 @@ class ControlsWindow:
         rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
         atoms = [self._atom_model.row_atom(r) for r in rows]
         mid = self._table_model_id
+        self._engage_step_view(self._atom_view)
         entry = self._desktop._model_entry(mid)
         session = entry["session"] if entry else None
         if session is not None and getattr(session, "model", None) is not None:
@@ -6773,6 +6833,7 @@ class DesktopApp:
         self.bridge.run_on_main.connect(lambda fn: fn())
         self.bridge.localres_shown.connect(self._on_localres_shown)
         self._viewport = ViewportWindow()
+        self._step_view = None  # the last table engaged; Space steps it until another does
         self._controls = ControlsWindow(self)
 
         # One coherent window: the viewport fills it, the controls ride in a dock on the
@@ -12630,6 +12691,26 @@ class DesktopApp:
         self._status("Refine drag enabled — drag an atom to pull and minimize"
                      if enabled else "Refine drag disabled")
 
+    def _selection_flags(self) -> tuple:
+        """The Selection pane's three checkboxes as persisted — (focus, clip, context).
+
+        Desktop-side paths read the same truth the widgets persist on every toggle
+        (``ControlsWindow._selection_flags`` reads the boxes themselves)."""
+        return tuple(
+            str(self._settings.value(key, "true")).lower() == "true"
+            for key in ("selection/focus_on_apply",
+                        "selection/clip_on_apply",
+                        "selection/context_rep"))
+
+    def _clip_padding(self) -> float:
+        """Angstroms of clearance a selection-clip sphere adds past the selection's
+        reach — the Settings pane's clip padding, so even a one-atom selection
+        keeps readable neighbourhood."""
+        try:
+            return float(self._settings.value("selection/clip_padding", 4.0))
+        except (TypeError, ValueError):  # pragma: no cover - a hand-edited ini
+            return 4.0
+
     def lift_auto_clips(self) -> None:
         """Drop every standing selection-clip sphere.
 
@@ -12643,6 +12724,36 @@ class DesktopApp:
             try:
                 if m.pop("_auto_clip", False):
                     m["session"].set_clip(0.0, 1.0, radius=None)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+    def reapply_auto_clips(self) -> None:
+        """Clip the standing selection — the mirror of :meth:`lift_auto_clips`.
+
+        Re-checking "Clip to selection" should put the sphere back on whatever is
+        selected, the same way unchecking lifts it — waiting for the next click
+        would leave the toggle one-sided (and clicking the checkbox takes focus
+        off the table, so the next Space may not even reach a row).
+        """
+        with self._scene_lock:
+            selections = {mid: list(ix) for mid, ix in self._scene_selection.items()}
+        for mid, indices in selections.items():
+            entry = self._model_entry(mid)
+            session = entry["session"] if entry else None
+            model = getattr(session, "model", None) if session else None
+            if not indices or model is None:
+                continue
+            try:
+                atoms = model.get_hierarchy().atoms()
+                xyz = np.array([atoms[i].xyz for i in indices if 0 <= i < len(atoms)],
+                               dtype=float)
+                if not len(xyz):
+                    continue
+                centre = xyz.mean(axis=0)  # same sphere _select_fragment draws
+                reach = float(np.linalg.norm(xyz - centre, axis=1).max())
+                session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
+                                 center=centre)
+                entry["_auto_clip"] = True
             except Exception:  # pragma: no cover - defensive
                 pass
 
@@ -12827,8 +12938,9 @@ class DesktopApp:
         row or space-bar navigation. Routed through the same fragment pipeline as a
         click or a typed expression, so the caller's flags (the Selection pane's
         checkboxes, for a table row) govern the framing, isolation clip and
-        neighbourhood context identically. Space-bar navigation keeps the plain
-        defaults: frame it, touch nothing else. Returns the equivalent selection
+        neighbourhood context identically. Space-bar navigation passes only the
+        clip checkbox — the walk is a selection each step — and keeps focus on
+        and context off. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the residue names no
         atoms. The residue->atom-index map is built once from the model and cached
         on the model entry."""
@@ -12858,10 +12970,11 @@ class DesktopApp:
         keys. Every one of these tables already acts on its *selection* (focus that
         residue, highlight those atoms), so moving the selection is the whole gesture.
 
-        Anywhere else it is the next residue along the chain, which is what the key has
-        always done. The two never competed for the key so much as the residue one
-        simply won: the shortcut is window-wide, so it fired over a focused table too,
-        and stepping a list of outliers moved the model instead of the list.
+        And it stays that table's key once one has been engaged: the table you last
+        worked is the thing being stepped, whether or not it still holds focus --
+        clicking the viewport or another tab should not silently demote a residue
+        worklist to the residue walk. The walk is only the default before any table
+        has been touched; switching tables again is deliberate (a sub-tab, a row).
 
         It stops at the ends of a table rather than wrapping or falling through to the
         residue walk: running off the end of a worklist should be visible, and having
@@ -12870,7 +12983,16 @@ class DesktopApp:
         from PySide6.QtWidgets import QTableView
 
         view = self._app.focusWidget() if self._app is not None else None
-        model = view.model() if isinstance(view, QTableView) else None
+        if isinstance(view, QTableView):
+            self._step_view = view          # stepping a focused table engages it
+        else:
+            view = self._step_view        # the last table engaged, wherever focus is
+        model = None
+        if view is not None:
+            try:
+                model = view.model()
+            except RuntimeError:            # its page was rebuilt under it (validation)
+                self._step_view = view = None
         rows = 0 if model is None else model.rowCount()
         if rows:
             row = view.currentIndex().row()
@@ -12888,13 +13010,21 @@ class DesktopApp:
 
     def advance_residue(self, step: int = 1) -> None:
         """Move the focused residue to the next/previous one in its chain (space-bar
-        navigation). With nothing focused yet, start at the first residue."""
+        navigation). With nothing focused yet, start at the first residue.
+
+        The walk IS a selection each step, so it takes the Selection pane's clip
+        checkbox — otherwise stepping with the box checked would silently
+        differ from stepping the Components table. Focus stays on regardless:
+        a walk that does not move the camera is no walk. Context stays off:
+        rebuilding a ball-and-stick neighbourhood every keypress is too heavy
+        for rapid stepping."""
         entry = self._model_entry(self._active_model_id)
         if entry is None:
             return
         model = getattr(entry["session"], "model", None)
         if model is None:
             return
+        clip = self._selection_flags()[1]
         order = entry.get("_chain_order")
         if order is None:
             order = entry["_chain_order"] = self._build_chain_order(model)
@@ -12902,18 +13032,18 @@ class DesktopApp:
         if cur is None:
             for cid, residues in order.items():
                 if residues:
-                    self.focus_residue(cid, residues[0])
+                    self.focus_residue(cid, residues[0], clip=clip)
                     return
             return
         chain, resid = cur
         residues = order.get(chain, [])
         if resid not in residues:
             if residues:
-                self.focus_residue(chain, residues[0])
+                self.focus_residue(chain, residues[0], clip=clip)
             return
         nxt = residues.index(resid) + step
         if 0 <= nxt < len(residues):
-            self.focus_residue(chain, residues[nxt])
+            self.focus_residue(chain, residues[nxt], clip=clip)
 
     @staticmethod
     def _build_chain_order(model):
@@ -12940,11 +13070,15 @@ class DesktopApp:
     def show_restraint_notations(self, mid: Optional[str], specs) -> None:
         """Show the selected restraint rows in the viewer.
 
-        ``specs`` is a list of ``(kind, i_seqs)``. Every participating atom is highlighted —
-        so you see exactly *which* atoms make up the restraint, not the whole residue — and
-        bonds/angles/dihedrals also get their measurement notation drawn (the distance line,
-        angle arc or dihedral fan). Chirality/planarity have no simple notation, so they show
-        as the highlight alone. Multiple rows -> multiple. The camera frames them all.
+        ``specs`` is a list of ``(kind, i_seqs)``. A restraint row names a collection
+        of atoms, so stepping one IS a selection: the participating atoms take the
+        same pipeline as a typed or clicked selection — highlighted (so you see
+        exactly *which* atoms make up the restraint, not the whole residue),
+        framed, clip-sphered and context-dressed under the Selection pane's
+        checkboxes. On top of that, bonds/angles/dihedrals get their measurement
+        notation drawn (the distance line, angle arc or dihedral fan);
+        chirality/planarity have no simple notation, so they show as the highlight
+        alone. Multiple rows -> multiple.
         """
         session = self.session_for(mid)
         self._clear_restraint_notations()
@@ -12953,13 +13087,11 @@ class DesktopApp:
         if specs:
             self.ensure_atoms_shown(mid)  # a ribbon can't show the atoms this notation marks
         self._restraint_prim_session = session
-        highlight: set = set()
-        focus_atoms: set = set()
+        marked: set = set()
         for i, (kind, iseqs) in enumerate(specs):
             pid = f"geomsel-{i}"
             iseqs = list(iseqs)
-            focus_atoms.update(iseqs)
-            highlight.update(iseqs)  # mark every atom in the restraint, whatever the kind
+            marked.update(iseqs)  # mark every atom in the restraint, whatever the kind
             try:
                 if kind == "bond" and len(iseqs) == 2:
                     session.add_distance(iseqs[0], iseqs[1], id=pid)
@@ -12972,15 +13104,21 @@ class DesktopApp:
                 self._restraint_prim_ids.append(pid)
             except Exception:  # pragma: no cover - defensive (stale indices)
                 pass
-        try:  # (empty list clears the overlay)
-            session.highlight(sorted(highlight))
-        except Exception:  # pragma: no cover - defensive
-            pass
-        if focus_atoms:  # aim the camera at the selected restraint's atoms
-            try:
-                session.focus(sorted(focus_atoms))
+        entry = self._model_entry(mid)
+        if getattr(session, "model", None) is not None:
+            focus, clip, context = self._selection_flags()
+            self._select_fragment(mid, session, entry, sorted(marked),
+                                  focus=focus, clip=clip, context=context)
+        else:  # a model-less session keeps the plain highlight-and-aim it had
+            try:  # (empty list clears the overlay)
+                session.highlight(sorted(marked))
             except Exception:  # pragma: no cover - defensive
                 pass
+            if marked:
+                try:
+                    session.focus(sorted(marked))
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
     def select_object(self, mid: str) -> int:
         """Select a whole model as an *object*: every atom selected, framed by the
@@ -13104,7 +13242,8 @@ class DesktopApp:
             xyz = np.array([atoms[i].xyz for i in indices])
             centre = xyz.mean(axis=0)
             reach = float(np.linalg.norm(xyz - centre, axis=1).max())
-            session.set_clip(0.0, 1.0, radius=reach + 4.0, center=centre)
+            session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
+                             center=centre)
             entry["_auto_clip"] = True
         elif entry.pop("_auto_clip", False):
             session.set_clip(0.0, 1.0, radius=None)
@@ -13176,7 +13315,8 @@ class DesktopApp:
                 atoms = session.model.get_hierarchy().atoms()
                 reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - centre))
                             for i in indices)
-                session.set_clip(0.0, 1.0, radius=reach + 4.0, center=centre)
+                session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
+                                 center=centre)
                 if entry is not None:
                     entry["_auto_clip"] = True
             elif entry is not None and entry.pop("_auto_clip", False):

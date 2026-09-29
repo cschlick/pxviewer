@@ -1073,9 +1073,9 @@ def exercise_the_selection_pane_describes_picked_atoms():
 
 def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
     """'Clip to selection' is the only control the selection's clip sphere has, so
-    it is also the off switch: unticking it lifts what a selection already applied.
-    And because stepping a table row is just selecting, the same checkbox governs
-    whether a stepped row clips."""
+    it works on the standing selection both ways: unticking lifts what a selection
+    applied, re-ticking puts it back. And because stepping a table row or walking
+    residues with Space is just selecting, the same checkbox governs both."""
     with desktop() as app:
         mid = ubiquitin(app)
         controls = app._controls
@@ -1089,23 +1089,22 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         assert "_auto_clip" not in entry
         assert None not in entry["session"]._clips
 
-        controls._clip_on_select.setChecked(True)   # leave the toggle as found
-        assert None not in entry["session"]._clips  # checking does not re-clip
-
-        # Stepping a table row is a selection, so it answers to the same checkbox.
-        model, view = controls._component_model, controls._component_view
-        view.selectRow(1)
-        controls._push_component_selection_to_viewer()   # the debounced slot
+        controls._clip_on_select.setChecked(True)   # symmetric: re-clips what stands
         assert entry["_auto_clip"] is True
         assert None in entry["session"]._clips
 
-        controls._clip_on_select.setChecked(False)       # lifts it again...
-        assert "_auto_clip" not in entry
-        view.selectRow(2)                                # ...and stays lifted
-        controls._push_component_selection_to_viewer()
-        assert "_auto_clip" not in entry
-        assert None not in entry["session"]._clips
+        # Stepping a table row is a selection, so it answers to the same checkbox.
+        model, view = controls._component_model, controls._component_view
+        controls._clip_on_select.setChecked(False)
+        view.selectRow(1)
+        controls._push_component_selection_to_viewer()   # the debounced slot
+        assert "_auto_clip" not in entry                 # unchecked: stays open
+
         controls._clip_on_select.setChecked(True)
+        view.selectRow(2)
+        controls._push_component_selection_to_viewer()
+        assert entry["_auto_clip"] is True               # checked: rows clip again
+        assert None in entry["session"]._clips
 
         # The atoms table steps the same pipeline, one atom at a time.
         atom_model, atom_view = controls._atom_model, controls._atom_view
@@ -1113,7 +1112,45 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         controls._push_table_selection_to_viewer()
         assert entry["_auto_clip"] is True
         assert app._scene_selection.get(mid) == [atom_model.row_atom(0)]
+
+        # And the space-bar residue walk honours it too: clicking the checkbox
+        # takes focus off the table, so the next Space lands here, not on a row.
         controls._clip_on_select.setChecked(False)
+        app.advance_residue(1)
+        assert "_auto_clip" not in entry
+        controls._clip_on_select.setChecked(True)
+        app.advance_residue(1)
+        assert entry["_auto_clip"] is True
+
+        # A restraint row is a collection of atoms, so it takes the same selection
+        # path: the sphere re-centres on the restraint's atoms rather than leaving
+        # the residue's standing to hide them.
+        import numpy as np
+        app.show_restraint_notations(mid, [("bond", (0, 1))])
+        assert entry["_auto_clip"] is True
+        assert list(app._scene_selection.get(mid, ())) == [0, 1]
+        atoms = entry["session"].model.get_hierarchy().atoms()
+        centre = (np.asarray(atoms[0].xyz) + np.asarray(atoms[1].xyz)) / 2.0
+        reach = float(np.linalg.norm(np.asarray(atoms[0].xyz) - centre))
+        sphere = entry["session"]._clips[None]
+        assert approx_equal(sphere["radius"], reach + 4.0)
+        assert approx_equal(np.linalg.norm(np.asarray(sphere["center"]) - centre), 0.0)
+
+        # The sphere's clearance is a setting: pad it and the next selection's
+        # sphere is reach + the new padding.
+        app._settings.setValue("selection/clip_padding", 7.5)
+        app.show_restraint_notations(mid, [("bond", (2, 3))])
+        atoms_sel = entry["session"].model.get_hierarchy().atoms()
+        centre2 = (np.asarray(atoms_sel[2].xyz) + np.asarray(atoms_sel[3].xyz)) / 2.0
+        reach2 = float(np.linalg.norm(np.asarray(atoms_sel[2].xyz) - centre2))
+        assert approx_equal(entry["session"]._clips[None]["radius"], reach2 + 7.5)
+        app._settings.setValue("selection/clip_padding", 4.0)
+
+        # And clip off lifts it again for the same path.
+        controls._clip_on_select.setChecked(False)
+        app.show_restraint_notations(mid, [("bond", (0, 1))])
+        assert "_auto_clip" not in entry
+        assert None not in entry["session"]._clips
 
 
 def exercise_validation_subtabs_and_row_focus():
@@ -1420,8 +1457,11 @@ def exercise_residue_orientation_and_space_navigation():
         app.advance_residue(-1)
         assert app._focused_residue == ("A", "13")
 
-        # With nothing table-shaped focused, the key still walks the chain -- step_next
-        # is what the shortcut is actually wired to.
+        # With nothing table-shaped focused and no table engaged yet, the key still
+        # walks the chain -- step_next is what the shortcut is actually wired to.
+        # (_step_view is the "once you have touched a table it keeps the key" state;
+        # reset it so the pre-engagement default is what is on trial here.)
+        app._step_view = None
         app.step_next(1)
         assert app._focused_residue == ("A", "14")
         app.step_next(-1)
@@ -1536,6 +1576,20 @@ def exercise_space_steps_the_focused_table_a_row_at_a_time():
         app.step_next(1)
         assert table.currentRow() == 1
         assert app._controls._select_expr.text() == "chain A and resid 14"
+        app.step_next(-1)
+        assert table.currentRow() == 0
+
+        # Engaging a table makes it Space's target until another table takes over:
+        # focus leaving for a plain pane (or the viewport) must not demote the
+        # worklist to the residue walk.
+        app._controls._clip_on_select.setFocus()
+        process_events()
+        assert app._app.focusWidget() is not table
+        app.step_next(1)
+        assert table.currentRow() == 1, (
+            "focus moved off the table and space walked the chain instead")
+        table.setFocus()
+        process_events()
         app.step_next(-1)
         assert table.currentRow() == 0
 

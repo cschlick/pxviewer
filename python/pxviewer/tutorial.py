@@ -540,14 +540,16 @@ def xray_refinement_tutorial() -> Tutorial:
     ], loader=lambda d: d.load_xray_demo())
 
 
-def load_edits_tutorial() -> Tutorial:
-    """Load a shared restraint-edits file onto a structure — the reading half of the loop."""
-    return Tutorial("Load restraint edits", [
+def restraint_edits_tutorial() -> Tutorial:
+    """The whole restraint-edits loop on one zinc site — read a shared PHIL file,
+    then clear it and author the same restraint by hand."""
+    return Tutorial("Restraint edits", [
         Step(
-            "Restraint **edits** — custom bonds/angles the monomer library can't know — can "
-            "be shared as a phenix PHIL file.\n\n**Loaded:** a zinc site. cctbx works out "
-            "the Zn–His bonds on its own, but not the water in the fourth coordination "
-            "position. Let's supply that one from a file.",
+            "Restraint **edits** — custom bonds/angles the monomer library can't know — "
+            "can be shared as a phenix PHIL file, or authored from the atoms themselves. "
+            "This walkthrough does both.\n\n**Loaded:** a zinc site. cctbx works out the "
+            "Zn–His bonds on its own, but not the water in the fourth coordination "
+            "position — that restraint has to be supplied.",
         ),
         Step(
             "On the **Tools** tab, in the **Restraint edits** panel (below Measure), click "
@@ -559,41 +561,36 @@ def load_edits_tutorial() -> Tutorial:
         ),
         Step(
             "Loaded! That Zn–water restraint now governs this app's minimize and drag, and "
-            "it came straight from a phenix `geometry_restraints.edits` file — the same file "
-            "phenix.refine reads.\n\nNext, try **Custom restraint edits** to author one "
-            "yourself.",
-        ),
-    ], loader=lambda d: _load_bundled(d, "zn_site.pdb"))
-
-
-def restraint_edits_tutorial() -> Tutorial:
-    """Author a custom restraint edit end to end — the writing half of the loop."""
-    return Tutorial("Custom restraint edits", [
-        Step(
-            "Now let's author a restraint by hand rather than read one from a file. A "
-            "metal's coordination is a good case: cctbx guesses the Zn–His bonds, but not "
-            "the water in the fourth site.\n\n**Loaded:** the same zinc site, with no "
-            "edits on it.",
+            "it came straight from a phenix `geometry_restraints.edits` file — the same "
+            "file phenix.refine reads.\n\nBut a file is only half the loop — the same "
+            "restraint can be authored by hand. To prove it, clear the board: select the "
+            "edit in the list and click **Remove**.",
+            done=lambda cw: _edit_count(cw) == 0,
+            target=lambda cw: cw._edit_remove_btn,
         ),
         Step(
-            "Turn on atom picking with the **Pick** button, then click the **zinc** and the "
-            "**water oxygen** beside it — the pair that isn't already coordinated. Each click "
-            "adds to the selection; click empty space to start over.",
+            "Now author it yourself. Turn on atom picking with the **Pick** button, then "
+            "click the **zinc** and the **water oxygen** beside it — the pair that isn't "
+            "coordinated. Each click adds to the selection; click empty space to start "
+            "over.",
             done=lambda cw: _selection_count(cw) >= 2,
             target=lambda cw: cw._pick_btn,
         ),
         Step(
-            "On the **Tools** tab, in the **Restraint edits** panel, click **Bond**. It takes "
-            "the current Zn–water distance as the target and adds the restraint — watch it "
-            "appear in the list. (If it says the bond already exists, you picked two atoms "
-            "cctbx already coordinated — pick the zinc and the lone water instead.)",
+            "Back on the **Tools** tab, in the **Restraint edits** panel, click **Bond**. "
+            "It takes the current Zn–water distance as the target and adds the restraint — "
+            "watch it appear in the list, same as the file's did. (If it says the bond "
+            "already exists, you picked two atoms cctbx already coordinated — pick the "
+            "zinc and the lone water instead.)",
             done=lambda cw: _edit_count(cw) >= 1,
             target=lambda cw: cw._edit_bond_btn,
         ),
         Step(
-            "That's the whole loop — the custom bond now governs this app's minimize and "
-            "drag. Use **Save…** to write it as a phenix `geometry_restraints.edits` file "
-            "(exactly the kind the Load tutorial reads), for phenix.refine.",
+            "That's the whole loop — read a restraint from a phenix file, then write the "
+            "same one from the atoms. The authored bond governs this app's minimize and "
+            "drag exactly as the loaded one did.\n\n**Save…** writes it as a phenix "
+            "`geometry_restraints.edits` file — the same kind you opened earlier — for "
+            "phenix.refine or for sharing.",
             target=lambda cw: cw._edit_save_btn,
         ),
     ], loader=lambda d: _load_bundled(d, "zn_site.pdb"))
@@ -648,10 +645,10 @@ def all_tutorials() -> List[Tutorial]:
     """Every walkthrough offered, in menu order — looking before judging before changing:
     the three viewing ones (open a model, a model with its map, alternate conformations),
     then the judging pair (validation, then its hotspot aggregate), then
-    the fitting/refinement group, then the restraint-edits pair (reading before writing).
+    the fitting/refinement group, then restraint edits (read and write in one loop).
     There is no separate examples list: every example is the opening scene of the
     tutorial that explains it."""
     return [open_model_tutorial(), map_model_tutorial(), altlocs_tutorial(),
             validation_tutorial(), hotspots_tutorial(), ligand_fitting_tutorial(),
             cryo_em_refinement_tutorial(), local_resolution_tutorial(),
-            xray_refinement_tutorial(), load_edits_tutorial(), restraint_edits_tutorial()]
+            xray_refinement_tutorial(), restraint_edits_tutorial()]

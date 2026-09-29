@@ -426,6 +426,19 @@ def exercise_space_steps_the_restraint_and_atom_tables():
             view.setCurrentIndex(view.model().index(rows - 1, 0))
             app.step_next(1)
             assert view.currentIndex().row() == rows - 1   # ...and at the bottom
+
+        # A table-made selection echoes back from the viewer over the websocket a
+        # beat later, re-running the filter pass; a filter that did not change must
+        # not reset the model and wipe the row -- live, that late reset left the row
+        # un-selected and every next Space landing back on row zero.
+        bond_view = app._controls._restraint_tabs["bond"]["view"]
+        bond_view.setCurrentIndex(bond_view.model().index(3, 0))
+        bond_view.setFocus()
+        process_events()
+        app._controls._apply_geometry_filter()
+        assert [i.row() for i in bond_view.selectionModel().selectedRows()] == [3]
+        app.step_next(1)
+        assert bond_view.currentIndex().row() == 4   # and the key still walks on
     finally:
         dispose(app)
 

@@ -48,8 +48,7 @@ TUTORIAL_TITLES = [
     "Real-space refine into cryo-EM density",
     "Look at local resolution",
     "X-ray: refine with a live difference map",
-    "Load restraint edits",
-    "Custom restraint edits",
+    "Restraint edits",
 ]
 
 
@@ -118,7 +117,7 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
 
         controls._start_tutorial(tutorial.restraint_edits_tutorial())
         assert not coach.coach_bar.isHidden()
-        assert progress(app) == "Step 1 / 4"
+        assert progress(app) == "Step 1 / 6"
 
         # Starting it loaded its own example, so the tutorial opens on a step about a
         # structure it knows is there rather than asking for one.
@@ -128,24 +127,35 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         # rather than a control to be shown.
         assert coach.coach_next.text() == "Next"
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 1 / 4"          # no predicate: it waits
+        assert progress(app) == "Step 1 / 6"          # no predicate: it waits
         controls._tutorial_next()
-        assert progress(app) == "Step 2 / 4"
+        assert progress(app) == "Step 2 / 6"
 
-        # Step 2: selecting two atoms.
+        # Step 2: loading the shared edits file -- drive the same call the Load
+        # button makes rather than the file dialog.
         mid = app._active_model_id
+        app.load_edits(mid, str(sample_structure_path("zn_site_edits.phil")))
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 3 / 6"
+
+        # Step 3: removing the loaded edit so the same restraint can be authored.
+        app.remove_edit(mid, 0)
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 4 / 6"
+
+        # Step 4: selecting two atoms.
         app._scene_selection[mid] = [0, 1]
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 4"
+        assert progress(app) == "Step 5 / 6"
 
-        # Step 3: authoring an edit between two atoms in different residues.
+        # Step 5: authoring an edit between two atoms in different residues.
         atoms = app._model_entry(mid)["session"].model.get_hierarchy().atoms()
         resseqs = [a.parent().parent().resseq for a in atoms]
         other = next(k for k in range(len(atoms)) if resseqs[k] != resseqs[0])
         app._scene_selection[mid] = [0, other]
         app.add_edit_from_selection(mid, "bond")
         controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 4 / 4"
+        assert progress(app) == "Step 6 / 6"
         assert coach.coach_next.text() == "Finish"
 
         controls._tutorial_next()

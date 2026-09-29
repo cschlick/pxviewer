@@ -136,6 +136,13 @@ DESKTOP_SETTINGS_KEYS = (
     "defaults/model_representations",
     "defaults/molstar_interactions",
     "defaults/shown_structure_types",
+    "drag/diagnostics",
+    "drag/pull_strength",
+    "drag/settle_seconds",
+    "selection/clip_on_apply",
+    "selection/clip_padding",
+    "selection/context_rep",
+    "selection/focus_on_apply",
     "work_dir",
 )
 
