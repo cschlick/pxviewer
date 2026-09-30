@@ -949,7 +949,22 @@ export class LiveViewer {
     async setSlab(slab: Slab) {
         this.slab = { ...slab };
         const version = ++this.slabVersion;
+        // An open slab lifts every clip a selection ever stood for, including the
+        // depth slab orient() parks on the camera's near/far planes -- the
+        // per-representation objects below cannot reach it, so the sphere would
+        // lift while the view stays depth-clipped around the old selection.
+        const camera = this.plugin.canvas3d?.camera;
+        if (camera && slabIsOpen(slab) && camera.state.radiusMax) {
+            const radius = Math.max(camera.state.radiusMax, 1.0);
+            if (radius !== camera.state.radius) camera.setState({ radius });
+        } else if (camera && typeof slab.depth === 'number') {
+            // A lifted clip is re-applied away from the camera flight that set its
+            // depth slab up, so the near/far cut travels with the message instead.
+            const radius = Math.max(slab.depth, 1.0);
+            if (radius !== camera.state.radius) camera.setState({ radius });
+        }
         await this.reaimSlab(version);
+        this.plugin.canvas3d?.requestDraw();
     }
 
     /** Re-aim the slab down the current view direction (called as the camera moves). */
@@ -2741,6 +2756,11 @@ export interface Slab {
      *  would centre the sphere on wherever the view used to be and clip out the very
      *  thing being framed. */
     center?: number[] | null;
+    /** The camera depth slab to (re)establish alongside the objects, as a bounding
+     *  radius in Angstrom — the selection's view-axis half-extent, which orient()
+     *  parks on the camera's near/far planes when it clips. Carried on re-apply so a
+     *  lifted clip comes back as the same view it left, depth cut included. */
+    depth?: number | null;
 }
 
 const SLAB_OPEN: Slab = { front: 0, back: 1, radius: null };
@@ -2816,7 +2836,12 @@ async function applySlabTo(plugin: PluginContext, ref: string, slab: Slab) {
     const clip = slabClip(plugin, slab);
     await plugin.state.data.build().to(ref).update((old: any) => {
         // Components sit alongside representations and have no clip to set.
-        if (old?.type?.params && 'clip' in old.type.params) old.type.params.clip = clip;
+        if (!old?.type?.params || !('clip' in old.type.params)) return;
+        // A fresh params object: Mol*'s createOrUpdate can skip an update whose
+        // incoming props are identity-equal to the stored ones, which is what an
+        // in-place mutation of `old` produces -- the clip then exists in the
+        // state tree but never reaches the drawn render objects.
+        return { ...old, type: { ...old.type, params: { ...old.type.params, clip } } };
     }).commit();
 }
 
@@ -3795,6 +3820,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,
                     center: (Array.isArray(msg.center) && msg.center.length === 3)
                         ? msg.center : null,
+                    depth: typeof msg.depth === 'number' ? msg.depth : null,
                 };
                 if (typeof msg.ref === 'string') {
                     if (slabIsOpen(slab)) volumeSlabs.delete(msg.ref);

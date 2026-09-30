@@ -4531,6 +4531,17 @@ class ControlsWindow:
         if self._viewing_restraint_tab():
             self._ensure_restraints()
 
+    def _coordinates_moved(self, mid) -> None:
+        """A model's atoms moved: the cached geometry describes the old sites.
+
+        Unlike :meth:`_on_restraints_changed` the restraint *set* did not change —
+        only the measured values — so the cache drop is what matters; the tables
+        refill now if one is on screen, or on next view either way.
+        """
+        self._geo_cache.pop(mid, None)
+        if mid == self._table_model_id:
+            self._invalidate_restraints()
+
     def _ensure_restraints(self) -> None:
         """Build restraints for the current geometry model and fill the tables."""
         from PySide6.QtCore import Qt
@@ -7209,6 +7220,12 @@ class DesktopApp:
         for key in ("analysis", "validation", "hotspots"):
             entry.pop(key, None)
         self._dim_stale_diff(entry.get("group"))
+        # The restraint tables' model/delta/residual columns are a snapshot of the
+        # sites when the geometry was last built — stale the moment atoms move too.
+        mid = entry.get("id")
+        if mid is not None:
+            self.bridge.run_on_main.emit(
+                lambda mid=mid: self._controls._coordinates_moved(mid))
 
     def _dim_stale_diff(self, gid) -> None:
         """Dim the group's difference map the moment the model outruns its phasing.
@@ -12759,7 +12776,8 @@ class DesktopApp:
                 centre = xyz.mean(axis=0)  # same sphere _select_fragment draws
                 reach = float(np.linalg.norm(xyz - centre, axis=1).max())
                 session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                                 center=centre)
+                                 center=centre,
+                                 depth=entry.get("_auto_clip_depth"))
                 entry["_auto_clip"] = True
             except Exception:  # pragma: no cover - defensive
                 pass
@@ -12769,6 +12787,7 @@ class DesktopApp:
             try:
                 m["session"].clear_selection()
                 if m.pop("_auto_clip", False):
+                    m.pop("_auto_clip_depth", None)
                     m["session"].set_clip(0.0, 1.0, radius=None)
                 self._set_context_rep(m, None)
             except Exception:  # pragma: no cover - defensive
@@ -13147,6 +13166,7 @@ class DesktopApp:
         session.highlight(sel)
         entry = self._model_entry(mid)
         if entry is not None and entry.pop("_auto_clip", False):
+            entry.pop("_auto_clip_depth", None)
             session.set_clip(0.0, 1.0, radius=None)
         self._set_context_rep(entry, None)        # a whole object needs no context view
         session.focus(list(sel))                  # Mol*'s own whole-object framing
@@ -13171,6 +13191,7 @@ class DesktopApp:
         if not text:
             session.clear_selection()
             if entry is not None and entry.pop("_auto_clip", False):
+                entry.pop("_auto_clip_depth", None)
                 # The isolation sphere was ours; clearing the selection lifts it.
                 session.set_clip(0.0, 1.0, radius=None)
             self._set_context_rep(entry, None)
@@ -13235,6 +13256,7 @@ class DesktopApp:
         if not grown:
             session.clear_selection()
             if entry.pop("_auto_clip", False):
+                entry.pop("_auto_clip_depth", None)
                 session.set_clip(0.0, 1.0, radius=None)
             self._set_context_rep(entry, None)
             with self._scene_lock:
@@ -13252,7 +13274,9 @@ class DesktopApp:
             session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
                              center=centre)
             entry["_auto_clip"] = True
+            entry["_auto_clip_depth"] = None   # the camera never oriented here
         elif entry.pop("_auto_clip", False):
+            entry.pop("_auto_clip_depth", None)
             session.set_clip(0.0, 1.0, radius=None)
         self._set_context_rep(entry, indices if context else None)
         self._on_model_selection(mid, sel)
@@ -13326,9 +13350,14 @@ class DesktopApp:
                                  center=centre)
                 if entry is not None:
                     entry["_auto_clip"] = True
+                    # The camera slab orient() parked is part of the clipped view:
+                    # remember the depth so lifting and re-applying restore it too.
+                    entry["_auto_clip_depth"] = (
+                        orientation[4][2] if orientation is not None else None)
             elif entry is not None and entry.pop("_auto_clip", False):
                 # Clip is off for this selection, so lift the sphere a previous
                 # clipped selection left -- otherwise it keeps cutting the new view.
+                entry.pop("_auto_clip_depth", None)
                 session.set_clip(0.0, 1.0, radius=None)
         # The neighbourhood context rides the selection, not the camera: it shows (or
         # clears) whether or not the focus checkbox moved the view.

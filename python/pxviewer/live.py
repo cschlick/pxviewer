@@ -1305,6 +1305,7 @@ class LiveSession:
         radius: Optional[float] = None,
         center: Optional[Any] = None,
         ref: Optional[str] = None,
+        depth: Optional[float] = None,
     ) -> None:
         """Clip a representation: a front/rear slab, a radius around a point, or both.
 
@@ -1317,7 +1318,9 @@ class LiveSession:
         pass the point explicitly: the clip lands while the camera is still animating,
         and a sampled target would centre the sphere on the old view and clip out the
         very thing being framed. ``ref`` names a volume; without one this session's own
-        model is clipped.
+        model is clipped. ``depth`` (Angstrom) re-establishes the camera's own
+        near/far slab: a lift frees it, and re-applying a selection clip asks for
+        it back so the restored view matches the clipped one, not just its sphere.
 
         The slab follows the camera, and clips are per representation deliberately — it
         is what lets density be cut open, or thinned out, while the model inside stays
@@ -1330,6 +1333,8 @@ class LiveSession:
             "radius": None if radius is None else float(radius),
             "center": None if center is None else [float(c) for c in center],
         }
+        if depth is not None:
+            clip["depth"] = float(depth)
         if clip["front"] <= 0 and clip["back"] >= 1 and clip["radius"] is None:
             self._clips.pop(key, None)  # nothing to restore
         else:
