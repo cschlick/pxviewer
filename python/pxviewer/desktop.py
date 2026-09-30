@@ -1663,6 +1663,7 @@ class ControlsWindow:
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QCheckBox,
+            QComboBox,
             QGridLayout,
             QGroupBox,
             QHBoxLayout,
@@ -1867,6 +1868,33 @@ class ControlsWindow:
             lambda on: self._desktop._settings.setValue(
                 "selection/context_rep", "true" if on else "false"))
         sl.addWidget(self._context_on_select)
+
+        # What a viewport click selects. Residue is the crystallographer's default —
+        # a click asks "show me this residue" — but a click while an atom-level
+        # worklist is engaged should land on one atom, so engaging the Atoms table
+        # flips this to Atom and engaging a residue-level table flips it back
+        # (_engage_step_view). The control is also the readout: it always says what
+        # the next click will do, and a hand-set choice holds until the next table
+        # engagement.
+        gran_row = QHBoxLayout()
+        gran_row.addWidget(QLabel("Click selects:"))
+        self._pick_granularity = QComboBox()
+        self._pick_granularity.addItem("Residue", "residue")
+        self._pick_granularity.addItem("Atom", "atom")
+        self._pick_granularity.setToolTip(
+            "What a click in the viewport selects — the atom's whole residue, or "
+            "just the atom. Follows the table you last engaged (the Atoms table "
+            "implies atoms); changing it by hand holds until the next table "
+            "engagement.")
+        saved = str(self._desktop._settings.value(
+            "selection/pick_granularity", "residue"))
+        self._pick_granularity.setCurrentIndex(1 if saved == "atom" else 0)
+        self._pick_granularity.currentIndexChanged.connect(
+            lambda _i: self._desktop._settings.setValue(
+                "selection/pick_granularity", self._pick_granularity.currentData()))
+        gran_row.addWidget(self._pick_granularity)
+        gran_row.addStretch(1)
+        sl.addLayout(gran_row)
 
         sl.addWidget(QLabel("Selected:"))
         self._selection_label = QLabel("None")
@@ -4488,8 +4516,16 @@ class ControlsWindow:
     def _engage_step_view(self, view) -> None:
         """Remember a table as Space's target: the last one the user engaged keeps
         the key, so leaving its tab (or clicking the viewport) does not demote the
-        worklist back to the residue walk."""
+        worklist back to the residue walk.
+
+        The engaged table is also the selection's granularity: an atom-level
+        worklist implies the next viewport click wants one atom, a residue-level
+        one the whole residue — so the pick-granularity control follows it (and
+        doubles as the readout of which the next click will do)."""
         self._desktop._step_view = view
+        combo = getattr(self, "_pick_granularity", None)
+        if combo is not None:
+            combo.setCurrentIndex(1 if view is self._atom_view else 0)
 
     def _on_geometry_subtab_changed(self, index: int) -> None:
         if index >= self._restraint_subtab_start:  # a restraint tab
@@ -5910,13 +5946,15 @@ class ControlsWindow:
 
     def _on_atom_picked(self, mid: str, index: int, shift: bool) -> None:
         """An atom of ``mid`` was clicked. With no click mode armed this IS a
-        selection: a plain click replaces it with the clicked residue through the
-        same pipeline a typed expression takes — oriented framing, clip,
-        neighbourhood context, all under the Selection pane's checkboxes — and a
-        SHIFT-click grows or shrinks it by that residue, camera left where it is.
-        Either way the box shows the equivalent expression. While Pick mode
-        accumulates, refine-drag tugs, or a measurement is being placed, the click
-        belongs to that tool, and the panel just follows the model."""
+        selection: a plain click replaces it through the same pipeline a typed
+        expression takes — oriented framing, clip, neighbourhood context, all
+        under the Selection pane's checkboxes — and a SHIFT-click grows or
+        shrinks it, camera left where it is. How much each click takes — the
+        atom's whole residue, or just the atom — is the Selection pane's
+        granularity control, which the last engaged table already set. Either way
+        the box shows the equivalent expression. While Pick mode accumulates,
+        refine-drag tugs, or a measurement is being placed, the click belongs to
+        that tool, and the panel just follows the model."""
         desktop = self._desktop
         entry = desktop._model_entry(mid)
         tool_owns_click = (
@@ -5926,15 +5964,16 @@ class ControlsWindow:
         if tool_owns_click or index < 0:
             self._set_current_tree_row("model", mid)  # follow attention, touch nothing
             return
+        granularity = self._pick_granularity.currentData()
         try:
             if shift:
                 expression = desktop.toggle_picked_residue(
-                    mid, index,
+                    mid, index, granularity=granularity,
                     clip=self._clip_on_select.isChecked(),
                     context=self._context_on_select.isChecked())
             else:
                 expression = desktop.select_picked_atom(
-                    mid, index,
+                    mid, index, granularity=granularity,
                     focus=self._focus_on_select.isChecked(),
                     clip=self._clip_on_select.isChecked(),
                     context=self._context_on_select.isChecked())
@@ -13010,7 +13049,7 @@ class DesktopApp:
 
         view = self._app.focusWidget() if self._app is not None else None
         if isinstance(view, QTableView):
-            self._step_view = view          # stepping a focused table engages it
+            self._controls._engage_step_view(view)  # stepping a focused table engages it
         else:
             view = self._step_view        # the last table engaged, wherever focus is
         model = None
@@ -13205,13 +13244,15 @@ class DesktopApp:
                                      focus=focus, clip=clip, context=context)
 
     def select_picked_atom(self, mid: str, atom_index: int, *, focus: bool = True,
-                           clip: bool = True, context: bool = True):
+                           clip: bool = True, context: bool = True,
+                           granularity: str = "residue"):
         """A viewport atom click, unified with the selection box: select the clicked
-        atom's whole residue and give it exactly the treatment a typed selection gets
-        — same oriented framing, same clip sphere, same neighbourhood context. One
-        grammar for "show me this residue", however it was indicated. Returns the
-        equivalent selection expression (for the selection box), or ``None`` when the
-        index names no atom."""
+        atom's whole residue — or just the atom at ``granularity="atom"`` — and give
+        it exactly the treatment a typed selection gets — same oriented framing,
+        same clip sphere, same neighbourhood context. One grammar for "show me
+        this", however it was indicated. Returns the equivalent selection
+        expression (for the selection box), or ``None`` when the index names no
+        atom."""
         self.set_active_model(mid)
         entry = self._model_entry(mid)
         session = entry["session"] if entry else None
@@ -13220,21 +13261,27 @@ class DesktopApp:
         atoms = session.model.get_hierarchy().atoms()
         if not (0 <= int(atom_index) < atoms.size()):
             return None
-        residue_group = atoms[int(atom_index)].parent().parent()
-        indices = [a.i_seq for a in residue_group.atoms()]
-        chain_id = residue_group.parent().id.strip()
-        expression = f"chain {chain_id} and resid {residue_group.resid().strip()}"
+        if granularity == "atom":
+            indices = [int(atom_index)]
+            from . import edits as edits_mod
+            expression = edits_mod.selection_for_atom(session.model, int(atom_index))
+        else:
+            residue_group = atoms[int(atom_index)].parent().parent()
+            indices = [a.i_seq for a in residue_group.atoms()]
+            chain_id = residue_group.parent().id.strip()
+            expression = f"chain {chain_id} and resid {residue_group.resid().strip()}"
         self._select_fragment(mid, session, entry, indices,
                               focus=focus, clip=clip, context=context)
         return expression
 
     def toggle_picked_residue(self, mid: str, atom_index: int, *, clip: bool = True,
-                              context: bool = True):
-        """Shift-click: grow or shrink the selection by the clicked atom's residue.
+                              context: bool = True, granularity: str = "residue"):
+        """Shift-click: grow or shrink the selection by the clicked atom's residue
+        — or by just the atom at ``granularity="atom"``.
 
-        The residue joins the selection, or leaves it when it is already entirely
+        The unit joins the selection, or leaves it when it is already entirely
         selected. The camera deliberately stays where it is — re-framing on every
-        added residue would fight the accumulating gesture — but the isolation clip
+        addition would fight the accumulating gesture — but the isolation clip
         and the neighbourhood context re-fit the grown selection, so an addition is
         never clipped out of view. Emptying the selection this way clears everything,
         exactly like an empty expression. Returns the equivalent expression for the
@@ -13249,7 +13296,10 @@ class DesktopApp:
         atoms = session.model.get_hierarchy().atoms()
         if not (0 <= int(atom_index) < atoms.size()):
             return None
-        residue = {a.i_seq for a in atoms[int(atom_index)].parent().parent().atoms()}
+        if granularity == "atom":
+            residue = {int(atom_index)}
+        else:
+            residue = {a.i_seq for a in atoms[int(atom_index)].parent().parent().atoms()}
         with self._scene_lock:
             current = set(self._scene_selection.get(mid, []))
         grown = (current - residue) if residue <= current else (current | residue)
@@ -13285,10 +13335,14 @@ class DesktopApp:
     def _selection_expression(self, entry, indices):
         """The selection as a whole-residue expression ('(chain A and resid 17) or …'),
         or '' when some residue is only partially selected — a box expression that
-        does not reproduce the selection would lie."""
+        does not reproduce the selection would lie. The one exception: a lone atom
+        is exactly expressible, so it still echoes."""
         owner, members = self._residue_map(entry)
         chosen = set(indices)
         atoms = entry["session"].model.get_hierarchy().atoms()
+        if len(chosen) == 1:
+            from . import edits as edits_mod
+            return edits_mod.selection_for_atom(entry["session"].model, next(iter(chosen)))
         terms = []
         for group in sorted({int(owner[i]) for i in chosen}):
             group_atoms = members[group]

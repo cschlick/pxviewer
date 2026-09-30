@@ -1153,6 +1153,76 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         assert None not in entry["session"]._clips
 
 
+def exercise_a_viewport_click_uses_the_engaged_tables_unit():
+    """A click selects what the last engaged table is about: a residue by default
+    and under any residue-level worklist, a single atom under the Atoms table. The
+    Selection pane's granularity control is both the readout of which applies and
+    a hand-override — and a click a tool owns never becomes a selection at all."""
+    with desktop() as app:
+        mid = ubiquitin(app)
+        controls = app._controls
+        atoms = app._model_entry(mid)["session"].model.get_hierarchy().atoms()
+        residue = {a.i_seq for a in atoms[0].parent().parent().atoms()}
+
+        # Nothing engaged yet: a click asks for the residue it landed on.
+        assert controls._pick_granularity.currentData() == "residue"
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == residue
+        assert "resid" in controls._select_expr.text()
+        assert "name" not in controls._select_expr.text()
+
+        # Engaging the atom-level worklist flips the control — and the next click —
+        # to single atoms, and the box names the atom, not its residue.
+        controls._engage_step_view(controls._atom_view)
+        assert controls._pick_granularity.currentData() == "atom"
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+        assert "name N" in controls._select_expr.text()
+
+        # Shift-click toggles the same unit: two atoms of one residue is a partial
+        # residue, which no whole-residue expression can honestly name — the box
+        # clears rather than lie; toggling the second atom off restores the exact
+        # atom echo.
+        other = int(min(residue - {0}))
+        controls._on_atom_picked(mid, other, True)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0, other}
+        assert controls._select_expr.text() == ""
+        controls._on_atom_picked(mid, other, True)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+        assert "name N" in controls._select_expr.text()
+
+        # The control is also the override: a hand-set residue choice wins even
+        # with the atom-level worklist still engaged — until another table is
+        # engaged, which is itself the deliberate signal the combo follows.
+        controls._pick_granularity.setCurrentIndex(0)
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == residue
+
+        # Engaging a residue-level table returns the control to Residue — the
+        # engagement is itself the deliberate signal — and only then does a
+        # hand-set Atom hold, until the next engagement after it.
+        controls._engage_step_view(controls._component_view)
+        assert controls._pick_granularity.currentData() == "residue"
+        controls._pick_granularity.setCurrentIndex(1)
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+
+        # A click a tool owns never becomes a selection, whatever the unit.
+        app._tug_enabled = True
+        controls._on_atom_picked(mid, 5, False)
+        process_events()
+        app._tug_enabled = False
+        assert set(app._scene_selection.get(mid, ())) == {0}
+
+        controls._pick_granularity.setCurrentIndex(0)  # leave the key as shipped
+
+
 def exercise_validation_subtabs_and_row_focus():
     """Each result becomes a sub-tab, and selecting a whole row focuses that residue,
     resolved to atom indices on the active model."""
