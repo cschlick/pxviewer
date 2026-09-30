@@ -163,6 +163,48 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         assert controls._tutorial is None
 
 
+def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
+    """Going Back to a step whose task is still done must stay there.
+
+    The done-poll is edge-triggered, and Back seeds the latch with the
+    predicate's present value — without the seed, the next poll saw "satisfied"
+    and re-advanced, so Back read as a dead key. A revisited step that is not
+    yet done must still auto-advance the moment it genuinely becomes done.
+    """
+    with desktop() as app:
+        controls, coach = app._controls, app._viewport
+        controls._start_tutorial(tutorial.open_model_tutorial())
+        assert progress(app) == "Step 1 / 5"
+        controls._tutorial_back()
+        assert progress(app) == "Step 1 / 5"        # already at the top: a no-op
+        controls._tutorial_next()
+        assert progress(app) == "Step 2 / 5"
+
+        # Satisfy step 2's predicate — it fires on any selection on the model —
+        # and the poll advances.
+        controls._select_expr.setText("resseq 1")
+        controls._on_select_expression()
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 3 / 5"
+
+        # Back onto the still-satisfied step: however often the poll runs, it
+        # must not fling the user forward again.
+        controls._tutorial_back()
+        assert progress(app) == "Step 2 / 5"
+        for _ in range(3):
+            controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 2 / 5", "a satisfied step re-flung the user"
+
+        # A revisited step not yet done still advances on a real false->true
+        # edge: un-satisfy, then satisfy again.
+        app.clear_selection()
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 2 / 5"
+        app.select_by_expression("resseq 1")
+        controls._maybe_advance_tutorial()
+        assert progress(app) == "Step 3 / 5", "a re-earned step did not advance"
+
+
 def exercise_starting_a_tutorial_loads_its_own_example():
     """Every tutorial brings its data with it, so no step has to say "go and open this".
 

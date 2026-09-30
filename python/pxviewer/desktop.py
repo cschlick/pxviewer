@@ -1486,6 +1486,7 @@ class ControlsWindow:
         # those widgets — wire their buttons to our handlers.
         self._tutorial = None            # active Tutorial (see pxviewer.tutorial)
         self._tutorial_step = 0
+        self._tutorial_step_satisfied = False  # edge-latch for the done() poll
         self._tutorial_timer = None      # polls the step's done() predicate while active
         self._hl_timer = None            # pulses a step's highlight target
         self._hl_overlay = None          # a transparent ring drawn over it (no layout effect)
@@ -5779,6 +5780,7 @@ class ControlsWindow:
         vp.coach_back.setEnabled(self._tutorial_step > 0)
         last = self._tutorial_step == len(tut.steps) - 1
         vp.coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
+        self._tutorial_step_satisfied = False
 
     def _maybe_advance_tutorial(self) -> None:
         if self._tutorial is None:
@@ -5790,6 +5792,9 @@ class ControlsWindow:
             satisfied = bool(step.done(self))
         except Exception:  # pragma: no cover - a predicate touching not-yet-ready state
             satisfied = False
+        if satisfied == self._tutorial_step_satisfied:
+            return
+        self._tutorial_step_satisfied = satisfied
         if satisfied:
             self._advance_tutorial(auto=True)
 
@@ -5808,9 +5813,20 @@ class ControlsWindow:
         self._advance_tutorial(auto=False)
 
     def _tutorial_back(self) -> None:
+        """Step back for a re-read. The poll is edge-triggered, and this step is
+        latched to its predicate's *present* value: without that, returning to a
+        step whose task is still done would instantly fling the user forward
+        again — Back read as a dead key. A step not yet done still auto-advances
+        the moment it genuinely is (a false→true edge)."""
         if self._tutorial is not None and self._tutorial_step > 0:
             self._tutorial_step -= 1
             self._show_tutorial_step()
+            step = self._tutorial.steps[self._tutorial_step]
+            try:
+                self._tutorial_step_satisfied = (
+                    bool(step.done(self)) if step.done is not None else False)
+            except Exception:
+                self._tutorial_step_satisfied = False
 
     def _tutorial_exit(self, finished: bool = False) -> None:
         self._tutorial = None

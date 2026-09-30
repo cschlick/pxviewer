@@ -137,8 +137,7 @@ def open_model_tutorial() -> Tutorial:
             "atom's whole residue instead. It follows the last table you engage — "
             "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
             "or a validation table sets Residue — and you can always set it by hand.",
-            done=lambda cw: ("name" in cw._select_expr.text()
-                             or "resid" in cw._select_expr.text()),
+            done=lambda cw: _selection_count(cw) > 0,
             target=lambda cw: cw._pick_granularity,
         ),
         Step(
