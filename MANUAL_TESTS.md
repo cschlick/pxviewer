@@ -7,9 +7,10 @@ are where a human notices that the result looks bad.
 
 How to use them:
 
-- Each pass is 5–15 minutes and independent. A full sweep is ~90 minutes; before a
+- Each pass is 5–15 minutes and independent. A full sweep is ~100 minutes; before a
   release, run everything. After a focused change, run the pass that owns the area plus
-  **Pass 0** and **Pass 10**.
+  **Pass 0** and **Pass 10**. Pass 11 is automation-first: its steps are scripted
+  sequences with mechanically checkable assertions, not visual judgement calls.
 - The **Watch for** lines are the point. Do the step slowly, then actually look —
   most visual bugs live in the half-second after an action, in resizes, and in the
   second time you do something.
@@ -337,3 +338,81 @@ Load the X-ray demo or a model with restraints available.
 5. Quit the app from a busy moment (mid-render, tutorial open).
    - **Watch for:** the process exits; the terminal shows no "task was destroyed" or Qt
      object-deleted warnings.
+
+---
+
+## Pass 11 — Chained sequences (suitable for automation) (15 min)
+
+Multi-step chains where each step leaves standing state the next step leans on —
+this is where interaction bugs (stale caches, orphaned scene state, echo wipes,
+clips surviving rebuilds) actually hide. Every step's **Watch for** is a checkable
+assertion, not a judgement call, so the pass is written to be driven headless:
+`session.screenshot()` for frames, `runJavaScript` on the viewport for Mol* state,
+the `app._models`/`_scene_selection`/`_auto_clip` keys on the Python side. Two
+models are needed; 1ubq + one more protein works.
+
+1. Load A → eye it off → load B → eye it off → eye A back on.
+   - **Watch for:** A reappears exactly where it was (hidden objects keep view
+     state); the row styles track reality at every step; showing/hiding never moves
+     the camera.
+2. With A shown and B hidden, click B's row so it is the *active* model, then apply
+   `resseq 5` in the Selection pane.
+   - **Watch for:** the selection applies to the hidden B — the label and atoms
+     table agree with the hidden model; unhiding B afterwards shows the highlight
+     already standing.
+3. On A, apply `resseq 29` with Focus and Clip on. Then cycle its representation
+   cartoon → ball-and-stick → cartoon.
+   - **Watch for:** the clip sphere survives the rebuild — clip objects are baked
+     into each new representation, not just the one they were applied to; the view
+     after the round trip is still the clipped residue, not the lifted scene.
+4. Uncheck **Clip to selection**, wait a beat, re-check it. Compare against the
+   clipped frame (screenshot diff or eye).
+   - **Watch for:** the same clipped view returns — depth slab included, not just
+     the sphere. A reapplied frame that matches the *lifted* frame is the bug.
+5. With the clip standing, engage the Components table and Space-step five rows.
+   - **Watch for:** the sphere re-centres on each stepped residue and the
+     neighbourhood context follows; no stepped residue is ever rendered outside
+     its own sphere.
+6. Shift-click a second residue in the viewport to grow the selection.
+   - **Watch for:** the sphere re-fits to the grown selection; nothing added is
+     clipped out of view; the camera does not move.
+7. Clear the selection entirely, then toggle **Clip to selection** off and on with
+   nothing selected.
+   - **Watch for:** re-checking an empty selection is a calm no-op — no sphere
+     stranded mid-scene, no camera lurch, no state marker claiming a clip exists.
+8. Restore a selection clip (`resseq 29` again), then Minimize for a few seconds
+   and pause.
+   - **Watch for:** the sphere stands where it was fit — it does not chase moving
+     atoms. Then open a Geometry restraint sub-tab: the model/delta/residual
+     columns must describe the *moved* sites, not the pre-minimize snapshot (the
+     stale-geometry-cache bug lived here).
+9. With the clip on A standing, select a residue on B. Then eye A off and on.
+   - **Watch for:** clip state is per-model — B's selection never writes into A's
+     viewer; A returns still clipped around its own selection; B's view is
+     unaffected.
+10. Rapid storm: toggle **Clip to selection** ten times fast, cycle A's
+    representation five times, click three restraint rows quickly in succession.
+    - **Watch for:** the final state wins everywhere (no mid-storm commit lands
+      last); the last restraint row clicked stays selected after its WS echo; the
+      terminal shows no Mol* exceptions. (A `uniform*: no array` warning when a
+      clip is *cleared* is a known benign Mol* shader-rebuild message.)
+11. Remove A while its clip stands. Then remove B.
+    - **Watch for:** the clip dies with the model — no orphaned sphere drawn over
+      the remaining scene; removing the last object leaves the empty state clean.
+12. Reload A and apply `resseq 29` again.
+    - **Watch for:** a fresh clip behaves like a fresh clip — sphere centred on
+      the new selection, depth slab tight; no bookkeeping from the removed model's
+      clip leaks into the new one.
+13. Load a map alongside a clipped model (difference map or cryo-EM demo), drag its
+    Level while the selection clip stands, then lift and re-apply the model clip.
+    - **Watch for:** map contours and model clips are independent channels — the
+      map neither inherits nor eats the model's sphere; the Level still tracks
+      mid-clip; lifting and re-applying the model clip leaves the map untouched.
+14. Drive **Hide selected** then **Show selected** on the Selection pane with a
+    clip standing.
+    - **Watch for:** hidden atoms leave the highlight consistently; the sphere and
+      context still describe the selection you made, and showing them back lands
+      exactly where they were.
+15. Long loop: steps 3–5, 8, 10 chained three times back to back.
+    - **Watch for:** no growth in console warnings, memory, or stray state — the
+      same sequences must behave identically on the third pass as the first.
