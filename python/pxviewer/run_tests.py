@@ -118,6 +118,7 @@ visual_tests = [
     "$D/regression/visual/tst_visual_launch.py",
     "$D/regression/visual/tst_visual_selection.py",
     "$D/regression/visual/tst_visual_chains.py",
+    "$D/regression/visual/tst_visual_tutorials.py",
 ]
 
 tst_list = tuple(core_tests)

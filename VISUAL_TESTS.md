@@ -274,8 +274,15 @@ Run **Tutorials ▸ Look at local resolution** twice.
 
 ## Pass 7 — Tutorials sweep (15 min)
 
+The scripted half lives in `regression/visual/tst_visual_tutorials.py`: it
+starts each bundled-data tutorial, walks every step to the end, and checks the
+coach opens, reserves its height, and is put away cleanly (the three
+fetch-dependent tutorials run under `PXVIEWER_VISUAL_NET=1`). What it does not
+do is *perform* each step's action — per-step predicates are exercised by
+`tst_desktop_tutorials.py`; the hands-on checks below are the rest.
+
 1. Open the Tutorials menu (graduation cap).
-   - **Watch for:** nine entries, stable order, titles match what they teach.
+   - **Watch for:** ten entries, stable order, titles match what they teach.
 2. Run **Open a model** and **Alternate conformations** to completion, doing exactly
    what each step says.
    - **Watch for:** wording matches the real UI ("Objects list", "Appearance pane" —
