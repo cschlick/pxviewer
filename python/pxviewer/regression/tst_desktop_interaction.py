@@ -1181,6 +1181,14 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         assert set(app._scene_selection.get(mid, ())) == {0}
         assert "name N" in controls._select_expr.text()
 
+        # A restraint sub-tab is atom-level too — a restraint row's unit is its
+        # participating atoms, and a click should show precisely those.
+        controls._engage_step_view(controls._restraint_tabs["bond"]["view"])
+        assert controls._pick_granularity.currentData() == "atom"
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+
         # Shift-click toggles the same unit: two atoms of one residue is a partial
         # residue, which no whole-residue expression can honestly name — the box
         # clears rather than lie; toggling the second atom off restores the exact

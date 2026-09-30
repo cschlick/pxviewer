@@ -1872,7 +1872,8 @@ class ControlsWindow:
         # What a viewport click selects. Residue is the crystallographer's default —
         # a click asks "show me this residue" — but a click while an atom-level
         # worklist is engaged should land on one atom, so engaging the Atoms table
-        # flips this to Atom and engaging a residue-level table flips it back
+        # or a restraint table (a restraint row's unit IS its atoms) flips this to
+        # Atom and engaging a residue-level table flips it back
         # (_engage_step_view). The control is also the readout: it always says what
         # the next click will do, and a hand-set choice holds until the next table
         # engagement.
@@ -1884,8 +1885,8 @@ class ControlsWindow:
         self._pick_granularity.setToolTip(
             "What a click in the viewport selects — the atom's whole residue, or "
             "just the atom. Follows the table you last engaged (the Atoms table "
-            "implies atoms); changing it by hand holds until the next table "
-            "engagement.")
+            "and restraint tables imply atoms); changing it by hand holds until "
+            "the next table engagement.")
         saved = str(self._desktop._settings.value(
             "selection/pick_granularity", "residue"))
         self._pick_granularity.setCurrentIndex(1 if saved == "atom" else 0)
@@ -4519,13 +4520,18 @@ class ControlsWindow:
         worklist back to the residue walk.
 
         The engaged table is also the selection's granularity: an atom-level
-        worklist implies the next viewport click wants one atom, a residue-level
-        one the whole residue — so the pick-granularity control follows it (and
-        doubles as the readout of which the next click will do)."""
+        worklist (the Atoms table, or a restraint table — a restraint row's unit
+        IS its participating atoms) implies the next viewport click wants one
+        atom, a residue-level one the whole residue — so the pick-granularity
+        control follows it (and doubles as the readout of which the next click
+        will do)."""
         self._desktop._step_view = view
         combo = getattr(self, "_pick_granularity", None)
         if combo is not None:
-            combo.setCurrentIndex(1 if view is self._atom_view else 0)
+            atom_level = (view is self._atom_view or
+                          any(view is info["view"]
+                              for info in getattr(self, "_restraint_tabs", {}).values()))
+            combo.setCurrentIndex(1 if atom_level else 0)
 
     def _on_geometry_subtab_changed(self, index: int) -> None:
         if index >= self._restraint_subtab_start:  # a restraint tab
