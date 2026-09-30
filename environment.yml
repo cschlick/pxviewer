@@ -72,6 +72,10 @@ dependencies:
   - msgpack-python>=1.0
   - websockets>=12.0
   - ipykernel>=6.0
+  # pillow: the visual passes (regression/visual/) pixel-diff viewport frames with it.
+  # Pulled in transitively today; named so the harness's only non-GUI dependency is
+  # declared rather than inherited.
+  - pillow
   # No test runner: the regression suite is plain scripts run by
   # `libtbx.python -m pxviewer.run_tests`, asserting through libtbx.test_utils, which
   # comes with cctbx-base. See TESTING.md.

@@ -1,25 +1,45 @@
-# Manual test passes
+# Visual test passes
 
-Interactive walks that cover the program's functionality end to end, written to surface
-what the regression suite cannot: visual glitches, layout breakage, sluggishness, and
-"this feels wrong" usability problems. The suite proves the machinery fires; these passes
-are where a human notices that the result looks bad.
+End-to-end walks that cover what the regression suite cannot: chained state the
+unit tests never leave standing, and results that only a rendered frame can show.
+Two things make a check belong here rather than in `regression/`: **(A)** it needs
+chained state — a clip standing while representations rebuild, a hidden model
+receiving a selection — and **(B)** its verdict lives in the pixels or in the
+behaviour across steps, not in a single state read.
+
+Most of the time these run automated. `python/pxviewer/regression/visual/` holds
+a driver (`harness.py`) and one `tst_visual_*.py` per scripted pass — the real
+app, real QtWebEngine, real GPU, asserting on state and pixel-diffs and writing
+screenshots to `$PXVIEWER_VISUAL_DIR` (default `$TMPDIR/pxviewer-visual`) for
+review:
+
+```bash
+PXVIEWER_VISUAL=1 libtbx.python -m pxviewer.run_tests                     # with the suite
+libtbx.python python/pxviewer/regression/visual/tst_visual_chains.py     # one pass
+```
+
+The human half of each pass is what a script cannot judge — "this feels wrong",
+resizes, the half-second after an action. Steps that need a real gesture or a
+subjective call are marked *(manual)* in their pass.
 
 How to use them:
 
-- Each pass is 5–15 minutes and independent. A full sweep is ~100 minutes; before a
-  release, run everything. After a focused change, run the pass that owns the area plus
-  **Pass 0** and **Pass 10**. Pass 11 is automation-first: its steps are scripted
-  sequences with mechanically checkable assertions, not visual judgement calls.
-- The **Watch for** lines are the point. Do the step slowly, then actually look —
-  most visual bugs live in the half-second after an action, in resizes, and in the
-  second time you do something.
-- Run on the hardware and screen size you actually use, and at least once on a small
-  window (13"-laptop-sized) — several past bugs only existed at panel widths.
-- Keep the terminal you launched from visible: stray tracebacks, Qt warnings, and
-  asyncio "task destroyed" noise are all bugs even when the GUI looks fine.
+- Each pass is 5–15 minutes scripted or by hand. A full sweep is ~100 minutes;
+  before a release, run everything. After a focused change, run the pass that
+  owns the area plus **Pass 0** and **Pass 10**.
+- When running by hand: the **Watch for** lines are the point. Do the step
+  slowly, then actually look — most visual bugs live in the half-second after an
+  action, in resizes, and in the second time you do something.
+- Run on the hardware and screen size you actually use, and at least once on a
+  small window (13"-laptop-sized) — several past bugs only existed at panel
+  widths.
+- Keep the terminal you launched from visible: stray tracebacks, Qt warnings,
+  and asyncio "task destroyed" noise are all bugs even when the GUI looks fine.
+  (Automated runs keep stderr too — check the script's output after the `[PASS]`
+  lines.)
 
-Automated coverage is documented in `TESTING.md`; nothing here replaces it.
+Automated regression coverage is documented in `TESTING.md`; nothing here
+replaces it.
 
 ---
 
@@ -341,14 +361,15 @@ Load the X-ray demo or a model with restraints available.
 
 ---
 
-## Pass 11 — Chained sequences (suitable for automation) (15 min)
+## Pass 11 — Chained sequences (mostly automated) (15 min)
 
 Multi-step chains where each step leaves standing state the next step leans on —
 this is where interaction bugs (stale caches, orphaned scene state, echo wipes,
-clips surviving rebuilds) actually hide. Every step's **Watch for** is a checkable
-assertion, not a judgement call, so the pass is written to be driven headless:
-`session.screenshot()` for frames, `runJavaScript` on the viewport for Mol* state,
-the `app._models`/`_scene_selection`/`_auto_clip` keys on the Python side. Two
+clips surviving rebuilds) actually hide. **Steps 1–5, 7–12 and 14 are scripted**
+in `regression/visual/tst_visual_chains.py`; steps 6 and 13 need a real gesture
+or a map and stay *(manual)*. When running by hand, `runJavaScript` on the
+viewport page reads Mol* state and the `app._models`/`_scene_selection`/
+`_auto_clip` keys the Python side keeps are the assertions' ground truth. Two
 models are needed; 1ubq + one more protein works.
 
 1. Load A → eye it off → load B → eye it off → eye A back on.
@@ -373,7 +394,7 @@ models are needed; 1ubq + one more protein works.
    - **Watch for:** the sphere re-centres on each stepped residue and the
      neighbourhood context follows; no stepped residue is ever rendered outside
      its own sphere.
-6. Shift-click a second residue in the viewport to grow the selection.
+6. *(manual)* Shift-click a second residue in the viewport to grow the selection.
    - **Watch for:** the sphere re-fits to the grown selection; nothing added is
      clipped out of view; the camera does not move.
 7. Clear the selection entirely, then toggle **Clip to selection** off and on with
@@ -403,8 +424,9 @@ models are needed; 1ubq + one more protein works.
     - **Watch for:** a fresh clip behaves like a fresh clip — sphere centred on
       the new selection, depth slab tight; no bookkeeping from the removed model's
       clip leaks into the new one.
-13. Load a map alongside a clipped model (difference map or cryo-EM demo), drag its
-    Level while the selection clip stands, then lift and re-apply the model clip.
+13. *(manual)* Load a map alongside a clipped model (difference map or cryo-EM demo),
+    drag its Level while the selection clip stands, then lift and re-apply the
+    model clip.
     - **Watch for:** map contours and model clips are independent channels — the
       map neither inherits nor eats the model's sphere; the Level still tracks
       mid-clip; lifting and re-applying the model clip leaves the map untouched.
@@ -413,6 +435,6 @@ models are needed; 1ubq + one more protein works.
     - **Watch for:** hidden atoms leave the highlight consistently; the sphere and
       context still describe the selection you made, and showing them back lands
       exactly where they were.
-15. Long loop: steps 3–5, 8, 10 chained three times back to back.
+15. *(manual)* Long loop: steps 3–5, 8, 10 chained three times back to back.
     - **Watch for:** no growth in console warnings, memory, or stray state — the
       same sequences must behave identically on the third pass as the first.

@@ -110,6 +110,16 @@ hotspots_tests = [
     "$D/../../hotspots/regression/tst_field.py",
 ]
 
+#: The scripted visual passes (VISUAL_TESTS.md): the real app, real QtWebEngine and a
+#: real GPU render, driven through multi-step chains with state and pixel assertions.
+#: Each takes minutes rather than seconds and leaves screenshots in the run directory,
+#: so the group is opt-in -- PXVIEWER_VISUAL=1 -- rather than part of every suite run.
+visual_tests = [
+    "$D/regression/visual/tst_visual_launch.py",
+    "$D/regression/visual/tst_visual_selection.py",
+    "$D/regression/visual/tst_visual_chains.py",
+]
+
 tst_list = tuple(core_tests)
 tst_list_expected_unstable = ()
 
@@ -133,6 +143,12 @@ def _assemble():
     elif hotspots_tests:
         print("Skipping %d hotspots tests: hotspots/ is not in this tree"
               % len(hotspots_tests))
+    if os.environ.get("PXVIEWER_VISUAL"):
+        if _have("PySide6.QtWebEngineWidgets", "websockets", "PIL"):
+            tests += visual_tests
+        elif visual_tests:
+            print("Skipping %d visual passes: PySide6 QtWebEngine / websockets / "
+                  "pillow not available" % len(visual_tests))
     return tuple(tests)
 
 

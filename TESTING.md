@@ -152,6 +152,36 @@ Two things to watch when converting:
   `urllib.error.HTTPError` needs five. Fall back to `try` / `except` with
   `raise Exception_expected` in the try, which is the older cctbx idiom and always works.
 
+## Visual passes
+
+`VISUAL_TESTS.md` describes end-to-end walks whose point is chained state and
+rendered output rather than a single state read. Most of them are scripted:
+`regression/visual/` holds `harness.py` (the driver — real `DesktopApp`, real
+QtWebEngine viewport, viewport screenshots via `LiveSession.screenshot`,
+camera/Mol* state readback, pixel diffs between frames in the same run) and one
+`tst_visual_*.py` per scripted pass, each an ordinary test program that prints
+`OK` and exits nonzero on failure.
+
+They are **opt-in** in `run_tests.py` — each takes minutes, launches the real
+app, and leaves screenshots for review — so set `PXVIEWER_VISUAL=1` to include
+them:
+
+```bash
+PXVIEWER_VISUAL=1 libtbx.python -m pxviewer.run_tests                  # with the suite
+libtbx.python python/pxviewer/regression/visual/tst_visual_chains.py  # one pass
+```
+
+Artifacts (frames plus `report.txt`) go to `$PXVIEWER_VISUAL_DIR`, defaulting to
+`$TMPDIR/pxviewer-visual`. The same conventions as everywhere else apply — real
+objects, state assertions over spies — plus two the medium adds:
+
+- **Pump with `harness.pump`/`settle`, never bare sleeps or `processEvents`**, so
+  deferred deletes are delivered and the run's memory resembles the app's.
+- **Pixel assertions are within-run**: compare `clipped` against `lifted` or
+  `reapplied` from the same session. Golden images across machines would be a
+  GPU lottery; "the re-applied frame matches the first clip" is a behavioural
+  claim that travels.
+
 ## Inventory
 
 Converted, and the pytest originals removed — **49 files, 485 exercises**:
