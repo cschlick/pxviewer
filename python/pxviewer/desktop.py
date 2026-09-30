@@ -6137,6 +6137,13 @@ class ControlsWindow:
 
     def _set_table_model(self, mid) -> None:
         """Point the atoms table at model ``mid`` (or None) and reflect its selection."""
+        if mid == self._table_model_id:
+            # Every loaded_changed funnels here; when the model did not actually
+            # change (a rep switch, an eye toggle, ensure_atoms_shown's courtesy
+            # flip on the first restraint click) the rebuild below would only
+            # rebind the same session and reset the restraint tables' rows --
+            # which discards the very row selection that triggered it.
+            return
         self._table_model_id = mid
         session = self._desktop.session_for(mid)
         with self._table_sync_suppressed():
