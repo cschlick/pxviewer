@@ -1869,26 +1869,25 @@ class ControlsWindow:
                 "selection/context_rep", "true" if on else "false"))
         sl.addWidget(self._context_on_select)
 
-        # What a viewport click selects. Residue is the crystallographer's default —
-        # a click asks "show me this residue" — but a click while an atom-level
-        # worklist is engaged should land on one atom, so engaging the Atoms table
-        # or a restraint table (a restraint row's unit IS its atoms) flips this to
-        # Atom and engaging a residue-level table flips it back
-        # (_engage_step_view). The control is also the readout: it always says what
-        # the next click will do, and a hand-set choice holds until the next table
-        # engagement.
+        # What a viewport click selects. Atom is the default — a click takes exactly
+        # the atom under the cursor — while a residue-level worklist (Components, a
+        # validation table) flips it to Residue, since a click there wants the whole
+        # residue (_engage_step_view). The control is also the readout: it always
+        # says what the next click will do, and a hand-set choice holds until the
+        # next table engagement.
         gran_row = QHBoxLayout()
         gran_row.addWidget(QLabel("Click selects:"))
         self._pick_granularity = QComboBox()
         self._pick_granularity.addItem("Residue", "residue")
         self._pick_granularity.addItem("Atom", "atom")
         self._pick_granularity.setToolTip(
-            "What a click in the viewport selects — the atom's whole residue, or "
-            "just the atom. Follows the table you last engaged (the Atoms table "
-            "and restraint tables imply atoms); changing it by hand holds until "
-            "the next table engagement.")
+            "What a click in the viewport selects — just the atom (the default), "
+            "or the atom's whole residue. Follows the table you last engaged (the "
+            "Atoms table and restraint tables imply atoms, residue-level tables "
+            "imply residues); changing it by hand holds until the next table "
+            "engagement.")
         saved = str(self._desktop._settings.value(
-            "selection/pick_granularity", "residue"))
+            "selection/pick_granularity", "atom"))
         self._pick_granularity.setCurrentIndex(1 if saved == "atom" else 0)
         self._pick_granularity.currentIndexChanged.connect(
             lambda _i: self._desktop._settings.setValue(
@@ -4524,7 +4523,7 @@ class ControlsWindow:
         IS its participating atoms) implies the next viewport click wants one
         atom, a residue-level one the whole residue — so the pick-granularity
         control follows it (and doubles as the readout of which the next click
-        will do)."""
+        will do). Atom is the default before any table has been engaged."""
         self._desktop._step_view = view
         combo = getattr(self, "_pick_granularity", None)
         if combo is not None:
@@ -13251,10 +13250,10 @@ class DesktopApp:
 
     def select_picked_atom(self, mid: str, atom_index: int, *, focus: bool = True,
                            clip: bool = True, context: bool = True,
-                           granularity: str = "residue"):
+                           granularity: str = "atom"):
         """A viewport atom click, unified with the selection box: select the clicked
-        atom's whole residue — or just the atom at ``granularity="atom"`` — and give
-        it exactly the treatment a typed selection gets — same oriented framing,
+        atom — or its whole residue at ``granularity="residue"`` — and give it
+        exactly the treatment a typed selection gets — same oriented framing,
         same clip sphere, same neighbourhood context. One grammar for "show me
         this", however it was indicated. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the index names no
@@ -13281,9 +13280,9 @@ class DesktopApp:
         return expression
 
     def toggle_picked_residue(self, mid: str, atom_index: int, *, clip: bool = True,
-                              context: bool = True, granularity: str = "residue"):
-        """Shift-click: grow or shrink the selection by the clicked atom's residue
-        — or by just the atom at ``granularity="atom"``.
+                              context: bool = True, granularity: str = "atom"):
+        """Shift-click: grow or shrink the selection by the clicked atom — or by
+        its whole residue at ``granularity="residue"``.
 
         The unit joins the selection, or leaves it when it is already entirely
         selected. The camera deliberately stays where it is — re-framing on every

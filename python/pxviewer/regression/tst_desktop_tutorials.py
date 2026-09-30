@@ -380,11 +380,13 @@ def exercise_removing_a_model_clears_its_selection_text():
 
 
 def exercise_a_click_and_a_typed_selection_are_one_pipeline():
-    """The unification: with no click mode armed, a viewport atom click selects the
-    clicked residue through exactly the pipeline a typed selection takes — oriented
-    framing, isolation clip, neighbourhood context — and the selection box shows the
-    equivalent expression. A tool that owns clicks (Pick mode) keeps them: the panel
-    follows the model, nothing else changes."""
+    """The unification: with no click mode armed, a viewport atom click selects
+    through exactly the pipeline a typed selection takes — oriented framing,
+    isolation clip, neighbourhood context — and the selection box shows the
+    equivalent expression. The residue unit is exercised here (the granularity
+    control's two settings and its table-following are covered in
+    tst_desktop_interaction). A tool that owns clicks (Pick mode) keeps them: the
+    panel follows the model, nothing else changes."""
     import json
 
     with desktop() as app:
@@ -395,6 +397,7 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         process_events()
         second = app._active_model_id
         controls = app._controls
+        controls._pick_granularity.setCurrentIndex(0)  # the residue unit
         session = app.session_for(first)
         calls = []
         session.orient_camera = lambda *a, **k: calls.append("orient")

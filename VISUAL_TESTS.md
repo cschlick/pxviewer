@@ -241,15 +241,16 @@ Load a protein (1ubq works).
      Hide-selected / Show-selected enable only when something is selected, and do what
      they say.
 7. Watch the **Click selects** control in the Selection pane while clicking the
-   viewport, then engage the Atoms table (its sub-tab or a row) and click again.
-   - **Watch for:** the control says Residue while a residue-level worklist (or
-     none) is engaged and every click takes the clicked atom's whole residue;
-     engaging Atoms — or any restraint sub-tab, whose rows are atom collections —
-     flips it to Atom and each click then takes the one atom (the selection box
-     names it, `… and name CA`, and the label and atoms table agree). Engaging
-     Components or a validation table flips it back. Setting it by hand holds
-     until the next table engagement, and Shift-click grows and shrinks by the
-     same unit — atoms in Atom, residues in Residue.
+   viewport, then engage the Components table (its sub-tab or a row) and click
+   again, then a restraint sub-tab and click once more.
+   - **Watch for:** the control says Atom by default and every click takes
+     exactly the atom under the cursor — the selection box names it
+     (`… and name CA`) and the label and atoms table agree. Engaging
+     Components or a validation table flips it to Residue (clicks take the
+     whole residue); the Atoms table and restraint sub-tabs — whose rows are
+     atom collections — flip it back. Setting it by hand holds until the next
+     table engagement, and Shift-click grows and shrinks by the same unit —
+     atoms in Atom, residues in Residue.
 
 ## Pass 6 — Local resolution (15 min)
 

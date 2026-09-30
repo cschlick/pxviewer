@@ -1154,17 +1154,28 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
 
 
 def exercise_a_viewport_click_uses_the_engaged_tables_unit():
-    """A click selects what the last engaged table is about: a residue by default
-    and under any residue-level worklist, a single atom under the Atoms table. The
-    Selection pane's granularity control is both the readout of which applies and
-    a hand-override — and a click a tool owns never becomes a selection at all."""
+    """A click selects what the last engaged table is about: a single atom by
+    default and under the Atoms and restraint worklists, the whole residue under a
+    residue-level one. The Selection pane's granularity control is both the
+    readout of which applies and a hand-override — and a click a tool owns never
+    becomes a selection at all."""
     with desktop() as app:
         mid = ubiquitin(app)
         controls = app._controls
         atoms = app._model_entry(mid)["session"].model.get_hierarchy().atoms()
         residue = {a.i_seq for a in atoms[0].parent().parent().atoms()}
 
-        # Nothing engaged yet: a click asks for the residue it landed on.
+        # Nothing engaged yet: a click takes exactly the atom it landed on, and
+        # the box names it — `name N`, not its residue.
+        assert controls._pick_granularity.currentData() == "atom"
+        controls._on_atom_picked(mid, 0, False)
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+        assert "name N" in controls._select_expr.text()
+
+        # Engaging a residue-level worklist flips the control — and the next
+        # click — to the residue the atom belongs to.
+        controls._engage_step_view(controls._component_view)
         assert controls._pick_granularity.currentData() == "residue"
         controls._on_atom_picked(mid, 0, False)
         process_events()
@@ -1172,17 +1183,11 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         assert "resid" in controls._select_expr.text()
         assert "name" not in controls._select_expr.text()
 
-        # Engaging the atom-level worklist flips the control — and the next click —
-        # to single atoms, and the box names the atom, not its residue.
+        # Atom-level worklists flip it back: the Atoms table, and a restraint
+        # sub-tab too — a restraint row's unit is its participating atoms, and a
+        # click should show precisely those.
         controls._engage_step_view(controls._atom_view)
         assert controls._pick_granularity.currentData() == "atom"
-        controls._on_atom_picked(mid, 0, False)
-        process_events()
-        assert set(app._scene_selection.get(mid, ())) == {0}
-        assert "name N" in controls._select_expr.text()
-
-        # A restraint sub-tab is atom-level too — a restraint row's unit is its
-        # participating atoms, and a click should show precisely those.
         controls._engage_step_view(controls._restraint_tabs["bond"]["view"])
         assert controls._pick_granularity.currentData() == "atom"
         controls._on_atom_picked(mid, 0, False)
@@ -1211,7 +1216,7 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         process_events()
         assert set(app._scene_selection.get(mid, ())) == residue
 
-        # Engaging a residue-level table returns the control to Residue — the
+        # Engaging a residue-level table leaves the control at Residue — the
         # engagement is itself the deliberate signal — and only then does a
         # hand-set Atom hold, until the next engagement after it.
         controls._engage_step_view(controls._component_view)
@@ -1228,7 +1233,7 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         app._tug_enabled = False
         assert set(app._scene_selection.get(mid, ())) == {0}
 
-        controls._pick_granularity.setCurrentIndex(0)  # leave the key as shipped
+        controls._pick_granularity.setCurrentIndex(1)  # leave the key as shipped
 
 
 def exercise_validation_subtabs_and_row_focus():

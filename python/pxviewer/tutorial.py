@@ -129,6 +129,27 @@ def open_model_tutorial() -> Tutorial:
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
+            "**Click an atom in the viewport.** With **Click selects: Atom** — the "
+            "default — a click selects exactly the atom under the cursor: the "
+            "Selection pane describes it and the box echoes its expression "
+            "(`chain … and resseq … and name …`).\n\n"
+            "The same control also reads **Residue**, so each click takes the "
+            "atom's whole residue instead. It follows the last table you engage — "
+            "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
+            "or a validation table sets Residue — and you can always set it by hand.",
+            done=lambda cw: ("name" in cw._select_expr.text()
+                             or "resid" in cw._select_expr.text()),
+            target=lambda cw: cw._pick_granularity,
+        ),
+        Step(
+            "The **Selection** box takes selection strings as well as clicks: type "
+            "**resseq 29** and press Enter — cctbx syntax, so `chain A and resseq "
+            "1:10` works too. **Shift-click** in the viewport grows or shrinks the "
+            "selection by the same unit **Click selects** shows.",
+            done=_tyr29_selected,
+            target=lambda cw: cw._select_expr,
+        ),
+        Step(
             "The model appears a row in the **Objects** list. This is where a model is made active, and hidden/shown. "
             "How it is drawn lives in the **Appearance** pane on the right:"
             "you can customize the visual representation or the coloring for example.",
