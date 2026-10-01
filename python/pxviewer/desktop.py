@@ -1702,6 +1702,7 @@ class ControlsWindow:
         from PySide6.QtWidgets import (
             QCheckBox,
             QComboBox,
+            QFrame,
             QGridLayout,
             QGroupBox,
             QHBoxLayout,
@@ -1766,9 +1767,10 @@ class ControlsWindow:
         ol.addWidget(self._loaded_tree, stretch=1)
 
         # -- Actions on the objects: a compact icon toolbar -----------------
-        # Icon-only (the words move to richer tooltips), one row in two groups: get data in
-        # and out | act on what is loaded and the view. Lucide icons tinted to the button
-        # text color, with the old label kept as fallback text if an asset is missing.
+        # Icon-only (the words move to richer tooltips), one row in three groups:
+        # data in (open, tutorials) | data out (save, remove) | other (pair).
+        # Lucide icons tinted to the button text color, with the old label kept as
+        # fallback text if an asset is missing.
         def _icon_button(icon_name, label, tooltip, on_click=None):
             b = self._make_icon_button(icon_name, label, tooltip)
             if on_click is not None:
@@ -1801,13 +1803,22 @@ class ControlsWindow:
         self._remove_model_btn = _icon_button(
             "trash-2", "Remove", "Remove the highlighted object", self._on_remove_selected)
 
+        def _vsep():
+            line = QFrame()
+            line.setFrameShape(QFrame.Shape.VLine)
+            line.setStyleSheet("color: palette(mid);")
+            line.setFixedWidth(10)
+            return line
+
         actions = QHBoxLayout()
         actions.setSpacing(4)
-        for button in (self._open_btn, self._get_btn, self._write_btn,
-                       self._pair_btn):
+        for button in (self._open_btn, self._get_btn):        # data in
             actions.addWidget(button)
-        actions.addSpacing(14)  # separate "data in / out" from "act on it"
-        actions.addWidget(self._remove_model_btn)
+        actions.addWidget(_vsep())
+        for button in (self._write_btn, self._remove_model_btn):  # data out
+            actions.addWidget(button)
+        actions.addWidget(_vsep())
+        actions.addWidget(self._pair_btn)                     # other
         actions.addStretch(1)  # keep them a compact, left-packed toolbar
         ol.addLayout(actions)
 
