@@ -120,8 +120,25 @@ def _validation_ran(cw: Any) -> bool:
     return bool(entry and entry.get("validation"))
 
 
+def _ball_and_stick(cw: Any) -> bool:
+    """Whether the active model is drawn in ball-and-stick."""
+    entry = _active_model_entry(cw)
+    return bool(entry and entry.get("rep") == "ball-and-stick")
+
+
+def _atoms_were_hidden(cw: Any) -> bool:
+    """Whether the active model has had atoms hidden — latched, so pressing Show
+    to bring them back does not un-acknowledge the step that asked for it."""
+    entry = _active_model_entry(cw)
+    if entry is None:
+        return False
+    if entry.get("hidden_atoms"):
+        entry["_tut_atoms_were_hidden"] = True
+    return bool(entry.get("_tut_atoms_were_hidden"))
+
+
 def open_model_tutorial() -> Tutorial:
-    """The starting point: a model on screen and the three gestures that drive it."""
+    """The starting point: a model on screen and the gestures that drive it."""
     return Tutorial("Open a model", [
         Step(
             "**1UBQ**, ubiquitin, is loaded into the Mol* viewport.\n\n"
@@ -129,32 +146,56 @@ def open_model_tutorial() -> Tutorial:
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
+            "The model appears as a row in the **Objects** list — where a model is "
+            "made active, hidden or removed. How it is drawn lives in the "
+            "**Appearance** pane beside it.\n\n"
+            "It opens as a ribbon (**Cartoon**): pretty, but with no atoms to aim "
+            "at. Set **Representation** to **Ball & stick** there — every atom "
+            "drawn large enough to click.",
+            done=_ball_and_stick,
+            target=lambda cw: cw._appearance_box,
+        ),
+        Step(
             "The **Selection** box takes selection strings as well as clicks: type "
             "**resseq 29** and press Enter — cctbx syntax, so `chain A and resseq "
-            "1:10` works too. **Shift-click** in the viewport grows or shrinks the "
-            "selection by the same unit **Click selects** shows.",
+            "1:10` works too. Focus and Clip below the box aim the camera at what "
+            "matched.",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
         ),
         Step(
-            "The selected atoms are drawn up close in **ball & stick** — **click "
-            "one.** With **Click selects: Atom** — the default — a click selects "
-            "exactly the atom under the cursor: the Selection pane describes it "
-            "and the box echoes its expression (`chain … and resseq … and name "
-            "…`).\n\n"
+            "With atoms selected, the buttons under **Selected:** act on them: "
+            "press **Hide** — the selected atoms vanish from the drawing — then "
+            "**Show** brings them back.",
+            done=_atoms_were_hidden,
+            target=lambda cw: cw._hide_sel_btn,
+        ),
+        Step(
+            "**Clear** empties the selection — the highlight, the clip sphere and "
+            "the neighbourhood layer all fold away.",
+            done=lambda cw: _selection_count(cw) == 0,
+            target=lambda cw: cw._clear_btn,
+        ),
+        Step(
+            "**Click an atom in the viewport.** With **Click selects: Atom** — the "
+            "default — a click selects exactly the atom under the cursor: the "
+            "Selection pane describes it and the box echoes its expression "
+            "(`chain … and resseq … and name …`).\n\n"
             "The same control also reads **Residue**, so each click takes the "
             "atom's whole residue instead. It follows the last table you engage — "
             "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
             "or a validation table sets Residue — and you can always set it by hand.\n\n"
-            "Away from the ball & stick layer a click can only aim as fine as the "
-            "ribbon — Atom picks there still take the residue.",
+            "On a ribbon there are no atom pixels to aim at, so Atom clicks there "
+            "take the residue — the representation bounds the aim.",
             done=lambda cw: _selection_count(cw) == 1,
             target=lambda cw: cw._pick_granularity,
         ),
         Step(
-            "The model appears a row in the **Objects** list. This is where a model is made active, and hidden/shown. "
-            "How it is drawn lives in the **Appearance** pane on the right:"
-            "you can customize the visual representation or the coloring for example.",
+            "**Shift-click** another atom — the selection grows by the same unit "
+            "**Click selects** shows, and the **Selected:** count climbs. "
+            "Shift-click a selected atom to take it back out.",
+            done=lambda cw: _selection_count(cw) > 1,
+            target=lambda cw: cw._selection_label,
         ),
         Step(
             "To load a model yourself use the **Open** button to either: "

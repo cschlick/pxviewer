@@ -187,31 +187,31 @@ def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
     with desktop() as app:
         controls, coach = app._controls, app._viewport
         controls._start_tutorial(tutorial.open_model_tutorial())
-        assert progress(app) == "Step 1 / 5"
+        assert progress(app) == "Step 1 / 8"
         controls._tutorial_back()
-        assert progress(app) == "Step 1 / 5"        # already at the top: a no-op
+        assert progress(app) == "Step 1 / 8"        # already at the top: a no-op
         controls._tutorial_next()
-        assert progress(app) == "Step 2 / 5"
+        assert progress(app) == "Step 2 / 8"
         assert coach.coach_next.text() == "Skip"    # a doable step not yet done
 
-        # Do the step's task (the string-selection step asks for resseq 29); the
-        # poll acknowledges — Skip becomes Next — but the coach does not move.
-        controls._select_expr.setText("resseq 29")
-        controls._on_select_expression()
+        # Do the step's task (the representation step asks for ball-and-stick);
+        # the poll acknowledges — Skip becomes Next — but the coach does not move.
+        pump_until(lambda: app._active_model_id is not None, "no model loaded")
+        app.set_model_representation(app._active_model_id, "ball-and-stick")
         controls._poll_tutorial_done()
-        assert progress(app) == "Step 2 / 5"
+        assert progress(app) == "Step 2 / 8"
         assert coach.coach_next.text() == "Next"
 
         # Forward over the satisfied step, then Back: it stays put however often
         # the poll runs, and keeps offering Next rather than re-demanding the task.
         controls._tutorial_next()
-        assert progress(app) == "Step 3 / 5"
+        assert progress(app) == "Step 3 / 8"
         controls._tutorial_back()
-        assert progress(app) == "Step 2 / 5"
+        assert progress(app) == "Step 2 / 8"
         assert coach.coach_next.text() == "Next"
         for _ in range(3):
             controls._poll_tutorial_done()
-        assert progress(app) == "Step 2 / 5", "a satisfied step re-flung the user"
+        assert progress(app) == "Step 2 / 8", "a satisfied step re-flung the user"
 
 
 def exercise_starting_a_tutorial_loads_its_own_example():
