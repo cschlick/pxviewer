@@ -230,8 +230,9 @@ Load a protein (1ubq works).
      chain. The residue walk is only the default before any table has been touched;
      switching to another table (its sub-tab, a row) is what moves the key to it.
    - **Watch for:** each row is a real selection — Components/Atoms/restraint rows
-     alike frame, isolate and dress the neighborhood exactly as the Selection
-     pane's Focus / Clip / Neighborhood checkboxes say, so stepping the list clips
+     alike frame, isolate and dress the neighborhood as the Selection pane's
+     Focus / Clip checkboxes and the Settings tab's Neighborhood checkbox say,
+     so stepping the list clips
      only while **Clip to selection** is checked, and a restraint row's sphere
      centers on the restraint's atoms rather than inheriting whatever a previous
      selection left.

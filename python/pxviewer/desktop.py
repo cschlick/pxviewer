@@ -1902,22 +1902,9 @@ class ControlsWindow:
         self._clip_on_select.toggled.connect(self._on_clip_on_select_toggled)
         sl.addWidget(self._clip_on_select)
 
-        self._context_on_select = QCheckBox("Neighborhood in ball-and-stick")
-        self._context_on_select.setToolTip(
-            "Draw the selected atoms and every residue within 5 Å of them in "
-            "ball-and-stick while the selection stands — the same local context for a "
-            "typed selection and a clicked atom; the main representation steps aside "
-            "there, so the region reads as sticks alone. Restored when the selection "
-            "clears. Skipped for large selections and when the model already shows "
-            "ball-and-stick.")
-        self._context_on_select.setChecked(
-            str(self._desktop._settings.value("selection/context_rep", "true")).lower()
-            != "false")
-        self._context_on_select.toggled.connect(
-            lambda on: self._desktop._settings.setValue(
-                "selection/context_rep", "true" if on else "false"))
-        sl.addWidget(self._context_on_select)
-
+        # The neighborhood-in-ball-and-stick context is a standing style choice, not a
+        # per-selection gesture — it lives in the Settings tab's Selection box
+        # (_build_settings_tab), where _context_on_select is still built.
         # What a viewport click selects. Atom is the default — a click takes exactly
         # the atom under the cursor — while a residue-level worklist (Components, a
         # validation table) flips it to Residue, since a click there wants the whole
@@ -3452,12 +3439,32 @@ class ControlsWindow:
 
         # (The old "Show Mol* focus neighborhood on click" toggle is gone: a click now
         # runs pxviewer's own selection pipeline, and the neighborhood context is the
-        # Selection pane's "Neighborhood in ball-and-stick" checkbox — one treatment
-        # for clicked and typed selections alike.)
+        # "Neighborhood in ball-and-stick" checkbox in the Selection box below — one
+        # treatment for clicked and typed selections alike.)
         layout.addWidget(viewer)
 
         selection = QGroupBox("Selection")
         sg = QVBoxLayout(selection)
+
+        # The neighborhood context around a selection: a style of looking at
+        # selections, not a per-selection choice, so it lives here rather than in the
+        # Selection pane where Focus/Clip sit. On by default — the sticks around a
+        # selection are the context that makes a residue-level rep readable up close.
+        self._context_on_select = QCheckBox("Neighborhood in ball-and-stick")
+        self._context_on_select.setToolTip(
+            "Draw the selected atoms and every residue within 5 Å of them in "
+            "ball-and-stick while the selection stands — the same local context for a "
+            "typed selection and a clicked atom; the main representation steps aside "
+            "there, so the region reads as sticks alone. Restored when the selection "
+            "clears. Skipped for large selections and when the model already shows "
+            "ball-and-stick.")
+        self._context_on_select.setChecked(
+            str(self._desktop._settings.value("selection/context_rep", "true")).lower()
+            != "false")
+        self._context_on_select.toggled.connect(
+            lambda on: self._desktop._settings.setValue(
+                "selection/context_rep", "true" if on else "false"))
+        sg.addWidget(self._context_on_select)
 
         # The clip sphere is reach + this much: how much neighborhood survives
         # around a clipped selection is a taste setting, not a property of any one
