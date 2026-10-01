@@ -137,13 +137,47 @@ def _atoms_were_hidden(cw: Any) -> bool:
     return bool(entry.get("_tut_atoms_were_hidden"))
 
 
+def _zoom_used() -> Callable[[Any], bool]:
+    """A zoom-button press after the step's first poll (its baseline).
+
+    Wheel zoom happens in the page and reports nothing, so the predicate watches
+    the buttons, the discoverable control the step points at. The baseline keeps
+    presses from earlier steps from pre-satisfying this one, and on a revisit the
+    stored baseline means a user who did zoom comes back to a step that still
+    reads done."""
+    baseline: dict = {}
+
+    def pred(cw: Any) -> bool:
+        n = cw._desktop._zoom_presses
+        if "n" not in baseline:
+            baseline["n"] = n
+            return False
+        return n > baseline["n"]
+
+    return pred
+
+
+def _clip_lifted_and_restored() -> Callable[[Any], bool]:
+    """Clip to selection went off and came back — the sphere lifted and returned."""
+    seen_off = {"v": False}
+
+    def pred(cw: Any) -> bool:
+        if not cw._clip_on_select.isChecked():
+            seen_off["v"] = True
+            return False
+        return seen_off["v"]
+
+    return pred
+
+
 def open_model_tutorial() -> Tutorial:
     """The starting point: a model on screen and the gestures that drive it."""
     return Tutorial("Open a model", [
         Step(
             "**1UBQ**, ubiquitin, is loaded into the Mol* viewport.\n\n"
-            "The viewport enables: **drag** to rotate, **scroll** to "
-            "zoom, **click** an atom to select it (its details land in the status line).",
+            "The viewport enables: **drag** to rotate, **right-drag** or "
+            "**ctrl+scroll** to zoom (the wheel itself contours maps), **click** "
+            "an atom to select it (its details land in the status line).",
         ),
         Step(
             "The model appears as a row in the **Objects** list, where a model is "
@@ -158,10 +192,30 @@ def open_model_tutorial() -> Tutorial:
         Step(
             "The **Selection** box takes selection strings as well as clicks: type "
             "`resseq 29` and press Enter. It is cctbx syntax, so `chain A and "
-            "resseq 1:10` works too. Focus and Clip below the box aim the camera at "
-            "what matched.",
+            "resseq 1:10` works too.\n\n"
+            "The camera zooms to what matched on its own (that is **Focus on "
+            "selection**, checked below the box) and a clip sphere isolates it "
+            "(**Clip to selection**).",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
+        ),
+        Step(
+            "To drive the zoom yourself, step it with the {icon:zoom-out} and "
+            "{icon:zoom-in} buttons beside the status line; the camera keeps its "
+            "target. A right-drag (ctrl+scroll on a trackpad) does the same.\n\n"
+            "Zoom around the residue now.",
+            done=_zoom_used(),
+            target=lambda cw: cw._zoom_in_btn,
+        ),
+        Step(
+            "The sphere around the residue is **Clip to selection**'s: everything "
+            "outside it is undrawn. Uncheck it and the surroundings reappear; "
+            "check it again and the sphere returns. The same clip is the object's "
+            "**Sphere** row in the Appearance pane, which reads **On selection** "
+            "while this is checked.\n\n"
+            "Uncheck it, then check it again.",
+            done=_clip_lifted_and_restored(),
+            target=lambda cw: cw._clip_on_select,
         ),
         Step(
             "With atoms selected, the buttons under **Selected:** act on them: "
