@@ -449,7 +449,8 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         process_events()
         second = app._active_model_id
         controls = app._controls
-        controls._pick_granularity.setCurrentIndex(0)  # the residue unit
+        controls._pick_granularity.setCurrentIndex(
+            controls._pick_granularity.findData("residue"))  # the residue unit
         session = app.session_for(first)
         calls = []
         session.orient_camera = lambda *a, **k: calls.append("orient")

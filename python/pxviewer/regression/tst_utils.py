@@ -143,7 +143,6 @@ DESKTOP_SETTINGS_KEYS = (
     "selection/clip_padding",
     "selection/context_rep",
     "selection/focus_on_apply",
-    "selection/pick_granularity",
     "work_dir",
 )
 

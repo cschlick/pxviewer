@@ -1875,24 +1875,20 @@ class ControlsWindow:
         # validation table) flips it to Residue, since a click there wants the whole
         # residue (_engage_step_view). The control is also the readout: it always
         # says what the next click will do, and a hand-set choice holds until the
-        # next table engagement.
+        # next table engagement. Deliberately NOT persisted: it moves with table
+        # engagement all session, so a stored value is stale the moment it is read —
+        # every session starts at Atom.
         gran_row = QHBoxLayout()
         gran_row.addWidget(QLabel("Click selects:"))
         self._pick_granularity = QComboBox()
-        self._pick_granularity.addItem("Residue", "residue")
         self._pick_granularity.addItem("Atom", "atom")
+        self._pick_granularity.addItem("Residue", "residue")
         self._pick_granularity.setToolTip(
             "What a click in the viewport selects — just the atom (the default), "
             "or the atom's whole residue. Follows the table you last engaged (the "
             "Atoms table and restraint tables imply atoms, residue-level tables "
             "imply residues); changing it by hand holds until the next table "
             "engagement.")
-        saved = str(self._desktop._settings.value(
-            "selection/pick_granularity", "atom"))
-        self._pick_granularity.setCurrentIndex(1 if saved == "atom" else 0)
-        self._pick_granularity.currentIndexChanged.connect(
-            lambda _i: self._desktop._settings.setValue(
-                "selection/pick_granularity", self._pick_granularity.currentData()))
         gran_row.addWidget(self._pick_granularity)
         gran_row.addStretch(1)
         sl.addLayout(gran_row)
@@ -4531,7 +4527,7 @@ class ControlsWindow:
             atom_level = (view is self._atom_view or
                           any(view is info["view"]
                               for info in getattr(self, "_restraint_tabs", {}).values()))
-            combo.setCurrentIndex(1 if atom_level else 0)
+            combo.setCurrentIndex(0 if atom_level else 1)
 
     def _on_geometry_subtab_changed(self, index: int) -> None:
         if index >= self._restraint_subtab_start:  # a restraint tab

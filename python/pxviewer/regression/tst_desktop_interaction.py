@@ -1211,7 +1211,8 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         # The control is also the override: a hand-set residue choice wins even
         # with the atom-level worklist still engaged — until another table is
         # engaged, which is itself the deliberate signal the combo follows.
-        controls._pick_granularity.setCurrentIndex(0)
+        controls._pick_granularity.setCurrentIndex(
+            controls._pick_granularity.findData("residue"))
         controls._on_atom_picked(mid, 0, False)
         process_events()
         assert set(app._scene_selection.get(mid, ())) == residue
@@ -1221,7 +1222,8 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         # hand-set Atom hold, until the next engagement after it.
         controls._engage_step_view(controls._component_view)
         assert controls._pick_granularity.currentData() == "residue"
-        controls._pick_granularity.setCurrentIndex(1)
+        controls._pick_granularity.setCurrentIndex(
+            controls._pick_granularity.findData("atom"))
         controls._on_atom_picked(mid, 0, False)
         process_events()
         assert set(app._scene_selection.get(mid, ())) == {0}
@@ -1233,7 +1235,7 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         app._tug_enabled = False
         assert set(app._scene_selection.get(mid, ())) == {0}
 
-        controls._pick_granularity.setCurrentIndex(1)  # leave the key as shipped
+        controls._pick_granularity.setCurrentIndex(0)  # back to the shipped Atom
 
 
 def exercise_validation_subtabs_and_row_focus():
