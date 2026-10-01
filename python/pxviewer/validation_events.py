@@ -75,7 +75,7 @@ import numpy as np
 # same problem in two different places.
 
 #: Backbone atoms of the residue whose phi/psi produced a Ramachandran score. Narrow on
-#: purpose: phi/psi involve three residues, but implicating the neighbours smears one
+#: purpose: phi/psi involve three residues, but implicating the neighbors smears one
 #: residue's problem onto two innocent ones.
 RAMA_ATOMS = frozenset({"N", "CA", "C", "O"})
 
@@ -309,7 +309,7 @@ def extract_cablam(hierarchy: Any, *, index=None, cablam_result=None
 
     CaBLAM sees five consecutive CAs, so the score is unavailable at chain ends (``None``,
     skipped here) and it is informed by residues *i±2*. It is still assigned narrowly to
-    residue *i*, for the reason Ramachandran is: implicating the neighbours would smear one
+    residue *i*, for the reason Ramachandran is: implicating the neighbors would smear one
     residue's problem across five.
     """
     from libtbx.utils import null_out
@@ -500,7 +500,7 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
     # otherwise weight a contact by how much of it happens to be dotted.
     # Also keep where the worst dot sat. A consumer that deposits a kernel per event may
     # legitimately prefer the contact point -- the interface itself -- to the two atom
-    # centres; carrying it means that choice stays the consumer's rather than being decided
+    # centers; carrying it means that choice stays the consumer's rather than being decided
     # here by omission.
     worst: Dict[Tuple[int, int], float] = {}
     contact: Dict[Tuple[int, int], Optional[Xyz]] = {}
@@ -568,7 +568,7 @@ def extract_clashes(model: Any, *, dots=None, data_manager: Any = None,
 #   * every atom index recorded before the build points at a different atom (``extract_all``
 #     defends against this by building first, but a caller holding its own earlier indices
 #     cannot be);
-#   * the build is not serialised, and a plain ``process()`` ignores any custom bond/angle
+#   * the build is not serialized, and a plain ``process()`` ignores any custom bond/angle
 #     edits the host carries on the model. Since an existing restraints manager is reused
 #     rather than rebuilt, that edit-less manager is then inherited by whatever runs next --
 #     in pxviewer, silently dropping a user's custom restraints from minimize and drag, which
@@ -755,8 +755,8 @@ MAP_FIT_METRICS = frozenset({
 #: way. The shells and probe count are part of the metric's definition, not tuning knobs.
 #:
 #: A shell at radius 0.0 in particular is not a free choice: every probe collapses onto the
-#: atom centre, the rejection mask keeps them all, and the shell contributes N duplicate
-#: copies of the peak-anchored centre density — a systematic upward bias against phenix.
+#: atom center, the rejection mask keeps them all, and the shell contributes N duplicate
+#: copies of the peak-anchored center density — a systematic upward bias against phenix.
 QSCORE_SHELLS = tuple(float(r) for r in np.linspace(0.1, 2.0, 20))
 QSCORE_N_PROBES = 32
 QSCORE_RTOL = 0.9
@@ -894,7 +894,7 @@ def extract_local_resolution(mmm, *, fsc_cutoff=LOCAL_RESOLUTION_FSC_CUTOFF, n_b
     **Lower is better here** — the only channel in this file with that polarity. Carried
     native so a colorer inverts as it likes, but note that :func:`per_atom` combines with a
     max, which on an inverted field selects the *best*-resolved value rather than the worst.
-    Pass a negating ``transform=`` if you want worst-case behaviour from it.
+    Pass a negating ``transform=`` if you want worst-case behavior from it.
 
     DETERMINISM: with only ``smoothing_radius_ratio``, the smoothing sphere is
     ``ratio * mmm.resolution()`` -- and ``mmm.resolution()`` is a MUTABLE cache that a prior
@@ -1031,7 +1031,7 @@ def per_atom(events: Iterable[ValidationEvent], n_atoms: int, *, metric: Optiona
     """Roll events onto atoms with a **max**, never a sum — for a SEVERITY field.
 
     Max because one physical mistake is routinely seen several times — a badly placed atom
-    clashes with three neighbours, and a phi/psi is assigned to four backbone atoms — and
+    clashes with three neighbors, and a phi/psi is assigned to four backbone atoms — and
     summing would count it once per sighting and rank a large residue above a small one for
     no reason but size.
 
@@ -1093,7 +1093,7 @@ def per_atom_field(events: Iterable[ValidationEvent], n_atoms: int, *,
       resolution in angstroms it is the *best* possible reading, so an unmeasured atom would
       display as perfectly resolved.
 
-    ``nan`` is also what a viewer's attribute theme draws in its "missing" colour, so
+    ``nan`` is also what a viewer's attribute theme draws in its "missing" color, so
     unmeasured atoms read as unmeasured rather than as a score.
 
     Note the polarity is the caller's to handle: local resolution is lower-is-better while
@@ -1162,7 +1162,7 @@ def summarize(events: Iterable[ValidationEvent], *, n_atoms: Optional[int] = Non
     Returns, for each metric present: ``n_<metric>`` and ``n_<metric>_outliers``, plus
       ``rota_outlier_pct`` / ``rama_outlier_pct`` = 100 * outliers / evaluated residues,
       ``clashscore``       = 1000 * clash outliers / ``n_atoms``  (needs ``n_atoms``;
-                             for an H-less model this normalises on heavy atoms -- state it),
+                             for an H-less model this normalizes on heavy atoms -- state it),
       ``bond_rmsd`` (A) / ``angle_rmsd`` (deg) = RMS of the native deviations.
     """
     by: Dict[str, List[ValidationEvent]] = {}
@@ -1249,7 +1249,7 @@ def check_field_agreement(events: Iterable[ValidationEvent], sampled: Sequence[f
       ``concerning`` says what counts, defaulting to outliers. **For a continuous field,
       widen it** — pass ``worse_than_percent(2.0)`` for rama/rota — because the concern curve
       starts rising well before the outlier cut, so the field legitimately marks residues
-      MolProbity never flags. Judging it against outliers alone reports correct behaviour as
+      MolProbity never flags. Judging it against outliers alone reports correct behavior as
       failure.
 
     A hot atom that is not itself concerning is still **expected**: these fields splat each

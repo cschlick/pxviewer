@@ -12,14 +12,14 @@ copy in this repo — a second, drifting copy is the failure this file exists to
 
 The file carries **native values and one localization**: which residue a result belongs to,
 which atoms it implicates, and — for a validator — its own `outlier` boolean. It does not
-carry scores. Turning a value into a score or a colour is the caller's business, and the
+carry scores. Turning a value into a score or a color is the caller's business, and the
 three consumers legitimately disagree there:
 
 | consumer | maps events to |
 | --- | --- |
 | pxviewer | unbounded surprisal **severity**, `[0, 4]`, 1.0 = the community cut |
 | `hotspots/` generator | bounded **concern**, `[0, 1]`, log-interpolated from a good/bad percentage |
-| map-model / RSR | continuous map-fit fields, coloured directly |
+| map-model / RSR | continuous map-fit fields, colored directly |
 
 What must never differ between us is the localization. That is the whole point: a
 disagreement becomes impossible rather than merely unlikely.
@@ -118,7 +118,7 @@ Also, `QSCORE_SHELLS` was 21 shells from 0.0 with `n_probes=8`. The shells and p
 *are* the metric's definition — a different set is a different number wearing the same name.
 Now cctbx's own defaults (`np.linspace(0.1, 2.0, 20)`, 32 probes, rtol 0.9), which is what
 `phenix.qscore` reports. A shell at radius 0.0 is particularly not free: every probe collapses
-onto the atom centre and contributes duplicate copies of the peak-anchored density, biasing
+onto the atom center and contributes duplicate copies of the peak-anchored density, biasing
 upward.
 
 ### 3.5 Local resolution: FSC cutoff and a missing residue
@@ -176,7 +176,7 @@ summarize(restrict(events, region_atom_indices), n_atoms=len(region_atom_indices
 
 `check_field_agreement` maps a field back to atoms and confirms the hot places are the places
 validation complained about. **Pass `concerning=worse_than_percent(2.0)`** for any continuous
-field: judged against the outlier boolean alone it reports correct behaviour as failure,
+field: judged against the outlier boolean alone it reports correct behavior as failure,
 because a concern curve rises well before the outlier cut. There is a worked example in
 `HOTSPOTS_NOTES.md` §4.
 
@@ -188,7 +188,7 @@ because a concern curve rises well before the outlier cut. There is a worked exa
    with defaults. It now raises a message saying so rather than a bare `ImportError`, but the
    dependency needs resolving — either vendor the module, or rebuild the channel on
    `mmtbx.maps.correlation` / `mmtbx.maps.map_model_cc`, which do exist.
-2. **`extract_rsr` materialises the envelope through `list()`** —
+2. **`extract_rsr` materializes the envelope through `list()`** —
    `np.array(list(env), dtype=np.int64)` on a `flex.size_t` that is 10⁶–10⁸ elements for a
    whole-protein envelope on a cryo-EM grid. Use `env.as_numpy_array()`. Two sites.
 3. **`extract_rsr` drops residues with < 10 grid points** with no record. On a coarse grid a
@@ -197,7 +197,7 @@ because a concern curve rises well before the outlier cut. There is a worked exa
    `residue_atom_index` iterates all models — the two disagree on multi-model input.
 5. **RSR calibration** is still owed against `phenix.real_space_correlation` / EDSTATS, as the
    docstring says. Also worth checking: `denom = sum|obs + calc|` can cancel toward zero on a
-   mean-zero cryo-EM map, so it is not a stable normaliser there.
+   mean-zero cryo-EM map, so it is not a stable normalizer there.
 6. **`asu` bond proxies are excluded.** Symmetry-related covalent bonds (cross-symmetry
    disulfides, metal links) live in `.asu` with `i_seq`/`j_seq` rather than `i_seqs` and need
    the `gr.bond(sites_cart, asu_mappings, proxy)` overload. Absent from events and from

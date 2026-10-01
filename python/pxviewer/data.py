@@ -21,7 +21,7 @@ from . import bcif
 class AtomArrays:
     """A structure's atom-site data as parallel columns rather than per-atom objects.
 
-    This is the efficient hand-off from a vectorised source (e.g. a cctbx
+    This is the efficient hand-off from a vectorized source (e.g. a cctbx
     hierarchy's ``extract_xyz``/``extract_element`` arrays) to BinaryCIF: the
     columns go straight into the CIF fields with no per-atom Python. ``x/y/z`` and
     ``resseq`` are numpy arrays; the string columns are plain lists. ``id`` defaults

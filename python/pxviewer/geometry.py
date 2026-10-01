@@ -59,7 +59,7 @@ def _is_chem_data_subdir(path: str) -> bool:
 
     A redirect naming chem_data's own geostd is not a user preference: it is what
     pxviewer's former ``activate.d`` hook wrote, and it is precisely the value that
-    hides mon_lib. Recognising it lets an env that still has that hook self-heal
+    hides mon_lib. Recognizing it lets an env that still has that hook self-heal
     instead of staying half-broken until someone deletes the file.
     """
     try:
@@ -77,7 +77,7 @@ def _explicit_monomer_library() -> Optional[str]:
     """A monomer library the user deliberately pointed at, if it exists on disk.
 
     Ignores a redirect that merely names chem_data's own directories (see
-    :func:`_is_chem_data_subdir`) — cctbx searches those anyway, and honouring it as an
+    :func:`_is_chem_data_subdir`) — cctbx searches those anyway, and honoring it as an
     override would pin the search to one of the two.
     """
     for var in ("MMTBX_CCP4_MONOMER_LIB", "CLIBD_MON"):
@@ -307,7 +307,7 @@ class GeometryRestraints:
 
     Builds restraints on the cctbx model if they aren't already present, then
     serves per-category counts and lazily-computed row values. The proxy arrays
-    and the sites are references into the model — nothing is materialised per
+    and the sites are references into the model — nothing is materialized per
     restraint.
     """
 

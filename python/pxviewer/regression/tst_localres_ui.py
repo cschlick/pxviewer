@@ -1,12 +1,12 @@
 """One map, one row, one checkbox -- the localres object model, at the window.
 
-Colour-by-resolution is an appearance of the map, not a second object: the coloured
+Color-by-resolution is an appearance of the map, not a second object: the colored
 surface is the same grid contoured at the same level, painted differently. The tree
 shows one row per map, its checkbox hides and shows whichever surface currently
-represents it (the coloured one while colouring is on, the plain contour otherwise),
+represents it (the colored one while coloring is on, the plain contour otherwise),
 and the resolution dataset appears nowhere in the tree -- its user-facing existence is
-the "Colour by local resolution" group on its map's pane, and its lifecycle rides its
-map. Before this model the tree showed the map unchecked while its coloured surface was
+the "Color by local resolution" group on its map's pane, and its lifecycle rides its
+map. Before this model the tree showed the map unchecked while its colored surface was
 on screen, and checking the box drew the plain contour on top of it.
 """
 
@@ -53,7 +53,7 @@ class pinned_resolution_map:
         self.app = DesktopApp(port=0)
         self.app._webapp.start()
         # Hiding is disabled on software WebGL, which also strips the checkboxes this file
-        # is about. Assert the hardware behaviour, which is what a real machine gets.
+        # is about. Assert the hardware behavior, which is what a real machine gets.
         self.app._can_hide = True
         self.app.load_file(full_path)
         process_events()
@@ -135,10 +135,10 @@ def exercise_the_resolution_map_is_not_in_the_drawn_scene():
 
 
 def exercise_one_row_whose_checkbox_drives_the_visible_surface():
-    """The tree shows the map once, checked while its coloured surface is on screen.
+    """The tree shows the map once, checked while its colored surface is on screen.
 
     The old model showed the map unchecked (its plain contour was hidden behind the
-    coloured stand-in), so checking the box drew a second surface on top -- the reported
+    colored stand-in), so checking the box drew a second surface on top -- the reported
     "there are actually two maps". Now the checkbox routes to whichever surface
     represents the map, and the resolution dataset has no row at all.
     """
@@ -160,18 +160,18 @@ def exercise_one_row_whose_checkbox_drives_the_visible_surface():
         volume_rows = [r for r in rows if r["kind"] == "volume"]
         assert len(volume_rows) == 1, "the resolution dataset still has a tree row"
         assert volume_rows[0]["visible"] is True, (
-            "the map reads hidden while its coloured surface is what is on screen")
+            "the map reads hidden while its colored surface is what is on screen")
 
         stub = Recording()
         app._control_session = lambda: stub
 
-        # The push parks the plain contour and hands its visibility to the coloured one.
+        # The push parks the plain contour and hands its visibility to the colored one.
         app._push_localres(full)
         assert ("plain_visible", full["ref"], False) in stub.calls
         assert ("localres_visible", True) in stub.calls
         assert full["visible"] is True, "the push flipped the map's own checkbox"
 
-        # The one checkbox drives the coloured surface while colouring is on...
+        # The one checkbox drives the colored surface while coloring is on...
         stub.calls.clear()
         app.set_volume_visible(fixture.full_vid, False)
         assert stub.calls == [("localres_visible", False)], stub.calls
@@ -179,14 +179,14 @@ def exercise_one_row_whose_checkbox_drives_the_visible_surface():
         app.set_volume_visible(fixture.full_vid, True)
         assert ("localres_visible", True) in stub.calls
 
-        # ...and turning colouring off hands the same visibility back to the contour.
+        # ...and turning coloring off hands the same visibility back to the contour.
         stub.calls.clear()
         app.set_color_by_resolution(fixture.full_vid, False)
         assert ("plain_visible", full["ref"], True) in stub.calls, stub.calls
 
 
 def exercise_a_level_change_takes_the_cheap_path():
-    """With colour-by-resolution on, the Level slider must not re-stream the grids.
+    """With color-by-resolution on, the Level slider must not re-stream the grids.
 
     The browser retained both grids with the first payload, so a level change is one
     float (set_localres_iso) and a client-side re-contour -- the cost a plain map pays.
@@ -226,7 +226,7 @@ def exercise_a_level_change_takes_the_cheap_path():
 
 
 def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
-    """The coloured surface's display resolution is a user setting, not an adaptive one.
+    """The colored surface's display resolution is a user setting, not an adaptive one.
 
     x4 by default -- 64^3 on a typical box, which re-levels instantly -- shown as a
     Downsample dropdown on the full map's pane. What is drawn is what was asked for:
@@ -265,7 +265,7 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
         assert full["localres_downsample"] == 2
         assert stub.calls[-1] == ("factor", 2)
 
-        # The pane offers it, current value shown, beside the colour switch.
+        # The pane offers it, current value shown, beside the color switch.
         controls = app._controls
         controls._update_appearance("volume", fixture.full_vid, force=True)
         process_events()
@@ -273,8 +273,8 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
         values = {c.currentText() for c in combos}
         assert "2×" in values, "no Downsample dropdown showing the current factor: %r" % (values,)
 
-        # Downsample is a member of the map's own display rows, not of the colouring
-        # group: it says how this map is drawn (its one consumer today is the coloured
+        # Downsample is a member of the map's own display rows, not of the coloring
+        # group: it says how this map is drawn (its one consumer today is the colored
         # surface, but that is plumbing, not placement).
         from PySide6.QtWidgets import QGroupBox
         ds = next(c for c in combos if c.currentText() == "2×")
@@ -283,13 +283,13 @@ def exercise_the_downsample_choice_is_explicit_and_defaults_to_4x():
             parent = parent.parent()
         group_title = parent.title() if isinstance(parent, QGroupBox) else None
         assert group_title != "Local resolution", (
-            "Downsample is nested inside the colouring sub-panel")
+            "Downsample is nested inside the coloring sub-panel")
 
 
 def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
     """The indicator must span "payload streamed" to "surface on screen".
 
-    The reported dead air: model visible at ~5 s, coloured map usable at ~20 s, and the
+    The reported dead air: model visible at ~5 s, colored map usable at ~20 s, and the
     busy oscillator gone after ~2 s -- because the worker's busy ended when it returned,
     and the payload's send was treated as done. Now the push opens a hold that only the
     viewport's localres-shown ack releases, and the tutorial's "ready" predicate follows
@@ -329,13 +329,13 @@ def exercise_busy_holds_until_the_viewport_confirms_the_drawing():
         assert _resolution_ready(CW()), "tutorial not ready after the ack"
 
 
-def exercise_the_colour_range_is_stable_until_the_user_moves_it():
+def exercise_the_color_range_is_stable_until_the_user_moves_it():
     """The mapping never drifts on its own -- that is the figure-making contract.
 
     The domain used to be recomputed from the whole resolution map on every push, and
     the full-map percentiles spend most of the ramp on solvent-adjacent voxels no
     realistic contour shows: the visible particle sat entirely in the blue end. It is
-    now stored state -- initialised once at pin time, resent verbatim on every push,
+    now stored state -- initialized once at pin time, resent verbatim on every push,
     changed only by the user's own set/fit/reset.
     """
     class RecordingSession(StubSession):
@@ -358,13 +358,13 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
         app = fixture.app
         full = app._volume_entry(fixture.full_vid)
         first = full.get("localres_domain")
-        assert first is not None, "pinning did not initialise a colour range"
+        assert first is not None, "pinning did not initialize a color range"
 
         stub = RecordingSession()
         app._control_session = lambda: stub
         app._push_localres(full)
         app._push_localres(full)
-        assert full["localres_domain"] == first, "a push moved the colour range"
+        assert full["localres_domain"] == first, "a push moved the color range"
 
         # An explicit change sticks, reaches the session, and rejects a crossed range.
         app.set_localres_domain(fixture.full_vid, 4.2, 7.0)
@@ -400,27 +400,27 @@ def exercise_the_colour_range_is_stable_until_the_user_moves_it():
         box = controls._appearance_box
         spins = [w for w in box.findChildren(QDoubleSpinBox)
                  if w.objectName().startswith("value-domain-")]
-        assert len(spins) == 2, "no colour-range spinboxes on the pane"
+        assert len(spins) == 2, "no color-range spinboxes on the pane"
         assert {round(sp.value(), 2) for sp in spins} == {round(lo, 2), round(hi, 2)}
         texts = {b.text() for b in box.findChildren(QPushButton)}
         assert "Fit to surface" in texts and "Reset" in texts, texts
 
         # One question, one control: "Local resolution" is an entry in the Color
-        # dropdown (it answers "what colours this map", same as the flat colours), and
+        # dropdown (it answers "what colors this map", same as the flat colors), and
         # the range controls live in a plain framed sub-panel shown only while it is
-        # the selected colouring. The old separate checkbox is gone.
+        # the selected coloring. The old separate checkbox is gone.
         from PySide6.QtWidgets import QComboBox, QGroupBox
         parent = spins[0].parent()
         while parent is not None and not isinstance(parent, QGroupBox):
             parent = parent.parent()
-        assert isinstance(parent, QGroupBox), "the colour range escaped its sub-panel"
+        assert isinstance(parent, QGroupBox), "the color range escaped its sub-panel"
         assert parent.title() == "Local resolution", parent.title()
         assert not parent.isCheckable(), "selection lives in the Color dropdown, not here"
         color_combos = [c for c in box.findChildren(QComboBox)
                         if c.findData("localres") >= 0]
         assert color_combos, "the Color dropdown offers no Local resolution entry"
         assert color_combos[0].currentData() == "localres", (
-            "colouring is on but the dropdown does not say so")
+            "coloring is on but the dropdown does not say so")
 
 
 def exercise_downsample_is_a_generic_map_tool():
@@ -552,8 +552,8 @@ def exercise_the_computed_resolution_map_is_saved_and_reused():
             dispose(app)
 
 
-def exercise_a_custom_colour_pick_survives_the_pane_rebuilding_under_it():
-    """The Custom… dialog previews live, and applying a colour while a colour-by
+def exercise_a_custom_color_pick_survives_the_pane_rebuilding_under_it():
+    """The Custom… dialog previews live, and applying a color while a color-by
     theme is on turns the theme off — which emits loaded-changed, rebuilds the
     appearance pane and deletes the combo the picker is standing on.
 
@@ -683,9 +683,9 @@ def exercise_a_real_space_difference_is_added_as_a_difference_map():
             time.sleep(0.05)
         assert len(app._volumes) == before + 1, "the difference map never landed"
 
-        colour, iso, negative = MAP_STYLE[True]
+        color, iso, negative = MAP_STYLE[True]
         added = app._volumes[-1]
-        assert added["color"] == colour and added["negative_color"] == negative
+        assert added["color"] == color and added["negative_color"] == negative
         assert added["iso"] == iso
         # Drawn at the session's view radius, like every other map. It has two contours
         # over a full box, so meshing all of it made every nudge of the Level slider

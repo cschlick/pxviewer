@@ -42,7 +42,7 @@ def exercise_hiding_the_structure_reaches_the_client():
 
 
 def exercise_interactions_from_a_mapping_reach_the_client():
-    """Aliases are normalised to canonical Mol* kinds, and indices are left alone."""
+    """Aliases are normalized to canonical Mol* kinds, and indices are left alone."""
     with session() as live:
         async def scenario():
             async with client(live) as ws:
@@ -56,7 +56,7 @@ def exercise_interactions_from_a_mapping_reach_the_client():
 
 
 def exercise_interactions_accept_tuple_and_dict_forms():
-    """Both spellings normalise to the same contact, so callers need not care."""
+    """Both spellings normalize to the same contact, so callers need not care."""
     with session() as live:
         from_tuples = live.set_interactions([("hydrogen-bond", 0, 1, "backbone")])
         assert from_tuples == [{"kind": "hydrogen-bond", "a": 0, "b": 1,

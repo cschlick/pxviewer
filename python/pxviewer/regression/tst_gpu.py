@@ -1,7 +1,7 @@
 """The WebGL-backend chooser.
 
 The QtWebEngine half cannot be exercised headlessly, but the decision logic can, and it
-is what actually governs behaviour: mode precedence, leaving hand-set flags alone,
+is what actually governs behavior: mode precedence, leaving hand-set flags alone,
 remembering a verdict across launches, and the one-shot restart that must not loop.
 
 Everything here is real -- real environment variables, a real cache file under a real
@@ -217,7 +217,7 @@ def exercise_a_cache_from_another_machine_is_ignored():
         data["signature"] = "not-this-machine"
         open(path, "w").write(json.dumps(data))
 
-        # Unrecognised: fall back to arming the check rather than trusting it.
+        # Unrecognized: fall back to arming the check rather than trusting it.
         assert gpu.configure("auto", log=quiet) == "hardware"
         assert gpu.autofix_enabled()
 

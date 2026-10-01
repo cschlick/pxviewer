@@ -74,7 +74,7 @@ single-directory redirect that cctbx consults *before* its cascade, so pointing 
 geostd hides every monomer that lives only in mon_lib: ALA and ~54k others keep working
 while HEM stops resolving. pxviewer ignores such a redirect on import and
 `tst_monomer_library.py` guards against it returning. An external geostd checkout is
-still honoured.
+still honored.
 
 ### Frontend
 
@@ -111,7 +111,7 @@ session.start()                                       # ws://127.0.0.1:8787
 
 `LiveSession.from_cctbx_model(model)` builds a session from an existing
 `mmtbx.model.manager`; `pxviewer.cctbx_io.model_to_arrays(model)` exposes the
-hierarchy's vectorised columns (xyz, element, name, residue/chain labels, B, occ)
+hierarchy's vectorized columns (xyz, element, name, residue/chain labels, B, occ)
 if you want the mapping directly.
 
 ## Live coordinate updates
@@ -151,7 +151,7 @@ python -m pxviewer demo wave              # then open the http:// URL it prints
 
 | Demo | What you see |
 | --- | --- |
-| `wave` | a chain rippling with a growing travelling wave |
+| `wave` | a chain rippling with a growing traveling wave |
 | `breathe` | a sphere of atoms expanding and contracting |
 | `orbit` | a rigid body gliding around a square path |
 | `morph` | a chain folding into a helix and back |
@@ -304,18 +304,18 @@ Control how the structure is drawn, on the whole structure or a subset:
 session.set_representation("cartoon", color="secondary-structure")   # replace with one
 rid = session.add_representation("ball_and_stick", color="element-symbol",
                                  on=session.select_by(ids=[101, 102, 103]))  # a subset
-session.add_representation("spacefill", color_value="orange", opacity=0.6)   # flat colour
+session.add_representation("spacefill", color_value="orange", opacity=0.6)   # flat color
 session.remove_representation(rid)
 session.clear_representations()                                       # back to default
 ```
 
 - **`type`** — MolViewSpec's representation types: `ball_and_stick`, `spacefill`
   (alias `sphere`), `cartoon` (alias `ribbon`), `surface`, `carbohydrate`.
-- **`color`** — a **uniform** colour (an SVG name like `orange`, or `#ff8800`), or
-  a Mol\* **colour theme** name (`element-symbol`, `chain-id`,
+- **`color`** — a **uniform** color (an SVG name like `orange`, or `#ff8800`), or
+  a Mol\* **color theme** name (`element-symbol`, `chain-id`,
   `secondary-structure`, `residue-name`, `hydrophobicity`, …). `color_value=` also
-  forces a uniform colour. (Uniform colours are MVS's native `ColorT`; themes are
-  the Mol\* colouring mechanism layered on top.)
+  forces a uniform color. (Uniform colors are MVS's native `ColorT`; themes are
+  the Mol\* coloring mechanism layered on top.)
 - **`on`** — a `Selection`, an MVS `ComponentExpression`, or anything coercible, to
   restrict to a subset; omit for the whole structure. `opacity=` and a `params=`
   passthrough are also available.
@@ -324,10 +324,10 @@ Representations **track the streamed coordinates**, and the current set is
 replayed to viewers that connect later. If you never set any, you get the default
 ball-and-stick / element-symbol.
 
-### Colouring by a per-atom attribute
+### Coloring by a per-atom attribute
 
-Colour atoms by a per-atom scalar — B-factor, occupancy, or anything you compute —
-mapped through a colour scale:
+Color atoms by a per-atom scalar — B-factor, occupancy, or anything you compute —
+mapped through a color scale:
 
 ```python
 session.color_by("bfactor", palette="turbo")          # from the model
@@ -336,8 +336,8 @@ session.color_by(my_values, domain=(0, 1))            # a raw length-N array
 ```
 
 `bfactor` and `occupancy` are always available from the model. For arbitrary
-attributes, register a named length-N array once and colour by name — handy when
-you colour by the same quantity repeatedly or want it listed in
+attributes, register a named length-N array once and color by name — handy when
+you color by the same quantity repeatedly or want it listed in
 `session.attributes()`:
 
 ```python
@@ -349,7 +349,7 @@ Attributes can also come **from mmCIF**, since a per-atom scalar is naturally an
 extra `_atom_site` column:
 
 ```python
-# custom _atom_site.* columns are auto-detected on load, ready to colour by
+# custom _atom_site.* columns are auto-detected on load, ready to color by
 session = LiveSession.from_model_file("model_with_plddt.cif")
 session.attributes()                                  # -> [... , "plddt", "bfactor", "occupancy"]
 session.color_by("plddt")
@@ -369,22 +369,22 @@ residue, insertion code, altloc, atom name), so it need not be in the same order
 missing atoms get `nan`. All of this uses cctbx's own mmCIF reader/writer — there
 is no separate parser.
 
-`palette` is a Mol\* colour-list name (`turbo`, `viridis`, `spectral`, `plasma`,
-`red-yellow-blue`, …) or an explicit list of colours; `domain` is `(min, max)`,
+`palette` is a Mol\* color-list name (`turbo`, `viridis`, `spectral`, `plasma`,
+`red-yellow-blue`, …) or an explicit list of colors; `domain` is `(min, max)`,
 taken from the finite values when omitted. Non-finite (`nan`) values render in a
-neutral "missing" colour. `color_by` sets a single representation of `type`
+neutral "missing" color. `color_by` sets a single representation of `type`
 (default `ball_and_stick`, optionally limited with `on=`), like
 `set_representation`, and is replayed to viewers that connect later. Under the
-hood it drives one custom Mol\* colour theme (`pxviewer-attribute`) whose per-atom
+hood it drives one custom Mol\* color theme (`pxviewer-attribute`) whose per-atom
 values are supplied from Python, indexed by positional atom identity. The values
 travel on a **compact binary channel** (`float32`, one per atom) rather than JSON,
-so colouring very large structures stays cheap; the representation JSON just
+so coloring very large structures stays cheap; the representation JSON just
 references them by key.
 
 ### Non-covalent interactions
 
 Two ways to draw non-covalent (non-bonded) interaction notation — dashed
-cylinders, coloured by kind.
+cylinders, colored by kind.
 
 **Explicit — you supply the contacts.** Give a typed table of atom-index pairs;
 nothing is inferred. This is the usual path when Python owns the atoms (a live
@@ -495,14 +495,14 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
 - **Geometry ▸ Components** — the model's residue groups (residues, ligands,
   waters), one per row. Selecting a row is the same selection a residue click or
   a space-bar step makes; Space steps the list a residue at a time.
-- **Geometry ▸ Atoms** — a virtualised table of every per-atom attribute (fast at
+- **Geometry ▸ Atoms** — a virtualized table of every per-atom attribute (fast at
   100k+ atoms). A **Model** dropdown picks which model's atoms it shows (it follows
   the active model, or pin it to another); **Show only selected atoms** collapses it
   to the current selection. Selecting rows highlights those atoms in the viewport,
   and picking atoms in the viewport selects their rows. Space steps one atom at a
   time.
 - **Geometry ▸ Bonds / Angles / Dihedrals / Chirality / Planarity** — the model's
-  cctbx geometry restraints, one virtualised table per type. Each row is a restraint
+  cctbx geometry restraints, one virtualized table per type. Each row is a restraint
   (its atoms, ideal, model, delta, sigma, residual), read straight from the cctbx
   proxy arrays and computed on demand. Selecting a row is a real selection of the
   atoms it involves — framed and clipped under the Selection pane's checkboxes —
@@ -568,11 +568,11 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | --- | --- | --- |
 | server → client | topology | `[u32 tag=0][BinaryCIF bytes]` (sent once on connect) |
 | server → client | frame | `[u32 tag=1][u32 frameIndex][f32 × 3N]` interleaved `x,y,z` |
-| server → client | attribute | `[u32 tag=2][u32 keyLen][key utf8][pad→4][f32 × N]` per-atom colour-by values (`nan` = missing) |
+| server → client | attribute | `[u32 tag=2][u32 keyLen][key utf8][pad→4][f32 × N]` per-atom color-by values (`nan` = missing) |
 | server → client | highlight | JSON `{"type":"highlight","atoms":<index-set>}` (empty clears) |
 | server → client | focus | JSON `{"type":"focus","atoms":<index-set>}` |
 | server → client | primitive | JSON `{"type":"primitive","action":"add"\|"remove"\|"clear","kind":…,"id":str,"groups":[[int…]…],"options":{…}}` |
-| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?,attribute?},…]}` (`color:"attribute"` + `attribute:{key,domain,palette}` colours by the per-atom values sent under `key` on the attribute channel) |
+| server → client | representations | JSON `{"type":"representations","reprs":[{id,type,color?,colorValue?,on?,opacity?,params?,attribute?},…]}` (`color:"attribute"` + `attribute:{key,domain,palette}` colors by the per-atom values sent under `key` on the attribute channel) |
 | server → client | interactions | JSON `{"type":"interactions","action":"set","contacts":[{kind,a,b,description?},…]}` or `{"type":"interactions","action":"clear"}` (explicit typed contacts) |
 | server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
 | server → client | clashes | JSON `{"type":"clashes","action":"set","pairs":[{a,b},…]}` or `{"type":"clashes","action":"clear"}` (steric clashes, drawn red) |

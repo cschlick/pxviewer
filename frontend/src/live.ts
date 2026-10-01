@@ -58,7 +58,7 @@ export interface AtomInfo {
     resseq: number;
     chain: string;
     /**
-     * The alternate conformation this atom belongs to, or '' when the atom is modelled
+     * The alternate conformation this atom belongs to, or '' when the atom is modeled
      * in only one. Without it a click is ambiguous on any structure with altlocs: both
      * conformers of THR 1 report the same name, residue and chain, so the two atoms are
      * indistinguishable to everything downstream.
@@ -217,9 +217,9 @@ export const HotspotVolume = PluginStateTransform.BuiltIn({
 type HotspotVolume = typeof HotspotVolume;
 
 // -- local-resolution surface --------------------------------------------
-// The primary map's isosurface, coloured not by its own density but by a second,
+// The primary map's isosurface, colored not by its own density but by a second,
 // co-registered grid (a local-resolution map). The surface is extracted with Mol*'s
-// marching cubes on grid A; each vertex is sampled in grid B and coloured through a
+// marching cubes on grid A; each vertex is sampled in grid B and colored through a
 // [lo, hi] ramp (see LiveViewer.setLocalresSurface / pxviewer.volume_io.encode_localres).
 // The heavy work (marching cubes + per-vertex sampling) is done up front in the viewer and
 // the finished Shape handed to this transform, which only surfaces it into the state tree.
@@ -232,7 +232,7 @@ export type LocalresGrid = {
     origin: Vec3; stepX: Vec3; stepY: Vec3; stepZ: Vec3; values: Float32Array;
 };
 
-/** The [lo, hi] colour ramp sampled into a 256-entry LUT (see buildLocalresShape). */
+/** The [lo, hi] color ramp sampled into a 256-entry LUT (see buildLocalresShape). */
 function localresLut(lo: number, hi: number, palette?: Color[]): Color[] {
     const scale = ColorScale.create({ domain: [lo, hi], listOrName: palette ?? LOCALRES_PALETTE });
     const lut: Color[] = [];
@@ -334,7 +334,7 @@ function sampleGridTrilinear(
 
 const LocalresSurface = PluginStateTransform.BuiltIn({
     name: 'pxviewer-localres-surface',
-    display: { name: 'pxviewer Local-resolution Surface', description: 'The primary map surface, coloured by a second map.' },
+    display: { name: 'pxviewer Local-resolution Surface', description: 'The primary map surface, colored by a second map.' },
     from: SO.Root,
     to: SO.Shape.Provider,
     params: {
@@ -699,7 +699,7 @@ export class LiveViewer {
     private mapVersion = 0;
     private hotspotVolume: StateObjectSelector | undefined;  // the validation-severity cloud
     private hotspotRepr: StateObjectSelector | undefined;    // its direct-volume representation
-    private localresSurface: StateObjectSelector | undefined;  // the primary map surface coloured by a second grid
+    private localresSurface: StateObjectSelector | undefined;  // the primary map surface colored by a second grid
     private localresGrids: {
         A: LocalresGrid; B: LocalresGrid; lo: number; hi: number;
         levels: Map<number, LocalresGrid>;  // factor -> decimated copy of A, built lazily
@@ -710,7 +710,7 @@ export class LiveViewer {
     // The user-chosen display resolution: the surface is contoured from A decimated by
     // this factor, during drags AND at rest, with no exceptions -- an automatic drag
     // preview at any other resolution is a surface that changes detail on its own,
-    // which is the exact behaviour the explicit setting exists to remove. Full means
+    // which is the exact behavior the explicit setting exists to remove. Full means
     // full: if dragging at it is slow, the remedy is the dropdown. Authoritative state
     // lives in Python; this is applied from its messages and defaulted the same.
     private localresFactor = 4;
@@ -719,7 +719,7 @@ export class LiveViewer {
     private localresVisible = true;                  // the one checkbox: hide/show in place
     private hotspotCutFrac = 0.25;   // where the outlier cut falls on the [0,1] value scale
     private hotspotKnee = 0.25;      // opacity onset (user slider); starts at the cut
-    // Declared colour positions for an imported concern field; undefined = derive from the cut.
+    // Declared color positions for an imported concern field; undefined = derive from the cut.
     private hotspotAnchors: { yellow: number; orange: number; red: number } | undefined;
     private hotspotColorStops: [number, number][] | undefined;  // explicit [rgb, stop] ramp (CC deficit cloud)
     private hotspotCellDim = 1.0;    // voxel size in A, sizes the empty-space jump
@@ -1237,7 +1237,7 @@ export class LiveViewer {
             const { width, height } = camera.viewport;
             const aspect = width > 0 && height > 0 ? width / height : 1;
             // Fraction of the frame the selection spans. Deliberately well shy of
-            // full: the frame is centred on the selection's mass, and a residue is
+            // full: the frame is centered on the selection's mass, and a residue is
             // asymmetric about it (the backbone reaches further from the COM than the
             // ring fan), so nominal 0.9 and even 0.75 cropped backbone atoms at the
             // bottom -- verified with rendered screenshots either way. 0.62 keeps the
@@ -1673,9 +1673,9 @@ export class LiveViewer {
         const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
         const cut = clamp01(this.hotspotCutFrac);
         const knee = clamp01(this.hotspotKnee);
-        // Color. An imported concern field states where each colour falls (setHotspotAnchors),
+        // Color. An imported concern field states where each color falls (setHotspotAnchors),
         // and those positions are fixed by its generator — so the same concern value is the
-        // same colour in every structure and metric, and the ramp does *not* follow the knee.
+        // same color in every structure and metric, and the ramp does *not* follow the knee.
         // Without a declared contract (the computed severity field) the anchors are derived
         // from the cut instead, so the outlier threshold stays legible whatever this
         // structure's worst severity happens to be.
@@ -1769,11 +1769,11 @@ export class LiveViewer {
     }
 
     /**
-     * Colour the primary map's surface by a second, co-registered grid (a local-resolution
+     * Color the primary map's surface by a second, co-registered grid (a local-resolution
      * map). Payload at `offset` is `[f32 isoLevel][f32 lo, hi][affine-grid A][affine-grid B]`
      * (see pxviewer.volume_io.encode_localres): grid A is contoured at `isoLevel` to recover
      * the surface the user already sees, grid B is sampled at every vertex and mapped through
-     * `[lo, hi]` onto the resolution ramp. Rebuilt, not updated — attaching a colouring map is
+     * `[lo, hi]` onto the resolution ramp. Rebuilt, not updated — attaching a coloring map is
      * a one-shot, like the severity cloud.
      */
     async setLocalresSurface(buffer: ArrayBuffer, offset: number) {
@@ -1781,7 +1781,7 @@ export class LiveViewer {
         const isoLevel = dv.getFloat32(offset, true);
         const lo = dv.getFloat32(offset + 4, true);
         const hi = dv.getFloat32(offset + 8, true);
-        // Optional explicit colour ramp (low to high); zero entries means the built-in
+        // Optional explicit color ramp (low to high); zero entries means the built-in
         // resolution palette, so plain local-resolution payloads look exactly as before.
         const nColors = dv.getUint32(offset + 12, true);
         let p = offset + 16;
@@ -1800,7 +1800,7 @@ export class LiveViewer {
         };
         const A = readGrid(), B = readGrid();
 
-        // Kept so a level change needs no new grids. The colour ramp is sampled into a
+        // Kept so a level change needs no new grids. The color ramp is sampled into a
         // LUT here so the per-vertex work is an array index, not a scale evaluation.
         this.localresGrids = { A, B, lo, hi, levels: new Map(),
                                lut: localresLut(lo, hi, this.localresPalette) };
@@ -1824,9 +1824,9 @@ export class LiveViewer {
     }
 
     /**
-     * Re-map the colour ramp to a new [lo, hi] domain and repaint. The mapping is
+     * Re-map the color ramp to a new [lo, hi] domain and repaint. The mapping is
      * deliberately manual and stable -- it never follows the contour on its own, so a
-     * figure's colours mean the same thing at every threshold -- and a change is this
+     * figure's colors mean the same thing at every threshold -- and a change is this
      * ~60-byte message plus a local rebuild, like the level.
      */
     async setLocalresDomain(lo: number, hi: number) {
@@ -1862,7 +1862,7 @@ export class LiveViewer {
         await build.commit();
         this.localresSurface = provider.selector;
         // Same problem as markVolumeReprsUnpickable, different object type: a pickable
-        // coloured surface steals identify() hits from the atoms inside it.
+        // colored surface steals identify() hits from the atoms inside it.
         for (const child of Array.from(this.plugin.state.data.cells.values())) {
             if (child.transform.parent === this.localresSurface.ref) {
                 const data: any = (child.obj as any)?.data;
@@ -1875,8 +1875,8 @@ export class LiveViewer {
     }
 
     /**
-     * Hide or show the coloured surface in place -- the map's one visibility checkbox,
-     * routed here while colour-by-resolution is on. A render skip like the plain
+     * Hide or show the colored surface in place -- the map's one visibility checkbox,
+     * routed here while color-by-resolution is on. A render skip like the plain
      * isosurface's: the grids, level and domain all stay, so showing again is instant.
      */
     setLocalresVisible(visible: boolean) {
@@ -1907,7 +1907,7 @@ export class LiveViewer {
                 this.localresLevel = level;
                 // The chosen factor is what is drawn, dragging or not. A first cut of
                 // this kept a 2x drag preview for factor 1 "because full resolution is
-                // slow" -- and that was exactly the dynamic-detail behaviour the setting
+                // slow" -- and that was exactly the dynamic-detail behavior the setting
                 // exists to remove, just confined to one factor. The pending/coalescing
                 // loop already keeps a slow drag correct (intermediate levels are
                 // dropped, the latest always builds); the dropdown is the remedy for
@@ -1922,14 +1922,14 @@ export class LiveViewer {
         }
     }
 
-    /** Marching-cubes grid A at `isoLevel`, then colour each vertex by grid B (see
+    /** Marching-cubes grid A at `isoLevel`, then color each vertex by grid B (see
      *  `setLocalresSurface`). Returns a ready-to-render Shape<Mesh>.
      *
      *  The grid is cropped to the voxels at or above the level before contouring
      *  (`cropGrid`): marching cubes visits every voxel it is given, and at the levels
      *  people actually look at the surface occupies a fraction of a cryo-EM box, so the
      *  crop is most of the speed of a level change. `lut` is the [lo, hi] ramp sampled
-     *  once; without it the colour scale was evaluated per vertex. */
+     *  once; without it the color scale was evaluated per vertex. */
     private async buildLocalresShape(
         grid: LocalresGrid, B: LocalresGrid,
         isoLevel: number, lo: number, hi: number, lut: Color[],
@@ -1948,8 +1948,8 @@ export class LiveViewer {
         const bAffine = Mat4.mul(Mat4(), Mat4.fromTranslation(Mat4(), B.origin), Mat4.fromBasis(Mat4(), B.stepX, B.stepY, B.stepZ));
         const aToB = Mat4.mul(Mat4(), Mat4.invert(Mat4(), bAffine), toCart);
 
-        // Per-vertex colour: give each vertex its own group id so the Shape's getColor can
-        // return a distinct colour per vertex (the renderer interpolates across triangles).
+        // Per-vertex color: give each vertex its own group id so the Shape's getColor can
+        // return a distinct color per vertex (the renderer interpolates across triangles).
         const span = hi - lo || 1;
         const colors = new Array<Color>(vc);
         const groups = new Float32Array(vc);
@@ -2156,7 +2156,7 @@ export class LiveViewer {
                     chain: StructureProperties.chain.label_asym_id(location),
                     altloc: StructureProperties.atom.label_alt_id(location),
                     index: location.element as unknown as number,
-                    repr: e.current.repr?.type.name ?? '',
+                    repr: (e.current.repr as unknown as { type?: { name: string } } | undefined)?.type?.name ?? '',
                 } : null, !!e.modifiers?.shift);
             }
             if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);
@@ -2649,7 +2649,7 @@ const TAG_DOTS = 3;
 const TAG_MAP = 4;
 const TAG_FRAME_DELTA = 5;  // only the atoms that moved; see LiveViewer.updateDelta
 const TAG_HOTSPOT_VOLUME = 6;  // a validation-severity cloud; see LiveViewer.setHotspotVolume
-const TAG_LOCALRES = 7;  // primary map surface coloured by a second grid; see LiveViewer.setLocalresSurface
+const TAG_LOCALRES = 7;  // primary map surface colored by a second grid; see LiveViewer.setLocalresSurface
 // Dot channels >= this are validation markers (drawn large); must match
 // pxviewer.validation.CHANNEL_BASE.
 const VALIDATION_CHANNEL_BASE = 10;
@@ -2724,7 +2724,7 @@ async function applyCootBindings(plugin: PluginContext) {
     // No auto-adjusted zoom bounds. Mol* re-derives the trackball's min/maxDistance
     // from the *visible* bounding sphere whenever a scene commit requests a camera
     // reset -- and a commit that momentarily has nothing visible (mid-reload, or
-    // while a colour-by surface is being built after its plain contour was parked)
+    // while a color-by surface is being built after its plain contour was parked)
     // latches maxDistance at the empty-scene floor of 20 A without ever resetting
     // the camera, leaving zoom-out walled there for the rest of the session. Our
     // scenes are molecular scale and the app does its own framing, so the static
@@ -2776,7 +2776,7 @@ export interface Slab {
      *  with the view already where they want it. A caller clipping around something it
      *  just told the camera to fly to must pass the point instead: the clip applies
      *  immediately while the camera is still mid-animation, so sampling the target here
-     *  would centre the sphere on wherever the view used to be and clip out the very
+     *  would center the sphere on wherever the view used to be and clip out the very
      *  thing being framed. */
     center?: number[] | null;
     /** The camera depth slab to (re)establish alongside the objects, as a bounding
@@ -3014,7 +3014,7 @@ async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boo
     if (repr) setSubtreeVisibility(plugin.state.data, repr.transform.ref, !visible);
     // ...and its negative lobe, which is the same map. A difference map is drawn as two
     // contours at +level and -level; hiding only the positive one left the red half on
-    // screen with nothing in the object list still claiming to own it. Colour is the one
+    // screen with nothing in the object list still claiming to own it. Color is the one
     // thing the two deliberately do NOT share (see setVolumeColor); opacity and
     // visibility belong to the map, not to one of its lobes.
     //
@@ -3649,7 +3649,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     let pendingDots: ArrayBuffer[] = [];  // dot buffers (per channel) that beat the viewer build
     let pendingMapBox: ArrayBuffer | null = null;  // a density window that beat the viewer build (latest only)
     let pendingHotspotVolume: ArrayBuffer | null = null;  // a severity cloud that beat the viewer build (latest only)
-    let pendingLocalres: ArrayBuffer | null = null;  // a local-resolution colouring that beat the viewer build (latest only)
+    let pendingLocalres: ArrayBuffer | null = null;  // a local-resolution coloring that beat the viewer build (latest only)
     // Topology parsing/building is asynchronous. The server deliberately sends its saved full
     // coordinate frame immediately after topology on every reconnect, so dropping frames while
     // `viewer` is absent restores the coordinates baked into the BCIF and makes a just-applied
@@ -3697,7 +3697,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'zoom' && typeof msg.factor === 'number') {
                 // Step the camera along its own view direction, keeping the target and
                 // orientation exactly as they are: a zoom button must not re-frame or
-                // re-centre the way Reset view does -- you press it to look closer at
+                // re-center the way Reset view does -- you press it to look closer at
                 // what you are already looking at.
                 const cam = plugin.canvas3d?.camera;
                 if (cam) {
@@ -4061,7 +4061,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             if (viewer) { const v = viewer; await serializeApply(() => v.setHotspotVolume(buffer, 4)); }
             else pendingHotspotVolume = buffer;
         } else if (tag === TAG_LOCALRES) {
-            // The primary map surface coloured by a second grid (see viewer.setLocalresSurface).
+            // The primary map surface colored by a second grid (see viewer.setLocalresSurface).
             // Like the other volumes, only the most recent matters while the viewer is building.
             if (viewer) {
                 const v = viewer;

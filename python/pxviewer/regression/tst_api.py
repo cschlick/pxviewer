@@ -4,7 +4,7 @@ These are the functions a user calls to describe a view without running a sessio
 ``create_view`` and friends return an MVSJ string, so every exercise here is a check on
 the node tree that string parses to. The MVSJ spec is a contract with Mol*, and the tree
 shape (download -> parse -> structure/volume -> representation) is the part of it that
-breaks silently: a wrongly nested node still serialises, it just renders nothing.
+breaks silently: a wrongly nested node still serializes, it just renders nothing.
 """
 
 from __future__ import absolute_import, division, print_function

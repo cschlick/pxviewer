@@ -23,7 +23,7 @@ Screenshots, produced through the headless path — no corpus needed:
    most visibly cannot work without the streaming architecture.
 4. One scene, several object types: model + 2Fo−Fc + Fo−Fc + a reflections-derived map.
 5. Coloring channels on fixed domains: element, B-factor, occupancy, Q-score.
-6. **Why a 3-D field at all** — per-atom colouring on a cartoon (problem invisible: no side
+6. **Why a 3-D field at all** — per-atom coloring on a cartoon (problem invisible: no side
    chains drawn, buried atoms behind the surface) beside the translucent field (you can see
    through to it). The argument is entirely about seeing.
 7. The aggregation is trivial and decomposable: combined overlay beside the per-channel
@@ -104,7 +104,7 @@ recall — a violin or ECDF per channel — and name the structures where recall
 **Precision is not reported.** It was, and it should not be: on the corpus, Ramachandran
 precision is 0.162, which implies the field adds 6.2× what the markup shows — against 2.12×
 measured by counting residues directly. The gap is the kernel's own width. σ ≈ 2 Å is wider
-than the ~3.8 Å between adjacent Cα atoms, so an isolated outlier marks its neighbours' atoms
+than the ~3.8 Å between adjacent Cα atoms, so an isolated outlier marks its neighbors' atoms
 above 0.5 even when those residues carry no concern at all, and precision counts that blur as
 an addition. Use the residue-level count instead: it is blur-free by construction.
 
@@ -146,7 +146,7 @@ field was actually built from, **every hot voxel is within 2.7 Å of it** — wh
 result, and it is a good one.
 
 **Why this figure and not precision.** Precision at 0.5 is 0.59 for Ramachandran on 1TEC (0.162
-across the corpus), which sounds poor and is not: the remainder are overwhelmingly neighbours of
+across the corpus), which sounds poor and is not: the remainder are overwhelmingly neighbors of
 concerning residues, because the σ ≈ 2 Å splat is wider than the ~3.8 Å between adjacent Cα
 atoms. A PR curve counts the blur as error and makes a correct field look mediocre. A distance
 histogram shows the blur sitting where it should, in physical units. That is the difference
@@ -171,7 +171,7 @@ held-out channels; report the corpus distribution.
 > to four significant figures only on the **uncalibrated** `--heavy-atom-clashes` preview path,
 > which finds 5 clash events on 1TEC. On the calibrated hydrogen path — the one every result
 > in this project uses — 1TEC has 96 clash events and a base rate of 6.2843%. The 6.1× was an
-> artefact of the preview path and has been removed rather than restated.
+> artifact of the preview path and has been removed rather than restated.
 >
 > The corpus number, over 1,324 structures with the spatially matched null this section
 > already required, is **1.92× against a 0.98× null**. That is a real but small effect, and it
@@ -179,7 +179,7 @@ held-out channels; report the corpus distribution.
 >
 > Two later measurements closed it. Regions the field marks that contain *no* flagged outlier
 > carry an enrichment of **0.86×** — below the null, so the field's unique regions carry no
-> signal. And different kinds of problem do not co-locate: the metric-by-metric neighbourhood
+> signal. And different kinds of problem do not co-locate: the metric-by-metric neighborhood
 > matrix is 0.8–1.2 outside the backbone block, Clark-Evans cross-kind R = 0.978, residue-level
 > Jaccard 0.000. There is little for a held-out channel to be enriched *by*.
 >

@@ -75,13 +75,13 @@ def exercise_anchors_come_from_the_manifest():
     declared = concern.display_anchors({"primary_display": {"color_anchors": {
         "0.0": "transparent", "0.4": "yellow", "0.6": "orange", "0.9": "red"}}})
     assert declared == {"yellow": 0.4, "orange": 0.6, "red": 0.9}
-    # A contract whose colours do not ascend cannot make a coherent ramp; fall back rather
+    # A contract whose colors do not ascend cannot make a coherent ramp; fall back rather
     # than paint an incoherent one.
     assert concern.display_anchors({"primary_display": {"color_anchors": {
         "0.8": "yellow", "0.2": "red"}}}) == concern.DEFAULT_ANCHORS
 
-    # The contour colour is read off the same anchors the density is painted with, so the
-    # two styles cannot state the same level in different colours.
+    # The contour color is read off the same anchors the density is painted with, so the
+    # two styles cannot state the same level in different colors.
     assert concern.concern_color(0.4, declared) == "#FFD400"    # exactly the yellow anchor
     assert concern.concern_color(0.6, declared) == "#F46D43"    # exactly the orange anchor
     assert concern.concern_color(0.9, declared) == "#B2182B"    # exactly the red anchor

@@ -17,7 +17,7 @@ into a confusing unrelated one, which is how it cost time here.
 
 ### What happens
 
-probe2 detects a genuine data problem — a hydrogen with no bonded neighbour — and raises
+probe2 detects a genuine data problem — a hydrogen with no bonded neighbor — and raises
 `Sorry(...)` to report it. Building that message calls `_describe_atom_for_debug`, which
 dereferences the atom's parent without checking it exists. For the offending atom the parent
 is `None`, so the error *reporter* raises `AttributeError` and the real diagnostic is lost:
@@ -48,7 +48,7 @@ ve.probe2_dots(add_hydrogens(m))
 ```
 
 `4rvn` (14,520 atoms). It is the only structure of 2,000 that hit this path — the same
-underlying "hydrogen with no neighbours" condition occurred 19 other times and reported
+underlying "hydrogen with no neighbors" condition occurred 19 other times and reported
 itself correctly, so the trigger is the missing parent, not the hydrogen condition.
 
 ### Suggested fix

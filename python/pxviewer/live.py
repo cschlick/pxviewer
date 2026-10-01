@@ -103,7 +103,7 @@ _TAG_DOTS = 3       # probe2 contact-dot surface (positions + spikes + colors)
 _TAG_MAP = 4        # a small live density box (affine + f32 grid); see volume_io.encode_map_box
 _TAG_FRAME_DELTA = 5  # only the atoms that moved: [u32 n][u32 * n indices][f32 * 3n]
 _TAG_HOTSPOT_VOLUME = 6  # a validation-severity grid drawn as a cloud; see hotspots.encode_severity_box
-_TAG_LOCALRES = 7  # a second grid that colours the primary map's surface; see volume_io.encode_localres
+_TAG_LOCALRES = 7  # a second grid that colors the primary map's surface; see volume_io.encode_localres
 
 # probe2 dot overlay channels — independently toggleable (full surface vs clashes).
 PROBE_CONTACTS = 0
@@ -479,8 +479,8 @@ class LiveSession:
         self._map_box_style: Optional[str] = None   # its contour colors, replayed first
         self._last_hotspot_volume: Optional[bytes] = None  # current severity cloud, replayed to late clients
         self._hotspot_knee: Optional[float] = None  # current cloud opacity knee, replayed to late clients
-        self._hotspot_anchors: Optional[dict] = None  # imported colour contract, replayed to late clients
-        self._last_localres: Optional[bytes] = None  # current local-resolution colouring, replayed to late clients
+        self._hotspot_anchors: Optional[dict] = None  # imported color contract, replayed to late clients
+        self._last_localres: Optional[bytes] = None  # current local-resolution coloring, replayed to late clients
         # Volume visibility (ref -> shown), replayed to late clients. Hiding is a
         # render skip broadcast in place, but every viewport reload connects a *new*
         # client -- without replay, each reload silently redraws every hidden map.
@@ -496,7 +496,7 @@ class LiveSession:
         # of the queued binary payload on the client).
         self._localres_downsample: Optional[int] = None
         # Whether the localres surface is shown; replayed (before the payload, applied
-        # after its build) so a reload keeps a hidden colouring hidden.
+        # after its build) so a reload keeps a hidden coloring hidden.
         self._localres_visible: Optional[bool] = None
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
 
@@ -1001,12 +1001,12 @@ class LiveSession:
                 self._broadcast_text, json.dumps({"type": "hotspot_volume", "action": "clear"}))
 
     def show_localres_grid(self, payload: bytes) -> None:
-        """Stream a local-resolution colouring to the viewport (see
+        """Stream a local-resolution coloring to the viewport (see
         :func:`pxviewer.volume_io.encode_localres`).
 
         ``payload`` carries two co-registered grids — the primary map (contoured to the
         surface the user sees) and a second field sampled at each surface vertex — so the
-        frontend redraws the *actual* map's surface value-coloured by the second map. On its
+        frontend redraws the *actual* map's surface value-colored by the second map. On its
         own channel, independent of the density box and the severity cloud. Thread-safe;
         replayed to late viewers. Call :meth:`clear_localres_grid` to remove it.
         """
@@ -1032,7 +1032,7 @@ class LiveSession:
                  "value": self._localres_downsample}))
 
     def set_localres_visible(self, visible: bool) -> None:
-        """Hide or show the localres colouring in place -- a render skip, everything
+        """Hide or show the localres coloring in place -- a render skip, everything
         kept, so showing again is instant. Stored and replayed. Thread-safe."""
         self._localres_visible = bool(visible)
         loop = self._loop
@@ -1041,7 +1041,7 @@ class LiveSession:
                 {"type": "localres", "action": "visible", "value": bool(visible)}))
 
     def set_localres_iso(self, iso_level: float) -> None:
-        """Re-contour the local-resolution colouring at a new level, in place.
+        """Re-contour the local-resolution coloring at a new level, in place.
 
         The full payload (:meth:`show_localres_grid`) carries two complete grids that a
         level change does not touch, so re-sending it per slider tick moved ~128 MB to
@@ -1065,7 +1065,7 @@ class LiveSession:
                 {"type": "localres", "action": "level", "value": float(iso_level)}))
 
     def set_localres_domain(self, lo: float, hi: float) -> None:
-        """Re-map the localres colour ramp to ``[lo, hi]`` (Angstrom), in place.
+        """Re-map the localres color ramp to ``[lo, hi]`` (Angstrom), in place.
 
         Like the level, the domain lives in the payload header (two f32 after the
         level), so the stored replay is byte-patched and a late client reconstructs with
@@ -1083,7 +1083,7 @@ class LiveSession:
                  "lo": float(lo), "hi": float(hi)}))
 
     def clear_localres_grid(self) -> None:
-        """Remove the local-resolution colouring (see :meth:`show_localres_grid`). Thread-safe."""
+        """Remove the local-resolution coloring (see :meth:`show_localres_grid`). Thread-safe."""
         self._last_localres = None
         self._localres_downsample = None
         self._localres_visible = None
@@ -1316,7 +1316,7 @@ class LiveSession:
         sits on the camera's *current* target, which follows the view like Coot's — right
         for the pane's manual controls, but a caller that just re-aimed the camera must
         pass the point explicitly: the clip lands while the camera is still animating,
-        and a sampled target would centre the sphere on the old view and clip out the
+        and a sampled target would center the sphere on the old view and clip out the
         very thing being framed. ``ref`` names a volume; without one this session's own
         model is clipped. ``depth`` (Angstrom) re-establishes the camera's own
         near/far slab: a lift frees it, and re-applying a selection clip asks for
@@ -1425,10 +1425,10 @@ class LiveSession:
         self._volume_iso_handlers.append(handler)
 
     def on_localres_shown(self, handler: Callable[[], None]) -> None:
-        """Register a callback for the viewport having *drawn* a localres colouring.
+        """Register a callback for the viewport having *drawn* a localres coloring.
 
         Sent by the client after the payload's surface build commits — the moment the
-        coloured map is on screen and interactive. Streaming the payload finishes long
+        colored map is on screen and interactive. Streaming the payload finishes long
         before that (it is ~128 MB and the client's marching cubes over it is seconds),
         so this is what "ready" means, not the send.
         """
@@ -1493,7 +1493,7 @@ class LiveSession:
 
         The Selection holds only the indices plus a reference to the session's
         columns — per-atom fields are read columnarly on access, nothing is
-        materialised per atom.
+        materialized per atom.
         """
         idx = sorted({int(i) for i in indices})
         for i in idx:
@@ -1755,7 +1755,7 @@ class LiveSession:
         This sets a single representation of ``type`` (optionally limited to ``on``),
         replacing any current ones — like :meth:`set_representation` — unless
         ``replace=False``, which *adds* the attribute-colored layer alongside what is
-        already drawn (the selection-neighbourhood layer over a value-coloured model).
+        already drawn (the selection-neighborhood layer over a value-colored model).
         Returns the representation id. The coloring is replayed to late viewers.
         """
         values = self._resolve_attribute(attribute)
@@ -2149,7 +2149,7 @@ class LiveSession:
         # goes away without a clean WebSocket close -- so a queued send can be parked on
         # ``websocket.send`` forever, waiting on a write that will never drain. Left
         # alone, ``loop.close()`` destroys each one and asyncio prints "Task was
-        # destroyed but it is pending!" per message queued at exit. Cancelling first
+        # destroyed but it is pending!" per message queued at exit. Canceling first
         # lets them unwind; the gather waits for that and swallows the CancelledErrors.
         pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         for task in pending:
@@ -2266,7 +2266,7 @@ class LiveSession:
                 await self._locked_send(websocket, self._last_localres)
             if self._last_hotspot_volume is not None:
                 # Anchors first: they are the scale the grid is painted on, so sending them
-                # after the grid would show the wrong colours for a frame.
+                # after the grid would show the wrong colors for a frame.
                 if self._hotspot_anchors is not None:
                     await self._locked_send(websocket, json.dumps(
                         {"type": "hotspot_anchors", **self._hotspot_anchors}))
@@ -2453,7 +2453,7 @@ def oscillating_frames(
     amplitude: float = 3.0,
     wavelength: float = 4.0,
 ) -> Iterable[np.ndarray]:
-    """Yield a looping demo trajectory: a travelling sine wave along +y.
+    """Yield a looping demo trajectory: a traveling sine wave along +y.
 
     ``sites`` is the base ``(N, 3)`` coordinates. Topology is unchanged; only y is
     displaced per frame. Useful for exercising the live path without a simulation.

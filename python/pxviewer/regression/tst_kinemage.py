@@ -66,9 +66,9 @@ def exercise_list_name_is_kept():
         "cablam_wheels", "cablam_wheels_lines"]
 
 
-def exercise_per_point_colour_splits_primitives():
-    """CaBLAM's wheels carry a colour per point ({} P X magenta x y z) instead of on the
-    list header (which has none) -- score-coded magenta/purple wedges. Each colour becomes
+def exercise_per_point_color_splits_primitives():
+    """CaBLAM's wheels carry a color per point ({} P X magenta x y z) instead of on the
+    list header (which has none) -- score-coded magenta/purple wedges. Each color becomes
     its own primitive; ignoring them rendered the wheels white."""
     text = ("@trianglelist {cablam_wheels} alpha=0.75\n"
             "{} P X magenta 0 0 0\n{} magenta 1 0 0\n{} magenta 1 1 0\n"
@@ -79,15 +79,15 @@ def exercise_per_point_colour_splits_primitives():
     assert all(p["kind"] == "triangles" and len(p["triangles"]) == 1 for p in prims)
 
 
-def exercise_per_point_colour_persists():
-    """A per-point colour applies to following points until the next colour."""
+def exercise_per_point_color_persists():
+    """A per-point color applies to following points until the next color."""
     text = "@vectorlist {v} color= green\n{a} P red 0 0 0 {b} 1 1 1 {c} 2 2 2"
     prims = parse_kinemage(text)
     assert len(prims) == 1 and prims[0]["color"] == [255, 0, 0]   # red, not list green
     assert len(prims[0]["segments"]) == 2
 
 
-def exercise_unknown_colour_and_empty():
+def exercise_unknown_color_and_empty():
     assert parse_kinemage("") == []
     assert parse_kinemage(
         "@vectorlist {v} color= chartreuse\n{a} P 0 0 0 {b} 1 1 1") == [

@@ -84,7 +84,7 @@ TEST_SETTINGS_DIR, TEST_SETTINGS_DIR_CREATED = _isolate_qsettings()
 def desktop_settings():
     """The same ``QSettings`` store the desktop reads and writes.
 
-    ``DesktopApp`` honours ``PXVIEWER_SETTINGS_DIR`` (set just above) by persisting into
+    ``DesktopApp`` honors ``PXVIEWER_SETTINGS_DIR`` (set just above) by persisting into
     a plain ini file there; the two-argument constructor does not. A test that snapshots
     or writes through ``QSettings("pxviewer", "pxviewer")`` while the app reads the ini
     is operating on a different store entirely -- which is how a saved two-layer
@@ -187,9 +187,9 @@ def closing_modals(interval_ms=20):
     A timer rather than a patched ``QMessageBox.warning`` / ``QFileDialog.getSaveFileName``
     / ``QColorDialog.getColor``: the timer fires inside the nested event loop the dialog's
     ``exec()`` spins, so the dialog is really constructed, really shown, and really
-    cancelled, and the calling handler gets its answer and carries on.
+    canceled, and the calling handler gets its answer and carries on.
 
-    That is not merely the no-patching rule applied for its own sake -- cancelling returns
+    That is not merely the no-patching rule applied for its own sake -- canceling returns
     exactly what the stubs used to return (``("", "")``, ``([], "")``, an invalid
     ``QColor``), so this is a strict replacement that additionally covers the dialog
     construction and the app's own handling of a cancel.

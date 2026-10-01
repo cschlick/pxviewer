@@ -10,17 +10,17 @@ central hypothesis was measured and failed.*
 
 The current field cannot accumulate across residues, and that is a property of how it deposits
 rather than a tuning problem. **A system that only accumulates within a residue does not need
-to be a field at all — colouring residues would do the same job.** So the field's aggregation
+to be a field at all — coloring residues would do the same job.** So the field's aggregation
 is currently earning nothing; only its display value (seeing through the structure) is real.
 
 The fix is to stop asking one field two questions:
 
 | | **locator field** | **hotspot field** |
 |---|---|---|
-| question | *where exactly is this problem?* | *which neighbourhoods carry an unusual concentration of trouble?* |
+| question | *where exactly is this problem?* | *which neighborhoods carry an unusual concentration of trouble?* |
 | construction | peak-normalized splats, σ = 2 Å | severity-weighted intensity, R = 6 Å |
 | unit | bounded concern, cut at 1.0 | **flagged-outlier-equivalents** |
-| accumulates | within ~2 Å (sub-residue) | across the neighbourhood |
+| accumulates | within ~2 Å (sub-residue) | across the neighborhood |
 | status | **unchanged** — figure B validates it | new |
 
 ---
@@ -47,7 +47,7 @@ the bumps.** Per-metric fields are clipped to [0, 1]; metrics combine by maximum
 coincident events reach at most `Σ sᵢ`. Two concerns of 0.2 can never make 0.5 — at any σ,
 superimposed. This is not a kernel-width problem and no kernel change touches it.
 
-**Gaussian tails are thin.** A neighbour contributes `exp(−d²/2σ²)` of its own peak: at σ = 2,
+**Gaussian tails are thin.** A neighbor contributes `exp(−d²/2σ²)` of its own peak: at σ = 2,
 **16.4%** at 3.8 Å (adjacent Cα) and **0.1%** at 7.6 Å. Two events two residues apart would
 each need severity 0.500 to reach threshold — i.e. each already individually hot.
 
@@ -65,8 +65,8 @@ Widening σ from 2 to 8 raises "within reach" only from 14.9% to 36.0% — and w
 B's half-maximum radius from 2.35 Å to 9.42 Å, destroying the result that carries the section.
 The asymptote is ~38.5%, because the other 61.5% are ceiling-limited.
 
-**The spatial ingredient is present** — neighbours at a median 3.75 Å, comfortably inside a
-6 Å neighbourhood. It is the deposition model that cannot use it.
+**The spatial ingredient is present** — neighbors at a median 3.75 Å, comfortably inside a
+6 Å neighborhood. It is the deposition model that cannot use it.
 
 ---
 
@@ -93,7 +93,7 @@ same atoms, a different way of accumulating them.
 | one flagged outlier, isolated | **1.0** |
 | two mild concerns of 0.2, adjacent | 0.4 |
 | ten mild concerns of 0.2 in one pocket | **~1.5–2.0** |
-| a flagged outlier plus five mild neighbours | ~2 |
+| a flagged outlier plus five mild neighbors | ~2 |
 
 *"There is as much trouble in this pocket as two flagged outliers"* is a sentence a reader can
 check. The anchor is inherited from whoever defined each community threshold, exactly as in the
@@ -101,13 +101,13 @@ concern calibration — nothing here is fitted.
 
 Note what changed and what did not. The **ceiling on a single pair is still there** (two 0.2s
 read 0.4, correctly less than one real outlier). What lifts is the ceiling on *many*: because
-the kernel transmits most of an event's severity across the whole neighbourhood instead of
+the kernel transmits most of an event's severity across the whole neighborhood instead of
 killing it at 2 Å, ten weak problems genuinely sum. That is the effect an outlier list cannot
 reproduce, and it is inter-residue by construction.
 
 ### Display contract
 
-This is **not concern** and must not be coloured as if it were. Separate quantity, separate
+This is **not concern** and must not be colored as if it were. Separate quantity, separate
 scale, separate name — `hotspot_density`, units *outlier-equivalents*:
 
 ```text
@@ -118,7 +118,7 @@ scale, separate name — `hotspot_density`, units *outlier-equivalents*:
 
 **Two anchors, both inherited, answering different questions.**
 
-*Knee at 1.0.* Visibility starts where a neighbourhood holds one flagged outlier's worth of
+*Knee at 1.0.* Visibility starts where a neighborhood holds one flagged outlier's worth of
 trouble — so **a severe lone outlier still reaches the map, deliberately.** Multi-residue
 accumulation is *one* argument for having a field, not its entrance requirement; a "where to
 look" tool that hid the most obvious problems would be perverse. Measured over 67,292 residues
@@ -149,7 +149,7 @@ states. Component fields are retained per family so any bright region can be att
 
 Both were considered. **Absolute wins on failure modes**, not on rigor.
 
-Null-calibration asks *"is this neighbourhood worse than the rest of this structure?"*, and
+Null-calibration asks *"is this neighborhood worse than the rest of this structure?"*, and
 that question answers backwards twice:
 
 * **a pristine structure still shows hotspots** — the relatively-worst parts of an excellent
@@ -161,7 +161,7 @@ Absolute gets both right: "nothing to see here" is a legitimate answer, and a ba
 lights up everywhere because it *is* bad everywhere.
 
 It also keeps a rule already on the books. The display contract in `AGENTS.md` and `README.md`
-forbids min/max, percentile, sigma-scaled and viewport-relative colouring: *"the same concern
+forbids min/max, percentile, sigma-scaled and viewport-relative coloring: *"the same concern
 value must have the same color and opacity in every map."* Null-calibration is
 structure-relative by construction, so adopting it would be reversing a stated decision, not
 filling a gap.
@@ -189,7 +189,7 @@ against structure size before choosing where the knee sits.
 
 **Bandwidth is genuinely ours.** Unlike every other constant in this project, 6 Å is not
 inherited from a community threshold. It is chosen from the measured clustering (median nearest
-cross-family neighbour 3.75 Å, p75 5.40, p90 7.08) so that the neighbourhood covers observed
+cross-family neighbor 3.75 Å, p75 5.40, p90 7.08) so that the neighborhood covers observed
 co-location without reaching across the domain. It should be stated, fixed once, and **not
 tuned per figure** — that is where this design would start becoming a fitted metric.
 
@@ -241,7 +241,7 @@ this is two fields for one field's worth of information and should not ship.
 **Two findings, one of them a design error.**
 
 **1. The knee was in the wrong place, and that is my error.** It was anchored at "one flagged
-outlier's worth" without checking what a typical 6 Å neighbourhood already holds. Measured
+outlier's worth" without checking what a typical 6 Å neighborhood already holds. Measured
 distribution inside the envelope: **median 0.55, p95 2.89, p99 4.54, max 8.34**. A knee at 1.0
 marks **33% of the envelope** — a third of the protein, which is not a hotspot map. The *unit*
 is sound and interpretable; as a *threshold* 1.0 is meaningless and belongs near p95, ~3.0.
@@ -257,7 +257,7 @@ more strain, so trouble really is denser there. The residual 0.310 could be real
 residual artifact, and the aggregate number cannot tell them apart.
 
 **The diagnostic that would:** run the correlation channel by channel. Clash should track
-packing (a buried atom has more neighbours to clash with — real), while Ramachandran and
+packing (a buried atom has more neighbors to clash with — real), while Ramachandran and
 rotamer should not (backbone and side-chain conformation are not obviously a function of local
 density). If the residual is carried by clash it is signal; if rama and rota correlate with
 packing just as strongly, it is artifact and the field is measuring the wrong thing.
@@ -292,7 +292,7 @@ channel**, 1.57× against the concern field's 2.07×.
 
 The mechanism is dilution, and the packing diagnostic named it independently: **mean severity
 per event correlates −0.047 with packing**, so a density-hot region is one holding *more*
-events, not *worse* ones. Spreading severity over a 6 Å neighbourhood buys recall that was
+events, not *worse* ones. Spreading severity over a 6 Å neighborhood buys recall that was
 already 1.0 and pays for it in everything else.
 
 The only axis where density wins is that figure C is computable on more structures (42 of 46
@@ -319,7 +319,7 @@ point rather than a curve.
 
 The packing question is answered and is **not** a problem: the 0.714 correlation is carried by
 clash (rho 0.697) while conformation channels barely track packing (rama 0.139, rota 0.172) —
-real physics, since a buried atom has more neighbours to collide with. So the existing
+real physics, since a buried atom has more neighbors to collide with. So the existing
 envelope-matched null in figure C is adequate, and no packing-matched null is needed.
 
 ---

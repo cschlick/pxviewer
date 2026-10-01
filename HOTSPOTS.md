@@ -4,13 +4,13 @@
 > **visualization** feature: a light, deliberately simple overlay that shows where several
 > validators happen to agree, so the eye goes to a place worth looking at. It is **not a
 > validation metric** and must not be presented, reported, or refined against as one. The
-> numbers below exist to decide what colour a voxel is, not to score a structure.
+> numbers below exist to decide what color a voxel is, not to score a structure.
 >
 > Two consequences run through everything here. The aggregate is only ever allowed to
 > **rank**, never to stand alone — and the per-metric channels are always kept, so any
 > combined value can be decomposed into the channels that produced it. A calibration
 > argument in this file is an argument about *display*: anchoring on community thresholds
-> means the same colour means the same thing in every structure, which is a comparability
+> means the same color means the same thing in every structure, which is a comparability
 > property, not a claim to have measured anything new.
 >
 > An earlier aim — turning this into a defensible metric, with a concentration model and
@@ -690,7 +690,7 @@ can be decomposed into the channels that produced it.
 ## Future work: dynamic updates
 
 The natural next step is a **dynamic** hotspot field: as the user tugs, minimizes, or otherwise
-moves atoms, the colouring updates to show the score improving or worsening in real time. The
+moves atoms, the coloring updates to show the score improving or worsening in real time. The
 appeal is obvious — you would see a rotamer flip out of the red as you correct it, without
 stopping to re-run validation.
 
@@ -705,15 +705,15 @@ Two costs sit in the way, and they are separate:
    few milliseconds over a drag's local zone; clash and map fit are not, so a live pass would
    have to hold them frozen and reconcile with one full `score()` when the drag settles. That
    approximation is defensible, but it is an approximation.
-2. **The recolour.** Pushing new per-atom values to the viewer every frame is where a naive
+2. **The recolor.** Pushing new per-atom values to the viewer every frame is where a naive
    implementation actually stalls — re-sending a representation rebuilds its mesh on the GPU.
-   An in-place colour-theme update (values only, geometry untouched) avoids the rebuild, but
+   An in-place color-theme update (values only, geometry untouched) avoids the rebuild, but
    even that, driven at drag frame-rate alongside the coordinate stream, did not feel smooth on
    the MacBook Air that is the hardware floor.
 
 A proof of concept of all of the above was built and then removed — it added enough moving parts
 (a pre-built incremental scorer with cached mmtbx evaluators, a one-slot re-score worker, a
-private model copy to dodge cctbx's thread-unsafety, a new in-place-recolour wire path) that
+private model copy to dodge cctbx's thread-unsafety, a new in-place-recolor wire path) that
 carrying it dormant was not worth the weight. The git history has it if we return to the idea.
 
 **What shipped instead** is the cheap, honest half: a *staleness detector*. When a model is
@@ -730,8 +730,8 @@ Status: **implemented** — `python/pxviewer/concern.py`, the same Hotspots tab,
 
 The field generator is [`hotspots/`](hotspots/) (`make_concern_maps.py`, run under the cctbx
 python). It writes CCP4 maps plus a `*_hotspots.json` manifest; pxviewer's job is to
-**import and honour** them, not to compute them. Read its `AGENTS.md`, `README.md` and
-`HOTSPOT_FIELDS.md` before changing its behaviour.
+**import and honor** them, not to compute them. Read its `AGENTS.md`, `README.md` and
+`HOTSPOT_FIELDS.md` before changing its behavior.
 
 It began as a separate repository and **is kept separable** — nothing in `hotspots/` imports
 pxviewer, because the intent is to upstream it. The one shared thing is
@@ -788,8 +788,8 @@ scale:
 Anchors reach the browser as a `hotspot_anchors` control message, replayed on reconnect
 *before* the grid so a reload never paints a frame on the wrong scale. `concern.concern_color`
 reads the same anchors for the contour, so the two styles cannot state one level in two
-colours. Absolute concern drives **both** hue and opacity: no per-field percentile, min/max,
-sigma, or viewport-relative normalization anywhere, which is what makes a colour mean the same
+colors. Absolute concern drives **both** hue and opacity: no per-field percentile, min/max,
+sigma, or viewport-relative normalization anywhere, which is what makes a color mean the same
 thing in every structure and every metric.
 
 This is the same absolute-scale principle as the severity design ("Clean atoms fade into the
@@ -804,19 +804,19 @@ An earlier iteration of the importer contoured concern but masked it to `percent
 and took hue from the percentile field. That made the declared contract untrue: percentile was
 deciding what was visible. That path is **removed**, along with the `TAG_HOTSPOT_SURFACE` wire
 plumbing that existed only to serve it. Percentile maps are still imported when present, and a
-manifest without them imports and draws normally — they must not be *required* to colour.
+manifest without them imports and draws normally — they must not be *required* to color.
 
 ### The residue table is a field readout, not an attribution
 
 The table is sampled from the concern grids at each residue's atoms (trilinear, matching the
 browser's raymarcher), rolled up per residue with a max, ranked by the field on screen and
 filtered by the same threshold that drives the display. Every value is therefore bounded
-`[0, 1]`, labelled `concern`, and cannot disagree with what is drawn.
+`[0, 1]`, labeled `concern`, and cannot disagree with what is drawn.
 
-**It ranks neighbourhoods, not residues, and this is not fixable in the viewer.** The
+**It ranks neighborhoods, not residues, and this is not fixable in the viewer.** The
 generator splats each observation with a σ ≈ 2 Å Gaussian, which is wider than the ~3.8 Å
 between adjacent Cα atoms, so concern deposited on one residue is genuinely present at its
-neighbours' atoms. On 1TEC, E85 reads Rama concern 0.35 because E84 next door is a real
+neighbors' atoms. On 1TEC, E85 reads Rama concern 0.35 because E84 next door is a real
 outlier; around the E53 peak the whole stretch E50–E56 is elevated. Recovering per-residue
 attribution from the grid afterwards is an ill-posed deconvolution, and `concern.py`
 deliberately does **not** invent a de-blurring rule to make the numbers look cleaner —
@@ -835,7 +835,7 @@ is resolution, not misplacement. Regenerate at 1.0 Å when the numbers themselve
 `volume_io.grid_affine` is the single definition of where a grid sits in Cartesian space, used
 by both the wire encoders and `sample_at_sites`, so a value read in Python lands where the
 browser draws it. Cartesian placement has two independent cctbx representations and both must
-be honoured:
+be honored:
 
 ```
 origin = steps @ map_data().origin() - shift_cart()
@@ -844,7 +844,7 @@ origin = steps @ map_data().origin() - shift_cart()
 CCP4 **NXSTART** survives as `map_data().origin()`, which is what the generator writes;
 a `map_model_manager` working frame is recorded in `shift_cart`. Considering only `shift_cart`
 put standalone NXSTART-placed maps at Cartesian zero. For a boxed map the first term is zero,
-so the older behaviour is recovered exactly.
+so the older behavior is recovered exactly.
 
 ### One shared definition of what is wrong and where
 
@@ -891,7 +891,7 @@ takes a distance tolerance, because the splat is wider than the ~3.8 Å between 
 atoms, so a residue beside a bad one genuinely sits in its density; demanding identity would
 measure the kernel rather than the field. It also takes a `concerning` predicate, and **for a
 continuous field you must widen it** — pass `worse_than_percent(2.0)`, the generator's own
-"good" boundary. Judging against outliers alone reports correct behaviour as failure: the
+"good" boundary. Judging against outliers alone reports correct behavior as failure: the
 concern curve starts rising well before the outlier cut, so the field legitimately marks
 residues MolProbity never flags. Running the check the strict way on the 1TEC sample reported
 atoms 12–21 Å from any outlier as unexplained, which is far beyond a 2 Å splat and looked
@@ -920,15 +920,15 @@ script.** Every Python test here can pass against a months-old renderer.
 
 This bit once, and the failure mode was not obvious. The importer began sending the live
 threshold as the direct-volume's `cutFrac`, where it had previously been a fixed 0.5. The
-stale bundle had no `hotspot_anchors` support, so it still derived its colour ramp from that
+stale bundle had no `hotspot_anchors` support, so it still derived its color ramp from that
 value — and `0.37 * 1.5` is `0.5549999999999999`. Mol\*'s `ColorTheme.Palette` sizes its
 palette as `10^(most decimal places among the stop offsets)`, so it tried to build 10^16
-colours, threw `RangeError: Invalid array length`, rendered nothing at any threshold, and
+colors, threw `RangeError: Invalid array length`, rendered nothing at any threshold, and
 wedged the viewport. 31 of the 101 slider positions were fatal.
 
 `hotspotReprParams` now quantizes every stop to 3 decimals, which caps the palette at 1000
 entries — the same resolution the old fixed cut happened to produce — no matter what the cut
-or the declared anchors are. Any offset handed to a Mol\* colour list needs that treatment;
+or the declared anchors are. Any offset handed to a Mol\* color list needs that treatment;
 arithmetic on a user-driven float will otherwise produce one of these eventually.
 
 ### Verification

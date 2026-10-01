@@ -1,4 +1,4 @@
-"""A categorised, self-describing map of the ``LiveSession`` API.
+"""A categorized, self-describing map of the ``LiveSession`` API.
 
 Bound as ``api`` in the console namespace, this is the "how do I do X without
 reading the docs" entry point: type ``api`` for every command grouped by topic
@@ -20,7 +20,7 @@ Row = Tuple[str, str, str]  # (name, compact signature, one-line doc)
 Group = Tuple[str, List[Row]]
 
 # Topic -> ordered method names. Anything public but unlisted lands in "Other",
-# so a newly added API method still shows up (just uncategorised).
+# so a newly added API method still shows up (just uncategorized).
 _CATEGORIES: List[Tuple[str, List[str]]] = [
     ("Selecting atoms", [
         "select", "select_by", "highlight", "focus", "clear_selection",

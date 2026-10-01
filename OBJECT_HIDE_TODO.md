@@ -61,7 +61,7 @@ Both were consequences of the reload workaround, and both went away with in-plac
 - **Flicker**: hiding one object reloaded the whole page, so every other object blanked and
   redrew. In-place hiding touches only the toggled object's render state.
 - **Camera jump**: a fresh page re-ran the scene's focus, reframing the view on whatever
-  object it decided to centre. With no reload there is nothing to re-focus, so the camera
+  object it decided to center. With no reload there is nothing to re-focus, so the camera
   stays exactly where the user left it.
 
 The revert commit had also claimed `setSubtreeVisibility` "didn't hide" on macOS. That does not

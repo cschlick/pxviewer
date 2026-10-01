@@ -34,7 +34,7 @@ def exercise_ideal_atoms_have_coordinates():
     assert xyz.shape[1] == 3
 
 
-def exercise_build_model_is_centred_and_restraint_ready():
+def exercise_build_model_is_centered_and_restraint_ready():
     m = ligands.build_ligand_model("GOL", (12.0, 8.0, 20.0))
     assert m.get_number_of_atoms() == 14
     assert np.allclose(m.get_sites_cart().mean(), (12.0, 8.0, 20.0), atol=1e-6)
@@ -50,10 +50,10 @@ def exercise_an_unknown_code_raises():
         ligands.ideal_atoms("NOTACODE")
 
 
-def exercise_build_from_smiles_is_centred_and_restraint_ready():
+def exercise_build_from_smiles_is_centered_and_restraint_ready():
     """A ligand not in the library, built from SMILES: rdkit embeds a conformer whose
     geometry both places the atoms and supplies the on-the-fly restraints, so the model
-    comes out centred and with a real (bond + angle) geometry restraints manager."""
+    comes out centered and with a real (bond + angle) geometry restraints manager."""
     if not have("rdkit"):
         print("  skipping: rdkit not available")
         return
@@ -181,7 +181,7 @@ def _restraints_ready():
         and monomer_library_available()
 
 
-def exercise_an_unrecognised_ligand_is_reported_with_all_of_its_atoms():
+def exercise_an_unrecognized_ligand_is_reported_with_all_of_its_atoms():
     """cctbx flags only the atoms it could not type -- often the heavy ones, their
     hydrogens having typed fine -- but a dictionary has to describe the whole residue, and
     perceiving chemistry from part of a molecule fails outright. So the report widens each
@@ -222,14 +222,14 @@ def exercise_restraints_are_read_back_out_of_the_coordinates():
     # The header must say the SMILES was *perceived*, not supplied: a reader deciding
     # whether to trust these restraints needs to know it is a guess.
     assert "Perceived SMILES" in cif_text
-    assert "perceived from the modelled coordinates" in cif_text
+    assert "perceived from the modeled coordinates" in cif_text
     assert "Source SMILES" not in cif_text
 
 
 def exercise_the_ideals_come_from_clean_geometry_not_the_model():
     """The property that makes this worth doing at all.
 
-    A ligand needing restraints is usually one that is modelled badly. Measuring its
+    A ligand needing restraints is usually one that is modeled badly. Measuring its
     ideals off its own coordinates would restrain it to the distortion -- the restraints
     would hold the error in place instead of pulling it out. So the ideals are measured
     from a fresh conformer of the perceived chemistry.
@@ -245,15 +245,15 @@ def exercise_the_ideals_come_from_clean_geometry_not_the_model():
         model, found[0]["i_seqs"], found[0]["code"])
 
     positions = {a.name.strip(): np.array(a.xyz) for a in model.get_hierarchy().atoms()}
-    modelled = float(np.linalg.norm(positions["C1"] - positions["C2"]))
-    assert modelled > 1.8                          # stretched by a quarter, as built
+    modeled = float(np.linalg.norm(positions["C1"] - positions["C2"]))
+    assert modeled > 1.8                          # stretched by a quarter, as built
 
     block = iotbx.cif.reader(input_string=cif_text).model()["comp_L02"]
     ideal = next(float(d) for a1, a2, d in zip(block["_chem_comp_bond.atom_id_1"],
                                                block["_chem_comp_bond.atom_id_2"],
                                                block["_chem_comp_bond.value_dist"])
                  if {a1, a2} == {"C1", "C2"})
-    assert 1.45 < ideal < 1.60                     # an ordinary C-C, not the 1.89 modelled
+    assert 1.45 < ideal < 1.60                     # an ordinary C-C, not the 1.89 modeled
 
 
 def exercise_a_generated_dictionary_makes_the_model_buildable():

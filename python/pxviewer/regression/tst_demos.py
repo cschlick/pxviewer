@@ -48,7 +48,7 @@ class Recording_session(LiveSession):
     def for_demo(cls, demo):
         sites, _labels = demo.make_sites()
         session = cls.from_sites(sites)
-        assert isinstance(session, cls), "from_sites did not honour the subclass"
+        assert isinstance(session, cls), "from_sites did not honor the subclass"
         return session, np.asarray(sites, dtype="<f4")
 
     def push(self, coords, changed=None):
@@ -101,7 +101,7 @@ def wait_until(predicate, what, timeout=WAIT_S):
 
 
 def exercise_every_demo_streams_well_formed_frames_and_stops():
-    """Run the whole catalogue: a demo that never stops hangs the viewer's Demo menu, and
+    """Run the whole catalog: a demo that never stops hangs the viewer's Demo menu, and
     a NaN in a frame is a structure that vanishes with nothing logged."""
     for name in sorted(DEMOS):
         demo = DEMOS[name]

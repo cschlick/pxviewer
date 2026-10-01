@@ -1,7 +1,7 @@
 """Selection and representation integration.
 
 Selections are resolved by cctbx's own atom-selection machinery (the full Phenix selection
-language), so a session must be model-backed. Representations map MVS types and colours onto
+language), so a session must be model-backed. Representations map MVS types and colors onto
 Mol*'s vocabulary.
 """
 
@@ -156,20 +156,20 @@ def exercise_repr_unknown_type_rejected():
         session().add_representation("putty")
 
 
-def exercise_repr_named_colour_is_uniform():
+def exercise_repr_named_color_is_uniform():
     s = session()
     spec = s._representations[s.add_representation("spacefill", color="orange")]
     assert spec["color"] == "uniform" and spec["colorValue"] == "orange"
 
 
-def exercise_repr_theme_colour_stays_a_theme():
+def exercise_repr_theme_color_stays_a_theme():
     s = session()
     spec = s._representations[
         s.add_representation("ball_and_stick", color="element-symbol")]
     assert spec["color"] == "element-symbol" and "colorValue" not in spec
 
 
-def exercise_repr_colour_value_forces_uniform():
+def exercise_repr_color_value_forces_uniform():
     s = session()
     spec = s._representations[s.add_representation("cartoon", color_value="red")]
     assert spec["color"] == "uniform" and spec["colorValue"] == "red"

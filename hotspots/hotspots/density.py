@@ -1,9 +1,9 @@
-"""The hotspot field: severity-weighted intensity over a neighbourhood.
+"""The hotspot field: severity-weighted intensity over a neighborhood.
 
 A second, separate quantity from bounded concern. See ../HOTSPOT_DENSITY_DESIGN.md for why
 there are two fields; briefly, the concern field answers *where exactly is this problem* and
 cannot accumulate beyond ~2 A, which is sub-residue — and something that only accumulates
-within a residue does not need to be a field at all. This one answers *which neighbourhoods
+within a residue does not need to be a field at all. This one answers *which neighborhoods
 carry a concentration of trouble*, and accumulates across residues by construction.
 
     lambda(x) = sum_i  s_i * K(|x - x_i| / R),     K(u) = 1 - u^2  for u <= 1,  R = 6 A
@@ -15,12 +15,12 @@ inherited from whoever defined each community threshold; nothing here is fitted.
 
 Note what this does and does not lift. A *pair* of weak concerns still cannot exceed their sum
 (two 0.2s read 0.4, correctly less than one real outlier). What lifts is the ceiling on *many*:
-the kernel transmits most of an event's severity across the whole neighbourhood instead of
+the kernel transmits most of an event's severity across the whole neighborhood instead of
 killing it at 2 A, so a crowd of weak problems genuinely sums. That is the effect an outlier
 list structurally cannot reproduce.
 
 **R = 6 A is the one constant in this project not inherited from a community threshold.** It
-comes from the measured clustering of sub-threshold events (nearest cross-family neighbour:
+comes from the measured clustering of sub-threshold events (nearest cross-family neighbor:
 median 3.75 A, p75 5.40, p90 7.08). State it, fix it, and do not tune it per figure -- that is
 where this design would start becoming a fitted metric.
 """
@@ -32,7 +32,7 @@ import numpy as np
 
 from field import Field, _splat, compute_field
 
-#: Neighbourhood radius, angstrom. See the module docstring before changing it.
+#: Neighborhood radius, angstrom. See the module docstring before changing it.
 DEFAULT_RADIUS = 6.0
 
 #: Display knee: as much trouble here as one flagged outlier. Visibility starts here, so a
@@ -154,7 +154,7 @@ def build_density_fields(events_by_metric: Dict[str, List], spacing: float = 1.0
     """Per-family densities and their sum.
 
     Families combine by **sum** here, not by max: the whole point of this field is that
-    independent lines of evidence in one neighbourhood add up. Within a family the members are
+    independent lines of evidence in one neighborhood add up. Within a family the members are
     redundant readings of one property (measured: residue-level Jaccard 0.088 within against
     0.000 across, see corpus/channel_survey.py), so they are maxed per residue upstream by the
     concern layer rather than double-counted here.

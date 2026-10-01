@@ -108,7 +108,7 @@ def category(name: str, row_count: int, columns: Sequence[Dict[str, Any]]) -> Di
 
 def encode(header: str, categories: Sequence[Dict[str, Any]], *,
            encoder: str = "pxviewer-bcif") -> bytes:
-    """Serialise one data block of ``categories`` to BinaryCIF bytes."""
+    """Serialize one data block of ``categories`` to BinaryCIF bytes."""
     doc = {
         "version": "0.3.0",
         "encoder": encoder,

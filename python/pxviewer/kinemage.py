@@ -2,7 +2,7 @@
 
 The MolProbity validators emit their markup as kinemage text: ``@vectorlist``
 (line segments), ``@dotlist`` (points), ``@balllist`` (spheres) and
-``@trianglelist`` (filled triangles). We parse that into plain, JSON-serialisable
+``@trianglelist`` (filled triangles). We parse that into plain, JSON-serializable
 primitives the viewer can render directly.
 
 Kinemage point syntax (one or more points per physical line)::

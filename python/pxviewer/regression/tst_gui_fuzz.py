@@ -7,7 +7,7 @@ afterwards: state *combinations* no hand-written exercise reaches, with
 
 Two walks, because they fail differently. The first drives ``DesktopApp`` methods, which
 is where registry and pairing bugs live. The second clicks the real widgets, which is
-where wiring bugs live -- the colour dialog reopening on OK was one, and no amount of
+where wiring bugs live -- the color dialog reopening on OK was one, and no amount of
 backend driving would have found it.
 
 Both stay on fast synchronous actions on purpose. Minimize, tug and make_maps run on
@@ -67,7 +67,7 @@ TRAIL = 15
 
 #: Buttons that start background work -- Minimize, Stop, the validation run (which can
 #: queue reduce2 + probe2 when the checkbox fuzzing ticked Clashes & contacts), Build
-#: ligand. They are icon-only, so they are recognised by their tooltip.
+#: ligand. They are icon-only, so they are recognized by their tooltip.
 THREADED_TOOLTIPS = (
     "Minimize the active model", "Halt the run", "Run the ticked checks",
     "Build the ligand")
@@ -212,7 +212,7 @@ class Walk(object):
                 vid, self.rng.choice([None, 1.0, 2.5]))
         elif which == "mask":
             # Only valid when paired. Hitting the refusal is fine -- it is the documented
-            # behaviour, and reaching it from a random state is worth doing.
+            # behavior, and reaching it from a random state is worth doing.
             try:
                 self.app.set_volume_mask(vid, self.rng.choice([None, 3.0]))
             except ValueError:
@@ -362,7 +362,7 @@ def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
     """The same idea through the real controls: clicks, combos, checkboxes and sliders.
 
     The backend walk never touches a Qt signal; this does nothing else. Modals really open
-    and are really cancelled by ``closing_modals``, so a control that opens one is
+    and are really canceled by ``closing_modals``, so a control that opens one is
     exercised rather than skipped.
     """
     for seed in WIDGET_SEEDS:
@@ -404,7 +404,7 @@ def exercise_a_random_walk_over_the_widgets_keeps_the_model_consistent():
 
 def run():
     # Both walks build a DesktopApp and the widget walk clicks whatever it finds, so the
-    # preferences it reads are pinned and any dialog it opens is cancelled rather than
+    # preferences it reads are pinned and any dialog it opens is canceled rather than
     # left blocking.
     with shipped_defaults(), closing_modals():
         for name, fn in sorted(globals().items()):

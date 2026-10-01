@@ -222,7 +222,7 @@ class Tug:
 
         # Re-anchor the pins and holds where the drag LEFT the zone, then hold the
         # atom where it now is. The holds anchor at grab time, and after a long drag
-        # a settle against those old anchors tugged the whole neighbourhood — and the
+        # a settle against those old anchors tugged the whole neighborhood — and the
         # released atom with it — back toward the start, partially undoing the drag.
         # Settling means coming to rest in place, so the reference is the present.
         self._grm.remove_reference_coordinate_restraints_in_place()

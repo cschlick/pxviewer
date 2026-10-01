@@ -159,7 +159,7 @@ def experiment_methods(pdb_id: str, *, timeout: float = 30.0) -> Optional[list]:
     what makes a requested entity nonsensical before any download starts: a crystal
     entry has no EMDB map, and a cryo-EM entry deposits no structure factors. Any
     network or schema problem is swallowed into ``None`` — the mismatch checks are then
-    skipped and the download's own failure message stands, the old behaviour.
+    skipped and the download's own failure message stands, the old behavior.
     """
     url = f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id.strip().lower()}"
     try:
@@ -181,7 +181,7 @@ def reported_resolution(pdb_id: str, *, timeout: float = 30.0) -> Optional[float
     local-resolution map at 6.4 A and hides exactly the variation it is meant to show.
 
     Any network or schema problem is swallowed into ``None`` -- the caller falls back to
-    cctbx's estimate, which is the old behaviour rather than a failure.
+    cctbx's estimate, which is the old behavior rather than a failure.
     """
     url = f"https://data.rcsb.org/rest/v1/core/entry/{pdb_id.strip().lower()}"
     try:

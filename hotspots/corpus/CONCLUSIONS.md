@@ -32,7 +32,7 @@ deposit-and-read-back round trip at 1.0 Å loses nothing. That is necessary, not
 Their real function is to **license the operating point**: σ = 2 Å, threshold 0.5, 1.0 Å
 sampling. A shows that combination loses no flagged problem; B shows it does not point
 anywhere wrong. Had recall come in at 0.9 the overlay would be broken and no other figure
-would matter. Report them as the licence, not as the finding.
+would matter. Report them as the license, not as the finding.
 
 ## 2. Lead with figure B. The numbers are tighter than they look.
 
@@ -42,7 +42,7 @@ than reporting: for a Gaussian read at threshold 0.5, the half-maximum radius is
     σ · sqrt(2 ln 2) ≈ 1.177 σ ≈ 2.35 Å
 
 So the observed hot region is **tighter than a single isolated splat**, because most hot voxels
-arise where neighbouring splats overlap, near the atoms themselves. The field's spatial extent
+arise where neighboring splats overlap, near the atoms themselves. The field's spatial extent
 is the kernel and nothing else: no drift, no spurious signal, no misplacement anywhere in 22
 million voxels.
 
@@ -61,7 +61,7 @@ favored boundary — so **the rarer the outlier, the more of the hot region is c
 unflagged**. Precision here measures prevalence, which is the same confound that ruled out the
 ROC figure.
 
-Figure B is the identical question asked in honest units. De-emphasise precision or drop it,
+Figure B is the identical question asked in honest units. De-emphasize precision or drop it,
 and let the distance histogram carry "is the blur acceptable".
 
 ## 4. The clash channel is a design decision the paper must make, not a result.
@@ -156,7 +156,7 @@ volume render never asks that question.** It integrates opacity along a view ray
 composite into something you can see. Measuring accumulation in field space was the wrong test
 for a visualization claim; `corpus/alpha_accumulation.py` measures it in image space.
 
-The marker comparison is definitional rather than modelled: along a ray that never crosses the
+The marker comparison is definitional rather than modeled: along a ray that never crosses the
 threshold, a MolProbity marker representation shows **nothing** — markers exist only where a
 validator flagged something. So the only question is whether the field shows something there.
 
@@ -214,7 +214,7 @@ rate.** In hindsight this is what should have been expected: clashes concentrate
 is genuinely bad, and a sub-threshold region is by definition one where geometry is mildly off
 but *not* bad. It is the "fine, actually" part of the structure.
 
-### So the defence fails on its second leg
+### So the defense fails on its second leg
 
 Two turns of argument reduce to one sentence: **the field can show what markers cannot, and
 what it uniquely shows is not worth looking at.** A capability with no demonstrated benefit.
@@ -223,7 +223,7 @@ Caveats, because the result should not be overstated either:
 
 * This tests one held-out channel. Faint geometry strain might predict something else — poor
   map fit, say — which no map-free corpus can check.
-* "Worth seeing" is operationalised as *contains a held-out clash outlier*. A user might value
+* "Worth seeing" is operationalized as *contains a held-out clash outlier*. A user might value
   seeing mild strain for its own sake. But that is a much weaker claim than "shows places worth
   visiting", and a table of mildly-strained residues would serve it.
 
@@ -243,7 +243,7 @@ and the honest paper claims precisely that and no more:
 * it loses no flagged problem at its operating point (figure A);
 * it puts hot voxels within about a residue of what they represent (figure B);
 * the regions it marks carry ~2× the base rate of *other* problems (figure C);
-* it renders through occluding geometry, which per-atom colouring cannot.
+* it renders through occluding geometry, which per-atom coloring cannot.
 
 Nothing about accumulation. Nothing about finding what validators miss.
 
@@ -251,12 +251,12 @@ Nothing about accumulation. Nothing about finding what validators miss.
 
 ## 9. Measured: problems cluster with their own kind, not across kinds (2026-08-06)
 
-`corpus/clustering.py`, 46 structures. Clark-Evans ratio `R = observed mean nearest-neighbour
+`corpus/clustering.py`, 46 structures. Clark-Evans ratio `R = observed mean nearest-neighbor
 distance / null mean`, where the null re-places every event on a **randomly chosen heavy atom
 of the same structure** — the control that matters, since events can only occur where atoms
 are, and a uniform-box null would report the shape of the protein as clustering.
 
-| severity | neighbour | observed | null | R | clustered in |
+| severity | neighbor | observed | null | R | clustered in |
 |---|---|---:|---:|---:|---:|
 | flagged | any kind | 3.92 Å | 4.45 Å | **0.825** | 98% |
 | flagged | cross-family | 7.40 Å | 7.26 Å | 0.945 | 67% |
@@ -303,7 +303,7 @@ things that turned out to matter more.
 
 Every through-space result here is a negative or near-negative, and a negative is worth
 nothing unless the instrument would have reported a positive. So a halo was planted in real
-coordinates: random centres in 2.5% of residues, **+0.15 concern within 5 Å**, sequence-far
+coordinates: random centers in 2.5% of residues, **+0.15 concern within 5 Å**, sequence-far
 only, on a background of 0.30 — a signal of exactly **1.50×**. It recovered **1.52×**, with the
 4–6 Å bin returning 1.13 rather than 1.50 because the halo stops at 5 Å and that bin is half
 outside it. Correct dilution, right amplitude. `corpus/synthetic_control.py`.
@@ -316,9 +316,9 @@ would have proved only that the instrument sees loud things.
 Elevation around a flagged residue is 4.7–8.3× at ±1, **1.35–2.51× at ±3**, 1.26–1.85× at ±5.
 The ±1 column proves little (φ/ψ of residue *i* uses atoms of *i±1*); ±3 is the real signal.
 
-Through space, once chain neighbours are excluded, the near bin does not fall to 1.0 — it falls
+Through space, once chain neighbors are excluded, the near bin does not fall to 1.0 — it falls
 **below** it, to 0.26–0.72. Residues packed tight against an outlier but far from it in sequence
-are slightly *better* modelled than average. What survives is 1.51–1.64× in the 4–6 Å bin, and
+are slightly *better* modeled than average. What survives is 1.51–1.64× in the 4–6 Å bin, and
 only for the three backbone-conformation channels. Rotamer, Cβ and omega are flat at 1.08–1.12×.
 
 **A problem's extent is real and it is mostly an extent along the chain.** That is the shape a
@@ -326,11 +326,11 @@ field should be depicting.
 
 ### The cross-kind matrix, and a confound worth recording
 
-The metric-by-metric matrix must be measured **sequence-far**. At 2–4 Å over all neighbours it
+The metric-by-metric matrix must be measured **sequence-far**. At 2–4 Å over all neighbors it
 looked spectacular — rama→cablam 5.93, omega→ca_geom 7.59, the whole table warm — and it was
 measuring validator coupling: adjacent residues share atoms *across* channels as well as within
 them, since rama and omega read the same peptide and cablam and ca_geom are both built from Cα
-geometry. Every cell falls 3–5× once chain neighbours are excluded.
+geometry. Every cell falls 3–5× once chain neighbors are excluded.
 
 Corrected, the diagonal holds (rama 1.64, ca_geom 1.56, cablam 1.51) and everything outside the
 backbone block sits at 0.8–1.2. This agrees with §9's Clark-Evans (cross-kind R = 0.978) instead
@@ -343,10 +343,10 @@ The rota row is the cleanest negative in the project: 0.82–1.27 across the boa
 ### What the field adds, and the number that nearly went in wrong
 
 The mean concern near an outlier is elevated 1.35–2.51× — and the absolute means are
-**0.03–0.11**, which would render as nothing. A mean cannot tell *every neighbour faintly warm*
+**0.03–0.11**, which would render as nothing. A mean cannot tell *every neighbor faintly warm*
 (a haze worth nothing) from *97% at zero and a few at 0.6* (a handful of clearly-drawn
 residues). Counting by band separates them, and it is the second: near a rama outlier **4.09%**
-of non-outlier neighbours carry half an outlier or more, against **1.42%** at random — 2.87×.
+of non-outlier neighbors carry half an outlier or more, against **1.42%** at random — 2.87×.
 ca_geom and omega reach 3.38×.
 
 Across the corpus the field draws **157,760 residues where a markup draws 81,686** — 76,074
@@ -362,7 +362,7 @@ The rest is measured but unexplained.
 §3 argued precision measures prevalence. True, but the decisive objection is different:
 Ramachandran precision of 0.162 implies the field adds **6.2×** what the markup shows, against
 **2.12×** measured by counting residues. The gap is the kernel's own width — σ ≈ 2 Å is wider
-than the 3.8 Å Cα spacing, so an isolated outlier marks its neighbours' *atoms* above 0.5 even
+than the 3.8 Å Cα spacing, so an isolated outlier marks its neighbors' *atoms* above 0.5 even
 when those residues carry no concern at all. Precision counts blur as an addition and would
 have overstated the field's contribution threefold. The residue count is blur-free by
 construction and carries the claim alone.
@@ -376,7 +376,7 @@ rama's 1.000 exposed the calibration; a hydrogen check that accepted "any H pres
 partially-hydrogenated deposits skip reduce2; and the covalent roll-up drew 8 atoms where 30
 were flagged. None would have been found by reading the code.
 
-The 79 remaining misses share one cause — the single-divisor normalisation in `field.py`, still
+The 79 remaining misses share one cause — the single-divisor normalization in `field.py`, still
 open as item 1 in [OUTSTANDING.md](OUTSTANDING.md).
 
 ### The statement now

@@ -140,7 +140,7 @@ currently disagree about how metrics combine, which was probably never a decisio
 
 The moment weights are optimized against an outcome — PDB-REDO changes, rebuild decisions,
 resolution improvement — the project owes train/test splits, cross-validation, baselines, and a
-defence of the outcome variable itself. That spiral is not recoverable halfway, and avoiding it
+defense of the outcome variable itself. That spiral is not recoverable halfway, and avoiding it
 is why the validation-metric aim was dropped in the first place.
 
 But there is a real distinction between **fitting** and **checking**. A convention chosen on
@@ -252,7 +252,7 @@ The strict version of the original idea — *nothing here is individually visibl
 they light up* — accounts for **0.1–0.5%** of hot volume. It essentially does not happen.
 
 And those regions are **weaker** evidence than the field overall: 1.23× enrichment against
-1.92× for the whole field. Real (the null is correctly centred at 0.97) but modest, with
+1.92× for the whole field. Real (the null is correctly centered at 0.97) but modest, with
 per-structure significance rare.
 
 ### Consequences

@@ -116,7 +116,7 @@ def run_one(pdb_id, spacing=SPACING, radius=DEFAULT_RADIUS):
                   if per_atom_scaled.size > 10 else float("nan"))
 
         # Per channel, because the aggregate cannot tell real physics from artifact. Clash
-        # SHOULD track packing -- a buried atom has more neighbours to collide with -- while
+        # SHOULD track packing -- a buried atom has more neighbors to collide with -- while
         # rama and rota should not, since backbone and side-chain conformation are not a
         # function of local density. If every channel correlates alike, the field is measuring
         # how many atoms are nearby regardless of what is deposited.
@@ -226,7 +226,7 @@ def report(out_dir):
                             "per-atom does NOT remove it; the confound is not packing alone"))
 
     print("\n2b. PER CHANNEL: is the correlation real physics or artifact?")
-    print("    clash should track packing (buried atoms have more neighbours to hit);")
+    print("    clash should track packing (buried atoms have more neighbors to hit);")
     print("    rama/rota should not (conformation is not a function of local density).")
     chans = {}
     for r in ok:

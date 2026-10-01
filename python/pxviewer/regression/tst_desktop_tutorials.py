@@ -231,7 +231,7 @@ def exercise_starting_a_tutorial_loads_its_own_example():
 
 def exercise_a_tutorial_asks_before_disturbing_loaded_work():
     """Only when there is something to lose. The dialog offers to clear or to add
-    alongside, and cancelling leaves both the scene and the coach untouched.
+    alongside, and canceling leaves both the scene and the coach untouched.
 
     ``closing_modals`` rejects the dialog, which is the Cancel path -- so this also pins
     that a refused dialog aborts rather than loading anything.
@@ -439,7 +439,7 @@ def exercise_removing_a_model_clears_its_selection_text():
 def exercise_a_click_and_a_typed_selection_are_one_pipeline():
     """The unification: with no click mode armed, a viewport atom click selects
     through exactly the pipeline a typed selection takes — oriented framing,
-    isolation clip, neighbourhood context — and the selection box shows the
+    isolation clip, neighborhood context — and the selection box shows the
     equivalent expression. The residue unit is exercised here (the granularity
     control's two settings and its table-following are covered in
     tst_desktop_interaction). A tool that owns clicks (Pick mode) keeps them: the
@@ -478,12 +478,12 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
         assert "resid 29" in controls._select_expr.text(), controls._select_expr.text()
         assert "orient" in calls, "a click gets the same oriented framing as typing"
 
-        # The neighbourhood context covers the residue plus neighbours, and clears
+        # The neighborhood context covers the residue plus neighbors, and clears
         # with the selection.
         entry = app._model_entry(first)
         context = entry.get("context_on")
         assert context and set(expected) <= set(context)
-        assert len(context) > len(expected), "context should reach neighbouring residues"
+        assert len(context) > len(expected), "context should reach neighboring residues"
 
         # The Mol* focus look: the ribbon steps aside in the context region — the
         # main layer is restricted away from the context atoms, and the extra
@@ -549,7 +549,7 @@ def exercise_a_click_and_a_typed_selection_are_one_pipeline():
 def exercise_a_single_residue_selection_gets_the_oriented_framing():
     """Typing one residue frames it the standard way -- N left, C right, side chain up
     -- via the same orientation the space-bar navigation uses. Anything that is not
-    exactly one amino acid falls back to the plain centre-and-frame focus."""
+    exactly one amino acid falls back to the plain center-and-frame focus."""
     import numpy as np
 
     with desktop() as app:
@@ -564,7 +564,7 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         session.set_clip = lambda front, back, radius=None, center=None, ref=None: \
             calls.append(("clip", front, back, radius, center))
 
-        # The Selection pane's two behaviour switches, both defaulting on, both routed:
+        # The Selection pane's two behavior switches, both defaulting on, both routed:
         # unchecking Clip to selection frames and orients identically but asks the
         # viewer to leave the scene unclipped -- and applies no isolation sphere either
         # (it used to, which made the checkbox a lie: the sphere kept clipping).
@@ -593,13 +593,13 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         assert abs(np.dot(up, direction)) < 1e-6
         assert radius > 0
         atoms = session.model.get_hierarchy().atoms()
-        # Centred on the selection's mass, not on CA: with the side chain as "up", CA
-        # sits at the bottom of the picture, and a CA-centred view rides high by half a
+        # Centered on the selection's mass, not on CA: with the side chain as "up", CA
+        # sits at the bottom of the picture, and a CA-centered view rides high by half a
         # side chain. The camera target must be the middle of what is shown.
         sel_xyz = np.array([a.xyz for a in atoms
                             if a.parent().parent().resseq_as_int() == 29])
         assert np.linalg.norm(np.array(target) - sel_xyz.mean(axis=0)) < 1e-6, (
-            "not centred on the selection's centre of mass")
+            "not centered on the selection's center of mass")
 
         # Everything else frames by its principal axes: a residue range reads with the
         # chain running left-to-right (first selected atom leftward of the last)...
@@ -620,8 +620,8 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         assert np.dot(right, chain_span) > 0, "the chain does not run left-to-right"
 
         # Every clipped, focused selection gets the isolation sphere: sized to the
-        # selection plus context, and centred ON the selection, never on the camera
-        # target -- the clip lands mid-flight, and a camera-centred sphere sat on the
+        # selection plus context, and centered ON the selection, never on the camera
+        # target -- the clip lands mid-flight, and a camera-centered sphere sat on the
         # old view and blanked the viewport (worst with several models loaded).
         clips = [c for c in calls if c[0] == "clip"]
         assert clips and clips[-1][3] is not None and clips[-1][3] > 4.0, clips[-1:]
@@ -629,15 +629,15 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         assert clips[-1][4] is not None and (
             np.linalg.norm(np.asarray(clips[-1][4], dtype=float)
                            - np.asarray(target, dtype=float)) < 1e-6), (
-            "the sphere is not centred on the framed selection")
+            "the sphere is not centered on the framed selection")
 
-        # ...while a shape with no frame at all keeps the plain centre-and-frame focus.
+        # ...while a shape with no frame at all keeps the plain center-and-frame focus.
         app.select_by_expression("resseq 5 and name CA")
         focus_calls = [c for c in calls if c[0] == "focus"]
         assert focus_calls, "a lone atom cannot be oriented"
         assert calls[-1][0] == "clip" and calls[-1][3] >= 4.0 \
             and calls[-1][4] is not None, (
-            "even a plain focus should isolate the neighbourhood, centred on it")
+            "even a plain focus should isolate the neighborhood, centered on it")
 
         app.select_by_expression("")
         assert calls[-1] == ("clip", 0.0, 1.0, None, None), (

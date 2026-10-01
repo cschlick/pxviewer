@@ -138,11 +138,11 @@ BANNER_MAX_COLUMNS = 38
 #: entry: textwrap owns every line break, because hand-broken prose re-wrapped to the
 #: pane's width breaks twice and reads like a ransom note.
 CONSOLE_NAMES = [
-    ("session", "The active model as the viewer sees it: selection, colour, "
+    ("session", "The active model as the viewer sees it: selection, color, "
                 "representations, measurements. Re-binds when you switch models."),
     ("app", "The desktop: every object loaded, and every action the panels take — "
             "loading, validation, minimization, maps."),
-    ("api", "A categorised map of everything session can do. Type api, or "
+    ("api", "A categorized map of everything session can do. Type api, or "
             "api.find(\"color\")."),
 ]
 

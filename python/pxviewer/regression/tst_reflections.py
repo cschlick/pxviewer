@@ -1,6 +1,6 @@
 """Reading X-ray reflections, and turning them into density.
 
-The pure-cctbx half: recognising what kind of MTZ is in hand, reading its metadata, and
+The pure-cctbx half: recognizing what kind of MTZ is in hand, reading its metadata, and
 computing maps from it. The desktop side of the same feature -- what loading one does to
 the scene -- is in ``tst_reflections_gui.py``, which needs Qt.
 
@@ -54,10 +54,10 @@ def mtz(coefficients):
         yield path
 
 
-# -- recognising the file -----------------------------------------------------
+# -- recognizing the file -----------------------------------------------------
 
 
-def exercise_file_kind_recognises_reflections():
+def exercise_file_kind_recognizes_reflections():
     from pxviewer.loader import file_kind
 
     assert file_kind("data.mtz") == "reflections"

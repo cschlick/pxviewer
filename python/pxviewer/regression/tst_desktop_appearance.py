@@ -1,7 +1,7 @@
 """How loaded objects look, and what changing that is allowed to touch.
 
 Almost every exercise here is really about *not* rebuilding something. A contour level, a
-visibility toggle or a colour has to reach the viewport live, because the alternative --
+visibility toggle or a color has to reach the viewport live, because the alternative --
 recomposing the scene and reloading the page -- makes every other object flicker, throws
 away the camera, and on software WebGL crashes outright. So the assertions come in pairs:
 the change landed, and the scene was not rebuilt to land it.
@@ -130,7 +130,7 @@ def node_for(app, kind, ident):
 
 
 def exercise_volume_appearance_controls():
-    """Style, colour, opacity and a contour level are each kept on the entry, so a scene
+    """Style, color, opacity and a contour level are each kept on the entry, so a scene
     rebuild restores them, and pushed live, so nothing has to reload."""
     with desktop() as app:
         vid = blob(app)
@@ -214,7 +214,7 @@ def exercise_a_negative_contour_is_its_own_row_with_its_own_pane():
         controls = app._controls
         controls._update_appearance("negative", vid)
         assert controls._appearance_box.title().endswith("negative contour")
-        # Its own style, colour and opacity -- and a level, under the link.
+        # Its own style, color and opacity -- and a level, under the link.
         assert [c.text() for c in controls._appearance_box.findChildren(QLabel)
                 if c.text() in ("Style", "Color", "Opacity", "Level")] == [
             "Style", "Color", "Opacity", "Level"]
@@ -278,7 +278,7 @@ def exercise_the_level_link_is_the_one_tie_between_the_contours():
 
 
 def exercise_each_contour_is_styled_on_its_own():
-    """Style, colour and opacity belong to the contour whose pane is open. With a row
+    """Style, color and opacity belong to the contour whose pane is open. With a row
     each, a control on one row that silently moved the other would be a lie."""
     with desktop() as app:
         app._add_model(Recording_session.from_sites([[0, 0, 0], [1, 0, 0]]), "A")
@@ -405,10 +405,10 @@ def exercise_a_contour_changed_in_the_viewport_is_not_echoed_back():
         assert session.volume_commands == []        # nothing went back out
 
 
-def exercise_volume_colour_swatches_and_a_custom_picker():
-    """Colours are swatches rather than names, with a picker for anything off the preset
+def exercise_volume_color_swatches_and_a_custom_picker():
+    """Colors are swatches rather than names, with a picker for anything off the preset
     list -- the wire takes any hex Mol* can decode."""
-    def colour_combo(controls):
+    def color_combo(controls):
         # Found by content, not position: the pane's combo order has already shifted
         # once (Downsample moved in) and silently stranded a positional lookup.
         return next(c for c in controls._appearance_box.findChildren(QComboBox)
@@ -418,7 +418,7 @@ def exercise_volume_colour_swatches_and_a_custom_picker():
         vid = blob(app)
         controls = app._controls
         controls._update_appearance("volume", vid)
-        combo = colour_combo(controls)
+        combo = color_combo(controls)
 
         assert [combo.itemData(i) for i in range(len(_VOLUME_COLORS))] == _VOLUME_COLORS
         assert all(not combo.itemIcon(i).isNull() for i in range(len(_VOLUME_COLORS)))
@@ -427,7 +427,7 @@ def exercise_volume_colour_swatches_and_a_custom_picker():
         combo.setCurrentIndex(2)
         assert app._volume_entry(vid)["color"] == _VOLUME_COLORS[2]
 
-        # A picked colour is a hex string, and joins the list so it stays selected.
+        # A picked color is a hex string, and joins the list so it stays selected.
         app.set_volume_color(vid, "#3fa9f5")
         controls._update_appearance("volume", vid)
         combo = next(c for c in controls._appearance_box.findChildren(QComboBox)
@@ -827,7 +827,7 @@ def exercise_representation_dropdowns():
         controls = app._controls
         controls._update_appearance("model", mid)
         assert controls._appearance_box.title().endswith("1ubq")
-        # Representation and colour at least, plus the structure-type show/hide.
+        # Representation and color at least, plus the structure-type show/hide.
         assert len(controls._appearance_box.findChildren(QComboBox)) >= 2
 
         controls._update_appearance("volume", vid)
@@ -842,7 +842,7 @@ def exercise_every_representation_option_is_accepted_by_the_session():
 
 
 def exercise_tools_and_appearance_setters():
-    """Measure-from-selection, the colour and interaction setters, and the tools that
+    """Measure-from-selection, the color and interaction setters, and the tools that
     only broadcast."""
     from types import SimpleNamespace
 
@@ -1035,7 +1035,7 @@ def exercise_scene_actions_are_icon_buttons():
         # _make_icon_button uses when an asset is missing, which is how this row came to
         # have one worded button beside one glyph. Neither operation has an honest
         # picture: the guesses were a merge symbol and a palette.
-        assert controls._tabs.widget(1).isAncestorOf(controls._localres_btn)   # Tools
+        assert controls._tabs.widget(3).isAncestorOf(controls._localres_btn)   # Tools
         for button in (controls._localres_btn, controls._rs_diff_btn):
             assert button.text() in ("Local resolution", "Difference"), button.text()
             assert button.icon().isNull(), "%s took an icon" % button.text()
@@ -1110,12 +1110,12 @@ def exercise_the_mouse_bindings_are_shown_in_the_gui():
         assert chips == []
 
 
-# -- the custom colour picker -------------------------------------------------
+# -- the custom color picker -------------------------------------------------
 
 
-def exercise_a_custom_colour_previews_live_not_only_on_close():
+def exercise_a_custom_color_previews_live_not_only_on_close():
     """The picker changed the map only after the dialog closed, which read as broken
-    until you gave up. The colour is driven from the dialog's ``currentColorChanged``,
+    until you gave up. The color is driven from the dialog's ``currentColorChanged``,
     so it updates as the wheel moves."""
     from PySide6.QtWidgets import QColorDialog
 
@@ -1138,10 +1138,10 @@ def exercise_a_custom_colour_previews_live_not_only_on_close():
         assert live == ["#112233", "#445566", "#778899"]  # one per move, live
 
 
-def exercise_committing_a_custom_colour_does_not_reopen_the_dialog():
+def exercise_committing_a_custom_color_does_not_reopen_the_dialog():
     """Pressing OK looked like it closed the dialog and immediately reopened it.
 
-    Inserting the picked colour into the combo shifts the still-selected "Custom..."
+    Inserting the picked color into the combo shifts the still-selected "Custom..."
     entry, which re-fires ``currentIndexChanged`` with the sentinel and reopens the
     picker. The commit re-indexes with the combo's signals blocked to stop exactly that.
     """
@@ -1215,7 +1215,7 @@ def exercise_the_level_slider_reaches_past_the_hottest_voxel():
 
 
 def exercise_the_tabs_share_the_full_bar_width():
-    """The icon tabs span the bar edge to edge, not left-huddled beside grey space.
+    """The icon tabs span the bar edge to edge, not left-huddled beside gray space.
 
     The count is asserted loosely on purpose -- it has already changed once (Hotspots
     moved into Validation as a sub-tab) and the property under test is the filling,
@@ -1232,8 +1232,8 @@ def exercise_the_tabs_share_the_full_bar_width():
             "tabs cover %dpx of a %dpx bar -- the bar is not filled" % (total, bar.width()))
 
 
-def exercise_model_value_colourings_share_the_scale_machinery():
-    """By B-factor / By occupancy colour through the attribute path with a settable
+def exercise_model_value_colorings_share_the_scale_machinery():
+    """By B-factor / By occupancy color through the attribute path with a settable
     range -- the model-side twin of the map's local-resolution scale: same builder,
     same blue->red ramp, a domain that is the user's and stays put.
     """
@@ -1265,9 +1265,9 @@ def exercise_model_value_colourings_share_the_scale_machinery():
         app.reset_model_value_domain(mid)
         assert attribute["domain"] == attribute["default_domain"]
 
-        # Re-picking the colouring keeps a user-set range rather than clobbering it.
+        # Re-picking the coloring keeps a user-set range rather than clobbering it.
         app.set_model_value_domain(mid, 5.0, 40.0)
-        entry["color"] = None  # as if another colour had been picked meanwhile
+        entry["color"] = None  # as if another color had been picked meanwhile
         app.set_model_color(mid, "bfactor")
         assert entry["attribute"]["domain"] == (5.0, 40.0)
 

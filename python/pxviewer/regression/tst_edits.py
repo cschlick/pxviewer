@@ -320,7 +320,7 @@ def exercise_malformed_phil_is_reported_rather_than_ignored():
 
 
 def exercise_a_misspelled_scope_yields_nothing_without_complaining():
-    """PHIL ignores a scope it does not recognise, so ``edit`` for ``edits`` parses
+    """PHIL ignores a scope it does not recognize, so ``edit`` for ``edits`` parses
     cleanly and produces no restraints at all -- no exception, no warning.
 
     Pinned because it is silent, and silence here is expensive: the user believes they

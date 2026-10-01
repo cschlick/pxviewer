@@ -85,11 +85,11 @@ def _quantiles_from_hist(counts, edges):
     if total <= 0:
         return None
     cum = np.cumsum(counts) / total
-    centres = 0.5 * (edges[:-1] + edges[1:])
+    centers = 0.5 * (edges[:-1] + edges[1:])
     out = {}
     for name, q in (("median", 0.5), ("p90", 0.9), ("p99", 0.99)):
-        out[name] = float(centres[int(np.searchsorted(cum, q))])
-    out["max_bin"] = float(centres[int(np.flatnonzero(counts)[-1])])
+        out[name] = float(centers[int(np.searchsorted(cum, q))])
+    out["max_bin"] = float(centers[int(np.flatnonzero(counts)[-1])])
     return out
 
 
@@ -211,7 +211,7 @@ def main():
     for r in failed:
         kind = r["error"].split(":")[0]
         if "Hydrogen with no neigbors" in r["error"]:
-            kind = "reduce2: hydrogen with no neighbours"
+            kind = "reduce2: hydrogen with no neighbors"
         errors[kind] = errors.get(kind, 0) + 1
 
     data = {

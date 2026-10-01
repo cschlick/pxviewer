@@ -80,7 +80,7 @@ def _fetch_local_resolution(desktop: Any) -> None:
 
 
 def _resolution_ready(cw: Any) -> bool:
-    """Whether a coloured-by-resolution surface is actually drawn and usable.
+    """Whether a colored-by-resolution surface is actually drawn and usable.
 
     Gated on the viewport's own acknowledgement (``localres_drawn``), not on the map
     being pinned: pinning happens when Python has *streamed* the payload, seconds before
@@ -95,7 +95,7 @@ def _resolution_ready(cw: Any) -> bool:
                for entry in getattr(cw._desktop, "_volumes", []) or [])
 
 
-def _colouring_by_resolution(cw: Any) -> bool:
+def _coloring_by_resolution(cw: Any) -> bool:
     return any(entry.get("color_by_resolution")
                for entry in getattr(cw._desktop, "_volumes", []) or [])
 
@@ -172,7 +172,7 @@ def open_model_tutorial() -> Tutorial:
         ),
         Step(
             "{icon:circle-off} **Clear** empties the selection: the highlight, "
-            "the clip sphere and the neighbourhood layer all fold away.",
+            "the clip sphere and the neighborhood layer all fold away.",
             done=lambda cw: _selection_count(cw) == 0,
             target=lambda cw: cw._clear_btn,
         ),
@@ -227,7 +227,7 @@ def _fetch_cryoem_pair(desktop: Any) -> None:
 
 
 def _fetch_cryoem_pair_displaced(desktop: Any) -> None:
-    # The map opens translucent and neutral grey: the story here is a displaced
+    # The map opens translucent and neutral gray: the story here is a displaced
     # segment seen *against* its density, and at full opacity a zoomed-in view is
     # walls of surface with the model invisible behind them.
     desktop.fetch_map_model_pair(pdb_id=CRYOEM_PDB_ID, emdb_number=CRYOEM_EMDB,
@@ -262,8 +262,8 @@ def map_model_tutorial() -> Tutorial:
         ),
         Step(
             "The rest of the map's look lives in the same pane: opacity, surface or "
-            "mesh, clipping, and colourings. A cryo-EM map with half-maps can be "
-            "coloured by local resolution from its **Color** dropdown.",
+            "mesh, clipping, and colorings. A cryo-EM map with half-maps can be "
+            "colored by local resolution from its **Color** dropdown.",
         ),
     ], loader=_fetch_cryoem_pair)
 
@@ -309,7 +309,7 @@ def _conformer_back_to_all(cw: Any) -> bool:
     return bool(entry) and entry.get("conformer") is None
 
 
-def _coloured_by_occupancy(cw: Any) -> bool:
+def _colored_by_occupancy(cw: Any) -> bool:
     entry = _active_model_entry(cw)
     return bool(entry and entry.get("color") == "occupancy")
 
@@ -344,7 +344,7 @@ def altlocs_tutorial() -> Tutorial:
         ),
         Step(
             "Look at the highlighted tyrosine: **three complete side-chain positions**, "
-            "labelled A, B and C in the model. Now isolate one: in the model's "
+            "labeled A, B and C in the model. Now isolate one: in the model's "
             "appearance pane, set the **Conformer** dropdown to **A** (or B, or C).\n\n"
             "The ring settles into a single position, one self-consistent model.",
             done=_conformer_picked,
@@ -362,7 +362,7 @@ def altlocs_tutorial() -> Tutorial:
             "hold a fraction of an atom's worth of electrons, and now they stand apart "
             "from the full-occupancy backbone: blue is low, red is high, and the "
             "**Range** control that appears lets you set what the ramp spans.",
-            done=_coloured_by_occupancy,
+            done=_colored_by_occupancy,
         ),
         Step(
             "That's the whole skill, and two tools you will reuse everywhere: "
@@ -423,7 +423,7 @@ def hotspots_tutorial() -> Tutorial:
         ),
         Step(
             "On the **Validation** tab, tick **Hotspot severity** in the list of checks "
-            "and press **play**. It runs in the background and colours the model by "
+            "and press **play**. It runs in the background and colors the model by "
             "severity when done, and because it aggregates the very checks queued "
             "beside it, ticking them too costs almost nothing extra.\n\nThe fast pass "
             "finds heavy-atom clashes only; **Use hydrogens for clashes**, on the "
@@ -442,12 +442,12 @@ def hotspots_tutorial() -> Tutorial:
         ),
         Step(
             "The cloud around the model is the same severity as a **3-D field**, "
-            "because surface colour has a blind spot: a **buried** hotspot is hidden "
+            "because surface color has a blind spot: a **buried** hotspot is hidden "
             "behind the atoms in front of it, and a field is visible *through* the "
             "structure.\n\nIt is on by default (**Show in 3-D**, untick to drop it). "
             "**Density** shades every voxel by its own value; **Contour** draws a shell "
             "at the threshold; the **threshold** slider keeps only regions above it, "
-            "all on the same absolute scale as the atom colours.",
+            "all on the same absolute scale as the atom colors.",
             target=lambda cw: cw._hotspot_show3d,
         ),
         Step(
@@ -493,7 +493,7 @@ def ligand_fitting_tutorial() -> Tutorial:
             target=lambda cw: cw._lig_fit_btn,
         ),
         Step(
-            "Done. ATP is now modelled in the density that was empty. That is the whole "
+            "Done. ATP is now modeled in the density that was empty. That is the whole "
             "ligand-fitting loop, the same as Phenix's tutorial: difference map → place → "
             "build → fit, with no phenix and no downloaded dataset.",
         ),
@@ -661,7 +661,7 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def local_resolution_tutorial() -> Tutorial:
-    """Colour a cryo-EM map by local resolution: where the map is trustworthy, and where
+    """Color a cryo-EM map by local resolution: where the map is trustworthy, and where
     it is not. The one tutorial whose data is fetched rather than bundled: half-maps are
     too large to ship, and the calculation needs them."""
     return Tutorial("Look at local resolution", [
@@ -687,20 +687,20 @@ def local_resolution_tutorial() -> Tutorial:
             done=_resolution_ready,
         ),
         Step(
-            "The map is now **coloured by local resolution** rather than by a flat colour: "
-            "the resolution map is pinned underneath it, hidden, and drives the colour.\n\n"
+            "The map is now **colored by local resolution** rather than by a flat color: "
+            "the resolution map is pinned underneath it, hidden, and drives the color.\n\n"
             "Look at the difference between the middle and the edges. The nucleosome core "
             "is the best-ordered part; the p53 that binds it, and the DNA ends, are softer. "
             "That variation is invisible in the single quoted number.",
-            done=_colouring_by_resolution,
+            done=_coloring_by_resolution,
         ),
         Step(
-            "The colouring is a switch on the map itself: open the **Loaded** panel and "
-            "look at the map's own controls, where **Colour by resolution** can be turned "
-            "off and on. With it off you are back to one colour and no idea which parts "
+            "The coloring is a switch on the map itself: open the **Loaded** panel and "
+            "look at the map's own controls, where **Color by resolution** can be turned "
+            "off and on. With it off you are back to one color and no idea which parts "
             "earned it.\n\nThat's the loop: fetch the half-maps, compute once, and let the "
             "map say where it can be believed. You can run it on your own maps from the "
-            "map menu's **Colour by local resolution**, with local files or another entry.",
+            "map menu's **Color by local resolution**, with local files or another entry.",
         ),
     ], loader=_fetch_local_resolution)
 

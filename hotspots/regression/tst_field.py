@@ -85,7 +85,7 @@ def exercise_a_spread_event_draws_all_of_itself():
     for a in far:
         v = f.sample(a)
         assert v > DISPLAY_THRESHOLD, (
-            "isolated atom at %.4f is invisible (the pre-fix behaviour was 0.31)" % v)
+            "isolated atom at %.4f is invisible (the pre-fix behavior was 0.31)" % v)
         assert v > 0.9, "isolated atom dimmed to %.4f" % v
     for a in near:
         assert f.sample(a) > 0.8, "clustered atom dimmed to %.4f" % f.sample(a)
@@ -162,7 +162,7 @@ def exercise_sampling_outside_the_box_is_zero():
 #   * "every atom reconstructs to severity" is exact only for the idealized cases the
 #     rule is derived from -- a lone atom, or a cluster whose atoms all have the same
 #     self-overlap. A real footprint's atoms have differing overlaps, so an atom in a
-#     sparser part of the chain reads a weighted average of its neighbours' weights:
+#     sparser part of the chain reads a weighted average of its neighbors' weights:
 #     0.72 to 0.89 here, converging to 0.77-0.93 as the grid is refined rather than to
 #     1.0. That does not weaken the fix -- the point is clearing the display threshold,
 #     and the old rule put the same atoms at 0.60 -- but the property is a limit, not

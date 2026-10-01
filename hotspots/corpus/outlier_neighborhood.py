@@ -8,7 +8,7 @@ means the same thing in every channel because every community cut is anchored at
 
 Note what this is *not*. Every earlier test here asked whether the field **predicts** something
 it was not told — held-out clash, cross-metric coincidence — and all were negative. This is a
-**within-metric** question about **extent**: near a flagged rama outlier, are the neighbours
+**within-metric** question about **extent**: near a flagged rama outlier, are the neighbors
 worse on *rama*? That is what decides whether a field showing gradient is showing anything.
 
 Measured two ways, per metric:
@@ -20,18 +20,18 @@ against two baselines, because one is not enough:
 
 * the structure's own mean concern for that metric (the noise floor);
 * the same profile around **randomly chosen non-outlier residues**, which controls for the
-  fact that any residue's neighbourhood is not a random sample of the structure.
+  fact that any residue's neighborhood is not a random sample of the structure.
 
-**Outlier neighbours are excluded from the profile.** Otherwise the curve measures the known
+**Outlier neighbors are excluded from the profile.** Otherwise the curve measures the known
 clustering of outliers with each other (Clark-Evans R = 0.825) rather than the hypothesis,
 which is about sub-outlier elevation in the surroundings.
 
 **Confound stated up front:** phi/psi of residue *i* involve atoms of *i±1*, so Ramachandran
-scores of immediate sequence neighbours are structurally coupled whatever the quality.
+scores of immediate sequence neighbors are structurally coupled whatever the quality.
 Elevation at ±1 proves little. Elevation at ±3 or beyond is the real signal.
 
-    libtbx.python corpus/outlier_neighbourhood.py IDS.txt OUT_DIR --shard 0/4
-    libtbx.python corpus/outlier_neighbourhood.py IDS.txt OUT_DIR --report
+    libtbx.python corpus/outlier_neighborhood.py IDS.txt OUT_DIR --shard 0/4
+    libtbx.python corpus/outlier_neighborhood.py IDS.txt OUT_DIR --report
 """
 from __future__ import annotations
 
@@ -72,11 +72,11 @@ DIST_EDGES = np.arange(0.0, 20.001, 2.0)
 CONTROL_TRIALS = 20
 MIN_OUTLIERS = 3
 
-#: Sequence separation a residue must exceed to count as a *through-space* neighbour. The
+#: Sequence separation a residue must exceed to count as a *through-space* neighbor. The
 #: plain distance profile cannot separate the two effects: a residue 4 A from an outlier is
 #: usually the one next to it in sequence, so the spatial curve could be the sequence curve
 #: wearing a costume. Requiring >5 residues of chain separation (or a different chain
-#: entirely) leaves only neighbours that are close in space for a reason other than being
+#: entirely) leaves only neighbors that are close in space for a reason other than being
 #: adjacent in the chain.
 MIN_SEQ_SEP = 6
 
@@ -104,26 +104,26 @@ def _residue_ca(hierarchy):
     return out
 
 
-def _dist_profile_seqfar(conc, ca, centres, exclude, min_sep=MIN_SEQ_SEP):
-    """Distance profile counting only neighbours far away in sequence (or on another chain).
+def _dist_profile_seqfar(conc, ca, centers, exclude, min_sep=MIN_SEQ_SEP):
+    """Distance profile counting only neighbors far away in sequence (or on another chain).
 
     Each residue is binned by its distance to the nearest *sequence-far* outlier, so it is
     counted once and the statistic stays comparable to the plain distance profile.
     """
     keys = [k for k in ca if k not in exclude]
-    centres = [c for c in centres if c in ca]
-    if not keys or not centres:
+    centers = [c for c in centers if c in ca]
+    if not keys or not centers:
         return {i: (None, 0) for i in range(len(DIST_EDGES) - 1)}
     chain_id = {}
     for k in keys:
         chain_id.setdefault(k[0], len(chain_id))
-    for c in centres:
+    for c in centers:
         chain_id.setdefault(c[0], len(chain_id))
     axyz = np.array([ca[k] for k in keys])
     kchain = np.array([chain_id[k[0]] for k in keys])
     kres = np.array([k[1] for k in keys], dtype=float)
     best = np.full(len(keys), np.inf)
-    for c in centres:
+    for c in centers:
         d = np.linalg.norm(axyz - np.asarray(ca[c], float), axis=1)
         near_in_seq = (kchain == chain_id[c[0]]) & (np.abs(kres - c[1]) < min_sep)
         best = np.minimum(best, np.where(near_in_seq, np.inf, d))
@@ -137,30 +137,30 @@ def _dist_profile_seqfar(conc, ca, centres, exclude, min_sep=MIN_SEQ_SEP):
     return {i: (float(np.mean(v)) if v else None, len(v)) for i, v in out.items()}
 
 
-def _cross_profile(by_metric, ca, centres, exclude, min_sep=None):
-    """Mean concern of *every* metric, binned by distance to the nearest centre.
+def _cross_profile(by_metric, ca, centers, exclude, min_sep=None):
+    """Mean concern of *every* metric, binned by distance to the nearest center.
 
     One binning serves all metrics, so the whole metric-by-metric matrix costs about what the
     single-metric profile cost: six binnings rather than thirty-six.
     """
     keys = [k for k in ca if k not in exclude]
-    centres = [c for c in centres if c in ca]
+    centers = [c for c in centers if c in ca]
     nb = len(DIST_EDGES) - 1
-    if not keys or not centres:
+    if not keys or not centers:
         return {m: [None] * nb for m in by_metric}
     axyz = np.array([ca[k] for k in keys])
     if min_sep is None:
         from scipy.spatial import cKDTree
-        d = cKDTree(np.array([ca[c] for c in centres])).query(axyz, k=1)[0]
+        d = cKDTree(np.array([ca[c] for c in centers])).query(axyz, k=1)[0]
     else:
-        # Distance to the nearest centre that is NOT a chain neighbour.
+        # Distance to the nearest center that is NOT a chain neighbor.
         chain_id = {}
-        for k in list(keys) + list(centres):
+        for k in list(keys) + list(centers):
             chain_id.setdefault(k[0], len(chain_id))
         kchain = np.array([chain_id[k[0]] for k in keys])
         kres = np.array([k[1] for k in keys], dtype=float)
         d = np.full(len(keys), np.inf)
-        for c in centres:
+        for c in centers:
             dc = np.linalg.norm(axyz - np.asarray(ca[c], float), axis=1)
             near_seq = (kchain == chain_id[c[0]]) & (np.abs(kres - c[1]) < min_sep)
             d = np.minimum(d, np.where(near_seq, np.inf, dc))
@@ -177,17 +177,17 @@ def _cross_profile(by_metric, ca, centres, exclude, min_sep=None):
     return out
 
 
-def _profiles(conc, keys_by_chain, ca, centres, exclude, offsets=OFFSETS):
-    """Mean concern at each sequence offset and distance bin around ``centres``."""
+def _profiles(conc, keys_by_chain, ca, centers, exclude, offsets=OFFSETS):
+    """Mean concern at each sequence offset and distance bin around ``centers``."""
     seq = {o: [] for o in offsets}
-    for (chain, resseq, icode) in centres:
+    for (chain, resseq, icode) in centers:
         for o in offsets:
             k = (chain, resseq + o, icode)
             if k in ca and k not in exclude:
                 seq[o].append(conc.get(k, 0.0))
     dist = {i: [] for i in range(len(DIST_EDGES) - 1)}
-    if centres:
-        cxyz = np.array([ca[c] for c in centres if c in ca])
+    if centers:
+        cxyz = np.array([ca[c] for c in centers if c in ca])
         if cxyz.size:
             allk = [k for k in ca if k not in exclude]
             axyz = np.array([ca[k] for k in allk])
@@ -375,8 +375,8 @@ def _done(rec, started):
 
 
 #: Distance band the matrix is quoted at. DIST_EDGES starts at 0, so band 2 is 4-6 A -- the
-#: bin where the through-space effect peaks once chain neighbours are excluded. Band 1 (2-4 A)
-#: was used first and is unusable: it is where sequence neighbours live, and adjacent residues
+#: bin where the through-space effect peaks once chain neighbors are excluded. Band 1 (2-4 A)
+#: was used first and is unusable: it is where sequence neighbors live, and adjacent residues
 #: share atoms across channels as well as within them, so it measures validator coupling.
 MATRIX_BAND = 2
 MATRIX_ROWS = []
@@ -478,7 +478,7 @@ def report(out_dir):
         MATRIX_ROWS.append((metric, len(rows), _matrix_row(rows, channels)))
 
     if MATRIX_ROWS:
-        print("\nNEIGHBOURHOOD MATRIX at %.0f-%.0f A (obs/ctl)" % (
+        print("\nNEIGHBORHOOD MATRIX at %.0f-%.0f A (obs/ctl)" % (
             DIST_EDGES[MATRIX_BAND], DIST_EDGES[MATRIX_BAND + 1]))
         print("rows = the outlier's channel; columns = the channel measured nearby\n")
         print("%-9s %s" % ("near \u2193", "  ".join("%8s" % m[:8] for m in channels)))

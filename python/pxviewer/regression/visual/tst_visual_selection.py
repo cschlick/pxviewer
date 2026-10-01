@@ -163,7 +163,7 @@ def run() -> None:
         check("bond row is a scene selection",
               len(app._scene_selection.get(mid, [])) == 2,
               str(app._scene_selection.get(mid)))
-        check("sphere re-centred on the bond", entry.get("_auto_clip") is True)
+        check("sphere re-centered on the bond", entry.get("_auto_clip") is True)
         bview.setFocus(); pump()
         QTest.keyClick(bview, Qt.Key_Space)
         settle(2.0)

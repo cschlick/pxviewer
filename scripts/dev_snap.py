@@ -11,7 +11,7 @@ The environment matters, and each requirement below was found the hard way:
 * ``QT_QPA_PLATFORM=cocoa`` -- the test helpers default to Qt's ``offscreen`` platform
   on any machine without $DISPLAY, which includes every Mac (that variable is X11's).
   Offscreen windows are never really shown, the web page believes it is 0x0, WebGL
-  never initialises, and screenshots fail with "empty textures are not allowed".
+  never initializes, and screenshots fail with "empty textures are not allowed".
 * ``gpu.configure`` must run before QApplication exists, as run_desktop does, or the
   WebEngine backend is undecided.
 * Show ``app._main`` -- the app is one QMainWindow; the viewport window object is a

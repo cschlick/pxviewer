@@ -116,7 +116,7 @@ def main():
         return
     print("\n%d sub-threshold depositing events total" % len(rows))
 
-    # nearest cross-family neighbour, per structure
+    # nearest cross-family neighbor, per structure
     recs = []
     for pid in {r[0] for r in rows}:
         sub = [r for r in rows if r[0] == pid]
@@ -124,7 +124,7 @@ def main():
         fam = np.array([r[3] for r in sub])
         con = np.array([r[1] for r in sub])
         tree = cKDTree(xyz)
-        # k large enough to escape same-family neighbours; capped at the set size
+        # k large enough to escape same-family neighbors; capped at the set size
         k = min(len(sub), 40)
         dists, idx = tree.query(xyz, k=k)
         for i in range(len(sub)):

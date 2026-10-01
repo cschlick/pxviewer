@@ -37,7 +37,7 @@ from pxviewer.volume_demos import (                  # noqa: E402
 SHAPE = (16, 16, 16)          # small enough that every demo can be built in a loop
 
 
-def exercise_the_catalogue_is_complete():
+def exercise_the_catalog_is_complete():
     demos = list_volume_demos()
     assert len(demos) == len(VOLUME_DEMOS)
     for name, description in demos:
@@ -56,7 +56,7 @@ def exercise_every_demo_produces_finite_data():
 
 
 def exercise_every_demo_writes_a_map_and_a_scene():
-    """Run the whole catalogue, not a sample -- a demo that fails to write is a 404 in
+    """Run the whole catalog, not a sample -- a demo that fails to write is a 404 in
     the app, and the demos differ enough (single vs multi-channel) that one standing in
     for the others would miss it."""
     for name in sorted(VOLUME_DEMOS):

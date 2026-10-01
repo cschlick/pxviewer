@@ -98,7 +98,7 @@ def run() -> None:
               r_now is not None and clip_radius is not None
               and abs(r_now - clip_radius) < 0.5,
               "%s -> %s" % (clip_radius, r_now))
-        # NB: an explicit rep switch clears the neighbourhood context layer by
+        # NB: an explicit rep switch clears the neighborhood context layer by
         # design (set_model_representation), so pixels legitimately differ from
         # the context-bearing clipped frame. The clip claim is carried by
         # _auto_clip + the parked slab above; the reapplied view is compared

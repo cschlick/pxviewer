@@ -1,4 +1,4 @@
-"""The random default-colour cycler (pxviewer.palettes)."""
+"""The random default-color cycler (pxviewer.palettes)."""
 
 from __future__ import absolute_import, division, print_function
 
@@ -14,7 +14,7 @@ def palettes_as_sets():
 
 def exercise_a_block_of_four_comes_from_one_random_group():
     """Each run of four objects draws from a single palette group; the fifth rolls a new
-    one. That is the whole algorithm: pick a group, hand out random colours from it, and
+    one. That is the whole algorithm: pick a group, hand out random colors from it, and
     change group every four objects."""
     groups = palettes_as_sets()
     cyc = PaletteCycler(seed=1)
@@ -26,22 +26,22 @@ def exercise_a_block_of_four_comes_from_one_random_group():
             "block %d spans palettes: %s" % (i, block)
 
 
-def exercise_no_two_objects_in_a_row_share_a_colour():
-    """A random pick could repeat the previous colour and make two objects identical; the
-    cycler avoids the immediately-previous one so neighbours always differ."""
+def exercise_no_two_objects_in_a_row_share_a_color():
+    """A random pick could repeat the previous color and make two objects identical; the
+    cycler avoids the immediately-previous one so neighbors always differ."""
     cyc = PaletteCycler(seed=7)
     colors = [cyc.next_color() for _ in range(40)]
     assert all(a != b for a, b in zip(colors, colors[1:]))
 
 
-def exercise_every_colour_is_a_real_palette_colour():
+def exercise_every_color_is_a_real_palette_color():
     valid = set(c for group in load_palettes() for c in group)
     cyc = PaletteCycler(seed=3)
     assert all(cyc.next_color() in valid for _ in range(30))
 
 
 def exercise_the_group_changes_across_a_session():
-    """Over enough objects, more than one group is used -- colours are not stuck on the
+    """Over enough objects, more than one group is used -- colors are not stuck on the
     first palette."""
     groups = palettes_as_sets()
     cyc = PaletteCycler(seed=2)
@@ -52,9 +52,9 @@ def exercise_the_group_changes_across_a_session():
     assert len(used) > 4    # several distinct palettes touched, not just one group of four
 
 
-def exercise_suggested_colours_come_from_the_inventory_and_spread_by_hue():
+def exercise_suggested_colors_come_from_the_inventory_and_spread_by_hue():
     """The hand-pick swatches are drawn from the same bundled palettes the automatic
-    defaults come from -- hex, distinct, and spread around the hue circle so neighbouring
+    defaults come from -- hex, distinct, and spread around the hue circle so neighboring
     swatches are not three versions of the same pink."""
     inventory = set(c for group in load_palettes() for c in group)
     picks = suggested_colors(8)
@@ -78,8 +78,8 @@ def exercise_asking_for_more_suggestions_than_exist_returns_them_all():
     assert len(suggested_colors(10000)) == len(inventory)
 
 
-def exercise_different_sessions_get_different_colours():
-    """No seed -> entropy: two fresh cyclers almost never open on the same colour."""
+def exercise_different_sessions_get_different_colors():
+    """No seed -> entropy: two fresh cyclers almost never open on the same color."""
     firsts = set(PaletteCycler().next_color() for _ in range(20))
     assert len(firsts) > 1      # not a fixed deterministic sequence
 

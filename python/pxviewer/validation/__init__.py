@@ -25,7 +25,7 @@ from typing import Any, Callable, List, NamedTuple
 
 @dataclass
 class ValidationResult:
-    """One validator's output: a labelled table plus 3-D markup.
+    """One validator's output: a labeled table plus 3-D markup.
 
     ``key``      stable id of the validator (matches its :func:`register` key).
     ``title``    human-readable name, shown as the section/group-box title.
@@ -63,7 +63,7 @@ class ValidatorSpec(NamedTuple):
     run: Callable[[Any], ValidationResult]
 
 
-# Registry keyed by validator key; iteration is stabilised by sorting on the key
+# Registry keyed by validator key; iteration is stabilized by sorting on the key
 # (see :func:`validators`), so channel/ordering is independent of import order.
 _REGISTRY: dict[str, ValidatorSpec] = {}
 

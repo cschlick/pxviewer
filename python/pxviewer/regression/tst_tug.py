@@ -75,7 +75,7 @@ def exercise_a_tug_pulls_it_does_not_teleport():
     moved = np.linalg.norm(now - start, axis=1)
     assert 1.0 < moved[ATOM] < 3.0                       # it followed, but geometry argued
     assert np.linalg.norm(now[ATOM] - target) > 0.01     # it did not reach the pointer
-    assert (moved > 0.05).sum() > 10                     # the neighbourhood gave way too
+    assert (moved > 0.05).sum() > 10                     # the neighborhood gave way too
 
     # And the model is still a model: strained, not torn.
     energies = m.get_restraints_manager().geometry.energies_sites(
@@ -145,7 +145,7 @@ def exercise_scope_modes_pick_the_right_atoms():
 
     stretch = Tug(m, atom, mode="residues", flank=2)
     assert len(residues_touched(groups, stretch.indices)) == 5    # it and two each side
-    # And it is a contiguous run in sequence, not a ball of neighbours.
+    # And it is a contiguous run in sequence, not a ball of neighbors.
     expected = set()
     for j in range(index - 2, index + 3):
         expected |= iseqs(groups[j])
@@ -198,7 +198,7 @@ def exercise_a_standalone_ligand_with_no_boundary_can_be_dragged():
     """A placed monomer is a whole model with nothing around it, so the drag zone reaches
     no boundary atoms to pin.
 
-    That left the reference restraint list uninitialised, and re-aiming the pull
+    That left the reference restraint list uninitialized, and re-aiming the pull
     dereferenced it -- a crash on the first move, so a placed ligand could not be dragged
     at all.
     """
@@ -271,7 +271,7 @@ def exercise_density_is_what_makes_a_tug_correct_something():
     # Geometry alone cannot improve on a truth it cannot see; density moves towards it.
     # The margin over geometry is deliberately modest since the interior hold arrived
     # (HOLD_SIGMA): untouched zone atoms are softly pinned where the drag found them —
-    # a 0.1 A nudge must not rearrange the neighbourhood — which damps zone-wide
+    # a 0.1 A nudge must not rearrange the neighborhood — which damps zone-wide
     # correction by design (measured here: 0.209 vs 0.251 with the hold, from 0.414).
     assert after_map < before_map - 0.05
     assert after_map < after_geometry - 0.02

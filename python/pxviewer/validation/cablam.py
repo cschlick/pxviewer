@@ -22,7 +22,7 @@ def _fmt(value: Optional[float], ndigits: int) -> str:
 
 
 def _classify(feedback: Any) -> str:
-    """A one-word ``type`` label for the residue, prioritising the flags that
+    """A one-word ``type`` label for the residue, prioritizing the flags that
     drive the markers, then falling back to the identified secondary structure."""
     if feedback.cablam_outlier:
         return "CaBLAM outlier"
@@ -82,7 +82,7 @@ def run(model: Any) -> ValidationResult:
         tab="CaBLAM",
         notes=(
             "cablam and ca_geom are probabilities from 0 to 1 against CaBLAM's backbone "
-            "reference, so lower is less likely: below 0.05 is disfavoured and below "
+            "reference, so lower is less likely: below 0.05 is disfavored and below "
             "0.01 an outlier. ca_geom judges the CA trace itself; type names whichever "
             "was raised."
         ),

@@ -246,7 +246,7 @@ def model_has_hydrogens(model) -> bool:
 
     "Any hydrogen present" is the wrong test and was the one used here. probe2 requires
     *both* polar and non-polar hydrogens, and a deposit carrying only some -- polar-only, a
-    handful on waters, a ligand modelled with H in an otherwise heavy-atom protein -- passes
+    handful on waters, a ligand modeled with H in an otherwise heavy-atom protein -- passes
     an any-H check, skips reduce2, and then dies inside probe2 with "Did not find both polar
     and non-polar Hydrogens". That failure is indistinguishable from a real extraction error
     in a corpus log, so it silently costs structures rather than routing them to reduce2.
@@ -320,7 +320,7 @@ def extract_clash(model, keep_hydrogens=False, dots=None):
     here.
 
     ``model`` is used as given: add hydrogens first (see :func:`add_hydrogens`) for the
-    calibrated MolProbity path. The returned clashscore normalises on this model's atom
+    calibrated MolProbity path. The returned clashscore normalizes on this model's atom
     count, so it is comparable to MolProbity's only when H are present.
     """
     shared = ve.extract_clashes(model, dots=dots)

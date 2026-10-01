@@ -26,7 +26,7 @@ function App() {
                     : b);
             // Mol*'s FocusLoci behavior owns two click gestures we do not want: reset
             // the camera on an empty click (a stray background click threw the view
-            // away), and centre-focus on an atom click (its framing — Python drives
+            // away), and center-focus on an atom click (its framing — Python drives
             // the camera from pick events through pxviewer's own selection pipeline
             // instead, so a click and a typed selection frame identically). Blank all
             // of its bindings.

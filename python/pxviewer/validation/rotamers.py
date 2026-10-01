@@ -93,6 +93,6 @@ def run(model: Any, analysis: Any = None) -> ValidationResult:
             "chi1–chi4 are the side-chain dihedrals in degrees; rotamer names the "
             "nearest library conformation (or OUTLIER); score is the percentage of the "
             "rotamer distribution at that conformation — below 0.3% is an outlier, 2% "
-            "or more favoured."
+            "or more favored."
         ),
     )

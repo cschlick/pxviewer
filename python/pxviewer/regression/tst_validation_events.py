@@ -227,7 +227,7 @@ def exercise_agreement_accepts_spillover_but_not_signal_from_nowhere():
 
 def exercise_explanation_can_be_widened_past_the_cut():
     """A continuous field is built from every result, not just flagged ones, so judging it
-    against outliers alone reports correct behaviour as failure."""
+    against outliers alone reports correct behavior as failure."""
     sites, events = _synthetic()
     sampled = np.zeros(10)
     sampled[[0, 1]] = 1.0

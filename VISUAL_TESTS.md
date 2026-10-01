@@ -5,7 +5,7 @@ unit tests never leave standing, and results that only a rendered frame can show
 Two things make a check belong here rather than in `regression/`: **(A)** it needs
 chained state — a clip standing while representations rebuild, a hidden model
 receiving a selection — and **(B)** its verdict lives in the pixels or in the
-behaviour across steps, not in a single state read.
+behavior across steps, not in a single state read.
 
 Most of the time these run automated. `python/pxviewer/regression/visual/` holds
 a driver (`harness.py`) and one `tst_visual_*.py` per scripted pass — the real
@@ -53,7 +53,7 @@ replaces it.
      half-light/half-dark mix, no unreadable text anywhere. Dark mode is pinned off.
 3. Look over the right panel: six icon tabs — Scene, Geometry, Validation, Tools,
    Console, Settings (Hotspots is a sub-tab of Validation, not a tab of its own).
-   - **Watch for:** tabs share the full bar width with no dead grey strip on the right;
+   - **Watch for:** tabs share the full bar width with no dead gray strip on the right;
      icons are crisp (not blurry — a HiDPI regression); the selected tab's underline is
      visible; hovering shows a label.
 4. Hover every toolbar icon button (Open, Tutorials, Write, Pair, trash, reset view,
@@ -213,11 +213,11 @@ Load a protein (1ubq works).
 3. Uncheck **Focus on selection**, apply a different residue.
    - **Watch for:** the selection highlights but the camera stays put.
 4. Select a helix or a whole chain (e.g. `resseq 20:35`).
-   - **Watch for:** the view orients along the selection's long axis, centred, filling
+   - **Watch for:** the view orients along the selection's long axis, centered, filling
      the frame — not a random skewed angle.
 5. Press space repeatedly (residue navigation), then shift/space back.
    - **Watch for:** each step lands oriented the same way as typed selections; stepping
-     honours the clip checkbox; no drift or roll accumulating over many steps.
+     honors the clip checkbox; no drift or roll accumulating over many steps.
 5a. Click a row in any table — a validation sub-tab, the bonds or angles table, the
    atoms table — then press space repeatedly, and shift/space back.
    - **Watch for:** the *selection* walks the table a row at a time and the viewport
@@ -230,10 +230,10 @@ Load a protein (1ubq works).
      chain. The residue walk is only the default before any table has been touched;
      switching to another table (its sub-tab, a row) is what moves the key to it.
    - **Watch for:** each row is a real selection — Components/Atoms/restraint rows
-     alike frame, isolate and dress the neighbourhood exactly as the Selection
+     alike frame, isolate and dress the neighborhood exactly as the Selection
      pane's Focus / Clip / Neighborhood checkboxes say, so stepping the list clips
      only while **Clip to selection** is checked, and a restraint row's sphere
-     centres on the restraint's atoms rather than inheriting whatever a previous
+     centers on the restraint's atoms rather than inheriting whatever a previous
      selection left.
 6. Pick atoms in the viewport; watch the description label and atoms table. Select rows
    in the atoms table instead.
@@ -253,7 +253,7 @@ Load a protein (1ubq works).
      atoms in Atom, residues in Residue. Representation bounds the aim too:
      on a Cartoon ribbon a click can only aim at a residue, so even Atom
      takes the residue there; on Ball & stick (and the ball-and-stick
-     neighbourhood layer under a standing selection) it is genuinely per-atom.
+     neighborhood layer under a standing selection) it is genuinely per-atom.
 
 ## Pass 6 — Local resolution (15 min)
 
@@ -261,14 +261,14 @@ Run **Tutorials ▸ Look at local resolution** twice.
 
 1. First run (cold, with the cache cleared or on a fresh machine).
    - **Watch for:** fetch progress for each entity; the local-resolution computation
-     announces itself (not a silent hang); the busy indication holds until the coloured
+     announces itself (not a silent hang); the busy indication holds until the colored
      surface is *actually* draggable — not until some internal step.
 2. The Objects panel afterwards.
    - **Watch for:** ONE row for the map — no phantom second "resolution" object, no
      giant blue spheroid, no tiny broken checkbox.
 3. Appearance: Color ▸ **Local resolution**.
    - **Watch for:** the sub-panel appears only when this coloring is on and matches the
-     pane's usual look (not undersized); the colour range shows real Å numbers; **Fit**
+     pane's usual look (not undersized); the color range shows real Å numbers; **Fit**
      and **Reset** behave; your chosen range survives level changes.
 4. Drag Level at the default 4× downsample, then at Full.
    - **Watch for:** 4× is fluid; Full is honest about being slower but never swaps
@@ -282,8 +282,8 @@ Run **Tutorials ▸ Look at local resolution** twice.
    **By map-model CC**.
    - **Watch for:** it computes in a few seconds and paints atoms teal→pink on the
      0–1 correlation scale; the displaced helix reads pink against a teal molecule;
-     rotation stays fluid; selecting a residue keeps the CC colours on the
-     neighbourhood sticks (not element colours); picking another colour and
+     rotation stays fluid; selecting a residue keeps the CC colors on the
+     neighborhood sticks (not element colors); picking another color and
      re-picking recomputes against the model as it now stands.
 
 ## Pass 7 — Tutorials sweep (15 min)
@@ -344,7 +344,7 @@ Load the X-ray demo or a model with restraints available.
      unknown ligand *offers* restraint inference rather than failing mutely — from
      Minimize and drag too, not only the Geometry tab.
 6. Validation ▸ **Hotspots** sub-tab: run it on the loaded structure.
-   - **Watch for:** results render; overshoot behaviour matches expectations from the
+   - **Watch for:** results render; overshoot behavior matches expectations from the
      pinned footprints; no layout breakage in its panel.
 
 ## Pass 9 — Persistence, settings, window management (5 min)
@@ -359,7 +359,7 @@ Load the X-ray demo or a model with restraints available.
      bar, and Appearance pane all stay usable; nothing overlaps.
 4. Dock/undock the panel; use the picture (screenshot) button and reset view; open the
    mouse-bindings and help dialogs.
-   - **Watch for:** dialogs open centred and close cleanly; the saved screenshot matches
+   - **Watch for:** dialogs open centered and close cleanly; the saved screenshot matches
      the viewport; reset view actually reframes.
 
 ## Pass 10 — Stress and rough handling (10 min)
@@ -374,7 +374,7 @@ Load the X-ray demo or a model with restraints available.
    - **Watch for:** a readable failure, and the app fully usable afterwards; no `.part`
      litter adopted as a real file by a later cached run.
 4. Hide every object; select-all in an empty scene; apply a selection matching nothing.
-   - **Watch for:** empty states everywhere are calm and labelled — no error dialogs
+   - **Watch for:** empty states everywhere are calm and labeled — no error dialogs
      for ordinary emptiness.
 5. Quit the app from a busy moment (mid-render, tutorial open).
    - **Watch for:** the process exits; the terminal shows no "task was destroyed" or Qt
@@ -412,8 +412,8 @@ models are needed; 1ubq + one more protein works.
    - **Watch for:** the same clipped view returns — depth slab included, not just
      the sphere. A reapplied frame that matches the *lifted* frame is the bug.
 5. With the clip standing, engage the Components table and Space-step five rows.
-   - **Watch for:** the sphere re-centres on each stepped residue and the
-     neighbourhood context follows; no stepped residue is ever rendered outside
+   - **Watch for:** the sphere re-centers on each stepped residue and the
+     neighborhood context follows; no stepped residue is ever rendered outside
      its own sphere.
 6. *(manual)* Shift-click a second residue in the viewport to grow the selection.
    - **Watch for:** the sphere re-fits to the grown selection; nothing added is
@@ -442,7 +442,7 @@ models are needed; 1ubq + one more protein works.
     - **Watch for:** the clip dies with the model — no orphaned sphere drawn over
       the remaining scene; removing the last object leaves the empty state clean.
 12. Reload A and apply `resseq 29` again.
-    - **Watch for:** a fresh clip behaves like a fresh clip — sphere centred on
+    - **Watch for:** a fresh clip behaves like a fresh clip — sphere centered on
       the new selection, depth slab tight; no bookkeeping from the removed model's
       clip leaks into the new one.
 13. *(manual)* Load a map alongside a clipped model (difference map or cryo-EM demo),

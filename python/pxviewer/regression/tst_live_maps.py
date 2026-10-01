@@ -168,7 +168,7 @@ def exercise_the_encoded_box_carries_a_self_contained_affine():
 
     Decoding the peak through origin + i*stepX + j*stepY + k*stepZ has to land where the
     atom actually went. That product is the whole contract: get the affine wrong and the
-    density draws in the right shape at the wrong place, which looks like a modelling
+    density draws in the right shape at the wrong place, which looks like a modeling
     error rather than a bug.
     """
     import struct

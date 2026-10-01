@@ -235,7 +235,7 @@ def exercise_a_custom_atom_site_column_is_exposed():
         session = LiveSession.from_model_file(write(work, "m.cif", cif))
         assert "plddt" in session.attributes()
         assert list(session._attributes["plddt"]) == [88.5, 72.1, 95.0]
-        session.color_by("plddt")             # and it is usable for colouring
+        session.color_by("plddt")             # and it is usable for coloring
 
 
 def exercise_a_pdb_load_has_no_custom_attributes():

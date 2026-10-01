@@ -1,7 +1,7 @@
-"""The console's categorised API guide (``api``).
+"""The console's categorized API guide (``api``).
 
 ``build_groups`` introspects a class against the module's category map, so both halves
-matter: the categorised methods, and the "Other" bucket that catches anything public but
+matter: the categorized methods, and the "Other" bucket that catches anything public but
 unlisted -- that bucket is what stops a newly added API method from disappearing.
 """
 
@@ -14,10 +14,10 @@ from pxviewer.regression.tst_utils import have
 
 
 class Stand_in(object):
-    """A small class with one method in each of two real categories, plus an uncategorised
+    """A small class with one method in each of two real categories, plus an uncategorized
     one and a private one.
 
-    ``LiveSession`` cannot show the interesting cases: it has no uncategorised public
+    ``LiveSession`` cannot show the interesting cases: it has no uncategorized public
     method to land in "Other". The pytest version replaced the module's ``_CATEGORIES``
     with a stub to get here; that is unnecessary, because the real map already lists
     ``select`` and ``color_by`` under two different headings, so a class defining exactly
@@ -31,13 +31,13 @@ class Stand_in(object):
         """Color atoms by a per-atom attribute."""
 
     def wobble(self):
-        """An uncategorised extra method."""
+        """An uncategorized extra method."""
 
     def _private(self):
         """Should never appear."""
 
 
-def exercise_build_groups_categorises_and_collects_extras():
+def exercise_build_groups_categorizes_and_collects_extras():
     categories = dict((c, [r[0] for r in rows]) for c, rows in build_groups(Stand_in))
 
     assert categories["Selecting atoms"] == ["select"]
@@ -66,7 +66,7 @@ def exercise_find_filters_on_name_and_doc():
     guide = ApiGuide(Stand_in)
     text = repr(guide.find("color"))
 
-    # color_by matches by name; select's doc says nothing about colour, so it drops out.
+    # color_by matches by name; select's doc says nothing about color, so it drops out.
     assert "color_by" in text
     assert "select(" not in text
     assert "matching" in text
@@ -86,7 +86,7 @@ def exercise_html_rendering():
     assert "session.color_by" in html
 
 
-def exercise_the_real_livesession_is_mostly_categorised():
+def exercise_the_real_livesession_is_mostly_categorized():
     """Against the shipping class the common methods are grouped, not dumped in Other.
 
     This is the exercise that notices when a method is renamed and the category map is

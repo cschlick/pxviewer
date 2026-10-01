@@ -1,11 +1,11 @@
-"""Near an outlier, how many neighbours are *visibly* bad without being flagged?
+"""Near an outlier, how many neighbors are *visibly* bad without being flagged?
 
-The neighbourhood measurement says the mean concern around an outlier is elevated 1.35-2.51x.
+The neighborhood measurement says the mean concern around an outlier is elevated 1.35-2.51x.
 That is a real ratio and a misleading basis for a claim about a picture: the absolute means
 are 0.03-0.11 on a scale where 1.0 is the community cut, and a field value of 0.03 renders as
 nothing. A mean of 0.037 is equally consistent with
 
-  * every neighbour faintly warm  -> the field shows a uniform haze, nothing to look at;
+  * every neighbor faintly warm  -> the field shows a uniform haze, nothing to look at;
   * 97% at zero and 3% at 0.6     -> a handful of clearly-drawn residues the outlier markup
                                      cannot show at all.
 
@@ -42,7 +42,7 @@ sys.path.insert(0, HERE)
 from concern import molprobity_concern_events  # noqa: E402
 from events import _ADAPTERS, _load_shared, load_model  # noqa: E402
 from figure_data import MAX_ATOMS, model_path  # noqa: E402
-from outlier_neighbourhood import (  # noqa: E402
+from outlier_neighborhood import (  # noqa: E402
     CONTROL_TRIALS, DIST_EDGES, FLAGGED, MIN_OUTLIERS, MIN_SEQ_SEP,
     RESIDUE_METRICS, _residue_ca,
 )
@@ -51,7 +51,7 @@ ve = _load_shared()
 
 BANDS = (0.25, 0.50)
 #: Sequence window counted as "near", chosen to exclude the +-1 shared-atom coupling that
-#: the neighbourhood measurement already showed proves nothing on its own.
+#: the neighborhood measurement already showed proves nothing on its own.
 NEAR_OFFSETS = (-3, -2, 2, 3)
 #: Through-space band, the 4-6 A bin where the only surviving spatial effect lives.
 FAR_LO, FAR_HI = 4.0, 6.0
@@ -64,9 +64,9 @@ def _frac_above(conc, keys, band):
     return hits / float(len(keys)), len(keys)
 
 
-def _near_seq(ca, centres, exclude):
+def _near_seq(ca, centers, exclude):
     out = set()
-    for (chain, rs, ic) in centres:
+    for (chain, rs, ic) in centers:
         for o in NEAR_OFFSETS:
             k = (chain, rs + o, ic)
             if k in ca and k not in exclude:
@@ -74,20 +74,20 @@ def _near_seq(ca, centres, exclude):
     return sorted(out)
 
 
-def _near_space(ca, centres, exclude, min_sep=MIN_SEQ_SEP):
-    """Residues in the 4-6 A shell of a *sequence-far* centre."""
+def _near_space(ca, centers, exclude, min_sep=MIN_SEQ_SEP):
+    """Residues in the 4-6 A shell of a *sequence-far* center."""
     keys = [k for k in ca if k not in exclude]
-    centres = [c for c in centres if c in ca]
-    if not keys or not centres:
+    centers = [c for c in centers if c in ca]
+    if not keys or not centers:
         return []
     axyz = np.array([ca[k] for k in keys])
     chain_id = {}
-    for k in list(keys) + list(centres):
+    for k in list(keys) + list(centers):
         chain_id.setdefault(k[0], len(chain_id))
     kchain = np.array([chain_id[k[0]] for k in keys])
     kres = np.array([k[1] for k in keys], dtype=float)
     best = np.full(len(keys), np.inf)
-    for c in centres:
+    for c in centers:
         d = np.linalg.norm(axyz - np.asarray(ca[c], float), axis=1)
         near_seq = (kchain == chain_id[c[0]]) & (np.abs(kres - c[1]) < min_sep)
         best = np.minimum(best, np.where(near_seq, np.inf, d))
@@ -136,7 +136,7 @@ def run_one(pdb_id, seed=0):
                     f, n = _frac_above(conc, keys, band)
                     res["%s_%.2f" % (label, band)] = f
                     res["%s_n" % label] = n
-                # control: the same shell around random non-outlier centres
+                # control: the same shell around random non-outlier centers
                 ctl = defaultdict(list)
                 for _ in range(CONTROL_TRIALS):
                     pick = [pool[i] for i in rng.integers(0, len(pool), size=len(outliers))]
@@ -184,7 +184,7 @@ def report(out_dir):
     print("Concern 1.0 = the community cut, so 0.50 means 'half an outlier'.\n")
 
     for label, title in (("seq", "SEQUENCE: +-2 and +-3 residues along the chain"),
-                         ("space", "THROUGH SPACE: 4-6 A shell, sequence-far centres only")):
+                         ("space", "THROUGH SPACE: 4-6 A shell, sequence-far centers only")):
         print(title)
         print("%-9s %9s %9s %8s %9s %9s %8s" % (
             "channel", ">=0.25", "ctl", "x", ">=0.50", "ctl", "x"))

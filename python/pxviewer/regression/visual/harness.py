@@ -178,7 +178,7 @@ def controls_window(app, name: str) -> str:
 
 
 def cam_state(app, timeout: float = 10.0):
-    """The Mol* camera's serialised state (target, radius, radiusMax, ...)."""
+    """The Mol* camera's serialized state (target, radius, radiusMax, ...)."""
     return _call_session(app, "camera_state", timeout)
 
 
@@ -196,7 +196,7 @@ def img_diff(path_a, path_b, threshold: int = 8):
     """Percentage of pixels whose channels differ by more than ``threshold``.
 
     For comparing frames within one run -- same window, same GPU -- so the number
-    is a behavioural claim ("the lifted view differs", "the re-applied view
+    is a behavioral claim ("the lifted view differs", "the re-applied view
     matches"), not a rendering-fidelity claim.
     """
     import numpy as np

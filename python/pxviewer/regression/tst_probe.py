@@ -34,7 +34,7 @@ def probe_runnable():
     return True
 
 
-def exercise_dot_colour_mapping():
+def exercise_dot_color_mapping():
     assert _dot_rgb("hb", 0.0) != _dot_rgb("wc", 0.0)     # H-bonds are distinct
     assert _dot_rgb("wc", 0.4) == (0x40, 0x40, 0xFF)       # wide contact -> blue
     assert _dot_rgb("bo", -0.5) == (0xFF, 0x66, 0xB4)      # bad clash -> hotpink

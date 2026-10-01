@@ -14,7 +14,7 @@ A/B/C/D with the rest empty; and -- the property that matters -- **zero bonds be
 atoms in different conformers**, so a serine's A-conformer OG is never bonded to its
 B-conformer CB. Secondary structure survives alongside the altlocs, so cartoon still
 draws. pxviewer's frontend contains no altloc code at all: this is Mol*'s default
-behaviour, and these exercises pin the input it depends on.
+behavior, and these exercises pin the input it depends on.
 
 One encoding detail is deliberate and worth stating, because it looks like a bug. A blank
 altloc is written as the empty string with no BinaryCIF mask, where a canonical mmCIF file
@@ -133,7 +133,7 @@ def exercise_selecting_an_atom_name_returns_all_of_its_conformers():
     """The reason a viewer needs this: picking an atom that exists in two conformers must
     reach both, or the user edits one and wonders why the density still does not fit.
 
-    THR 1 is modelled in two conformations, so every one of its atoms is doubled -- 133
+    THR 1 is modeled in two conformations, so every one of its atoms is doubled -- 133
     named heavy atoms across the structure are, which is what makes this the normal case
     here rather than a curiosity.
     """

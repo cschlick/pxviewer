@@ -34,7 +34,7 @@ class VolumeData:
     """A single map: the native cctbx ``map_manager`` plus a lazy numpy view.
 
     The ``map_manager`` is the authority — grid metadata is read from it and the
-    map is re-written from it to serve to the browser. ``array`` materialises the
+    map is re-written from it to serve to the browser. ``array`` materializes the
     grid as numpy only on first access (and caches it), so viewing a large map
     never forces the flex→numpy copy.
     """
@@ -242,7 +242,7 @@ def masked_map_copy(mmm: Any, map_id: str, radius: float) -> Any:
 
 
 def encode_map_box(map_manager: Any, *, level: float = 3.0, is_difference: bool = True) -> bytes:
-    """Serialise a (boxed) map as a self-contained density window for the live viewer.
+    """Serialize a (boxed) map as a self-contained density window for the live viewer.
 
     A small binary header followed by the raw f32 grid, holding everything the browser
     needs to place and contour the box without any crystallography of its own: the box
@@ -274,7 +274,7 @@ def grid_affine(map_manager: Any) -> Tuple[np.ndarray, np.ndarray]:
     of a map in Python lands at the same Cartesian point the browser draws it at.
 
     Two maps on the same physical grid give the same ``(origin, steps)``, which is what lets
-    one map's surface be coloured by another's values (see :func:`encode_localres`).
+    one map's surface be colored by another's values (see :func:`encode_localres`).
     """
     md = map_manager.map_data()
     nx, ny, nz = md.all()
@@ -303,11 +303,11 @@ def sample_at_sites(map_manager: Any, sites_cart: Any, *, array: Any = None) -> 
     """Read a map at arbitrary Cartesian points — the inverse of :func:`grid_affine`.
 
     Trilinear, to match what the viewport shows: the browser raymarches these grids through an
-    interpolating sampler, so nearest-neighbour would report a value the renderer never draws
+    interpolating sampler, so nearest-neighbor would report a value the renderer never draws
     — and on a coarse output grid (the generator's 2 A setting) an atom can sit most of a
     voxel away from the point whose value it was given. Points outside the box read 0.
 
-    ``array`` lets a caller pass a grid it has already materialised (and validated) rather
+    ``array`` lets a caller pass a grid it has already materialized (and validated) rather
     than paying for a second flex->numpy copy.
     """
     origin, steps = grid_affine(map_manager)
@@ -384,20 +384,20 @@ def encode_localres(
     surface_map: Any, color_map: Any, *, iso_level: float, domain: Tuple[float, float],
     palette: Optional[List[int]] = None,
 ) -> bytes:
-    """Serialise a local-resolution colouring: two co-registered grids the frontend turns
-    into one surface whose *shape* is the primary map and whose *colour* is a second field.
+    """Serialize a local-resolution coloring: two co-registered grids the frontend turns
+    into one surface whose *shape* is the primary map and whose *color* is a second field.
 
     ``surface_map`` (grid A) is the primary/display map — the browser contours it at
     ``iso_level`` (an **absolute** value on A's own scale) to get the surface the user
     already sees. ``color_map`` (grid B) is the local-resolution map — its value is sampled
-    at every surface vertex and mapped through ``domain`` = ``(lo, hi)`` onto a colour ramp.
+    at every surface vertex and mapped through ``domain`` = ``(lo, hi)`` onto a color ramp.
     Both grids ride along so the frontend needs no crystallography and no state-tree lookup;
     they must share a physical grid for the sampling to line up (see :func:`_encode_affine_grid`).
 
-    ``palette`` is an optional explicit colour ramp — 0xRRGGBB ints, low to high —
-    for a colouring that is not local resolution (the map-model CC field ships the
+    ``palette`` is an optional explicit color ramp — 0xRRGGBB ints, low to high —
+    for a coloring that is not local resolution (the map-model CC field ships the
     brand spectrum this way). An empty count means the frontend's built-in
-    resolution ramp, so existing colourings are unchanged.
+    resolution ramp, so existing colorings are unchanged.
 
     Layout (little-endian; the sender prepends the u32 message tag):
         f32 isoLevel; f32 domainLo, domainHi; u32 nColors; u32 rgb × nColors;
@@ -429,7 +429,7 @@ def real_space_difference_map(map_data: Any, model: Any, *, d_min: float,
     * **Gain and background together.** ``exp ≈ k·calc + b`` is solved by least squares
       rather than scaling alone: a map with a non-zero solvent level (most deposited
       cryo-EM maps) would otherwise leave that offset in the difference everywhere, and
-      a flat pedestal is indistinguishable from real unmodelled density.
+      a flat pedestal is indistinguishable from real unmodeled density.
     * **Fitted where the model speaks.** Only voxels within ``reach`` of an atom are
       used to fit k and b. The model map is zero across the solvent, so including it
       would drive the fit to match empty space against noise — the same reasoning that

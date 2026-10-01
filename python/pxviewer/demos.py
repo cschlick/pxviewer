@@ -148,7 +148,7 @@ def _run_wave(p: Player) -> None:
         p.step(1, "Flat resting chain.")
         p.push(base)
         p.hold(1.5)
-        p.step(2, "A gentle travelling wave builds up.")
+        p.step(2, "A gentle traveling wave builds up.")
         p.play(lambda t: frame(2.0 * t, 1.5 * t), seconds=4.0)
         p.step(3, "The wave grows taller and travels faster.")
         p.play(lambda t: frame(2.0 + 2.0 * t, 1.5 + 4.0 * t), seconds=5.0)
@@ -470,7 +470,7 @@ class Demo:
 DEMOS: dict[str, Demo] = {
     d.name: d
     for d in [
-        Demo("wave", "A chain rippling with a growing travelling wave.", lambda: _plain(_line(24)), _run_wave),
+        Demo("wave", "A chain rippling with a growing traveling wave.", lambda: _plain(_line(24)), _run_wave),
         Demo("breathe", "A sphere of atoms expanding and contracting.", lambda: _plain(_sphere(64)), _run_breathe),
         Demo("orbit", "A rigid body gliding around a square path.", lambda: _plain(_helix(20, radius=2.5, pitch=3.0)), _run_orbit),
         Demo("morph", "A chain folding into a helix and back.", lambda: _plain(_line(30, spacing=1.2)), _run_morph),

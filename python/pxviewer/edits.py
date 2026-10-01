@@ -232,7 +232,7 @@ def add_entry(scope: Any, obj: Any, kind: str) -> None:
 
 
 def edits_as_phil(scope: Any, model: Any = None) -> str:
-    """Serialise an edits scope back to PHIL text, via cctbx's own formatter.
+    """Serialize an edits scope back to PHIL text, via cctbx's own formatter.
 
     ``fetch_diff`` rather than a plain format, so the file holds what the user actually
     set and not the whole master: every default a bare format emits -- an empty ``angle``
@@ -325,7 +325,7 @@ def get_edits(model: Any) -> Any:
     return scope
 
 
-#: Serialises restraint builds; see build_restraints.
+#: Serializes restraint builds; see build_restraints.
 _BUILD_LOCK = threading.Lock()
 
 
@@ -360,7 +360,7 @@ def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = 
     change): always rebuild, so an edit added or removed takes effect (and a cleared edit
     is really gone — ``process()`` only drops the old manager when given explicit params).
 
-    Serialised across threads. Building replaces the model's restraints manager in place, so
+    Serialized across threads. Building replaces the model's restraints manager in place, so
     two builds of the same model at once leave it in a state neither asked for. There is a
     real chance of that: the drag pre-warm runs on its own thread precisely so the user is
     not waiting on it, while minimize and the drag itself build from theirs. The lock is

@@ -6,7 +6,7 @@ regions are enriched (2.07x). Together they suggest **serious problems cluster a
 do not**. That was assembled from three different measurements and one back-of-envelope
 Poisson estimate; this measures it directly.
 
-**The statistic** is the nearest-neighbour distance between events, and the comparison is the
+**The statistic** is the nearest-neighbor distance between events, and the comparison is the
 Clark-Evans ratio ``R = observed mean NN / null mean NN``:
 
     R < 1   clustered      events sit closer together than chance
@@ -57,11 +57,11 @@ from figure_data import MAX_ATOMS, heavy_mask, model_path  # noqa: E402
 FAMILY_OF = {m: f for f, ms in FAMILIES.items() for m in ms}
 FLAGGED = 1.0
 NULL_TRIALS = 50
-MIN_EVENTS = 20          # below this a nearest-neighbour distribution is not worth reporting
+MIN_EVENTS = 20          # below this a nearest-neighbor distribution is not worth reporting
 
 
 def _nn_mean(points, groups=None, cross_family=False):
-    """Mean nearest-neighbour distance. With ``cross_family``, the neighbour must differ."""
+    """Mean nearest-neighbor distance. With ``cross_family``, the neighbor must differ."""
     n = len(points)
     if n < 2:
         return None
@@ -171,7 +171,7 @@ def report(out_dir):
     print("Clark-Evans R = observed mean NN / null mean NN, null = events re-placed on")
     print("random heavy atoms of the same structure.  R<1 clustered, R=1 random.\n")
     print("  %-15s %-14s %6s %10s %8s %9s %10s" % (
-        "severity", "neighbour", "n", "observed", "null", "R", "clustered"))
+        "severity", "neighbor", "n", "observed", "null", "R", "clustered"))
     summary = {}
     for cls in ("flagged", "sub_threshold", "all"):
         for pair in ("any", "cross_family"):

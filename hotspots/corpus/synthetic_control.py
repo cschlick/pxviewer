@@ -8,14 +8,14 @@ the obvious biological control and it does not work: rolled up per residue at Mo
 the flagged set is sparse enough to leave a far field -- fails, and its concern saturates at
 the cut so the achievable ratio is capped near 3x.
 
-So plant a halo instead. Take a real structure's CA coordinates, choose centres at random,
+So plant a halo instead. Take a real structure's CA coordinates, choose centers at random,
 give every residue background concern, then add a known amplitude to residues within a known
-radius *that are also sequence-far from their centre*. Run the identical profile and control
+radius *that are also sequence-far from their center*. Run the identical profile and control
 used on the real data. If the recovered curve peaks at the planted radius with roughly the
 planted amplitude, the machinery can see through-space co-location and the real negatives
 mean what they say. If it does not, every through-space number in this project is void.
 
-This is a test of the instrument, not of biology: the null is the same randomised-centre null,
+This is a test of the instrument, not of biology: the null is the same randomized-center null,
 and the only thing that changes is that the signal is known.
 
     libtbx.python corpus/synthetic_control.py IDS.txt --n 40
@@ -32,7 +32,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "hotspots"))
 sys.path.insert(0, HERE)
 
-from outlier_neighbourhood import (  # noqa: E402
+from outlier_neighborhood import (  # noqa: E402
     CONTROL_TRIALS, DIST_EDGES, MIN_SEQ_SEP, _dist_profile_seqfar, _residue_ca,
 )
 from events import load_model  # noqa: E402
@@ -47,18 +47,18 @@ PLANT_AMPLITUDE = 0.15
 BACKGROUND = 0.30
 BACKGROUND_JITTER = 0.10
 
-#: Fraction of residues used as planted centres, matching the real channels' outlier
+#: Fraction of residues used as planted centers, matching the real channels' outlier
 #: prevalence (rama 2.2%, cablam 1.9%, rota 3.6%).
-CENTRE_FRACTION = 0.025
+CENTER_FRACTION = 0.025
 
 
 def plant(ca, rng):
-    """Return (concern_by_residue, centres) with a known sequence-far spatial halo."""
+    """Return (concern_by_residue, centers) with a known sequence-far spatial halo."""
     keys = list(ca)
     xyz = np.array([ca[k] for k in keys])
-    n_centres = max(3, int(round(CENTRE_FRACTION * len(keys))))
-    idx = rng.choice(len(keys), size=min(n_centres, len(keys)), replace=False)
-    centres = [keys[i] for i in idx]
+    n_centers = max(3, int(round(CENTER_FRACTION * len(keys))))
+    idx = rng.choice(len(keys), size=min(n_centers, len(keys)), replace=False)
+    centers = [keys[i] for i in idx]
 
     conc = {k: max(0.0, BACKGROUND + BACKGROUND_JITTER * rng.standard_normal())
             for k in keys}
@@ -68,18 +68,18 @@ def plant(ca, rng):
         chain_id.setdefault(k[0], len(chain_id))
     kchain = np.array([chain_id[k[0]] for k in keys])
 
-    for c in centres:
+    for c in centers:
         d = np.linalg.norm(xyz - np.asarray(ca[c], float), axis=1)
-        # Plant ONLY on sequence-far residues. A halo planted on chain neighbours too would
+        # Plant ONLY on sequence-far residues. A halo planted on chain neighbors too would
         # be recovered by the plain distance profile and prove nothing about the seq-far path,
         # which is the one every through-space claim rests on.
         far = ~((kchain == chain_id[c[0]]) & (np.abs(kres - c[1]) < MIN_SEQ_SEP))
         hit = (d <= PLANT_RADIUS_A) & far
         for i in np.nonzero(hit)[0]:
             conc[keys[i]] += PLANT_AMPLITUDE
-    for c in centres:
-        conc[c] = 1.0        # centres are the "outliers"; they are excluded from the profile
-    return conc, centres
+    for c in centers:
+        conc[c] = 1.0        # centers are the "outliers"; they are excluded from the profile
+    return conc, centers
 
 
 def run_one(pdb_id, seed=0):
@@ -91,14 +91,14 @@ def run_one(pdb_id, seed=0):
     if len(ca) < 60:
         return None
     rng = np.random.default_rng(seed)
-    conc, centres = plant(ca, rng)
-    excl = set(centres)
+    conc, centers = plant(ca, rng)
+    excl = set(centers)
 
-    obs = _dist_profile_seqfar(conc, ca, centres, excl)
+    obs = _dist_profile_seqfar(conc, ca, centers, excl)
     pool = [k for k in ca if k not in excl]
     ctl = {i: [] for i in range(len(DIST_EDGES) - 1)}
     for _ in range(CONTROL_TRIALS):
-        pick = [pool[i] for i in rng.integers(0, len(pool), size=len(centres))]
+        pick = [pool[i] for i in rng.integers(0, len(pool), size=len(centers))]
         prof = _dist_profile_seqfar(conc, ca, pick, excl)
         for i, (m, _n) in prof.items():
             if m is not None:
@@ -106,7 +106,7 @@ def run_one(pdb_id, seed=0):
     return {
         "id": pdb_id,
         "n_res": len(ca),
-        "n_centres": len(centres),
+        "n_centers": len(centers),
         "obs": {i: obs[i][0] for i in obs},
         "n": {i: obs[i][1] for i in obs},
         "ctl": {i: (float(np.mean(v)) if v else None) for i, v in ctl.items()},
@@ -126,8 +126,8 @@ def main():
             r = run_one(pid, seed=i)
             if r:
                 recs.append(r)
-                print("[%d/%d] %s  %d res, %d centres" % (
-                    i, len(ids), pid, r["n_res"], r["n_centres"]), flush=True)
+                print("[%d/%d] %s  %d res, %d centers" % (
+                    i, len(ids), pid, r["n_res"], r["n_centers"]), flush=True)
         except Exception as exc:
             print("[%d/%d] %s  FAILED %s" % (i, len(ids), pid, type(exc).__name__), flush=True)
 
@@ -135,10 +135,10 @@ def main():
         print("nothing measured")
         return
 
-    print("\nPLANTED: +%.2f concern within %.0f A of a centre, sequence-far only,"
+    print("\nPLANTED: +%.2f concern within %.0f A of a center, sequence-far only,"
           % (PLANT_AMPLITUDE, PLANT_RADIUS_A))
-    print("         on a background of %.2f. Centres are %.1f%% of residues.\n"
-          % (BACKGROUND, 100 * CENTRE_FRACTION))
+    print("         on a background of %.2f. Centers are %.1f%% of residues.\n"
+          % (BACKGROUND, 100 * CENTER_FRACTION))
     expected = (BACKGROUND + PLANT_AMPLITUDE) / BACKGROUND
     print("%-10s %s" % ("dist(A):", "  ".join(
         "%6.0f" % DIST_EDGES[i + 1] for i in range(6))))

@@ -5,7 +5,7 @@ by cctbx's :class:`~iotbx.data_manager.DataManager` into an
 ``mmtbx.model.manager``, and everything the viewer shows is derived from that
 model's ``pdb_hierarchy`` — no structure is ever parsed in the browser.
 
-The hierarchy exposes its columns as vectorised arrays (``extract_xyz`` etc.), so
+The hierarchy exposes its columns as vectorized arrays (``extract_xyz`` etc.), so
 we lift them straight into an :class:`~pxviewer.data.AtomArrays` and hand that to
 the BinaryCIF encoder, mapping cctbx to the wire with no per-atom Python on the
 hot path (only the residue/chain labels need a single ordered walk).
@@ -289,9 +289,9 @@ def model_to_arrays(model: Any) -> AtomArrays:
     """Lift a cctbx model's hierarchy into :class:`AtomArrays`.
 
     Coordinates, element, name, B and occupancy come from the hierarchy's
-    vectorised ``extract_*`` arrays; residue name, chain id, residue number and
+    vectorized ``extract_*`` arrays; residue name, chain id, residue number and
     altloc need one ordered pass over ``atoms_with_labels`` (cctbx exposes no
-    vectorised accessor for those). Both walks follow the same atom order.
+    vectorized accessor for those). Both walks follow the same atom order.
     """
     hierarchy = model.get_hierarchy()
     atoms = hierarchy.atoms()
@@ -384,7 +384,7 @@ class ModelData:
     on every access. When present, ``model`` is the authority for **identity and
     selection**: `select("...")` goes through cctbx's own atom-selection machinery
     rather than any reimplementation, and `diff()` catches the cached columns
-    drifting from the model. cctbx calls are serialised under a lock, since the
+    drifting from the model. cctbx calls are serialized under a lock, since the
     session may touch the model from its WebSocket thread.
 
     ``polymer`` and ``secondary_structure`` are carried alongside — they're read

@@ -18,7 +18,7 @@ What it measures, and the two decisions that shape it:
 * **Figure B's target set is *concerning* atoms, not flagged outliers.** The concern curve
   rises from the 2.0% favored boundary, well before the outlier cut, so the field
   legitimately marks residues MolProbity never flags. Judged against outliers alone the
-  figure grows a 23 A tail and reports correct behaviour as failure.
+  figure grows a 23 A tail and reports correct behavior as failure.
 
 Usage -- sharded, resumable, one JSON line per model appended as it goes:
 
@@ -229,7 +229,7 @@ def heavy_mask(hierarchy) -> np.ndarray:
 
 
 def hot_voxel_xyz(field, threshold=None) -> np.ndarray:
-    """Cartesian centres of every voxel at or above the display threshold."""
+    """Cartesian centers of every voxel at or above the display threshold."""
     idx = np.argwhere(field.data >= (_hot() if threshold is None else threshold))
     if not idx.size:
         return np.empty((0, 3))
@@ -270,7 +270,7 @@ def figure_a(shared, sampled, heavy, metric) -> dict:
     Recall is the number that matters -- a field that loses a real outlier is wrong.
     Precision is reported for completeness, but see figure B before drawing any conclusion
     from it: the sigma ~ 2 A splat is wider than the ~3.8 A between adjacent CA atoms, so
-    most "false positives" are neighbours of concerning residues.
+    most "false positives" are neighbors of concerning residues.
     """
     scored, n_excluded = _scored_events(shared, metric)
     flagged = np.zeros(heavy.size, dtype=bool)
@@ -428,14 +428,14 @@ def figure_c(fields_heldout, shared_clash, clash_sites, clash_heavy, seed) -> di
     observed_rate, n_in = region_rate(pts)
     sampled = sample_field(field, sites)
     env = cKDTree(sites)
-    centred = [c - c.mean(axis=0) for c in comps]
+    centered = [c - c.mean(axis=0) for c in comps]
 
     trials = max(NULL_MIN_TRIALS,
                  min(NULL_TRIALS, _null_budget() // max(1, len(comps))))
     null_rates, inside_fracs = [], []
     for _ in range(trials):
         placed = []
-        for shape in centred:
+        for shape in centered:
             best, best_frac = None, -1.0
             for _try in range(NULL_PLACEMENT_TRIES):
                 moved = shape @ _random_rotation(rng).T + sites[rng.integers(len(sites))]
@@ -734,7 +734,7 @@ def main():
     ap.add_argument("--field", choices=("concern", "density"), default="concern",
                     help="which field construction to measure")
     ap.add_argument("--radius", type=float, default=6.0,
-                    help="neighbourhood radius for --field density")
+                    help="neighborhood radius for --field density")
     ap.add_argument("--no-figure-c", dest="want_c", action="store_false",
                     help="skip the held-out-clash prediction figure (a second field build "
                          "per structure); the project no longer makes that claim")

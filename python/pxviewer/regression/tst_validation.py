@@ -60,7 +60,7 @@ def smoke(key):
     assert result.title == spec.title
     assert result.columns                                  # a non-empty header
     assert all(len(row) == len(result.columns) for row in result.rows)
-    # Markup is a list of kinemage primitives, each a dict with kind + colour.
+    # Markup is a list of kinemage primitives, each a dict with kind + color.
     assert isinstance(result.markup, list)
     assert all(m["kind"] in set(["vectors", "dots", "balls", "triangles"])
                and len(m["color"]) == 3 for m in result.markup)

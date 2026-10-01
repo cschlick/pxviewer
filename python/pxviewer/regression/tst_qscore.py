@@ -1,8 +1,8 @@
-"""Per-atom Q-score, and colouring a model by how well it fits its map.
+"""Per-atom Q-score, and coloring a model by how well it fits its map.
 
 Q-score is the one per-atom attribute pxviewer computes from a map+model pair rather than
 from geometry alone, so it exercises two things nothing else does: mapping values from
-cctbx's non-hydrogen subset back onto the full model, and the threaded compute-then-colour
+cctbx's non-hydrogen subset back onto the full model, and the threaded compute-then-color
 path in the desktop.
 """
 
@@ -24,7 +24,7 @@ QAPP = qt_application()
 
 from pxviewer.desktop import _QSCORE_COLOR, DesktopApp   # noqa: E402
 
-#: Colouring runs on a worker thread; the map is small but reduce2-free Q-score on a real
+#: Coloring runs on a worker thread; the map is small but reduce2-free Q-score on a real
 #: structure is still tens of seconds on a slow machine.
 COLOR_TIMEOUT_S = 300
 
@@ -32,7 +32,7 @@ COLOR_TIMEOUT_S = 300
 def app_with_map():
     """A desktop app holding the bundled map+model demo -- a model paired with density.
 
-    Built per exercise rather than shared: each one colours the model, and the attribute
+    Built per exercise rather than shared: each one colors the model, and the attribute
     state that leaves behind is exactly what the next would be asserting about.
     """
     app = DesktopApp(port=0)
@@ -84,7 +84,7 @@ def exercise_qscore_is_one_value_per_atom_of_the_original_model():
 
 def exercise_hydrogens_come_back_missing_not_as_a_bad_fit():
     """Hydrogens are never scored, so they must come back nan -- which the attribute theme
-    draws in its "missing" colour -- rather than 0, which would paint them as the
+    draws in its "missing" color -- rather than 0, which would paint them as the
     worst-fitting atoms in the structure."""
     from pxviewer.qscore import per_atom_qscore
 
@@ -105,10 +105,10 @@ def exercise_hydrogens_come_back_missing_not_as_a_bad_fit():
         dispose(app)
 
 
-# -- colouring by it ----------------------------------------------------------
+# -- coloring by it ----------------------------------------------------------
 
 
-def exercise_colouring_by_qscore_needs_a_map():
+def exercise_coloring_by_qscore_needs_a_map():
     """With no map there is nothing to score, so the choice is refused and reverted rather
     than quietly showing something else."""
     from pxviewer.live import LiveSession
@@ -130,8 +130,8 @@ def exercise_colouring_by_qscore_needs_a_map():
         dispose(app)
 
 
-def exercise_colouring_by_qscore_sends_per_atom_values():
-    """It computes on a thread and colours through the attribute path, so the
+def exercise_coloring_by_qscore_sends_per_atom_values():
+    """It computes on a thread and colors through the attribute path, so the
     representation ends up keyed to a named per-atom attribute rather than a Mol* theme."""
     app = app_with_map()
     try:
@@ -145,15 +145,15 @@ def exercise_colouring_by_qscore_sends_per_atom_values():
         spec = list(session._representations.values())[0]
         assert spec["color"] == "attribute"
         assert spec["attribute"]["name"] == _QSCORE_COLOR
-        # A fixed 0-1 domain, so the same colour means the same quality in any structure.
+        # A fixed 0-1 domain, so the same color means the same quality in any structure.
         assert list(spec["attribute"]["domain"]) == [0.0, 1.0]
         assert spec["attribute"]["palette"] == "red-yellow-green"     # low red, high green
     finally:
         dispose(app)
 
 
-def exercise_leaving_qscore_drops_the_values_it_coloured_by():
-    """The scores belong to one map+model pairing, so switching colour has to drop them --
+def exercise_leaving_qscore_drops_the_values_it_colored_by():
+    """The scores belong to one map+model pairing, so switching color has to drop them --
     otherwise a later Q-score would have stale numbers sitting behind it."""
     app = app_with_map()
     try:
@@ -170,7 +170,7 @@ def exercise_leaving_qscore_drops_the_values_it_coloured_by():
         dispose(app)
 
 
-def exercise_colouring_by_map_model_cc_needs_a_map():
+def exercise_coloring_by_map_model_cc_needs_a_map():
     """Map-model CC follows Q-score's contract exactly: with no paired map the choice
     is refused and reverted, with a status line saying why."""
     from pxviewer.desktop import _CC_COLOR
@@ -193,7 +193,7 @@ def exercise_colouring_by_map_model_cc_needs_a_map():
         dispose(app)
 
 
-def exercise_colouring_by_map_model_cc_sends_per_atom_values():
+def exercise_coloring_by_map_model_cc_sends_per_atom_values():
     """Per-atom CC (cctbx's mmtbx.maps.correlation) through the attribute path, on the
     correlation's own absolute [0, 1] domain with the px spectrum, plus per-residue
     means so a cartoon can show it too. On the synthetic pair — a map computed from
@@ -222,16 +222,16 @@ def exercise_colouring_by_map_model_cc_sends_per_atom_values():
         dispose(app)
 
 
-def exercise_every_value_colouring_gets_the_same_scale_machinery():
-    """The registry is the contract: *every* per-atom colouring -- refined properties
+def exercise_every_value_coloring_gets_the_same_scale_machinery():
+    """The registry is the contract: *every* per-atom coloring -- refined properties
     and computed ones alike -- opens with a domain and a default_domain, keeps a range
     the user set across a re-apply, resets to its calibrated default, and shows the
     shared Range group on the pane.
 
-    Registry-driven on purpose. The computed colourings were once kept out of the
+    Registry-driven on purpose. The computed colorings were once kept out of the
     scale machinery deliberately, which left a correlation spanning 0.6-0.95 painted
     on a fixed 0-1 ramp with no way to see the variation; iterating the registry means
-    a colouring added later cannot quietly go the same way.
+    a coloring added later cannot quietly go the same way.
     """
     from PySide6.QtWidgets import QDoubleSpinBox
 
@@ -248,36 +248,36 @@ def exercise_every_value_colouring_gets_the_same_scale_machinery():
         n_atoms = entry["session"]._n_atoms
         entry["hotspots"] = Field(n_atoms)
 
-        for colour, info in _MODEL_VALUE_COLORS.items():
+        for color, info in _MODEL_VALUE_COLORS.items():
             entry.pop("attribute", None)
             entry["color"] = None
-            app.set_model_color(mid, colour)
+            app.set_model_color(mid, color)
             deadline = time.time() + COLOR_TIMEOUT_S
             while time.time() < deadline and (
-                    entry.get("attribute") or {}).get("name") != colour:
+                    entry.get("attribute") or {}).get("name") != color:
                 process_events()
                 time.sleep(0.05)
             attribute = entry.get("attribute") or {}
-            assert attribute.get("name") == colour, "%s never landed" % colour
-            assert len(attribute["values"]) == n_atoms, colour
+            assert attribute.get("name") == color, "%s never landed" % color
+            assert len(attribute["values"]) == n_atoms, color
 
             lo, hi = attribute["domain"]
-            assert hi > lo, colour
+            assert hi > lo, color
             assert attribute.get("default_domain") is not None, (
-                "%s has no default to Reset to" % colour)
+                "%s has no default to Reset to" % color)
 
-            # The range is the user's, in the same three ways for every colouring.
+            # The range is the user's, in the same three ways for every coloring.
             app.set_model_value_domain(mid, lo, hi + 5.0)
-            assert entry["attribute"]["domain"] == (lo, hi + 5.0), colour
+            assert entry["attribute"]["domain"] == (lo, hi + 5.0), color
             app.set_model_value_domain(mid, hi + 5.0, lo)          # crossed: refused
-            assert entry["attribute"]["domain"] == (lo, hi + 5.0), colour
+            assert entry["attribute"]["domain"] == (lo, hi + 5.0), color
             app.fit_model_value_domain(mid)
             fitted = entry["attribute"]["domain"]
-            assert fitted[1] > fitted[0], colour
+            assert fitted[1] > fitted[0], color
             app.reset_model_value_domain(mid)
-            assert entry["attribute"]["domain"] == attribute["default_domain"], colour
+            assert entry["attribute"]["domain"] == attribute["default_domain"], color
 
-            # ...and it survives the colouring being re-applied (a rep change, a recompute).
+            # ...and it survives the coloring being re-applied (a rep change, a recompute).
             app.set_model_value_domain(mid, lo, hi + 5.0)
             getattr(app, info["method"])(mid)
             deadline = time.time() + COLOR_TIMEOUT_S
@@ -286,16 +286,16 @@ def exercise_every_value_colouring_gets_the_same_scale_machinery():
                 process_events()
                 time.sleep(0.05)
             assert entry["attribute"]["domain"] == (lo, hi + 5.0), (
-                "%s clobbered the user's range on re-apply" % colour)
+                "%s clobbered the user's range on re-apply" % color)
 
-            # The pane offers the shared Range group, labelled for this colouring.
+            # The pane offers the shared Range group, labeled for this coloring.
             app._controls._update_appearance("model", mid, force=True)
             process_events()
             spins = [w for w in app._controls._appearance_box.findChildren(QDoubleSpinBox)
                      if w.objectName().startswith("value-domain-")]
-            assert len(spins) == 2, "no Range group for %s" % colour
+            assert len(spins) == 2, "no Range group for %s" % color
             assert {round(sp.value(), 2) for sp in spins} == {
-                round(lo, 2), round(hi + 5.0, 2)}, colour
+                round(lo, 2), round(hi + 5.0, 2)}, color
     finally:
         dispose(app)
 

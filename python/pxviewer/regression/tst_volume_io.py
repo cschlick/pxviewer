@@ -53,7 +53,7 @@ def exercise_the_array_is_lazy_and_cached():
     """Metadata and re-writing the map need only the map_manager, so the flex->numpy copy
     is deferred until something actually asks for values."""
     vol = VolumeData.from_map_manager(synthetic_mmm().map_manager())
-    assert vol._array is None            # not materialised until asked for
+    assert vol._array is None            # not materialized until asked for
     first = vol.array
     assert vol._array is first           # cached
     assert vol.array is first
@@ -162,7 +162,7 @@ def exercise_a_real_space_difference_is_flat_until_the_model_is_wrong():
 
 
 def exercise_encode_localres_carries_an_optional_palette():
-    """The payload header says how many ramp colours follow; zero means the frontend's
+    """The payload header says how many ramp colors follow; zero means the frontend's
     built-in resolution ramp, so a plain localres payload differs only by the count."""
     import struct
 

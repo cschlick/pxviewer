@@ -47,7 +47,7 @@ packages = ["pxviewer"]
 # icons (pxviewer/assets/**) — is included automatically as it lives inside the package
 # directory. The built Mol* frontend is copied to pxviewer/frontend/ at packaging time
 # (scripts/build_frontend.sh then the conda recipe); it must be force-listed as an
-# artifact because its build/ subdir matches a .gitignore rule hatchling would honour.
+# artifact because its build/ subdir matches a .gitignore rule hatchling would honor.
 artifacts = [
     "pxviewer/frontend/**",
 ]

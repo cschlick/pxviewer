@@ -195,7 +195,7 @@ def _smiles_restraints(smiles: str, code: str
         raise ValueError(f"rdkit could not embed a conformer for {smiles!r}")
     try:  # tidy the geometry so measured ideals are sensible; not fatal if it can't
         AllChem.MMFFOptimizeMolecule(mol)
-    except Exception:  # pragma: no cover - force field just not parameterised
+    except Exception:  # pragma: no cover - force field just not parameterized
         pass
 
     conf = mol.GetConformer()
@@ -265,7 +265,7 @@ def _provenance_header(code: str, provenance: dict, date: str) -> List[str]:
     smiles_label = "Perceived SMILES" if from_coordinates else "Source SMILES  "
     if from_coordinates:
         method = [
-            "# Method        : bonds perceived from the modelled coordinates by rdkit",
+            "# Method        : bonds perceived from the modeled coordinates by rdkit",
             "#                 (proximity bonding, then bond orders); ideal lengths and",
             "#                 angles MEASURED off a *fresh* conformer of that perceived",
             "#                 chemistry -- NOT off the coordinates, which are usually the",
@@ -276,7 +276,7 @@ def _provenance_header(code: str, provenance: dict, date: str) -> List[str]:
     else:
         method = [
             "# Method        : SMILES parsed, hydrogens added, one 3D conformer embedded",
-            "#                 (ETKDG) and MMFF-optimised; ideal bond lengths and angles",
+            "#                 (ETKDG) and MMFF-optimized; ideal bond lengths and angles",
             "#                 MEASURED off that single conformer, with nominal esds",
             "#                 (bond 0.020 A, angle 3.0 deg).",
         ]
@@ -287,7 +287,7 @@ def _provenance_header(code: str, provenance: dict, date: str) -> List[str]:
         f"# Generator     : RDKit {provenance.get('rdkit_version', '(unknown)')}",
     ] + method + [
         "# Caveat        : geometric estimates, not library- or QM-quality restraints —",
-        "#                 review (and ideally regularise with AceDRG/eLBOW) before",
+        "#                 review (and ideally regularize with AceDRG/eLBOW) before",
         "#                 production refinement.",
     ]
     if provenance.get("formula"):
@@ -481,7 +481,7 @@ def fit_into_density(model: Any, map_data: Any, *, resolution: float = 3.0,
 # A model carrying a ligand cctbx cannot type has no restraints at all -- not for the
 # ligand, and not for the protein around it, because pdb_interpretation refuses the whole
 # file. So minimize, drag, the Geometry tables and validation are all unavailable over one
-# unrecognised residue. rdkit can read the chemistry back out of the coordinates, which is
+# unrecognized residue. rdkit can read the chemistry back out of the coordinates, which is
 # enough to write the monomer dictionary cctbx is asking for.
 
 
@@ -554,9 +554,9 @@ def restraints_from_residue(model: Any, i_seqs: List[int], code: str) -> Tuple[s
     resulting graph, which is how a ligand with no dictionary can still be given one.
 
     **The ideal values do not come from the model's own coordinates.** They are measured
-    off a *fresh* conformer embedded and MMFF-optimised from the perceived chemistry, for
+    off a *fresh* conformer embedded and MMFF-optimized from the perceived chemistry, for
     the reason that makes this worth doing at all: a ligand needing restraints is usually
-    one that is modelled badly, and measuring its ideals off the geometry as-built would
+    one that is modeled badly, and measuring its ideals off the geometry as-built would
     restrain it to the distortion you were trying to fix. The atom order is preserved from
     the perceived molecule, so those ideals still land on the right atoms.
 
@@ -590,7 +590,7 @@ def restraints_from_residue(model: Any, i_seqs: List[int], code: str) -> Tuple[s
         raise ValueError("rdkit could not embed a clean conformer for %s" % code)
     try:
         AllChem.MMFFOptimizeMolecule(ideal)
-    except Exception:  # pragma: no cover - force field simply not parameterised
+    except Exception:  # pragma: no cover - force field simply not parameterized
         pass
 
     names = [hierarchy_atoms[i].name.strip() for i in selected]

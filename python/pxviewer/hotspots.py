@@ -1,6 +1,6 @@
 """Validation hotspots — one per-atom severity field aggregating several validation metrics.
 
-The point is navigation: colour the model by "how much does this atom deserve a look", so
+The point is navigation: color the model by "how much does this atom deserve a look", so
 the eye goes to the places worth rebuilding instead of cross-referencing six separate lists.
 
 The design, and the alternatives it was chosen over, are written up in ``HOTSPOTS.md`` at the
@@ -69,12 +69,12 @@ CC_GOOD = 0.8
 CC_OUTLIER = 0.4
 
 #: Display range: 0 is clean, 1.0 is exactly at the outlier cut, 2.0+ is severe. Fixed rather
-#: than stretched to the structure's own range, so a colour means the same thing everywhere —
+#: than stretched to the structure's own range, so a color means the same thing everywhere —
 #: the same reasoning that puts Q-score on a fixed 0-1 domain.
 DOMAIN = (0.0, 2.0)
 
 #: The warm end of the scale: yellow at the outlier cut, through orange, to red at severe.
-#: Explicit rather than a Mol* colour-list name because the built-in ramps run the wrong way
+#: Explicit rather than a Mol* color-list name because the built-in ramps run the wrong way
 #: for a badness scale.
 WARM = ["#FFD400", "#F46D43", "#B2182B"]
 
@@ -98,12 +98,12 @@ _DEFAULT_CLEAN = "#FFFFFF"
 
 
 def hotspot_palette(background: Optional[str] = None) -> List[str]:
-    """The model-colouring palette: clean atoms take the ``background`` colour and fade into
+    """The model-coloring palette: clean atoms take the ``background`` color and fade into
     it, so only the hotspots stand out.
 
     Evenly spaced across :data:`DOMAIN` ``(0, 2)``, so the two background stops cover 0..1
-    (clean up to the outlier cut) and the warm stops cover the cut and beyond. Colouring the
-    unremarkable protein the background colour is the whole point — a green "clean" end
+    (clean up to the outlier cut) and the warm stops cover the cut and beyond. Coloring the
+    unremarkable protein the background color is the whole point — a green "clean" end
     dominates the view and stops it reading as hotspots at all.
 
     Without a background (the query timed out, no viewer connected) it falls back to white,
@@ -200,7 +200,7 @@ def ramachandran_severity(model: Any, n_atoms: int, analysis: Any = None) -> np.
     """Per-atom Ramachandran severity, on the backbone N/CA/C/O of the scored residue.
 
     Assigned narrowly: phi/psi involve atoms from three residues, but implicating the
-    neighbours would smear one residue's problem onto two innocent ones.
+    neighbors would smear one residue's problem onto two innocent ones.
 
     ``analysis`` (a :class:`pxviewer.analysis.ModelAnalysis`) shares the ramalyze run with the
     Validation tab, so whichever ran first pays for it.
@@ -236,7 +236,7 @@ def clash_severity(model: Any, n_atoms: int, *, data_manager: Any = None,
 
     Both atoms of a clashing pair carry the full severity — neither is the innocent party. An
     atom in several clashes keeps its *worst*, not their sum: a badly placed atom typically
-    hits three neighbours at once, and that is one mistake seen three times. ``analysis`` caches
+    hits three neighbors at once, and that is one mistake seen three times. ``analysis`` caches
     the probe run so a re-score (e.g. a different map-fit term) does not repeat it.
     """
     from .analysis import for_model
@@ -391,7 +391,7 @@ def residue_broadcast(model: Any, values: np.ndarray, *, reduce=max) -> np.ndarr
 
     "Worst" is metric-directional, which is what ``reduce`` selects: severity's worst is
     its ``max`` (the default), a correlation's worst is its ``min`` — a displaced helix
-    with one side-chain atom brushing a neighbour's density must not broadcast that lucky
+    with one side-chain atom brushing a neighbor's density must not broadcast that lucky
     atom's high CC over the whole residue and paint the damage as a good fit.
 
     Used for display only; the per-atom field is what the table and the components report.
@@ -467,7 +467,7 @@ def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPA
 
     The weight is 1 within a voxel's reach of an atom, so the field at its nearest grid point
     is *at least* that atom's severity — a contour at 1.0 therefore always encloses every
-    outlier atom, which a bare Gaussian would not guarantee. Neighbours can
+    outlier atom, which a bare Gaussian would not guarantee. Neighbors can
     only add, so a cluster of merely-poor atoms can also reach 1.0 with none of them
     individually past the cut. That is the regional aggregation the field is for, and it is
     the one place the field says something the per-atom coloring does not; read the shell as
@@ -493,15 +493,15 @@ def severity_field(model: Any, values: np.ndarray, *, spacing: float = FIELD_SPA
         reach = int(np.ceil(FIELD_CUTOFF / spacing))
         axes = [np.arange(n) for n in shape]
         for i in hot:
-            centre = xyz[i] / spacing - origin
+            center = xyz[i] / spacing - origin
             slices, coords = [], []
             for axis in range(3):
-                start = max(0, int(np.floor(centre[axis])) - reach)
-                stop = min(shape[axis], int(np.ceil(centre[axis])) + reach + 1)
+                start = max(0, int(np.floor(center[axis])) - reach)
+                stop = min(shape[axis], int(np.ceil(center[axis])) + reach + 1)
                 if start >= stop:
                     break
                 slices.append(slice(start, stop))
-                coords.append((axes[axis][start:stop] - centre[axis]) * spacing)
+                coords.append((axes[axis][start:stop] - center[axis]) * spacing)
             if len(slices) < 3:
                 continue  # the atom's support falls entirely outside the box
             d2 = (coords[0][:, None, None] ** 2 + coords[1][None, :, None] ** 2

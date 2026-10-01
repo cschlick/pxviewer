@@ -51,9 +51,9 @@ _QSCORE_COLOR = "qscore"
 # see color_model_by_mapcc). Replaced two volume presentations of the same quantity.
 _CC_COLOR = "mapcc"
 
-#: The blue->red value ramp, one definition for every user-scaled colouring: the map's
-#: colour-by-local-resolution surface uses these exact stops in the frontend
-#: (LOCALRES_PALETTE in live.ts), and the model's B-factor/occupancy colouring sends
+#: The blue->red value ramp, one definition for every user-scaled coloring: the map's
+#: color-by-local-resolution surface uses these exact stops in the frontend
+#: (LOCALRES_PALETTE in live.ts), and the model's B-factor/occupancy coloring sends
 #: them over the attribute wire -- so "low is cool, high is hot" reads the same on a
 #: surface and on atoms, and a figure can put the two side by side on one legend.
 _VALUE_PALETTE = ["#2166ac", "#67a9cf", "#d1e5f0", "#fddbc7", "#ef8a62", "#b2182b"]
@@ -61,8 +61,8 @@ _VALUE_PALETTE = ["#2166ac", "#67a9cf", "#d1e5f0", "#fddbc7", "#ef8a62", "#b2182
 # Color a model by aggregated validation severity (see hotspots.py and the Hotspots tab).
 _HOTSPOT_COLOR = "hotspot"
 
-#: **Every** per-atom value colouring, and the single place that says so. These are not
-#: Mol* themes: each is an array of numbers travelling on ``entry["attribute"]``, drawn
+#: **Every** per-atom value coloring, and the single place that says so. These are not
+#: Mol* themes: each is an array of numbers traveling on ``entry["attribute"]``, drawn
 #: by _apply_model_rep's attribute branch through an explicit (lo, hi) domain and
 #: palette -- so each one gets the same user-settable Range group the map's
 #: local-resolution scale has, and ``method`` names the routine that computes it.
@@ -73,7 +73,7 @@ _HOTSPOT_COLOR = "hotspot"
 #: scale is for: a correlation whose values all sit between 0.6 and 0.95 is a
 #: uniformly teal molecule on a 0..1 ramp, with no way to see the variation. The
 #: default domain still carries the calibration and Reset is one click away, which
-#: keeps the same colour meaning the same thing by default without pretending the
+#: keeps the same color meaning the same thing by default without pretending the
 #: user has nothing to say about it.
 _MODEL_VALUE_COLORS = {
     "bfactor": {"label": "B-factor", "unit": " Å²", "method": "color_model_by_property"},
@@ -177,7 +177,7 @@ _MODEL_COLOR_OPTIONS = [
     ("By secondary structure", "secondary-structure"),
     ("By residue", "residue-name"),
     ("By hydrophobicity", "hydrophobicity"),
-    # The refined per-atom numbers, coloured through the attribute path rather than
+    # The refined per-atom numbers, colored through the attribute path rather than
     # Mol*'s fixed 'uncertainty'/'occupancy' themes: the attribute theme takes an
     # explicit domain and palette, which is what gives these a user-settable Range
     # (shared with the map's local-resolution scale) where the built-in themes have
@@ -297,7 +297,7 @@ _HIGHLIGHT_OVERLAY_CLASS = None
 
 def _highlight_overlay_class():
     """A transparent, click-through widget that paints a rounded ring at a set alpha — used
-    to emphasise a button *on top*, so it never touches the button's size or the layout
+    to emphasize a button *on top*, so it never touches the button's size or the layout
     around it. Defined lazily (needs Qt) and cached."""
     global _HIGHLIGHT_OVERLAY_CLASS
     if _HIGHLIGHT_OVERLAY_CLASS is None:
@@ -450,8 +450,8 @@ _ICON_BUTTON_QSS = (
 
 # macOS's native tab metrics ignore the icon-only size we want; only a stylesheet
 # overrides them. A stylesheet also makes Qt paint the bar itself — so paint the bar and
-# tabs the panel color (palette(window)) to cover the native grey base, rather than
-# leaving it transparent (which shows that grey through). With the metrics overridden,
+# tabs the panel color (palette(window)) to cover the native gray base, rather than
+# leaving it transparent (which shows that gray through). With the metrics overridden,
 # setExpanding(True) distributes the tabs evenly across the bar (measured: 7 tabs share
 # a 400px bar at 57px each). Applied on macOS only, so the native Linux tabs are untouched.
 _TAB_BAR_QSS = (
@@ -625,7 +625,7 @@ def _make_bridge():
         minimizing_changed = Signal(bool)   # a minimization started (True) / finished (False)
         ligand_placed = Signal()            # a ligand was built and added (clear the inputs)
         volume_iso_changed = Signal(object)  # (volume id, level) changed in the viewport
-        localres_shown = Signal()           # the viewport drew a localres colouring (it is usable now)
+        localres_shown = Signal()           # the viewport drew a localres coloring (it is usable now)
 
     return _Bridge()
 
@@ -806,7 +806,7 @@ def _make_atom_table_model():
 
     Rows are atoms (i_seq order), columns are the structure's per-atom attributes.
     Only the numpy columns are held; values are formatted on demand for the cells the
-    view actually paints, so 100k+ atoms stay cheap (QTableView virtualises rendering).
+    view actually paints, so 100k+ atoms stay cheap (QTableView virtualizes rendering).
     """
     from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
@@ -854,7 +854,7 @@ def _make_atom_table_model():
             """Restrict the visible rows to ``indices`` (atom order preserved); None = all.
 
             Backs the "show only selected" mode. Only the small selected subset is
-            materialised, so the view stays cheap even against 100k+ atoms.
+            materialized, so the view stays cheap even against 100k+ atoms.
             """
             new = (None if indices is None else
                    [i for i in sorted({int(i) for i in indices}) if 0 <= i < self._n])
@@ -1049,7 +1049,7 @@ def _make_component_table_model():
 
 
 def _atom_label_fn(session):
-    """A ``i_seq -> "chain/resnameresseq/name"`` labeller from a session's columns."""
+    """A ``i_seq -> "chain/resnameresseq/name"`` labeler from a session's columns."""
     arrays = getattr(getattr(session, "_data", None), "arrays", None)
     if arrays is None:
         return str
@@ -1062,7 +1062,7 @@ def _atom_label_fn(session):
 
 
 def _geostd_source_fn(session):
-    """An ``i_seqs -> (text, geostd_path_or_None)`` labeller for a restraint's source.
+    """An ``i_seqs -> (text, geostd_path_or_None)`` labeler for a restraint's source.
 
     Intra-residue restraints come from that monomer's geostd file; a restraint whose
     atoms span residues is defined by a link, not a single monomer file.
@@ -1109,7 +1109,7 @@ def _make_restraint_table_model():
     Rows are restraint proxies; the first column lists the atoms involved and the
     rest are the restraint's values (ideal/model/delta/…). Values are computed from
     cctbx on demand for the row the view paints — a small one-row memo keeps a row's
-    cells from recomputing — so 100k+ restraints stay cheap (QTableView virtualises).
+    cells from recomputing — so 100k+ restraints stay cheap (QTableView virtualizes).
     """
     from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
     from PySide6.QtGui import QColor, QFont
@@ -1533,7 +1533,7 @@ class ControlsWindow:
         self._console_started = False
         self._items: list = []  # last Loaded-tree items summary (for the appearance pane)
         self._focused: tuple = (None, None)  # (kind, id) currently shown in Appearance
-        # Buttons to grey out while the operation they start is running, keyed by its label
+        # Buttons to gray out while the operation they start is running, keyed by its label
         # (see _register_busy_button). Set up before the tabs, which register into it.
         self._busy_buttons: dict = {}
 
@@ -1547,7 +1547,7 @@ class ControlsWindow:
         tabs.setDocumentMode(True)
         tabs.tabBar().setUsesScrollButtons(False)
         # The seven icon tabs share the full bar width evenly -- left-tight tabs left a
-        # dead grey field to the right of the last one, most of the bar at panel widths.
+        # dead gray field to the right of the last one, most of the bar at panel widths.
         tabs.tabBar().setExpanding(True)
         if _IS_MAC:
             tabs.tabBar().setStyleSheet(_TAB_BAR_QSS)
@@ -1599,7 +1599,7 @@ class ControlsWindow:
         QTimer.singleShot(0, self._retint_icons)
 
         # A slim, always-visible status line, with the app icon + Help on the far side.
-        # It doubles as the tab labeller on hover, so remember the real status underneath.
+        # It doubles as the tab labeler on hover, so remember the real status underneath.
         # A busy bar directly above the status line. Some operations run for tens of seconds
         # (probe2, reduce2, a hotspot score), and the status text alone is easy to miss — this
         # is motion, so it reads as "working" at a glance. Indeterminate: none of these report
@@ -1740,9 +1740,9 @@ class ControlsWindow:
         self._loaded_tree.setColumnCount(2)
         self._loaded_tree.setHeaderHidden(True)
         # Pin the selection paint. Native macOS uses the vivid accent with white text
-        # (which drowned the dark eye icon) when focused, and a pale grey when not. A
+        # (which drowned the dark eye icon) when focused, and a pale gray when not. A
         # fixed pale blue with the normal dark text works for both icon and name, and
-        # is deterministic across machines and system accent colours — safe to
+        # is deterministic across machines and system accent colors — safe to
         # hardcode because the app is pinned to the light theme. One rule, no :active
         # variant, so focused and unfocused rows paint identically.
         self._loaded_tree.setStyleSheet(
@@ -1889,7 +1889,7 @@ class ControlsWindow:
         # Whether the focus also clips a sphere around the selection. On by default --
         # the sphere is what isolates the named atoms from everything in front of and
         # behind them -- but sometimes the surroundings are the point, so it is a
-        # choice, made where the behaviour happens. The sphere has no other control,
+        # choice, made where the behavior happens. The sphere has no other control,
         # so unchecking also lifts a standing one (see _on_clip_on_select_toggled).
         self._clip_on_select = QCheckBox("Clip to selection")
         self._clip_on_select.setToolTip(
@@ -1938,7 +1938,7 @@ class ControlsWindow:
             "imply residues); changing it by hand holds until the next table "
             "engagement. A ribbon face has no atoms to aim at, so a click on "
             "cartoon still takes the residue — clicks on ball-and-stick "
-            "(including the neighbourhood layer) stay atom-precise.")
+            "(including the neighborhood layer) stay atom-precise.")
         gran_row.addWidget(self._pick_granularity)
         gran_row.addStretch(1)
         sl.addLayout(gran_row)
@@ -2055,7 +2055,7 @@ class ControlsWindow:
         map_layout.addWidget(QLabel("Maps computed from what you already have:"))
         self._localres_btn = self._make_text_button(
             "Local resolution",
-            "Calculate local resolution from two half-maps and colour the map by it")
+            "Calculate local resolution from two half-maps and color the map by it")
         self._localres_btn.clicked.connect(self._on_localres_wizard)
         map_row = QHBoxLayout()
         map_row.addWidget(self._localres_btn)
@@ -2113,7 +2113,7 @@ class ControlsWindow:
     def _build_refine_group(self):
         """Refine — one box, because it is one engine driven two ways.
 
-        Minimize relaxes the whole model; a drag relaxes the neighbourhood under the
+        Minimize relaxes the whole model; a drag relaxes the neighborhood under the
         pointer. They were two boxes, which is how "Into the density" came to be offered
         twice as two unrelated-looking checkboxes, and how "does the map answer back"
         (the live difference map) ended up filed under one of them. The shared question
@@ -2133,7 +2133,7 @@ class ControlsWindow:
         box = QGroupBox("Refine")
         dg = QVBoxLayout(box)
         dg.addWidget(QLabel("Relax the model onto ideal geometry — all of it, or the "
-                            "neighbourhood under the pointer."))
+                            "neighborhood under the pointer."))
 
         # The shared question, asked once. Two boxes rather than one switch because the
         # two operations really can differ -- a predictable geometry-only tug while the
@@ -2741,7 +2741,7 @@ class ControlsWindow:
             "<b>Clashes &amp; contacts</b> — tick it in the checks above and press play: it "
             "adds hydrogens (reduce2) as a new object, runs probe2, and these overlays light "
             "up. There is no table here because probe's answer is the dots themselves: green "
-            "and blue are favourable contacts, and the red spikes are <b>overlaps</b>, drawn "
+            "and blue are favorable contacts, and the red spikes are <b>overlaps</b>, drawn "
             "where two atoms interpenetrate by more than 0.4 Å — the length of a spike is "
             "that overlap.")
         hint.setWordWrap(True)
@@ -2815,7 +2815,7 @@ class ControlsWindow:
         self._hotspots_check = QCheckBox("Hotspot severity (aggregate of the above)")
         self._hotspots_check.setToolTip(
             "Queue the severity aggregate: the ticked checks combined into one per-atom "
-            "field, colouring the model and drawing where they agree in 3-D.\n"
+            "field, coloring the model and drawing where they agree in 3-D.\n"
             "It reuses the analysis the other checks already build, so ticking it beside "
             "them costs the aggregation and little else. Results land in the Hotspots "
             "sub-tab.")
@@ -2900,7 +2900,7 @@ class ControlsWindow:
         self._sync_all_markup_button()
 
     def _sync_all_markup_button(self) -> None:
-        """Keep the label describing the action, and grey it out when there is no markup."""
+        """Keep the label describing the action, and gray it out when there is no markup."""
         button = getattr(self, "_all_markup_btn", None)
         if button is None:  # pragma: no cover - during tab construction
             return
@@ -2979,10 +2979,10 @@ class ControlsWindow:
         The first click switches a ribbon model to ball-and-stick (the standing rule
         for atom-precision work — measuring and dragging do the same). Judging an
         outlier needs its atoms anyway, and it makes every later click nearly free:
-        with the whole model in sticks the per-selection neighbourhood layer has
+        with the whole model in sticks the per-selection neighborhood layer has
         nothing to add, so clicking through a worklist re-sends no representations —
         without this, each click rebuilt the entire cartoon (the ribbon steps aside
-        around the neighbourhood), which was sluggish. Once per model only: a user
+        around the neighborhood), which was sluggish. Once per model only: a user
         who switches back to ribbon afterwards keeps ribbon (see
         :meth:`~DesktopApp.ensure_atoms_shown_once`)."""
         cols = result.columns
@@ -3125,7 +3125,7 @@ class ControlsWindow:
             "Per-atom color only shows the surface, so a buried hotspot stays hidden; a 3-D "
             "field is visible through the structure.")
         show3d.setEnabled(False)  # nothing to draw until a score exists
-        # On by default: the field is the thing per-atom colour cannot show (a buried
+        # On by default: the field is the thing per-atom color cannot show (a buried
         # hotspot sits behind the atoms in front of it), and leaving it off meant the
         # first run showed only the half of the answer that was already visible. Set
         # before the signal is connected -- the handler reads the style and quality
@@ -3451,7 +3451,7 @@ class ControlsWindow:
         vg.addLayout(radius_row)
 
         # (The old "Show Mol* focus neighborhood on click" toggle is gone: a click now
-        # runs pxviewer's own selection pipeline, and the neighbourhood context is the
+        # runs pxviewer's own selection pipeline, and the neighborhood context is the
         # Selection pane's "Neighborhood in ball-and-stick" checkbox — one treatment
         # for clicked and typed selections alike.)
         layout.addWidget(viewer)
@@ -3459,7 +3459,7 @@ class ControlsWindow:
         selection = QGroupBox("Selection")
         sg = QVBoxLayout(selection)
 
-        # The clip sphere is reach + this much: how much neighbourhood survives
+        # The clip sphere is reach + this much: how much neighborhood survives
         # around a clipped selection is a taste setting, not a property of any one
         # selection, so it lives here once. 4 A keeps a lone atom readable; a bond's
         # own reach already covers its two atoms.
@@ -3475,7 +3475,7 @@ class ControlsWindow:
         pad_tail = QLabel("past the selected atoms")
         pad_tip = ("The sphere a clipped selection draws is the selection's reach "
                    "plus this much clearance, so even a single atom keeps its "
-                   "neighbourhood in view. Applies to the next selection and "
+                   "neighborhood in view. Applies to the next selection and "
                    "re-fits a sphere that is standing now.")
         pad_label.setToolTip(pad_tip)
         pad_spin.setToolTip(pad_tip)
@@ -3784,9 +3784,9 @@ class ControlsWindow:
             # just set to one color, and the swatches/wheel are the only way to say the latter.
             self._add_color_row(it.get("color"), _set_color,
                                 themes=_MODEL_COLOR_OPTIONS, title="Model color")
-            # A value colouring's scale, the same framed Range group the map's
-            # local-resolution colouring gets -- one widget, one meaning, and the same
-            # blue->red ramp on both, so a model and a map colouring can share a legend.
+            # A value coloring's scale, the same framed Range group the map's
+            # local-resolution coloring gets -- one widget, one meaning, and the same
+            # blue->red ramp on both, so a model and a map coloring can share a legend.
             if it.get("value_domain") is not None:
                 info = _MODEL_VALUE_COLORS[it["color"]]
                 self._add_value_scale_group(
@@ -3841,11 +3841,11 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_style(vid, v))
 
             def _set_color(v, it=it):
-                # "Local resolution" rides the same dropdown as the flat colours: both
-                # answer "what colours this map", so two controls for one question (a
-                # colour row AND a separate checkbox) made each look unrelated to the
-                # other. Picking it turns the colouring on; picking any colour returns
-                # to a flat surface in that colour.
+                # "Local resolution" rides the same dropdown as the flat colors: both
+                # answer "what colors this map", so two controls for one question (a
+                # color row AND a separate checkbox) made each look unrelated to the
+                # other. Picking it turns the coloring on; picking any color returns
+                # to a flat surface in that color.
                 if v == "localres":
                     it["color_by_resolution"] = True
                     self._safe(lambda: self._desktop.set_color_by_resolution(vid, True))
@@ -3858,7 +3858,7 @@ class ControlsWindow:
 
             add_combo("Style", _VOLUME_STYLE_OPTIONS, live.get("style"), _set_style)
             # Downsample is a property of how any map is drawn: the plain isosurface
-            # redraws from an on-lattice decimated copy, and the colour-by-resolution
+            # redraws from an on-lattice decimated copy, and the color-by-resolution
             # surface (when active) rebuilds from its held grids at the same factor.
             # Plain maps default to Full; the localres wizard defaults its map to 4x.
             def _set_localres_ds(v, it=it):
@@ -3899,10 +3899,10 @@ class ControlsWindow:
             self._add_mask_row(live.get("mask_radius"),
                                self._desktop.can_mask_volume(vid), _set_mask)
 
-            # The colouring's own settings, shown only while "Local resolution" is the
-            # selected colouring (the Color dropdown is the switch; this panel is its
+            # The coloring's own settings, shown only while "Local resolution" is the
+            # selected coloring (the Color dropdown is the switch; this panel is its
             # detail). Built by the shared value-scale builder, so the map's range
-            # control is the identical widget a model's B-factor colouring gets.
+            # control is the identical widget a model's B-factor coloring gets.
             if it.get("color_by_resolution"):
                 def _set_map_domain(lo_v, hi_v, it=it):
                     it["localres_domain"] = (lo_v, hi_v)
@@ -3946,7 +3946,7 @@ class ControlsWindow:
         """The pane for a difference map's negative contour, which is its own object.
 
         It has a row of its own in the panel, so it gets the tools of any drawn thing:
-        style, colour, opacity, and a level. Only what is genuinely one map stays on the
+        style, color, opacity, and a level. Only what is genuinely one map stays on the
         map's own pane -- which part of the box is drawn, and at what sampling.
 
         The level is the one tie. "Link level with positive map" is on by default, which
@@ -4142,7 +4142,7 @@ class ControlsWindow:
         combo.setCurrentIndex(idx if idx >= 0 else 0)
 
         # The last color actually committed — the target to revert to if a custom pick
-        # is cancelled, since by then the live preview has already changed the map.
+        # is canceled, since by then the live preview has already changed the map.
         committed = {"value": current}
 
         def picked(_index, combo=combo):
@@ -4190,7 +4190,7 @@ class ControlsWindow:
 
             if not shiboken6.isValid(combo):
                 # The live preview can rebuild the appearance pane under this handler:
-                # applying a colour while a colour-by-CC/resolution theme is on turns
+                # applying a color while a color-by-CC/resolution theme is on turns
                 # that flag off, which emits loaded-changed, which rebuilds the pane
                 # and deletes the combo mid-``exec()``. The rebuilt pane already shows
                 # the entry's current state; only the final apply/undo remains to do.
@@ -4201,7 +4201,7 @@ class ControlsWindow:
                 combo.insertItem(at, swatch(name), name, name)
                 combo.setCurrentIndex(at)
             else:
-                # Cancelled: undo the preview and put the selection back where it was.
+                # Canceled: undo the preview and put the selection back where it was.
                 back = combo.findData(revert_to)
                 combo.setCurrentIndex(back if back >= 0 else 0)
             combo.blockSignals(False)
@@ -4310,8 +4310,8 @@ class ControlsWindow:
     def _add_value_scale_group(self, title, domain, unit, on_domain, on_fit, on_reset,
                                fit_label="Fit to values", fit_tip=""):
         """One framed value-scale panel: Range spins, Fit, Reset. The single control for
-        every user-scaled colouring -- the map's local-resolution surface and a model's
-        B-factor/occupancy colouring build the identical group, so a range means the
+        every user-scaled coloring -- the map's local-resolution surface and a model's
+        B-factor/occupancy coloring build the identical group, so a range means the
         same thing wherever it appears (lo draws blue, hi draws red, values clamp,
         fixed until the user moves it)."""
         from PySide6.QtWidgets import (QDoubleSpinBox, QGroupBox, QHBoxLayout, QLabel,
@@ -4323,7 +4323,7 @@ class ControlsWindow:
         rr = QHBoxLayout()
         lab = QLabel("Range")
         lab.setMinimumWidth(80)
-        lab.setToolTip("The values the colour ramp spans; values outside clamp. "
+        lab.setToolTip("The values the color ramp spans; values outside clamp. "
                        "Fixed until you change it.")
         rr.addWidget(lab)
         lo_spin, hi_spin = QDoubleSpinBox(), QDoubleSpinBox()
@@ -5082,10 +5082,10 @@ class ControlsWindow:
             self._set_status(str(exc))
 
     def _on_localres_wizard(self) -> None:
-        """Colour a map by local resolution computed from its two half-maps.
+        """Color a map by local resolution computed from its two half-maps.
 
         The half-maps are read in cctbx only (never shown); the resulting resolution map is
-        pinned, hidden, under the full map, and the map is coloured by it — a toggle that
+        pinned, hidden, under the full map, and the map is colored by it — a toggle that
         then lives in the map's own appearance controls. Inputs are either local files or
         fetched from the PDB/EMDB (the same computation either way)."""
         from PySide6.QtWidgets import (
@@ -5095,9 +5095,9 @@ class ControlsWindow:
 
         maps_filter = "Maps (*.mrc *.map *.ccp4);;All files (*)"
         dialog = QDialog(self._window)
-        dialog.setWindowTitle("Colour by local resolution")
+        dialog.setWindowTitle("Color by local resolution")
         outer = QVBoxLayout(dialog)
-        intro = QLabel("Compute local resolution from two half-maps and colour a map by it.")
+        intro = QLabel("Compute local resolution from two half-maps and color a map by it.")
         intro.setWordWrap(True)
         outer.addWidget(intro)
 
@@ -5344,12 +5344,12 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Write failed", str(exc))
 
     def _offer_ligand_restraints(self, mid: str) -> bool:
-        """Offer to build dictionaries for a model's unrecognised ligands. True if any were.
+        """Offer to build dictionaries for a model's unrecognized ligands. True if any were.
 
         The reason this is a prompt and not automatic: the dictionary is *inferred*. rdkit
         reads the bonds out of the coordinates and the bond orders out of the graph, which
-        is a guess about chemistry the file never stated. A well-modelled ligand it gets
-        right; a badly modelled one it gets wrong in a way that then looks authoritative,
+        is a guess about chemistry the file never stated. A well-modeled ligand it gets
+        right; a badly modeled one it gets wrong in a way that then looks authoritative,
         which is exactly the situation restraints are usually needed for. So the user is
         shown the ligands, told what the source is, and asked -- one at a time, since a
         model can carry one ligand worth guessing at and another worth fetching properly.
@@ -5372,7 +5372,7 @@ class ControlsWindow:
             "all unavailable until they are resolved.<br><br>"
             "pxviewer can generate one from the coordinates: rdkit works out the bonding, "
             "and the ideal values are measured from a clean conformer of the chemistry it "
-            "perceives — <b>not</b> from the geometry as modelled. Check what it perceived "
+            "perceives — <b>not</b> from the geometry as modeled. Check what it perceived "
             "afterwards; on a poorly built ligand the guess can be wrong.")
         intro.setWordWrap(True)
         intro.setMaximumWidth(460)
@@ -5849,7 +5849,7 @@ class ControlsWindow:
     def _poll_tutorial_done(self) -> None:
         """Poll the step's done() predicate. The predicate *acknowledges* — flash the
         status and swap Skip for Next on the false->true edge — but the coach never
-        advances itself: pressing Enter in a neighbouring field, for instance, must
+        advances itself: pressing Enter in a neighboring field, for instance, must
         not turn a finished step into a surprise page turn. Next is always the
         user's click."""
         if self._tutorial is None:
@@ -6037,7 +6037,7 @@ class ControlsWindow:
                         rep: str = "") -> None:
         """An atom of ``mid`` was clicked. With no click mode armed this IS a
         selection: a plain click replaces it through the same pipeline a typed
-        expression takes — oriented framing, clip, neighbourhood context, all
+        expression takes — oriented framing, clip, neighborhood context, all
         under the Selection pane's checkboxes — and a SHIFT-click grows or
         shrinks it, camera left where it is. How much each click takes — the
         atom's whole residue, or just the atom — is the Selection pane's
@@ -6050,7 +6050,7 @@ class ControlsWindow:
         only aimable where atoms are drawn: a ribbon face resolves to the
         residue's anchor atom whatever Mol* granularity says, so a cartoon hit
         promotes to the residue — the unit the click could actually have meant.
-        A hit on the ball-and-stick neighbourhood layer stays atom-precise."""
+        A hit on the ball-and-stick neighborhood layer stays atom-precise."""
         desktop = self._desktop
         entry = desktop._model_entry(mid)
         tool_owns_click = (
@@ -6188,7 +6188,7 @@ class ControlsWindow:
     def _on_restraints_changed(self, mid) -> None:
         """A model's restraints were rebuilt: drop the cache and refill the tables.
 
-        Without this an added restraint is real -- minimize honours it, and it is in the
+        Without this an added restraint is real -- minimize honors it, and it is in the
         file the user saves -- but invisible: ``_geo_cache`` is keyed by model id and the
         entry it holds wraps the *previous* restraints manager, so the Bonds table goes on
         listing the restraints from before the edit.
@@ -6414,7 +6414,7 @@ class ControlsWindow:
             palette = self._loaded_tree.palette()
             # A selected row keeps the same dark tints: the tree's stylesheet paints
             # its selection in the pale highlight (see the tree setup), on which the
-            # text-coloured icon reads fine — Selected-mode pixmaps are passed
+            # text-colored icon reads fine — Selected-mode pixmaps are passed
             # explicitly so the view never swaps in a faint variant of its own.
             text = palette.color(QPalette.ColorRole.Text)
             dim = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
@@ -6689,7 +6689,7 @@ class ControlsWindow:
         space-bar step or a clicked residue -- the focused-residue marker, the
         scene selection, the framing -- and the atoms table echoes the same
         atoms. Several rows select their atoms together. Like a Validation row,
-        the framing, clip sphere and neighbourhood context answer to the
+        the framing, clip sphere and neighborhood context answer to the
         Selection pane's checkboxes: stepping a list is still just selecting.
         """
         rows = [idx.row() for idx in self._component_view.selectionModel().selectedRows()]
@@ -6723,7 +6723,7 @@ class ControlsWindow:
         """Atom rows -> the viewer: the same selection a clicked atom makes.
 
         Model-backed sessions go through the fragment pipeline, so the rows
-        honour the Selection pane's checkboxes like every other selection;
+        honor the Selection pane's checkboxes like every other selection;
         model-less ones get the plain highlight-and-aim they always had.
         """
         rows = [idx.row() for idx in self._atom_view.selectionModel().selectedRows()]
@@ -6888,7 +6888,7 @@ class DesktopApp:
         # WebSocket threads, read on the GUI thread, so guard it.
         self._scene_selection: dict = {}
         self._scene_lock = threading.Lock()
-        # Serialises restraint builds. The pre-warm below runs on its own thread while a
+        # Serializes restraint builds. The pre-warm below runs on its own thread while a
         # drag can start on the tug worker, and both would otherwise process the same
         # model at once. Held only around the build, which is rare and per-model.
         self._restraints_lock = threading.Lock()
@@ -7759,8 +7759,8 @@ class DesktopApp:
         ``_reassert_hidden_volumes`` and replayed to the reloaded client by the live
         session) so a reload never rebuilds an isosurface from empty.
 
-        A pinned local-resolution map is left out entirely. It is a colour source, never a
-        surface: it exists to colour the map above it, and drawing its own isosurface
+        A pinned local-resolution map is left out entirely. It is a color source, never a
+        surface: it exists to color the map above it, and drawing its own isosurface
         produces a giant featureless blob (a smooth field contoured at its midpoint) on
         top of the data. Keeping it out of the scene makes "never drawn" structural
         instead of a hidden-state race the reload can lose.
@@ -7916,7 +7916,7 @@ class DesktopApp:
         reps = list(entry.get("reps") or [entry["rep"]])
         rep = reps[0]
         on = self._shown_indices(entry)  # restrict to shown structure types
-        # While a neighbourhood context stands, the main representation steps aside
+        # While a neighborhood context stands, the main representation steps aside
         # there: the region reads as ball-and-stick alone — the Mol* focus look — not
         # sticks threaded through ribbon. The context layer (below) draws those atoms.
         main_on = on
@@ -7944,9 +7944,9 @@ class DesktopApp:
             session.color_by(attribute["name"], type=rep, palette=attribute["palette"],
                              domain=attribute["domain"], on=main_on)
             # The attribute API replaces the representation list, so the model's other
-            # layers are added back — carrying the same colouring. A value colouring is a
+            # layers are added back — carrying the same coloring. A value coloring is a
             # statement about the atoms, not about one representation of them: drawing a
-            # B-factor cartoon threaded with element-coloured sticks says two different
+            # B-factor cartoon threaded with element-colored sticks says two different
             # things about the same atom, and the legend belongs to neither.
             for extra in reps[1:]:
                 session.color_by(attribute["name"], type=extra,
@@ -7963,7 +7963,7 @@ class DesktopApp:
         self._add_context_layer(entry, session, on)
 
     def _add_context_layer(self, entry, session, on) -> None:
-        """The selection's neighbourhood as an extra ball-and-stick layer (see
+        """The selection's neighborhood as an extra ball-and-stick layer (see
         ``_set_context_rep``), restricted to what the structure-type toggles show."""
         # Whatever else happens, never two context layers. Tracking-and-removing the
         # previous id still stacked duplicates under suite load (two adds that never
@@ -7985,9 +7985,9 @@ class DesktopApp:
                 return
         attribute = entry.get("attribute")
         if entry.get("color") in _MODEL_VALUE_COLORS and attribute is not None:
-            # A computed colouring (map-model CC, Q-score, hotspot severity) must not
-            # stop at the neighbourhood's edge: the sticks around a selection are
-            # exactly the atoms being judged, and element colours there made the
+            # A computed coloring (map-model CC, Q-score, hotspot severity) must not
+            # stop at the neighborhood's edge: the sticks around a selection are
+            # exactly the atoms being judged, and element colors there made the
             # guided "this residue is painted pink" reading simply false. The values
             # are already registered on the session; add the layer alongside.
             session.color_by(attribute["name"], type="ball-and-stick",
@@ -8154,7 +8154,7 @@ class DesktopApp:
     def set_model_representation(self, mid: str, rep: str) -> None:
         """Change a model's representation type (from the inline dropdown).
 
-        An explicit choice here also clears the standing neighbourhood context layer:
+        An explicit choice here also clears the standing neighborhood context layer:
         the user has just said what the model should look like, and keeping a
         selection's ball-and-stick patch on top of it reads as the switch half
         failing. Picking Cartoon therefore yields pure ribbon — until the next
@@ -8261,12 +8261,12 @@ class DesktopApp:
 
     @staticmethod
     def _opening_domain(entry, name: str, default) -> tuple:
-        """``(domain, default_domain)`` for a value colouring about to be applied.
+        """``(domain, default_domain)`` for a value coloring about to be applied.
 
-        The range the user last set for *this* colouring on *this* model survives a
+        The range the user last set for *this* coloring on *this* model survives a
         re-apply (a representation change, a recompute); anything else opens at the
         calibrated default, which is also where Reset goes. Shared by all five
-        colourings so "the scale sticks" means one thing.
+        colorings so "the scale sticks" means one thing.
         """
         default = (float(default[0]), float(default[1]))
         previous = entry.get("attribute") or {}
@@ -8280,11 +8280,11 @@ class DesktopApp:
         model = getattr(entry["session"], "model", None) if entry else None
         if entry is None:
             return
-        # Dispatched from the registry, which calls every colouring with just the model
-        # id; the colour already on the entry says which property is meant.
+        # Dispatched from the registry, which calls every coloring with just the model
+        # id; the color already on the entry says which property is meant.
         kind = kind or entry.get("color")
         if model is None:
-            self._warn("this model has no atoms to colour by")
+            self._warn("this model has no atoms to color by")
             return
         atoms = model.get_hierarchy().atoms()
         values = np.asarray(atoms.extract_b() if kind == "bfactor"
@@ -8308,7 +8308,7 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def set_model_value_domain(self, mid: str, lo: float, hi: float) -> None:
-        """Set the colour scale's range for a model's value colouring -- the model-side
+        """Set the color scale's range for a model's value coloring -- the model-side
         twin of :meth:`set_localres_domain`, stable until the user moves it."""
         entry = self._model_entry(mid)
         attribute = entry.get("attribute") if entry else None
@@ -8316,14 +8316,14 @@ class DesktopApp:
             return
         lo, hi = float(lo), float(hi)
         if not (hi > lo):
-            self._warn("the colour range needs max above min")
+            self._warn("the color range needs max above min")
             return
         attribute["domain"] = (lo, hi)
         self._apply_model_rep(entry)
         self._emit_loaded_changed()
 
     def fit_model_value_domain(self, mid: str) -> None:
-        """Span the model colouring's range over the values actually present."""
+        """Span the model coloring's range over the values actually present."""
         entry = self._model_entry(mid)
         attribute = entry.get("attribute") if entry else None
         if attribute is None or attribute["name"] not in _MODEL_VALUE_COLORS:
@@ -8398,9 +8398,9 @@ class DesktopApp:
 
     #: The px spectrum for map-model CC on atoms, worst to best: hot pink through
     #: purple and blue to calm teal — deliberately unlike Q-score's red-green, the
-    #: hotspot yellow-red and the localres blue-red, so no two colourings can be
+    #: hotspot yellow-red and the localres blue-red, so no two colorings can be
     #: mistaken for one another. The domain is the correlation's own absolute scale,
-    #: so a colour means the same thing on every structure.
+    #: so a color means the same thing on every structure.
     _CC_MODEL_PALETTE = ["#ec4899", "#a855f7", "#6366f1", "#3b82f6", "#2dd4bf"]
     _CC_MODEL_DOMAIN = (0.0, 1.0)
 
@@ -8410,8 +8410,8 @@ class DesktopApp:
         by atom. Pink is an atom the map disagrees with, teal a good fit.
 
         Needs a paired map, exactly like Q-score, and is computed against the model as
-        it stands — re-pick the colouring to recompute after refining or dragging.
-        This replaced two volume presentations of the same quantity (a colour-by-CC
+        it stands — re-pick the coloring to recompute after refining or dragging.
+        This replaced two volume presentations of the same quantity (a color-by-CC
         map surface and a hotspot-style deficit cloud): both cost far more to draw,
         and neither said *which atoms* to fix, which is the question.
         """
@@ -8438,7 +8438,7 @@ class DesktopApp:
                 return
             model = getattr(entry["session"], "model", None)
             # The ribbon draws residues, not atoms: broadcast per-residue means so the
-            # colouring is visible on a cartoon too, not only in ball-and-stick.
+            # coloring is visible on a cartoon too, not only in ball-and-stick.
             residue_values = (hotspots_mod.residue_broadcast(model, values, reduce=min)
                               if model is not None else None)
 
@@ -8497,7 +8497,7 @@ class DesktopApp:
         self.run_background(work, name="pxviewer-hotspots", label="Finding hotspots")
 
     def _hotspots_work(self, mid, name, model, analysis) -> None:
-        """Score the severity field and colour by it (background thread).
+        """Score the severity field and color by it (background thread).
 
         Shared by :meth:`compute_hotspots` and the validation queue, so ticking hotspots
         beside the per-residue checks costs the aggregation and nothing more: the
@@ -8711,10 +8711,10 @@ class DesktopApp:
             f"showing {imported.primary}{note}")
 
     def _drop_computed_hotspots(self, entry) -> None:
-        """Forget a computed severity score, and stop colouring the model by it.
+        """Forget a computed severity score, and stop coloring the model by it.
 
         Severity and concern are not convertible, so an imported field must not leave a
-        severity table, a severity-coloured model, or a severity-scaled slider behind it —
+        severity table, a severity-colored model, or a severity-scaled slider behind it —
         that is exactly the mix that lets a table read 0.43 where the map correctly reads 0.
         """
         entry.pop("hotspots", None)
@@ -8827,7 +8827,7 @@ class DesktopApp:
         through yellow to red — or ``'contour'``, a single translucent shell at the current
         threshold. Whichever is showing is torn down before the other is drawn; only one at a
         time. Both styles read the *same* absolute field: hue and opacity follow the value, on
-        a fixed domain, so a colour means the same thing in every structure and metric.
+        a fixed domain, so a color means the same thing in every structure and metric.
         """
         entry = self._model_entry(mid or self._active_model_id)
         if entry is None:
@@ -8879,7 +8879,7 @@ class DesktopApp:
             if imported is not None:
                 from .volume_io import encode_hotspot_concern
 
-                # Tell the viewer where the contract puts each colour, rather than letting it
+                # Tell the viewer where the contract puts each color, rather than letting it
                 # infer a ramp from the knee: the knee is a user control and moves, the
                 # anchors are the generator's fixed scale and must not move with it.
                 entry["session"].set_hotspot_anchors(imported.anchors)
@@ -8904,7 +8904,7 @@ class DesktopApp:
 
         data = VolumeData.from_numpy(
             field, spacing=spacing, origin=origin, name=f"{entry['name']} hotspots")
-        # The shell's colour is the colour the density shows at that same level — one scale,
+        # The shell's color is the color the density shows at that same level — one scale,
         # read two ways, so switching style does not restate the value differently.
         color = (concern.concern_color(threshold, imported.anchors) if imported is not None
                  else hotspots.severity_color(threshold))
@@ -9212,7 +9212,7 @@ class DesktopApp:
         """Whether a settled drag re-phases the whole-structure maps. Takes effect at once.
 
         Off, the maps stay as they were until **Update maps** on the reflections' Appearance
-        pane — which is the old behaviour, kept for anyone fitting a long way from the data
+        pane — which is the old behavior, kept for anyone fitting a long way from the data
         who does not want the recompute between pulls.
         """
         self._maps_after_drag = bool(enabled)
@@ -9734,7 +9734,7 @@ class DesktopApp:
             if not model.restraints_manager_available():
                 self._status("preparing restraints for dragging…")
             zone_build_started = time.monotonic()
-            # A repeat grab in the same neighbourhood reuses the last zone: the
+            # A repeat grab in the same neighborhood reuses the last zone: the
             # restraints sub-selection depends only on topology, and rebuilding it
             # is the occasional >1 s a grab goes dead for. The signature pins
             # everything a rebind cannot refresh — the scope, the restraints
@@ -9984,7 +9984,7 @@ class DesktopApp:
         try:
             self._tug.finish()
             # Park the finished zone for the next grab: a rebind in the same
-            # neighbourhood is milliseconds where a rebuild is the occasional >1 s.
+            # neighborhood is milliseconds where a rebuild is the occasional >1 s.
             if getattr(self, "_tug_signature", None) is not None:
                 self._tug_cache = (self._tug_signature, self._tug)
         except Exception:  # pragma: no cover - defensive
@@ -10035,10 +10035,10 @@ class DesktopApp:
                 try:
                     from .reflections import MAP_STYLE
 
-                    colour, iso, negative = MAP_STYLE[True]   # a difference map is a
+                    color, iso, negative = MAP_STYLE[True]   # a difference map is a
                     self._add_volume(                          # difference map, however made
                         data, f"{name} · real-space difference", group=gid,
-                        color=colour, iso=iso, negative_color=negative, style="mesh")
+                        color=color, iso=iso, negative_color=negative, style="mesh")
                     self._status(f"{name}: real-space difference at ±{iso:g}σ "
                                  "(green unexplained density, red unsupported model)")
                 finally:
@@ -10344,7 +10344,7 @@ class DesktopApp:
     def unknown_ligands(self, mid: str) -> list:
         """Residues in a model that cctbx cannot build restraints for.
 
-        One unrecognised ligand costs the whole model its restraints -- pdb_interpretation
+        One unrecognized ligand costs the whole model its restraints -- pdb_interpretation
         refuses the file rather than the residue -- so minimize, drag, the Geometry tables
         and validation are all unavailable until it is resolved.
         """
@@ -10364,7 +10364,7 @@ class DesktopApp:
 
         ``codes`` limits it to particular residue names; omit for all of them. Returns
         ``{code: smiles}`` for those generated -- the perceived chemistry, which is what
-        the user needs to check, since a dictionary built from a badly modelled ligand
+        the user needs to check, since a dictionary built from a badly modeled ligand
         describes whatever rdkit made of it.
 
         Failures are per ligand: one residue rdkit cannot read does not prevent the others
@@ -10904,8 +10904,8 @@ class DesktopApp:
             if entry.get("is_resolution"):
                 continue  # never in the scene (see _write_volume_scene): nothing to hide
             if not entry["visible"] or entry.get("color_by_resolution"):
-                # Hidden maps, and the parked plain contour of a coloured map -- the
-                # coloured surface represents that one, whatever the entry's own flag.
+                # Hidden maps, and the parked plain contour of a colored map -- the
+                # colored surface represents that one, whatever the entry's own flag.
                 try:
                     control.set_volume_visible(entry["ref"], False)
                 except Exception:  # pragma: no cover - defensive
@@ -10975,8 +10975,8 @@ class DesktopApp:
             return
         entry["iso"] = float(value)
         if entry.get("color_by_resolution"):
-            # The viewer just re-levelled the *parked* plain contour (the wheel works on
-            # refs); a coloured surface is what is on screen, so re-level that too.
+            # The viewer just re-leveled the *parked* plain contour (the wheel works on
+            # refs); a colored surface is what is on screen, so re-level that too.
             session = self._control_session()
             if session is not None:
                 surface = self._display_map_data(entry)
@@ -11097,7 +11097,7 @@ class DesktopApp:
         self._write_display_map(vid, self._display_map_data(entry))
         self._reload_viewport()
         if entry.get("color_by_resolution"):
-            self._push_localres(entry)  # re-extract the coloured surface from the masked grid
+            self._push_localres(entry)  # re-extract the colored surface from the masked grid
         self._status(
             f"{entry['name']}: masked {radius:g} A around the model" if radius
             else f"{entry['name']}: mask off")
@@ -11169,7 +11169,7 @@ class DesktopApp:
         control = self._control_session()
         if control is not None:
             if entry.get("color_by_resolution"):
-                # The coloured surface is this map's representation: the one checkbox
+                # The colored surface is this map's representation: the one checkbox
                 # hides and shows it. The plain contour stays parked regardless.
                 control.set_localres_visible(bool(visible))
             else:
@@ -11196,10 +11196,10 @@ class DesktopApp:
         self._reload_viewport()
         self._emit_loaded_changed()
 
-    # -- local-resolution surface colouring ------------------------------------
+    # -- local-resolution surface coloring ------------------------------------
 
     def colorable_volumes(self) -> list:
-        """Maps whose surface local resolution could colour — the real maps, not the hidden
+        """Maps whose surface local resolution could color — the real maps, not the hidden
         resolution maps pinned under them. ``(vid, name)`` pairs for a picker."""
         return [(v["id"], v["name"]) for v in self._volumes if not v.get("is_resolution")]
 
@@ -11209,7 +11209,7 @@ class DesktopApp:
         return entry.get("resolution_map") if entry else None
 
     def is_colored_by_resolution(self, full_vid: str) -> bool:
-        """Whether a full map is currently drawn coloured by its resolution map."""
+        """Whether a full map is currently drawn colored by its resolution map."""
         entry = self._volume_entry(full_vid)
         return bool(entry and entry.get("color_by_resolution"))
 
@@ -11223,15 +11223,15 @@ class DesktopApp:
     def compute_resolution_map(self, full_vid: str, half1_path, half2_path,
                                *, color: bool = True) -> None:
         """Compute a local-resolution map from two half-maps and pin it (hidden) under a
-        loaded full map, then optionally colour the full map by it.
+        loaded full map, then optionally color the full map by it.
 
         The half-maps (``half1_path``/``half2_path``) are opened in cctbx only and never
         shown — they are inputs to the FSC, not surfaces. The computation runs on a
-        background thread; the map is pinned and coloured back on the GUI thread.
+        background thread; the map is pinned and colored back on the GUI thread.
         """
         full = self._volume_entry(full_vid)
         if full is None:
-            raise ValueError("pick a map to colour")
+            raise ValueError("pick a map to color")
         half1_path, half2_path = str(half1_path), str(half2_path)
         for p in (half1_path, half2_path):
             if not Path(p).is_file():
@@ -11319,7 +11319,7 @@ class DesktopApp:
         """A deposited absolute contour as sigma on this map's own scale, or None.
 
         Stored in sigma rather than as an absolute-kind level because the whole level
-        pipeline — the appearance slider (labelled σ), the scroll wheel, the live wire
+        pipeline — the appearance slider (labeled σ), the scroll wheel, the live wire
         protocol — speaks sigma. An absolute-kind entry fed to that pipeline reads the
         slider's sigma numbers as absolute values: on EMD-53478 (max 0.092) a 4.5 "σ"
         becomes an absolute 4.5, the contoured surface is empty, and the Level control
@@ -11370,7 +11370,7 @@ class DesktopApp:
             # derives d_min from its own estimate, which floors the result: on EMD-53478
             # that estimate is 7.7 A against a deposited 4.2 A, and every voxel comes back
             # at 6.4 A or worse. None means "no answer from the API", not "failed" -- the
-            # calculation falls back to cctbx's estimate, i.e. the previous behaviour.
+            # calculation falls back to cctbx's estimate, i.e. the previous behavior.
             d_min = fetchmod.reported_resolution(pdb_id) if pdb_id else None
             # The deposited contour, so the map opens at the level its authors intend
             # rather than at a fixed sigma that is wrong for most cryo-EM maps.
@@ -11430,7 +11430,7 @@ class DesktopApp:
 
     def _pin_resolution_map(self, full_vid: str, res_data, *, color: bool = True) -> None:
         """Add a computed resolution map as a hidden volume pinned under ``full_vid``
-        (replacing any previous one), then optionally turn on colour-by-resolution."""
+        (replacing any previous one), then optionally turn on color-by-resolution."""
         full = self._volume_entry(full_vid)
         if full is None:
             return
@@ -11446,13 +11446,13 @@ class DesktopApp:
             res_entry = self._volume_entry(res_vid)
             res_entry["is_resolution"] = True
             res_entry["pinned_to"] = full_vid  # nests under the full map
-            # A colour source, never a surface: is_resolution keeps it out of the drawn
+            # A color source, never a surface: is_resolution keeps it out of the drawn
             # scene altogether (_write_volume_scene) and out of the tree's visibility
             # checkboxes (_loaded_summary). visible=False is kept for the paths that
             # treat "hidden" generically (first-visible focus, render skips).
             res_entry["visible"] = False
         full["resolution_map"] = res_vid
-        # Display resolution for the coloured surface: contour every nth voxel. x4 by
+        # Display resolution for the colored surface: contour every nth voxel. x4 by
         # default -- 64^3 on a typical 256^3 map, which re-levels instantly -- and the
         # user turns it up from the map's appearance pane when zoomed in. Explicit
         # rather than adaptive on purpose: what is drawn is what was asked for.
@@ -11472,8 +11472,8 @@ class DesktopApp:
         self._prune_group(entry.get("group"))
 
     def set_color_by_resolution(self, full_vid: str, on: bool) -> None:
-        """Toggle colouring a full map by its pinned resolution map. A plain appearance
-        option — on streams the value-coloured surface (and hides the uniform isosurface it
+        """Toggle coloring a full map by its pinned resolution map. A plain appearance
+        option — on streams the value-colored surface (and hides the uniform isosurface it
         stands in for); off restores the ordinary contour."""
         full = self._volume_entry(full_vid)
         if full is None:
@@ -11495,7 +11495,7 @@ class DesktopApp:
 
     @staticmethod
     def _localres_domain(color_map) -> tuple:
-        """A colour-scale range for a local-resolution map: the 2nd–98th percentile of its
+        """A color-scale range for a local-resolution map: the 2nd–98th percentile of its
         non-zero voxels (zeros are the mask/solvent, and would swamp the scale)."""
         a = color_map.array
         finite = a[np.isfinite(a)]
@@ -11522,7 +11522,7 @@ class DesktopApp:
 
         Generic, not a localres setting (the key name is the wire protocol's history):
         the plain isosurface redraws from an exactly on-lattice decimated copy served
-        beside the full map, and the colour-by-resolution surface rebuilds client-side
+        beside the full map, and the color-by-resolution surface rebuilds client-side
         from the grids the browser already holds. One dropdown, both surfaces.
         """
         entry = self._volume_entry(full_vid)
@@ -11532,7 +11532,7 @@ class DesktopApp:
         entry["localres_downsample"] = factor
         session = self._control_session()
         if session is not None:
-            session.set_localres_downsample(factor)   # the coloured surface's path
+            session.set_localres_downsample(factor)   # the colored surface's path
         if factor > 1:
             urls = entry.setdefault("downsample_urls", {})
             if factor not in urls:
@@ -11587,25 +11587,25 @@ class DesktopApp:
             self._warn("the viewport did not confirm the local-resolution surface")
 
     def _on_localres_shown(self) -> None:
-        """The viewport drew the coloured surface: it is on screen and usable now."""
+        """The viewport drew the colored surface: it is on screen and usable now."""
         self._end_localres_wait()
         for entry in self._volumes:
             if entry.get("color_by_resolution"):
                 entry["localres_drawn"] = True
                 self._status(f"{entry['name']}: local resolution ready — "
-                             "the map is coloured by it")
+                             "the map is colored by it")
         self._emit_loaded_changed()
 
     def set_localres_domain(self, full_vid: str, lo: float, hi: float) -> None:
-        """Set the colour ramp's value range (Angstrom): ``lo`` maps to blue, ``hi`` to
+        """Set the color ramp's value range (Angstrom): ``lo`` maps to blue, ``hi`` to
         red. Manual and stable -- it never follows the contour on its own, so a figure's
-        colours keep their meaning across thresholds and sessions."""
+        colors keep their meaning across thresholds and sessions."""
         entry = self._volume_entry(full_vid)
         if entry is None:
             return
         lo, hi = float(lo), float(hi)
         if not (hi > lo):
-            self._warn("the colour range needs max above min")
+            self._warn("the color range needs max above min")
             return
         entry["localres_domain"] = (lo, hi)
         session = self._control_session()
@@ -11614,14 +11614,14 @@ class DesktopApp:
         self._emit_loaded_changed()
 
     def fit_localres_domain(self, full_vid: str) -> None:
-        """Set the colour range from what the current contour actually shows.
+        """Set the color range from what the current contour actually shows.
 
         The full-map default spends most of the ramp on solvent-adjacent voxels no
         realistic threshold displays -- on EMD-53478 the whole visible particle sits in
         the blue end. This takes the 2nd-98th percentile of the resolution values inside
         the current contour (density >= the display level), so the ramp spans the values
         on screen. A deliberate action, never automatic: refitting on contour changes
-        would re-colour a figure under its caption.
+        would re-color a figure under its caption.
         """
         entry = self._volume_entry(full_vid)
         res = self._volume_entry(entry.get("resolution_map")) if entry else None
@@ -11633,16 +11633,16 @@ class DesktopApp:
         inside = inside[np.isfinite(inside)]
         inside = inside[inside != 0.0]
         if inside.size < 100:
-            self._warn("nothing visible at this level to fit the colour range to")
+            self._warn("nothing visible at this level to fit the color range to")
             return
         lo, hi = float(np.percentile(inside, 2)), float(np.percentile(inside, 98))
         if hi <= lo:
             hi = lo + 0.1
         self.set_localres_domain(full_vid, round(lo, 2), round(hi, 2))
-        self._status(f"colour range fitted to the visible surface: {lo:.2f}–{hi:.2f} Å")
+        self._status(f"color range fitted to the visible surface: {lo:.2f}–{hi:.2f} Å")
 
     def reset_localres_domain(self, full_vid: str) -> None:
-        """Restore the default colour range: percentiles of the whole resolution map."""
+        """Restore the default color range: percentiles of the whole resolution map."""
         entry = self._volume_entry(full_vid)
         res = self._volume_entry(entry.get("resolution_map")) if entry else None
         if entry is None or res is None:
@@ -11651,7 +11651,7 @@ class DesktopApp:
         self.set_localres_domain(full_vid, round(lo, 2), round(hi, 2))
 
     def _push_localres(self, full) -> None:
-        """(Re)stream a full map's colour-by-resolution surface and hide its plain isosurface.
+        """(Re)stream a full map's color-by-resolution surface and hide its plain isosurface.
 
         Sourced from the resolution map pinned under the full map. Cheap to re-run whenever
         the surface the browser draws changes (a new contour level, a mask), so the streamed
@@ -11665,9 +11665,9 @@ class DesktopApp:
         from .volume_io import encode_localres
 
         surface = self._display_map_data(full)  # the same (masked) grid the browser draws
-        # The stored domain, initialised once: recomputing per push would let the colour
+        # The stored domain, initialized once: recomputing per push would let the color
         # mapping drift on its own, and a mapping that shifts under a figure between
-        # sessions or contours is exactly what the explicit Colour range control forbids.
+        # sessions or contours is exactly what the explicit Color range control forbids.
         domain = full.get("localres_domain")
         if domain is None:
             domain = self._localres_domain(res["data"])
@@ -11682,9 +11682,9 @@ class DesktopApp:
             full["localres_drawn"] = False
             self._begin_localres_wait()   # released by the viewport's localres-shown ack
             session.show_localres_grid(payload)
-            # The coloured surface *is* the map now: the plain contour steps aside at the
+            # The colored surface *is* the map now: the plain contour steps aside at the
             # ref level (the entry's own visible flag is the map's one checkbox and stays
-            # what the user set), and the coloured surface takes that visibility over.
+            # what the user set), and the colored surface takes that visibility over.
             session.set_volume_visible(full["ref"], False)
             session.set_localres_visible(bool(full["visible"]))
 
@@ -11967,8 +11967,8 @@ class DesktopApp:
             for m in self._models
         ] + [
             # One row per map. The resolution dataset is deliberately absent: it is a
-            # colour source, not a drawable object -- its user-facing existence is the
-            # "Colour by local resolution" group on its map's pane, and its lifecycle
+            # color source, not a drawable object -- its user-facing existence is the
+            # "Color by local resolution" group on its map's pane, and its lifecycle
             # rides its map. (It also lives on disk beside the fetched files, loadable
             # as an ordinary map by anyone who wants to *see* it.)
             {"kind": "volume", "id": v["id"], "name": v["name"], "visible": v["visible"],
@@ -12714,7 +12714,7 @@ class DesktopApp:
                                 self.set_volume_opacity(new_vid, float(map_opacity))
                             if map_color is not None:
                                 # ...and neutral: the default palette rotates, and a
-                                # randomly coloured map competes with a coloured model.
+                                # randomly colored map competes with a colored model.
                                 self.set_volume_color(new_vid, map_color)
                     self._status(f"{label}: deposited model and map, loaded as a pair")
                 finally:
@@ -12866,7 +12866,7 @@ class DesktopApp:
     def _clip_padding(self) -> float:
         """Angstroms of clearance a selection-clip sphere adds past the selection's
         reach — the Settings pane's clip padding, so even a one-atom selection
-        keeps readable neighbourhood."""
+        keeps readable neighborhood."""
         try:
             return float(self._settings.value("selection/clip_padding", 4.0))
         except (TypeError, ValueError):  # pragma: no cover - a hand-edited ini
@@ -12910,10 +12910,10 @@ class DesktopApp:
                                dtype=float)
                 if not len(xyz):
                     continue
-                centre = xyz.mean(axis=0)  # same sphere _select_fragment draws
-                reach = float(np.linalg.norm(xyz - centre, axis=1).max())
+                center = xyz.mean(axis=0)  # same sphere _select_fragment draws
+                reach = float(np.linalg.norm(xyz - center, axis=1).max())
                 session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                                 center=centre,
+                                 center=center,
                                  depth=entry.get("_auto_clip_depth"))
                 entry["_auto_clip"] = True
             except Exception:  # pragma: no cover - defensive
@@ -12988,16 +12988,16 @@ class DesktopApp:
         (a bounding-sphere radius) cannot say both for anything elongated.
         """
         right = np.cross(np.asarray(direction), np.asarray(up))
-        centred = np.asarray(xyz, dtype=float) - np.asarray(target, dtype=float)
+        centered = np.asarray(xyz, dtype=float) - np.asarray(target, dtype=float)
         # Two pads for two jobs. The framing pad is slim -- it only keeps drawn atoms
         # off the very edge, and generous margin here is exactly "not zoomed enough"
         # (1.8 A per side around a ~6 A residue was a third of the frame). The clip pad
         # stays big enough that no sphere is sliced mid-surface by the near/far planes.
         frame_pad = 0.8
         clip_pad = 1.5
-        rx = float(np.abs(centred @ right).max()) + frame_pad
-        ry = float(np.abs(centred @ np.asarray(up)).max()) + frame_pad
-        rz = float(np.abs(centred @ np.asarray(direction)).max()) + clip_pad
+        rx = float(np.abs(centered @ right).max()) + frame_pad
+        ry = float(np.abs(centered @ np.asarray(up)).max()) + frame_pad
+        rz = float(np.abs(centered @ np.asarray(direction)).max()) + clip_pad
         return (max(rx, 2.0), max(ry, 2.0), max(rz, 2.0))
 
     @staticmethod
@@ -13022,8 +13022,8 @@ class DesktopApp:
         if len(xyz) < 3:
             return None
         centroid = xyz.mean(axis=0)
-        centred = xyz - centroid
-        eigenvalues, eigenvectors = np.linalg.eigh(centred.T @ centred)
+        centered = xyz - centroid
+        eigenvalues, eigenvectors = np.linalg.eigh(centered.T @ centered)
         if eigenvalues[1] < 1e-6 * max(eigenvalues[2], 1.0):
             return None  # collinear: no second axis to hang "up" on
         right = eigenvectors[:, 2]
@@ -13040,7 +13040,7 @@ class DesktopApp:
         if norm < 1e-6:
             return None
         direction = direction / norm
-        radius = max(float(np.linalg.norm(centred, axis=1).max()) + 2.0, 4.0)
+        radius = max(float(np.linalg.norm(centered, axis=1).max()) + 2.0, 4.0)
         extents = DesktopApp._frame_extents(xyz, centroid, up, direction)
         return centroid, up, direction, radius, extents
 
@@ -13082,8 +13082,8 @@ class DesktopApp:
         if dn < 1e-6:
             return None
         direction /= dn
-        # Centre on the selection's mass, not on CA: the frame's "up" is the side
-        # chain, so CA sits at the *bottom* of the picture, and a CA-centred view rides
+        # Center on the selection's mass, not on CA: the frame's "up" is the side
+        # chain, so CA sits at the *bottom* of the picture, and a CA-centered view rides
         # high by half a side chain (a tyrosine's worth, at full zoom). CA still
         # anchors the axes -- only the camera target moves to the middle of what is
         # actually shown.
@@ -13101,7 +13101,7 @@ class DesktopApp:
         row or space-bar navigation. Routed through the same fragment pipeline as a
         click or a typed expression, so the caller's flags (the Selection pane's
         checkboxes, for a table row) govern the framing, isolation clip and
-        neighbourhood context identically. Space-bar navigation passes only the
+        neighborhood context identically. Space-bar navigation passes only the
         clip checkbox — the walk is a selection each step — and keeps focus on
         and context off. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the residue names no
@@ -13179,7 +13179,7 @@ class DesktopApp:
         checkbox — otherwise stepping with the box checked would silently
         differ from stepping the Components table. Focus stays on regardless:
         a walk that does not move the camera is no walk. Context stays off:
-        rebuilding a ball-and-stick neighbourhood every keypress is too heavy
+        rebuilding a ball-and-stick neighborhood every keypress is too heavy
         for rapid stepping."""
         entry = self._model_entry(self._active_model_id)
         if entry is None:
@@ -13347,7 +13347,7 @@ class DesktopApp:
         """A viewport atom click, unified with the selection box: select the clicked
         atom — or its whole residue at ``granularity="residue"`` — and give it
         exactly the treatment a typed selection gets — same oriented framing,
-        same clip sphere, same neighbourhood context. One grammar for "show me
+        same clip sphere, same neighborhood context. One grammar for "show me
         this", however it was indicated. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the index names no
         atom."""
@@ -13380,7 +13380,7 @@ class DesktopApp:
         The unit joins the selection, or leaves it when it is already entirely
         selected. The camera deliberately stays where it is — re-framing on every
         addition would fight the accumulating gesture — but the isolation clip
-        and the neighbourhood context re-fit the grown selection, so an addition is
+        and the neighborhood context re-fit the grown selection, so an addition is
         never clipped out of view. Emptying the selection this way clears everything,
         exactly like an empty expression. Returns the equivalent expression for the
         selection box ('' when emptied or no longer expressible as whole residues),
@@ -13417,10 +13417,10 @@ class DesktopApp:
             # The same sphere the focus path fits, re-fit to the grown selection —
             # without it a residue added outside the standing sphere is invisible.
             xyz = np.array([atoms[i].xyz for i in indices])
-            centre = xyz.mean(axis=0)
-            reach = float(np.linalg.norm(xyz - centre, axis=1).max())
+            center = xyz.mean(axis=0)
+            reach = float(np.linalg.norm(xyz - center, axis=1).max())
             session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                             center=centre)
+                             center=center)
             entry["_auto_clip"] = True
             entry["_auto_clip_depth"] = None   # the camera never oriented here
         elif entry.pop("_auto_clip", False):
@@ -13466,7 +13466,7 @@ class DesktopApp:
             # camera happened to have). A residue always reads the same way on screen,
             # which is the point of orienting at all. Anything else (many residues, a
             # partial residue without its backbone, a ligand) falls back to the plain
-            # centre-and-frame focus; heuristics for those are a separate question.
+            # center-and-frame focus; heuristics for those are a separate question.
             indices = list(sel)
             orientation = None
             if self._is_single_residue(session.model, indices):
@@ -13478,28 +13478,28 @@ class DesktopApp:
                 orientation = self._principal_axes_orientation(session.model, indices)
             if orientation is not None:
                 session.orient_camera(*orientation, clip=clip)
-                centre = np.asarray(orientation[0], dtype=float)
+                center = np.asarray(orientation[0], dtype=float)
             else:
                 session.focus(indices)
                 atoms = session.model.get_hierarchy().atoms()
-                centre = np.mean([atoms[i].xyz for i in indices], axis=0)
+                center = np.mean([atoms[i].xyz for i in indices], axis=0)
             if clip:
-                # Isolate the neighbourhood: a clip sphere around what was selected, so
+                # Isolate the neighborhood: a clip sphere around what was selected, so
                 # the rest of the structure does not bury it. The same shader-side
                 # mechanism as the pane's clipping controls -- it cannot be disturbed by
                 # the viewer's own camera management, which is not true of near/far-plane
-                # clipping. Centred explicitly on the selection: the clip lands while the
+                # clipping. Centered explicitly on the selection: the clip lands while the
                 # camera is still flying there, so the camera-target default would put
                 # the sphere on the *old* view and clip out the very thing being framed
                 # (worst with several far-apart models loaded -- the whole viewport went
-                # blank until a manual clip re-centred it). Sized to the selection plus
+                # blank until a manual clip re-centered it). Sized to the selection plus
                 # enough context to read its surroundings; lifted when the selection is
                 # cleared, and any later manual clipping simply takes over.
                 atoms = session.model.get_hierarchy().atoms()
-                reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - centre))
+                reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - center))
                             for i in indices)
                 session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                                 center=centre)
+                                 center=center)
                 if entry is not None:
                     entry["_auto_clip"] = True
                     # The camera slab orient() parked is part of the clipped view:
@@ -13511,7 +13511,7 @@ class DesktopApp:
                 # clipped selection left -- otherwise it keeps cutting the new view.
                 entry.pop("_auto_clip_depth", None)
                 session.set_clip(0.0, 1.0, radius=None)
-        # The neighbourhood context rides the selection, not the camera: it shows (or
+        # The neighborhood context rides the selection, not the camera: it shows (or
         # clears) whether or not the focus checkbox moved the view.
         self._set_context_rep(entry, list(sel) if context else None)
         self._on_model_selection(mid, sel)        # feed the scene selection (table + label)
@@ -13525,7 +13525,7 @@ class DesktopApp:
     _CONTEXT_MAX_ATOMS = 250
 
     def _set_context_rep(self, entry, indices) -> None:
-        """Draw (or clear, with ``indices=None``) the selection's neighbourhood context."""
+        """Draw (or clear, with ``indices=None``) the selection's neighborhood context."""
         if entry is None:
             return
         want = None
@@ -13533,7 +13533,7 @@ class DesktopApp:
                 and entry.get("rep") != "ball-and-stick"):
             want = self._neighborhood_indices(entry, indices)
         if want == entry.get("context_on"):
-            return  # unchanged (both None, or the same neighbourhood) — no redraw
+            return  # unchanged (both None, or the same neighborhood) — no redraw
         entry["context_on"] = want
         self._apply_model_rep(entry)
 

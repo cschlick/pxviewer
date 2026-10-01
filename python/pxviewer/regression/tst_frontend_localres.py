@@ -1,7 +1,7 @@
 """The frontend's localres grid helpers, run under node against independent references.
 
 ``cropGrid`` and ``decimateGrid`` (frontend/src/live.ts) are what make a level change on
-a colour-by-resolution map cheap: contouring visits only the sub-box holding voxels at or
+a color-by-resolution map cheap: contouring visits only the sub-box holding voxels at or
 above the level (12.7x fewer voxels at EMD-53478's deposited level), and slider drags
 preview from a 2x-decimated copy (8x fewer even when the crop cannot help). An indexing
 mistake in either would not fail loudly -- it would draw the surface subtly wrong or in

@@ -142,7 +142,7 @@ def exercise_rotamer_severity_lands_on_the_side_chain():
 
 def exercise_ramachandran_severity_lands_on_the_backbone_only():
     """Rule 2/7: assigned to residue i's own N/CA/C/O. Narrow on purpose -- phi/psi involve
-    three residues, but implicating the neighbours smears one residue's problem onto two."""
+    three residues, but implicating the neighbors smears one residue's problem onto two."""
     m = model()
     values = hotspots.ramachandran_severity(m, m.get_number_of_atoms())
     names = [n.strip() for n in m.get_hierarchy().atoms().extract_name()]
@@ -251,7 +251,7 @@ def exercise_residue_rollup_takes_the_max_not_the_sum():
 
 def exercise_residue_broadcast_raises_the_residue_to_its_worst_atom():
     """Display-only (a ribbon draws no side chains, so per-atom rotamer severity would be
-    invisible on one). It must not change the ranking, only where the colour is carried."""
+    invisible on one). It must not change the ranking, only where the color is carried."""
     m, result = geometry_score()
     spread = hotspots.residue_broadcast(m, result.values)
 
@@ -311,7 +311,7 @@ def exercise_a_bad_fit_raises_severity_under_either_map_term():
 
 
 def exercise_a_missing_map_degrades_instead_of_refusing():
-    """Unlike Q-score colouring -- where no map means the metric itself is undefined -- the
+    """Unlike Q-score coloring -- where no map means the metric itself is undefined -- the
     hotspot score drops the map term and still reports the geometry."""
     result = hotspots.score(model(), mmm=None, fit="qscore")
     assert "fit" not in result.components

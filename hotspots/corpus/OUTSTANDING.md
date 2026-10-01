@@ -8,12 +8,12 @@ runs completed. Ordered by what would block or embarrass a paper submission, not
 
 ## Blocks the paper
 
-Nothing currently open. The single-divisor normalisation that stood here was fixed and
+Nothing currently open. The single-divisor normalization that stood here was fixed and
 verified at corpus scale on 2026-08-23; see item 1 below.
 
 ## Fixed 2026-08-23
 
-**1. `field.py` normalised each event by a single divisor set by its densest atom. FIXED.**
+**1. `field.py` normalized each event by a single divisor set by its densest atom. FIXED.**
 An event whose atoms were unevenly spread drew its tight part at full severity and its
 isolated atoms at a fraction — measured at **0.31 against 0.98** for a cluster of eight with
 two atoms 12 A away, which falls under the 0.5 display threshold and vanishes. Now each atom
@@ -71,7 +71,7 @@ eleven cuts land at 1.0.
 
 **5. `model_has_hydrogens` accepted "any H present". FIXED.** probe2 requires *both* polar and
 non-polar hydrogens, so a deposit carrying only some — polar-only, a few on waters, a ligand
-modelled with H in an otherwise heavy-atom protein — passed the check, skipped reduce2, and
+modeled with H in an otherwise heavy-atom protein — passed the check, skipped reduce2, and
 died inside probe2 with a message indistinguishable from a real extraction failure. The test now
 requires a C-bound and an N/O/S-bound hydrogen. 1fca went from failed to ok.
 
@@ -117,7 +117,7 @@ most. Recoverable with a low-concurrency pass.
 tractability on another machine, and this project then required a polypeptide entity. Both
 filters are documented in [README.md](README.md); neither should be described as random.
 
-**12. Clash cannot be measured by the neighbourhood design.** Rolled up per residue at the
+**12. Clash cannot be measured by the neighborhood design.** Rolled up per residue at the
 0.40 Å contact cut it flags a median 29.4% of residues (p90 62.8%, max 77.8%) against 1.5–3.6%
 for the other channels, so the design's precondition — a flagged set sparse enough to leave a
 far field — fails outright, and the bin counts show it (residue counts peak at 6 Å and fall

@@ -55,7 +55,7 @@ def run(model: Any, analysis: Any = None) -> ValidationResult:
         notes=(
             "phi and psi are the backbone dihedrals in degrees; score is how much of "
             "the reference distribution sits at that conformation, as a percentage — "
-            "below 0.05% is an outlier and 2% or more is favoured, which is what type "
+            "below 0.05% is an outlier and 2% or more is favored, which is what type "
             "reports."
         ),
     )

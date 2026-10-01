@@ -142,7 +142,7 @@ def exercise_importing_concern_drops_a_computed_score():
         app, mid = _app_with_model()
         try:
             entry = app._model_entry(mid)
-            # Stand in for a finished Find hotspots run: a score, and a coloured model.
+            # Stand in for a finished Find hotspots run: a score, and a colored model.
             entry["hotspots"] = object()
             entry["hotspot_palette"] = ["#000000"]
             entry["color"] = _HOTSPOT_COLOR
@@ -152,7 +152,7 @@ def exercise_importing_concern_drops_a_computed_score():
 
             assert entry.get("hotspots") is None          # the severity score is gone
             assert entry.get("hotspot_palette") is None
-            assert entry.get("attribute") is None         # and so is severity colouring
+            assert entry.get("attribute") is None         # and so is severity coloring
             assert entry["color"] != _HOTSPOT_COLOR
             assert entry["concern_metric"] == "combined"
         finally:
@@ -245,10 +245,10 @@ def exercise_the_table_reads_the_maps_not_a_second_scale():
             dispose(app)
 
 
-def exercise_the_table_says_it_ranks_neighbourhoods():
+def exercise_the_table_says_it_ranks_neighborhoods():
     """The generator splats each observation with a ~2 A Gaussian, wider than the ~3.8 A
     between adjacent CA atoms, so a residue beside a hotspot genuinely sits in its density.
-    That is not recoverable here, so the table must present itself as a neighbourhood ranking
+    That is not recoverable here, so the table must present itself as a neighborhood ranking
     rather than invent a de-blurring rule and claim per-residue attribution."""
     from pxviewer import concern as concern_mod
 
@@ -287,11 +287,11 @@ def exercise_the_knee_is_given_in_severity_and_sent_normalized():
         dispose(app)
 
 
-def exercise_the_threshold_updates_a_contour_level_and_colour():
+def exercise_the_threshold_updates_a_contour_level_and_color():
     """Contour uses the same absolute slider as the cloud and follows the hotspot palette.
 
     Driven through a real volume rather than by watching which methods get called: what
-    matters is the level and colour the volume ends up carrying, not the route taken there.
+    matters is the level and color the volume ends up carrying, not the route taken there.
     """
     from pxviewer.volume_io import VolumeData
 
@@ -407,7 +407,7 @@ def exercise_the_contour_is_added_once_and_removed_on_toggle():
         dispose(app)
 
 
-def exercise_computing_colours_through_the_attribute_path():
+def exercise_computing_colors_through_the_attribute_path():
     """The score reaches the viewport as a named per-atom attribute on a fixed severity
     domain, not as a Mol* theme and not stretched to this structure's own range."""
     from pxviewer.desktop import _HOTSPOT_COLOR

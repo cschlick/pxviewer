@@ -16,7 +16,7 @@ severity: a caller either has an import (and uses this module) or a computed sco
 :mod:`pxviewer.hotspots`).
 
 The authoritative display contract travels *in the manifest*, under ``primary_display``, and
-:func:`display_anchors` reads it rather than assuming it. The viewer's job is to honour it:
+:func:`display_anchors` reads it rather than assuming it. The viewer's job is to honor it:
 absolute concern drives both hue and opacity on one fixed ``[0, 1]`` domain, with no
 per-field percentile, min/max, sigma, or viewport-relative normalization — so the same concern
 value looks the same in every structure and every metric. Percentile maps are an optional
@@ -40,7 +40,7 @@ DOMAIN = (0.0, 1.0)
 #: anchors: transparent at 0, yellow at the half-concern mark, orange, red at saturation.
 DEFAULT_ANCHORS: Dict[str, float] = {"yellow": 0.5, "orange": 0.75, "red": 1.0}
 
-#: Hex colours for the warm anchors. Shared with the isosurface path so a contour drawn at
+#: Hex colors for the warm anchors. Shared with the isosurface path so a contour drawn at
 #: 0.75 is the same orange the direct volume shows at 0.75.
 ANCHOR_COLORS: Dict[str, str] = {"yellow": "#FFD400", "orange": "#F46D43", "red": "#B2182B"}
 
@@ -106,9 +106,9 @@ def display_anchors(payload: dict) -> Dict[str, float]:
 
 
 def concern_color(value: float, anchors: Optional[Dict[str, float]] = None) -> str:
-    """The colour of a constant-concern isosurface, interpolated between the anchors.
+    """The color of a constant-concern isosurface, interpolated between the anchors.
 
-    Below the yellow anchor there is no warm colour to give — the contract makes that range
+    Below the yellow anchor there is no warm color to give — the contract makes that range
     transparent — so it clamps to yellow rather than inventing a cool end.
     """
     anchors = anchors or DEFAULT_ANCHORS
@@ -184,7 +184,7 @@ def _pairs_from_manifest(path: Path) -> Tuple[Dict[str, Tuple[Path, Optional[Pat
     return ordered, payload
 
 
-#: Map extensions, longest first so ``.map.gz`` is recognised before ``.gz``. Splitting on
+#: Map extensions, longest first so ``.map.gz`` is recognized before ``.gz``. Splitting on
 #: every dot instead (``Path.suffixes``) would mangle a name that merely contains one.
 _MAP_SUFFIXES = (".map.gz", ".mrc.gz", ".ccp4.gz", ".ccp4", ".map", ".mrc")
 
@@ -281,10 +281,10 @@ def read_fields(path: Any, volume_cls: Any) -> ConcernImport:
 def residue_columns(metrics: List[str]) -> List[str]:
     """Columns for :func:`residue_rows`.
 
-    Every value column is labelled ``concern`` and every one of them is in ``[0, 1]``. Native
+    Every value column is labeled ``concern`` and every one of them is in ``[0, 1]``. Native
     validation numbers (a Ramachandran percentage, a clash overlap in A) are a different
     quantity on a different scale; if they are ever shown they belong in their own columns
-    under their own names, never merged into one labelled ``concern``.
+    under their own names, never merged into one labeled ``concern``.
     """
     return ["chain", "resid", "res"] + [f"{metric} concern" for metric in metrics]
 
@@ -312,7 +312,7 @@ def residue_rows(model: Any, fields: Dict[str, ConcernField], *, primary: str,
 
     **This is a field readout, not an attribution** (see :data:`TABLE_CAVEAT`). The splat is
     deliberately smooth and wider than the ~3.8 Å between adjacent Ca atoms, so concern
-    deposited on one residue is genuinely present at its neighbours' atoms and there is no way
+    deposited on one residue is genuinely present at its neighbors' atoms and there is no way
     to unmix it here. Exact per-residue concern exists upstream, before the splat; recovering
     it from the grid afterwards is not possible, and this module does not pretend otherwise by
     inventing a de-blurring rule. A coarse ``--output-pixel-size`` smooths the peaks down

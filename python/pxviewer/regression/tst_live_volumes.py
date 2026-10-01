@@ -1,6 +1,6 @@
 """Volume appearance, clipping and screenshots over the wire.
 
-A volume's colour, style and level are baked into the MVSJ scene, so they survive a
+A volume's color, style and level are baked into the MVSJ scene, so they survive a
 reload on their own and only need a live command to avoid one. Three things are *not* in
 the scene and so have to be replayed on connect: the clip, which is recomputed from the
 camera as it moves; the scroll target, which says which volume the wheel contours; and
@@ -68,7 +68,7 @@ def exercise_volume_appearance_commands_reach_the_client():
 
 
 def exercise_the_scroll_target_is_replayed_to_a_late_client():
-    """A volume's style, colour and level survive a reload because the scene carries
+    """A volume's style, color and level survive a reload because the scene carries
     them. The scroll target is not part of the scene, so it must be replayed on connect
     -- otherwise wheel contouring goes dead after any scene change."""
     with session() as live:
@@ -156,7 +156,7 @@ def exercise_a_clip_addresses_one_representation():
                     "type": "clip", "ref": "vol8", "front": 0.0, "back": 1.0,
                     "radius": 12.0, "center": None}
 
-                # An explicit centre travels with it: a caller that just re-aimed the
+                # An explicit center travels with it: a caller that just re-aimed the
                 # camera pins the sphere on the selection, not on the still-moving view.
                 live.set_clip(0.0, 1.0, radius=8.0, center=(1, 2.5, -3))
                 assert await next_text(ws, "clip") == {
@@ -167,7 +167,7 @@ def exercise_a_clip_addresses_one_representation():
 
 
 def exercise_a_clip_is_replayed_to_a_late_client():
-    """A clip is worked out from the camera and re-aimed as it moves, so unlike a colour
+    """A clip is worked out from the camera and re-aimed as it moves, so unlike a color
     or a level it cannot be baked into the scene. The session has to replay it, or every
     viewport reload silently drops it."""
     with session() as live:
@@ -280,7 +280,7 @@ def exercise_a_level_change_is_one_float_not_a_regrid():
                 message = await next_binary(ws, tag=7)
                 iso, lo, hi = struct.unpack_from("<fff", message, 4)
                 assert abs(iso - 0.62) < 1e-6, "replay still carries the stale level: %r" % iso
-                assert (lo, hi) == (4.0, 14.0), "patching the level disturbed its neighbours"
+                assert (lo, hi) == (4.0, 14.0), "patching the level disturbed its neighbors"
                 assert message[16:] == b"GRIDDATA" * 4, "patching the level disturbed the grids"
 
                 # ...and a live change reaches a connected client as one small message.
@@ -292,7 +292,7 @@ def exercise_a_level_change_is_one_float_not_a_regrid():
 
 
 def exercise_a_domain_change_patches_the_replay_and_broadcasts():
-    """The colour range lives beside the level in the payload header: patch and tell."""
+    """The color range lives beside the level in the payload header: patch and tell."""
     import struct
 
     with session() as live:
@@ -317,7 +317,7 @@ def exercise_a_domain_change_patches_the_replay_and_broadcasts():
 def exercise_the_downsample_factor_arrives_before_the_grids():
     """The factor must be in place when the payload's first build runs.
 
-    A reloading client rebuilds the coloured surface from the replayed payload the moment
+    A reloading client rebuilds the colored surface from the replayed payload the moment
     it arrives; a factor replayed after it would rebuild at the wrong resolution first
     and correct itself a beat later. So the replay sends the factor ahead of the payload,
     and the client stores it even before any grids exist.
@@ -343,7 +343,7 @@ def exercise_the_downsample_factor_arrives_before_the_grids():
         run_client(scenario)
 
 
-def exercise_the_viewport_can_report_the_colouring_drawn():
+def exercise_the_viewport_can_report_the_coloring_drawn():
     """localres-shown flows viewport -> python, releasing the app's busy hold.
 
     Streaming the payload finishes long before the browser's build does, so "ready" is
@@ -368,7 +368,7 @@ def exercise_stop_cancels_sends_parked_on_a_dead_socket():
 
     Broadcasts are fire-and-forget tasks, and when the app closes the embedded page goes
     away without a clean WebSocket close -- a queued send parks on ``websocket.send``
-    forever. Before _shutdown cancelled them, loop.close() destroyed each one and asyncio
+    forever. Before _shutdown canceled them, loop.close() destroyed each one and asyncio
     printed "Task was destroyed but it is pending!" per message queued at exit.
     """
     import time
@@ -378,14 +378,14 @@ def exercise_stop_cancels_sends_parked_on_a_dead_socket():
 
         def __init__(self):
             self.parked = threading.Event()   # set once the send coroutine is running
-            self.cancelled = False
+            self.canceled = False
 
         async def send(self, data):
             self.parked.set()
             try:
                 await asyncio.Event().wait()          # parks forever, like a full buffer
             except asyncio.CancelledError:
-                self.cancelled = True
+                self.canceled = True
                 raise
 
     with session() as live:
@@ -395,7 +395,7 @@ def exercise_stop_cancels_sends_parked_on_a_dead_socket():
         assert stalled.parked.wait(timeout=10), "the broadcast never reached the socket"
         time.sleep(0.05)  # let it settle onto the forever-await before stopping
     # session() exits -> stop() -> _shutdown cancels the parked send before loop.close().
-    assert stalled.cancelled, "stop() left a parked send to be destroyed pending"
+    assert stalled.canceled, "stop() left a parked send to be destroyed pending"
 
 
 def exercise_an_open_clip_is_not_replayed():

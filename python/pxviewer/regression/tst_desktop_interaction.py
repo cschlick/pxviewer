@@ -378,7 +378,7 @@ def exercise_minimization_runs_continuously_until_stopped():
 
 
 def exercise_a_tiny_drag_leaves_the_zone_where_it_was():
-    """A 0.1 A nudge must not rearrange the neighbourhood. Without the interior hold
+    """A 0.1 A nudge must not rearrange the neighborhood. Without the interior hold
     (HOLD_SIGMA) the zone minimizer idealized the whole sphere's geometry the moment a
     drag began — ~100 atoms moved, up to 1.6 A, which exploded the live difference map
     with real-but-unwanted signal and read as a map-level bug. The hold keeps untouched
@@ -410,9 +410,9 @@ def exercise_a_tiny_drag_leaves_the_zone_where_it_was():
     # SAME zone (~ms, where a rebuild is the occasional >1 s a grab goes dead for),
     # and refuses an atom outside it.
     tug.finish()
-    neighbour = int(tug.indices[len(tug.indices) // 3])
-    assert tug.rebind(neighbour), "an in-zone atom must rebind"
-    assert tug.atom == neighbour
+    neighbor = int(tug.indices[len(tug.indices) // 3])
+    assert tug.rebind(neighbor), "an in-zone atom must rebind"
+    assert tug.atom == neighbor
     far = next(i for i in range(model.get_number_of_atoms() - 1, -1, -1)
                if i not in set(int(x) for x in tug.indices))
     assert not tug.rebind(far), "an out-of-zone atom must force a fresh build"
@@ -473,7 +473,7 @@ def exercise_the_settle_wind_down_yields_to_pause_and_pending_drags():
             "a set wind-down should play for about that long")
 
 
-def exercise_the_native_focus_neighbourhood_stays_retired():
+def exercise_the_native_focus_neighborhood_stays_retired():
     """Mol*'s native click-focus display was replaced by pxviewer's own unified
     selection pipeline (a click and a typed selection get identical treatment; the
     local context is the Selection pane's Neighborhood checkbox). The old stored
@@ -843,7 +843,7 @@ def _model_with_an_unknown_ligand(directory):
 
 
 def exercise_an_unknown_ligand_can_be_given_restraints():
-    """One unrecognised residue costs the whole model its restraints, so the app offers to
+    """One unrecognized residue costs the whole model its restraints, so the app offers to
     infer a dictionary rather than leaving minimize, drag and the Geometry tab dead."""
     if not have("rdkit", "mmtbx.monomer_library.pdb_interpretation"):
         print("    (skipped: rdkit / pdb_interpretation not available)")
@@ -1113,7 +1113,7 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         assert entry["_auto_clip"] is True
         assert app._scene_selection.get(mid) == [atom_model.row_atom(0)]
 
-        # And the space-bar residue walk honours it too: clicking the checkbox
+        # And the space-bar residue walk honors it too: clicking the checkbox
         # takes focus off the table, so the next Space lands here, not on a row.
         controls._clip_on_select.setChecked(False)
         app.advance_residue(1)
@@ -1123,26 +1123,26 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         assert entry["_auto_clip"] is True
 
         # A restraint row is a collection of atoms, so it takes the same selection
-        # path: the sphere re-centres on the restraint's atoms rather than leaving
+        # path: the sphere re-centers on the restraint's atoms rather than leaving
         # the residue's standing to hide them.
         import numpy as np
         app.show_restraint_notations(mid, [("bond", (0, 1))])
         assert entry["_auto_clip"] is True
         assert list(app._scene_selection.get(mid, ())) == [0, 1]
         atoms = entry["session"].model.get_hierarchy().atoms()
-        centre = (np.asarray(atoms[0].xyz) + np.asarray(atoms[1].xyz)) / 2.0
-        reach = float(np.linalg.norm(np.asarray(atoms[0].xyz) - centre))
+        center = (np.asarray(atoms[0].xyz) + np.asarray(atoms[1].xyz)) / 2.0
+        reach = float(np.linalg.norm(np.asarray(atoms[0].xyz) - center))
         sphere = entry["session"]._clips[None]
         assert approx_equal(sphere["radius"], reach + 4.0)
-        assert approx_equal(np.linalg.norm(np.asarray(sphere["center"]) - centre), 0.0)
+        assert approx_equal(np.linalg.norm(np.asarray(sphere["center"]) - center), 0.0)
 
         # The sphere's clearance is a setting: pad it and the next selection's
         # sphere is reach + the new padding.
         app._settings.setValue("selection/clip_padding", 7.5)
         app.show_restraint_notations(mid, [("bond", (2, 3))])
         atoms_sel = entry["session"].model.get_hierarchy().atoms()
-        centre2 = (np.asarray(atoms_sel[2].xyz) + np.asarray(atoms_sel[3].xyz)) / 2.0
-        reach2 = float(np.linalg.norm(np.asarray(atoms_sel[2].xyz) - centre2))
+        center2 = (np.asarray(atoms_sel[2].xyz) + np.asarray(atoms_sel[3].xyz)) / 2.0
+        reach2 = float(np.linalg.norm(np.asarray(atoms_sel[2].xyz) - center2))
         assert approx_equal(entry["session"]._clips[None]["radius"], reach2 + 7.5)
         app._settings.setValue("selection/clip_padding", 4.0)
 
@@ -1196,7 +1196,7 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
 
         # Atom is only aimable where atoms are drawn: a ribbon face resolves to
         # the residue's anchor atom at best, so a cartoon hit promotes to the
-        # residue — while a ball-and-stick hit (the neighbourhood layer counts)
+        # residue — while a ball-and-stick hit (the neighborhood layer counts)
         # stays atom-precise. An unknown repr keeps the control's setting.
         controls._on_atom_picked(mid, 0, False, "cartoon")
         process_events()
@@ -1292,7 +1292,7 @@ def exercise_validation_subtabs_and_row_focus():
         # The first row click switches the ribbon model to ball-and-stick -- the
         # atom-precision rule measuring and dragging already follow -- and the
         # selection box shows the equivalent expression. With the whole model in
-        # sticks the neighbourhood layer has nothing to add, so there is no
+        # sticks the neighborhood layer has nothing to add, so there is no
         # per-selection context layer to rebuild.
         entry = app._model_entry(mid)
         assert entry["reps"] == ["ball-and-stick"]
@@ -1514,7 +1514,7 @@ def exercise_atom_precision_actions_switch_a_ribbon_to_ball_and_stick():
         app.ensure_atoms_shown(mid)
         assert app._model_entry(mid)["rep"] == "spacefill"      # already shows atoms
 
-        # Measuring switches a ribbon too. Select and colour do not, being unhooked.
+        # Measuring switches a ribbon too. Select and color do not, being unhooked.
         app.set_model_representation(mid, "cartoon")
         app._scene_selection[mid] = [0, 1]
         app.measure_selection("distance")

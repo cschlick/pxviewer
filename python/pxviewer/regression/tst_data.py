@@ -126,7 +126,7 @@ def exercise_a_repeated_chain_id_gets_one_label_asym_per_block():
     assert approx_equal([float(v) for v in site["Cartn_x"]], list(range(8)))
 
 
-def exercise_secondary_structure_follows_the_relabelled_chains():
+def exercise_secondary_structure_follows_the_relabeled_chains():
     """SS arrives keyed by author chain but is matched on ``label_asym_id``, so the ranges
     have to be retargeted -- otherwise Mol* finds no residues in them and the cartoon loses
     every helix and strand. A repeated chain's SS belongs to its polymer block."""
@@ -137,7 +137,7 @@ def exercise_secondary_structure_follows_the_relabelled_chains():
     assert b["_struct_sheet_range"]["beg_label_asym_id"][0] == "B"   # I's polymer block
 
 
-def exercise_a_single_chain_is_still_labelled_a():
+def exercise_a_single_chain_is_still_labeled_a():
     """The common case is unchanged -- one chain, one label."""
     site = block(encode_bcif_arrays(protein_arrays()))["_atom_site"]
     assert set(site["label_asym_id"]) == set(["A"])

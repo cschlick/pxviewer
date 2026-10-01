@@ -217,7 +217,7 @@ All are data properties or upstream defects, not defects here. The 35 skips are 
 
 Ramachandran loses **nothing** across the corpus; rotamer loses one atom in ~10,000.
 
-**Clash is a calibration artefact, not a field failure** — its 0.40 Å community cut maps to
+**Clash is a calibration artifact, not a field failure** — its 0.40 Å community cut maps to
 concern exactly 0.50, the display threshold itself, so roughly 40% of flagged clashes sit
 just under visibility by construction. See the finding above.
 

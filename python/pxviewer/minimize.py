@@ -2,7 +2,7 @@
 
 Two targets, both in-place on a cctbx model:
 
-* :func:`minimize_geometry` — restraints only ("regularisation"): pull a model back
+* :func:`minimize_geometry` — restraints only ("regularization"): pull a model back
   onto ideal bond lengths, angles and the rest of its geometry restraints.
 * :func:`minimize_to_map` — restraints *and* density: also pull it into a map, with
   cctbx deriving the balance between the two targets.

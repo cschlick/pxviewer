@@ -1,9 +1,9 @@
-"""Representations, and colouring atoms by a per-atom attribute.
+"""Representations, and coloring atoms by a per-atom attribute.
 
-Colouring by a value is the one path where the payload is large enough for its encoding to
+Coloring by a value is the one path where the payload is large enough for its encoding to
 matter: N floats per atom, resent whenever the values change. They go as a compact binary
 message keyed by name, and the representation JSON that follows *references* that key
-rather than inlining the numbers -- so a re-colour costs the values once, not once per
+rather than inlining the numbers -- so a re-color costs the values once, not once per
 representation that reads them.
 """
 
@@ -75,14 +75,14 @@ def exercise_representations_are_replayed_to_a_late_client():
 
 def exercise_bfactor_and_occupancy_are_always_available():
     """``from_sites`` writes occupancy 1.0 and B 0.0, so both exist on any model and
-    can be coloured by without anything being computed first."""
+    can be colored by without anything being computed first."""
     with session() as live:
         assert set(live.attributes()) >= {"bfactor", "occupancy"}
         live.color_by("bfactor")
         live.color_by("occupancy")
 
 
-def exercise_a_named_attribute_can_be_set_and_coloured_by():
+def exercise_a_named_attribute_can_be_set_and_colored_by():
     with session() as live:
         live.set_attribute("score", [0.1, 0.2, 0.3, 0.4])
         assert "score" in live.attributes()
@@ -92,14 +92,14 @@ def exercise_a_named_attribute_can_be_set_and_coloured_by():
 
 
 def exercise_an_attribute_of_the_wrong_length_is_rejected():
-    """One value per atom, or the colours land on the wrong atoms silently."""
+    """One value per atom, or the colors land on the wrong atoms silently."""
     with session() as live:
         with raises(ValueError) as e:
             live.set_attribute("bad", [1, 2, 3])       # the topology has 4
         assert "4 atoms" in str(e.value)
 
 
-def exercise_colouring_by_an_unknown_attribute_is_rejected():
+def exercise_coloring_by_an_unknown_attribute_is_rejected():
     with session() as live:
         with raises(ValueError) as e:
             live.color_by("nonsense")
@@ -159,7 +159,7 @@ def exercise_the_domain_is_taken_from_the_finite_values():
 
 def exercise_a_missing_value_survives_as_nan():
     """nan means "not computed for this atom" -- Q-score leaves it on every hydrogen --
-    and the theme draws those in its missing colour. Encoding it as a number would paint
+    and the theme draws those in its missing color. Encoding it as a number would paint
     them as real values at one end of the scale."""
     with session() as live:
         live.color_by([float("nan"), 1.0, 2.0, 3.0])
@@ -173,7 +173,7 @@ def exercise_a_missing_value_survives_as_nan():
 
 
 def exercise_color_by_replaces_the_representations():
-    """Like ``set_representation`` rather than ``add_representation``: colouring by a
+    """Like ``set_representation`` rather than ``add_representation``: coloring by a
     value is a statement about how the model is drawn, not another layer on it."""
     with session() as live:
         live.add_representation("spacefill", color="chain-id")
@@ -182,7 +182,7 @@ def exercise_color_by_replaces_the_representations():
 
 
 def exercise_a_replaced_attribute_payload_is_pruned():
-    """The payloads are held to replay them, so nothing must accumulate: a re-colour
+    """The payloads are held to replay them, so nothing must accumulate: a re-color
     drops the values it replaced, and clearing the representations drops them all."""
     with session() as live:
         live.color_by([1.0, 2.0, 3.0, 4.0])

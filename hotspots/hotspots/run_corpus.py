@@ -97,7 +97,7 @@ def check_model(fields, events, model, *, hot=DEFAULT_HOT, tolerance_a=DEFAULT_T
         sampled = _sample_field_at(field, sites)
         # Widened past the outlier boolean on purpose: the concern curve rises from the 2%
         # favored boundary, so the field legitimately marks residues MolProbity never flags.
-        # Judged against outliers alone this reports correct behaviour as failure.
+        # Judged against outliers alone this reports correct behavior as failure.
         r = ve.check_field_agreement(
             shared, sampled, sites, metric=metric, hot_threshold=hot,
             tolerance_a=tolerance_a, concerning=ve.worse_than_percent(2.0))

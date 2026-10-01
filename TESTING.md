@@ -88,7 +88,7 @@ faking it tests less. Two substitutions cover essentially every case:
   sizes by making exactly this swap.
 - *A test tempted to spy on which method got called should assert on the resulting state.*
   Watching for `set_volume_iso(vid, 1.5)` tests the implementation; reading the volume's `iso`
-  back afterwards tests the behaviour, and survives the implementation changing.
+  back afterwards tests the behavior, and survives the implementation changing.
 
 The second substitution has been the more valuable one in practice, because the state is
 usually a stronger assertion than the spy it replaces:
@@ -99,7 +99,7 @@ usually a stronger assertion than the spy it replaces:
 | wrap `fmodel.update_all_scales` | compare `k_isotropic`, `k_anisotropic`, `k_masks` | catches a rescale reached *any* way, including from inside cctbx where no spy would see it |
 | replace `_CATEGORIES` with a stub | run the shipping map against a small local class | tests the configuration that ships rather than one invented for the test |
 
-The last of those is worth generalising: patching a module constant to something convenient
+The last of those is worth generalizing: patching a module constant to something convenient
 usually means the test no longer covers the real value. `tst_api_guide.py` needed a class
 with one method in two different categories and one in none — and the real category map
 already puts `select` and `color_by` in different groups, so a four-method class exercises
@@ -179,7 +179,7 @@ objects, state assertions over spies — plus two the medium adds:
   deferred deletes are delivered and the run's memory resembles the app's.
 - **Pixel assertions are within-run**: compare `clipped` against `lifted` or
   `reapplied` from the same session. Golden images across machines would be a
-  GPU lottery; "the re-applied frame matches the first clip" is a behavioural
+  GPU lottery; "the re-applied frame matches the first clip" is a behavioral
   claim that travels.
 
 ## Inventory
@@ -301,7 +301,7 @@ occupant was a `conftest.py` that set `QT_QPA_PLATFORM` before collection; that 
 lives in `tst_utils.qt_application()`, where it belongs — every script calls it, and it
 holds the rest of the Qt setup besides.
 
-**Cancelling a real dialog needs `AA_DontUseNativeDialogs`.** `test_gui_fuzz.py` clicks
+**Canceling a real dialog needs `AA_DontUseNativeDialogs`.** `test_gui_fuzz.py` clicks
 random widgets, so it really does open dialogs, and its `guarded_modals` patches were
 load-bearing where `test_gui_concurrency.py`'s were not. Replacing them with
 `closing_modals()` — a timer that cancels a dialog that really opened — is right, but it
@@ -317,12 +317,12 @@ the fastest way to tell a hung GUI test from a slow one.
 Two things follow:
 
 - `qt_application()` now sets `AA_DontUseNativeDialogs`, so every dialog is a Qt widget and
-  `closing_modals()` can cancel it. Cancelling then returns exactly what the old stubs
+  `closing_modals()` can cancel it. Canceling then returns exactly what the old stubs
   returned (`("", "")`, `([], "")`, an invalid `QColor`), so the replacement really is
-  behaviour-for-behaviour — but only with that attribute set.
+  behavior-for-behavior — but only with that attribute set.
 - **The offscreen fallback does not fire on this machine.** `qt_application()` defaults to
   the offscreen platform only when there is no display, and XQuartz is installed here, so
-  `DISPLAY` is set and the platform stays `cocoa`. That is the intended behaviour — a
+  `DISPLAY` is set and the platform stays `cocoa`. That is the intended behavior — a
   machine with a display should exercise the real GPU path — but it means "it will be
   offscreen anyway" is not a safe assumption to build on.
 
@@ -341,7 +341,7 @@ return — a test that let it fire would be replaced by the process it launched.
 `restart=` parameter with `os.execv` as its default, the same injectable seam the module
 already gives `log`. Worth stating plainly: **that is a change to production code made for
 a test.** It is justified here because the parameter marks a real boundary and the module
-had already drawn the same one for logging. It is not a licence to add a hook wherever a
+had already drawn the same one for logging. It is not a license to add a hook wherever a
 patch used to be — the first question stays "what state does this leave behind?", and it
 had an answer for the other 23 cases in this file.
 

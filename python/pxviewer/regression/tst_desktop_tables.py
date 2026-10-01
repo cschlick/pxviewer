@@ -28,7 +28,7 @@ from pxviewer.desktop import (                   # noqa: E402
 from pxviewer.live import LiveSession            # noqa: E402
 
 #: Three atoms of one residue, with distinct B-factors so a column can be told apart from
-#: its neighbours. Written and read back rather than hand-built: the table reads
+#: its neighbors. Written and read back rather than hand-built: the table reads
 #: ``AtomArrays``, and building those from a file is the path the app actually takes.
 THREE_ATOMS = """\
 ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00 10.00           N
@@ -564,7 +564,7 @@ def exercise_a_link_authored_from_two_atoms_reaches_the_table_and_a_file():
     Bonds table, write it out as a PHIL that phenix can read.
 
     The table half is the part that silently did not work. The restraint was real --
-    minimize honoured it and it was in the saved file -- but ``_geo_cache`` is keyed by
+    minimize honored it and it was in the saved file -- but ``_geo_cache`` is keyed by
     model id and held a wrapper around the *previous* restraints manager, so the table
     went on showing the restraints from before the edit. Nothing said so; the row simply
     was not there.

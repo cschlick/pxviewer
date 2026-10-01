@@ -142,7 +142,7 @@ def exercise_a_refinement_mtz_opens_its_maps():
 
         by_name = dict((v["name"], v) for v in app._volumes)
         assert set(by_name) == {"2FOFCWT", "FOFCWT"}
-        # X-ray maps open in their canonical colours (a random palette colour clashed
+        # X-ray maps open in their canonical colors (a random palette color clashed
         # with the live recalc's conventions): blue density at 1.5 sigma, green/red
         # difference at 3 -- and as mesh, so difference lobes stay visible inside.
         assert by_name["2FOFCWT"]["color"] == "dodgerblue"
@@ -274,7 +274,7 @@ def exercise_updating_maps_replaces_them_in_place():
     model that no longer exists -- the difference map most of all, since it answers "what
     does the density have that the model does not" about the old positions.
 
-    Replaced in place, so a level or a colour the user set on them survives.
+    Replaced in place, so a level or a color the user set on them survives.
     """
     with desktop() as app, mtz(coefficients=False) as path:
         rid, _mid = phase(app, path)

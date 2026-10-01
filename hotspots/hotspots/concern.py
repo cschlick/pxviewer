@@ -243,7 +243,7 @@ def _worst_per_residue(events, metrics):
     residue. Rule 6 is untouched: the severity is still the max, never a sum, so a residue
     dense with mild restraints still cannot outrank one with a single bad outlier. Only the
     extent changes, and it changes to cover the atoms the channel actually implicates. Peak
-    normalisation in field.py means a wider footprint does not raise the peak -- the event
+    normalization in field.py means a wider footprint does not raise the peak -- the event
     still tops out at its own severity.
     """
     if not metrics:
@@ -349,7 +349,7 @@ def combine_arrays(arrays_by_metric, mode="max", p=DEFAULT_NORM_P, families=None
     earns its keep entirely below the threshold -- two concerns of 0.3 reaching 0.6 is the
     whole effect, and it happens inside the bounded range. Above 1.0 the display contract has
     nothing left to say anyway (already maximum concern), so clipping costs only contrast
-    between regions that were both already saturated, which no colour ramp was showing.
+    between regions that were both already saturated, which no color ramp was showing.
     """
     arrays = list(arrays_by_metric.values())
     if mode == "max":

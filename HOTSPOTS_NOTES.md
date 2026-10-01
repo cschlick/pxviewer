@@ -12,7 +12,7 @@ Design background for the viewer's own scoring is in [HOTSPOTS.md](HOTSPOTS.md);
 `VIEWER_NOTES.md` diagnosed the viewer as mixing two value systems. That was right, and the
 mechanism was one line of asymmetry: computing a severity score cleared any imported concern
 field, but importing a concern field did **not** clear a computed score. So a severity table
-and a severity-coloured model stayed on screen beside a concern map that correctly read zero
+and a severity-colored model stayed on screen beside a concern map that correctly read zero
 in the same place.
 
 What changed:
@@ -28,7 +28,7 @@ What changed:
   Percentile maps are imported when present and are now **optional** — a manifest without them
   imports and draws normally.
 - **The residue table is sampled from the concern maps themselves**, so its values are bounded
-  `[0, 1]`, labelled `concern`, and cannot disagree with what is drawn.
+  `[0, 1]`, labeled `concern`, and cannot disagree with what is drawn.
 - **Interface text** was rewritten; the threshold reads `Concern threshold` on a `[0, 1]` scale.
 
 Your acceptance checks 2–8 pass. Check 1 does not, and we are deliberately not making it pass
@@ -59,7 +59,7 @@ Rules the viewer enforces on import, each of which will reject a map with a clea
 - `color_anchors` must ascend `0 <= yellow < orange < red <= 1`, or the documented defaults
   (0.5 / 0.75 / 1.0) are used instead.
 
-Placement is honoured through **CCP4 NXSTART** (`map_data().origin()`) *and* `shift_cart`:
+Placement is honored through **CCP4 NXSTART** (`map_data().origin()`) *and* `shift_cart`:
 `origin = steps @ map_data().origin() - shift_cart()`. Considering only `shift_cart` put your
 standalone maps at Cartesian zero, which is fixed. The 1TEC sample lands at `(-48, -36, -40)`.
 
@@ -91,7 +91,7 @@ residue a result belongs to, which atoms it implicates, and whether it was flagg
 pxviewer's three severity functions are now thin calibrations over this module, so the
 sharing is enforced rather than intended.
 
-Two behaviours you would inherit, both of which matter to you specifically:
+Two behaviors you would inherit, both of which matter to you specifically:
 
 **Clash uses `probe2`, not `mmtbx.validation.clashscore`.** This is the fix for your Probe
 blocker. `clashscore` shells out to the classic Duke `probe` binary, which is not installed
@@ -152,7 +152,7 @@ the 0.05% outlier cut, so the field legitimately marks residues MolProbity never
 1TEC only 5 of 338 Ramachandran results are outliers, but many more deposit real concern
 (E84 at 0.2429% deposits ~0.57, E38 at 0.1519% deposits 0.699). Widening the predicate to your
 own good boundary resolved every unexplained atom. Judging a continuous field against a
-boolean cut reports correct behaviour as failure.
+boolean cut reports correct behavior as failure.
 
 Results on the shipped samples, threshold 0.5, tolerance 4 Å:
 
@@ -175,11 +175,11 @@ Check 1 asked that E85 not appear as a Rama hotspot at threshold 0.1, since its 
 concern is exactly 0.000.
 
 It does appear, and the field is right. E85 itself is favored at 3.8369% and deposits exactly
-0.000, as you said. But its neighbour **E84 scores 0.2429%** — not an outlier (the cut is
+0.000, as you said. But its neighbor **E84 scores 0.2429%** — not an outlier (the cut is
 0.05%) yet well inside your concern curve, depositing about **0.572**. The σ ≈ 2 Å splat is
 wider than the ~3.8 Å between adjacent Cα atoms, so E85's atoms genuinely sit in E84's
 density. Sampled Rama concern at E85 is 0.348 at 2.0 Å and 0.432 at 1.0 Å — finer sampling
-*raises* it, because it resolves more of the neighbour's peak.
+*raises* it, because it resolves more of the neighbor's peak.
 
 Note that E85's signal comes from a residue MolProbity never flagged. That is the same reason
 §4 insists on `worse_than_percent(2.0)`: a check keyed to the outlier boolean would call E85
@@ -195,7 +195,7 @@ The same pattern around the E53 outlier, sampled at 2.0 Å against what each res
 
 E54 reads four times what it deposits. This is the kernel doing exactly what it is for.
 
-So the viewer's table ranks **neighbourhoods, not residues**, and says so rather than implying
+So the viewer's table ranks **neighborhoods, not residues**, and says so rather than implying
 attribution. We deliberately did not add a de-blurring heuristic to make the number look
 cleaner; recovering per-residue concern from the grid after the splat is an ill-posed
 deconvolution. The user reviewed this and accepted it ("visible is better than not visible
