@@ -65,7 +65,7 @@ def run() -> None:
                   not vp.coach_bar.isHidden()
                   and vp.coach_title.text() == tut.title
                   and vp.coach_progress.text() == "Step 1 / %d" % len(tut.steps)
-                  and bool(vp.coach_text.text().strip()),
+                  and bool(vp.coach_text.toPlainText().strip()),
                   vp.coach_progress.text())
             check("%s: coach height reserved" % tut.title,
                   vp.coach_text.minimumHeight() > 0,

@@ -370,6 +370,33 @@ def _line_icon(name: str, color, size: int = 20, selected_color=None):
     return icon
 
 
+def _icon_img_tag(label, name: str) -> str:
+    """An ``<img>`` tag for icon ``name`` — rendered into the label's document as a
+    resource, tinted to its text color, sized to cap alongside the line. Lets coach
+    text show the actual button glyph it is naming (``{icon:eye-off}``)."""
+    from PySide6.QtCore import QByteArray, Qt, QUrl
+    from PySide6.QtGui import QImage, QPainter, QTextDocument
+    from PySide6.QtSvg import QSvgRenderer
+
+    path = _CUSTOM_ICONS_DIR / f"{name}.svg"
+    if not path.exists():
+        path = _ICONS_DIR / f"{name}.svg"
+    if not path.exists():  # pragma: no cover - packaging guard
+        return ""
+    px = label.fontMetrics().height() + 2
+    tint = label.palette().windowText().color().name()
+    svg = path.read_text().replace("currentColor", tint)
+    img = QImage(px * 3, px * 3, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(img)
+    QSvgRenderer(QByteArray(svg.encode("utf-8"))).render(painter)
+    painter.end()
+    img.setDevicePixelRatio(3.0)
+    label.document().addResource(
+        QTextDocument.ResourceType.ImageResource, QUrl(f"pxicon:{name}"), img)
+    return f'<img src="pxicon:{name}" width="{px}" height="{px}">'
+
+
 # One idea, one name. "Let the map pull" was offered twice under two labels — "Use map"
 # beside Minimize, "Into the density" beside the drag — which read as two unrelated
 # features rather than the same switch on two operations.
@@ -1341,7 +1368,8 @@ class ViewportWindow:
         tutorial starts). Built here so it splits the viewport, not the controls pane; the
         ControlsWindow owns the logic and drives these widgets (see its tutorial methods)."""
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+        from PySide6.QtWidgets import (
+            QFrame, QHBoxLayout, QLabel, QPushButton, QTextBrowser, QVBoxLayout)
 
         bar = QFrame()
         bar.setObjectName("coachPane")
@@ -1367,9 +1395,18 @@ class ViewportWindow:
         self.coach_close.setToolTip("Exit the tutorial")
         head.addWidget(self.coach_close)
         v.addLayout(head)
-        self.coach_text = QLabel("")
-        self.coach_text.setWordWrap(True)
-        self.coach_text.setTextFormat(Qt.TextFormat.RichText)
+        # QTextBrowser rather than QLabel: the coach embeds the buttons' own icons
+        # inline ({icon:name} — see _coach_markup), which needs a real document to
+        # hold the image resources; QLabel keeps its document private.
+        self.coach_text = QTextBrowser()
+        self.coach_text.setLineWrapMode(QTextBrowser.LineWrapMode.WidgetWidth)
+        self.coach_text.setFrameShape(QFrame.Shape.NoFrame)
+        self.coach_text.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.coach_text.setOpenLinks(False)
+        self.coach_text.setStyleSheet("background:transparent; border:none;")
+        self.coach_text.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.coach_text.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.coach_text.document().setDocumentMargin(0)
         v.addWidget(self.coach_text, stretch=1)
         row = QHBoxLayout()
         self.coach_show = QPushButton("Show me where")
@@ -5672,14 +5709,17 @@ class ControlsWindow:
         vp.coach_next.clicked.connect(self._tutorial_next)
 
     @staticmethod
-    def _coach_markup(text: str) -> str:
-        """Tiny markdown → HTML for the coach: **bold**, `code`, and blank-line breaks."""
+    def _coach_markup(text: str, label) -> str:
+        """Tiny markdown → HTML for the coach: **bold**, `code`, blank-line breaks,
+        and ``{icon:name}`` — the icon the named button wears, embedded inline."""
         import html
         import re
 
         t = html.escape(text)
         t = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
         t = re.sub(r"`(.+?)`", r"<code>\1</code>", t)
+        t = re.sub(r"\{icon:([\w-]+)\}",
+                   lambda m: _icon_img_tag(label, m.group(1)), t)
         return t.replace("\n\n", "<br><br>").replace("\n", "<br>")
 
     def _load_tutorial_data(self, tutorial_obj) -> bool:
@@ -5756,12 +5796,15 @@ class ControlsWindow:
         vp = self._desktop._viewport
         label = vp.coach_text
         # The bar is still hidden, so its own geometry is stale; the pane spans the
-        # viewport window minus the layout's 14px side margins.
+        # viewport window minus the layout's 14px side margins. QTextBrowser has no
+        # heightForWidth, so measure the document itself at that width.
         width = max(vp.coach_bar.parentWidget().width() - 28, 200)
+        doc = label.document()
         tallest = 0
         for step in tutorial_obj.steps:
-            label.setText(self._coach_markup(step.text))
-            tallest = max(tallest, label.heightForWidth(width))
+            label.setHtml(self._coach_markup(step.text, label))
+            doc.setTextWidth(width)
+            tallest = max(tallest, int(math.ceil(doc.size().height())))
         label.setMinimumHeight(tallest)
 
     def _show_tutorial_step(self) -> None:
@@ -5773,7 +5816,7 @@ class ControlsWindow:
         vp = self._desktop._viewport
         vp.coach_title.setText(tut.title)
         vp.coach_progress.setText(f"Step {self._tutorial_step + 1} / {len(tut.steps)}")
-        vp.coach_text.setText(self._coach_markup(step.text))
+        vp.coach_text.setHtml(self._coach_markup(step.text, vp.coach_text))
         vp.coach_show.setVisible(step.target is not None)  # "Show me where" only if targeted
         vp.coach_back.setEnabled(self._tutorial_step > 0)
         self._tutorial_step_satisfied = False

@@ -165,14 +165,14 @@ def open_model_tutorial() -> Tutorial:
         ),
         Step(
             "With atoms selected, the buttons under **Selected:** act on them: "
-            "press **Hide** — the selected atoms vanish from the drawing — then "
-            "**Show** brings them back.",
+            "press {icon:eye-off} **Hide** — the selected atoms vanish from the "
+            "drawing — then {icon:eye} **Show** brings them back.",
             done=_atoms_were_hidden,
             target=lambda cw: cw._hide_sel_btn,
         ),
         Step(
-            "**Clear** empties the selection — the highlight, the clip sphere and "
-            "the neighbourhood layer all fold away.",
+            "{icon:circle-off} **Clear** empties the selection — the highlight, "
+            "the clip sphere and the neighbourhood layer all fold away.",
             done=lambda cw: _selection_count(cw) == 0,
             target=lambda cw: cw._clear_btn,
         ),

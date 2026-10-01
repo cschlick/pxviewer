@@ -13,6 +13,7 @@ refinement all run for real.
 from __future__ import absolute_import, division, print_function
 
 import contextlib
+import math
 import sys
 import time
 
@@ -271,15 +272,19 @@ def exercise_the_coach_pane_keeps_one_height_for_the_whole_tutorial():
         label = vp.coach_text
         reserved = label.minimumHeight()
         width = max(vp.coach_bar.parentWidget().width() - 28, 200)
+        doc = label.document()
         # Every step fits inside the reserve: stepping cannot grow the label.
+        # (QTextBrowser has no heightForWidth — measure the document at the width.)
         heights = []
         for i in range(len(tutorial.altlocs_tutorial().steps)):
             controls._tutorial_step = i
             controls._show_tutorial_step()
             process_events()
-            assert label.heightForWidth(width) <= reserved, (
+            doc.setTextWidth(width)
+            needed = int(math.ceil(doc.size().height()))
+            assert needed <= reserved, (
                 "step %d needs %d but only %d is reserved"
-                % (i, label.heightForWidth(width), reserved))
+                % (i, needed, reserved))
             heights.append(vp.coach_bar.height())
         assert len(set(heights)) == 1, "the pane changed height across steps: %r" % heights
 
