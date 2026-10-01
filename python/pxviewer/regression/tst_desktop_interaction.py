@@ -1126,14 +1126,19 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
 
         # A restraint row is a collection of atoms, so it takes the same selection
         # path: the sphere re-centers on the restraint's atoms rather than leaving
-        # the residue's standing to hide them.
+        # the residue's standing to hide them. And the fit is to the touched
+        # *components* — a two-atom bond clips to the whole residue(s), so the
+        # bond never cuts its own residue in half.
         import numpy as np
         app.show_restraint_notations(mid, [("bond", (0, 1))])
         assert entry["_auto_clip"] is True
         assert list(app._scene_selection.get(mid, ())) == [0, 1]
         atoms = entry["session"].model.get_hierarchy().atoms()
-        center = (np.asarray(atoms[0].xyz) + np.asarray(atoms[1].xyz)) / 2.0
-        reach = float(np.linalg.norm(np.asarray(atoms[0].xyz) - center))
+        bounds = app._component_bounds(atoms, [0, 1])
+        assert len(bounds) > 2            # the residue, not just the bonded pair
+        xyz = np.array([atoms[i].xyz for i in bounds], dtype=float)
+        center = xyz.mean(axis=0)
+        reach = float(np.linalg.norm(xyz - center, axis=1).max())
         sphere = entry["session"]._clips[None]
         assert approx_equal(sphere["radius"], reach + 4.0)
         assert approx_equal(np.linalg.norm(np.asarray(sphere["center"]) - center), 0.0)
@@ -1142,9 +1147,10 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         # sphere is reach + the new padding.
         app._settings.setValue("selection/clip_padding", 7.5)
         app.show_restraint_notations(mid, [("bond", (2, 3))])
-        atoms_sel = entry["session"].model.get_hierarchy().atoms()
-        center2 = (np.asarray(atoms_sel[2].xyz) + np.asarray(atoms_sel[3].xyz)) / 2.0
-        reach2 = float(np.linalg.norm(np.asarray(atoms_sel[2].xyz) - center2))
+        bounds2 = app._component_bounds(atoms, [2, 3])
+        xyz2 = np.array([atoms[i].xyz for i in bounds2], dtype=float)
+        center2 = xyz2.mean(axis=0)
+        reach2 = float(np.linalg.norm(xyz2 - center2, axis=1).max())
         assert approx_equal(entry["session"]._clips[None]["radius"], reach2 + 7.5)
         app._settings.setValue("selection/clip_padding", 4.0)
 

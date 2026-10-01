@@ -11036,6 +11036,24 @@ class DesktopApp:
     _SPHERE_OFF = {"mode": "off", "radius": None, "center": None}
 
     @staticmethod
+    def _component_bounds(atoms, indices) -> list:
+        """``indices`` grown to whole components (residue groups) — for sphere fits.
+
+        The selection keeps its granularity, but a sphere fit to a single picked
+        atom clips that atom's own residue in half. The fit therefore measures the
+        components the selection stands inside: picking CA of a residue clips to
+        the whole residue. (atom → atom_group → residue_group, same parentage the
+        residue-granularity pick uses.)
+        """
+        expanded = set()
+        size = atoms.size()
+        for i in indices:
+            if 0 <= i < size:
+                expanded.update(int(a.i_seq)
+                                for a in atoms[i].parent().parent().atoms())
+        return sorted(expanded)
+
+    @staticmethod
     def _sphere_state(entry) -> dict:
         """An object's clip sphere, normalized to ``{"mode", "radius", "center"}``."""
         sph = entry.get("sphere")
@@ -11177,8 +11195,8 @@ class DesktopApp:
                 model = getattr(entry["session"], "model", None)
                 if indices and model is not None:
                     atoms = model.get_hierarchy().atoms()
-                    xyz = np.array([atoms[i].xyz for i in indices
-                                    if 0 <= i < len(atoms)], dtype=float)
+                    bounds = self._component_bounds(atoms, indices)
+                    xyz = np.array([atoms[i].xyz for i in bounds], dtype=float)
                     if len(xyz):
                         center = xyz.mean(axis=0)
                         reach = float(np.linalg.norm(xyz - center, axis=1).max())
@@ -13191,11 +13209,13 @@ class DesktopApp:
                 continue
             try:
                 atoms = model.get_hierarchy().atoms()
-                xyz = np.array([atoms[i].xyz for i in indices if 0 <= i < len(atoms)],
-                               dtype=float)
-                if not len(xyz):
+                # same sphere _select_fragment draws — fit to the touched
+                # components, not the picked atoms alone
+                bounds = self._component_bounds(atoms, indices)
+                if not bounds:
                     continue
-                center = xyz.mean(axis=0)  # same sphere _select_fragment draws
+                xyz = np.array([atoms[i].xyz for i in bounds], dtype=float)
+                center = xyz.mean(axis=0)
                 reach = float(np.linalg.norm(xyz - center, axis=1).max())
                 self._apply_model_sphere(
                     entry, "selection", radius=reach + self._clip_padding(),
@@ -13700,7 +13720,8 @@ class DesktopApp:
         if clip:
             # The same sphere the focus path fits, re-fit to the grown selection —
             # without it a residue added outside the standing sphere is invisible.
-            xyz = np.array([atoms[i].xyz for i in indices])
+            bounds = self._component_bounds(atoms, indices)
+            xyz = np.array([atoms[i].xyz for i in bounds])
             center = xyz.mean(axis=0)
             reach = float(np.linalg.norm(xyz - center, axis=1).max())
             self._apply_model_sphere(entry, "selection",
@@ -13776,12 +13797,16 @@ class DesktopApp:
                 # camera is still flying there, so the camera-target default would put
                 # the sphere on the *old* view and clip out the very thing being framed
                 # (worst with several far-apart models loaded -- the whole viewport went
-                # blank until a manual clip re-centered it). Sized to the selection plus
-                # enough context to read its surroundings; lifted when the selection is
-                # cleared, and any later manual clipping simply takes over.
+                # blank until a manual clip re-centered it). Sized to the touched
+                # components plus enough context to read their surroundings -- a lone
+                # atom gets its whole residue, not a ball around itself; lifted when
+                # the selection is cleared, and any later manual clipping simply
+                # takes over.
                 atoms = session.model.get_hierarchy().atoms()
-                reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - center))
-                            for i in indices)
+                bounds = self._component_bounds(atoms, indices)
+                xyz = np.array([atoms[i].xyz for i in bounds], dtype=float)
+                center = xyz.mean(axis=0)
+                reach = float(np.linalg.norm(xyz - center, axis=1).max())
                 if entry is not None:
                     self._apply_model_sphere(
                         entry, "selection", radius=reach + self._clip_padding(),
