@@ -1072,10 +1072,12 @@ def exercise_the_selection_pane_describes_picked_atoms():
 
 
 def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
-    """'Clip to selection' is the only control the selection's clip sphere has, so
-    it works on the standing selection both ways: unticking lifts what a selection
-    applied, re-ticking puts it back. And because stepping a table row or walking
-    residues with Space is just selecting, the same checkbox governs both."""
+    """'Clip to selection' is the policy for new selections AND the lift for the
+    sphere one put up, so it works on the standing selection both ways: unticking
+    lifts what a selection applied, re-ticking puts it back. (The standing sphere
+    itself is the Appearance pane's Sphere row — this exercises the checkbox.)
+    And because stepping a table row or walking residues with Space is just
+    selecting, the same checkbox governs both."""
     with desktop() as app:
         mid = ubiquitin(app)
         controls = app._controls

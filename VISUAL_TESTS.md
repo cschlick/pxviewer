@@ -126,6 +126,16 @@ Load two models and one map first.
 4. Set a custom color where offered.
    - **Watch for:** swatches render as color chips, not hex strings; a picked custom
      color joins the list and stays selected after the pane rebuilds.
+5. The pane's clip controls are two independent rows — **Slab** (near/far along the
+   view axis) and **Sphere** (Off / On selection / Around view center / Fixed point,
+   with a radius). Select a residue with **Clip to selection** on, then open the
+   model's Appearance pane.
+   - **Watch for:** the Sphere row reads **On selection** — a selection clip is not
+     invisible state, it lands here and is editable. Switching the row to Off lifts
+     it without touching the slab; **Around view center** follows the camera target;
+     **Fixed point** stays put while the camera moves. The slab slider keeps its
+     positions through all of it — slab and sphere compose, they never overwrite
+     each other.
 
 ## Pass 4 — Map appearance (10 min)
 
@@ -151,10 +161,11 @@ Open a map (or the cryo-EM tutorial data).
    tick **Settings ▸ Viewer ▸ Draw map density within**, change the radius, untick it.
    - **Watch for:** it starts unticked and every map is drawn in full. Every map then
      follows the control together, including the ones already open and the ones that
-     came from different places. Bounding is one setting for all of them; a map drawn at
+     came from different places. Bounding is the default for all of them; a map drawn at
      some radius of its own, or one that ignores the control because it was made before
-     the setting changed, is the unevenness this replaced. There is no per-map Radius row
-     any more.
+     the setting changed, is the unevenness this replaced. Each map's own Sphere row
+     (Appearance pane, **Around view center**) is the same primitive per map — the
+     setting changes it on every map, the row overrides it on one.
 
 6. Make a difference map (Tools ▸ Map tools ▸ **Difference**, or phase one with Make
    maps).
@@ -205,11 +216,12 @@ Load a protein (1ubq works).
      the right, side chain pointing up; nothing important lands offscreen; near/far
      clipping isolates the residue from the rest of the molecule.
 2. With a clip applied, uncheck **Clip to selection** without applying anything new.
-   - **Watch for:** the surrounding structure reappears immediately — the checkbox is
-     the clip sphere's only control, so it works on the standing selection both
-     ways: off lifts it, back on puts it right back without a fresh selection.
-     Apply a selection while unchecked: same framing, but the whole structure
-     stays visible around it.
+   - **Watch for:** the surrounding structure reappears immediately — the checkbox
+     governs the selection's clip both ways: off lifts it, back on puts it right
+     back without a fresh selection. The sphere itself also shows on the object's
+     Appearance pane as **Sphere: On selection** — switching that row to Off lifts
+     it too. Apply a selection while unchecked: same framing, but the whole
+     structure stays visible around it.
 3. Uncheck **Focus on selection**, apply a different residue.
    - **Watch for:** the selection highlights but the camera stays put.
 4. Select a helix or a whole chain (e.g. `resseq 20:35`).

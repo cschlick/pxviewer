@@ -1895,7 +1895,9 @@ class ControlsWindow:
         self._clip_on_select.setToolTip(
             "Clip the view to a sphere that just contains the selected atoms; "
             "uncheck to keep the whole scene visible around them — and to lift a "
-            "clip a selection already applied.")
+            "clip a selection already applied. The standing sphere is a setting of "
+            "the object itself: the Appearance pane's Sphere row shows it and can "
+            "re-aim or resize it.")
         self._clip_on_select.setChecked(
             str(self._desktop._settings.value("selection/clip_on_apply", "true")).lower()
             != "false")
@@ -3390,12 +3392,13 @@ class ControlsWindow:
         viewer = QGroupBox("Viewer")
         vg = QVBoxLayout(viewer)
 
-        # How much density any map draws around the view center. One setting for all of
-        # them, not a property of each: bounding is a statement about how much density
-        # you want to look at, and having it on some maps and not others left contours
-        # behaving differently with nothing on screen to say why. 15 A is a starting
-        # point, not a convention we can point at, so it is adjustable rather than baked
-        # in. Applies to what is open as well as to what opens next.
+        # How much density any map draws around the view center. One default for all of
+        # them: bounding is a statement about how much density you want to look at,
+        # and having it on some maps and not others left contours behaving differently
+        # with nothing on screen to say why. 15 A is a starting point, not a convention
+        # we can point at, so it is adjustable rather than baked in. This is the default
+        # — each map's own Sphere row (its Appearance pane, "Around view center") is the
+        # per-map override.
         from PySide6.QtWidgets import QCheckBox
 
         current = self._desktop.view_radius
@@ -3815,12 +3818,21 @@ class ControlsWindow:
                 interactions=bool(it.get("interactions"))), stretch=1)
             self._appearance_layout.addLayout(r)
 
+            _model_live = self._desktop.model_appearance(mid)
+
             def _set_clip(front, back, it=it):
                 it["clip"] = (front, back)
                 self._safe(lambda: self._desktop.set_model_clip(mid, front, back))
 
-            self._add_clip_row(
-                {**it, **self._desktop.model_appearance(mid)}.get("clip"), _set_clip)
+            self._add_clip_row({**it, **_model_live}.get("clip"), _set_clip)
+            self._add_sphere_row(
+                _model_live.get("sphere"), allow_selection=True,
+                on_pick=lambda mode, r: self._safe(
+                    lambda: self._desktop.set_model_sphere(mid, mode, r)),
+                on_radius=lambda r: self._safe(
+                    lambda: self._desktop.set_model_sphere(
+                        mid, (self._desktop.model_sphere_state(mid).get("mode")
+                              or "view"), r, refresh=False)))
 
             if it.get("has_restraints_cif"):
                 # A ligand built here — export the pair a refinement needs: its fitted
@@ -3898,6 +3910,14 @@ class ControlsWindow:
                 self._safe(lambda: self._desktop.set_volume_clip(vid, front, back))
 
             self._add_clip_row(live.get("clip"), _set_clip)
+            self._add_sphere_row(
+                live.get("sphere"), allow_selection=False,
+                on_pick=lambda mode, r: self._safe(
+                    lambda: self._desktop.set_volume_sphere(vid, mode, r)),
+                on_radius=lambda r: self._safe(
+                    lambda: self._desktop.set_volume_sphere(
+                        vid, (self._desktop.volume_sphere_state(vid).get("mode")
+                              or "view"), r, refresh=False)))
 
             def _set_mask(radius, it=it):
                 it["mask_radius"] = radius
@@ -4230,19 +4250,77 @@ class ControlsWindow:
 
         front, back = current if current else (0.0, 1.0)
         row = QHBoxLayout()
-        lab = QLabel("Clipping")
+        lab = QLabel("Slab")
         lab.setMinimumWidth(80)
         row.addWidget(lab)
         slider = _make_range_slider()()
         slider.setToolTip(
             "Front and rear clipping planes for this object. Drag the handles to slice "
             "into it, or the span between them to move the slab. The slab follows the "
-            "camera.")
+            "camera and composes with the Sphere clip below — slicing the depth does "
+            "not lift a sphere, and lifting a sphere does not reopen the slab.")
         slider.set_values(front, back)
         slider.changed.connect(on_change)
         row.addWidget(slider, stretch=1)
         self._appearance_layout.addLayout(row)
         return slider
+
+    def _add_sphere_row(self, sphere, allow_selection, on_pick, on_radius):
+        """The clip sphere — the *place* clip, complementing the Slab row's depth.
+
+        Where the sphere sits is the mode: on the current selection (what the
+        Selection pane's Clip checkbox writes — this row is its readout), around the
+        view center (the classic map bound, which follows the camera), or frozen at
+        a fixed point. The radius is the sphere's reach in Å — for a selection it is
+        fitted (selection + the clip padding), so it reads rather than edits there.
+        """
+        from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel
+
+        sphere = dict(sphere or {})
+        mode = sphere.get("mode") or "off"
+        row = QHBoxLayout()
+        lab = QLabel("Sphere")
+        lab.setMinimumWidth(80)
+        row.addWidget(lab)
+        combo = QComboBox()
+        options = [("Off", "off")]
+        if allow_selection:
+            options.append(("On selection", "selection"))
+        options += [("Around view center", "view"), ("Fixed point", "point")]
+        for text, value in options:
+            combo.addItem(text, value)
+        idx = combo.findData(mode)
+        if idx < 0:
+            idx = 0   # a mode this row doesn't offer (shouldn't happen)
+        combo.setCurrentIndex(idx)
+        radius = QDoubleSpinBox()
+        radius.setRange(0.5, 500.0)
+        radius.setDecimals(1)
+        radius.setSingleStep(1.0)
+        radius.setSuffix(" Å")
+        radius.setValue(float(sphere.get("radius") or 10.0))
+        radius.setEnabled(mode in ("view", "point"))
+        radius.setToolTip(
+            "The sphere's reach. 'On selection' sizes it to the selection plus the "
+            "clip padding (Settings ▸ Selection); edit it under 'Around view center' "
+            "or 'Fixed point'.")
+        combo.setToolTip(
+            "Draw only what is inside a sphere: 'On selection' fits the current "
+            "selection (and each new one — the Clip to selection checkbox), 'Around "
+            "view center' follows the camera's target like Coot's map radius, 'Fixed "
+            "point' freezes the sphere where it is. The Slab above still applies on "
+            "top.")
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo, r=radius: (r.setEnabled(c.currentData() in ("view", "point")),
+                                           on_pick(c.currentData(),
+                                                   r.value() if c.currentData() != "off" else None)))
+        radius.valueChanged.connect(
+            lambda v, c=combo: on_radius(float(v)) if c.currentData() in ("view", "point")
+            else None)
+        row.addWidget(combo)
+        row.addWidget(radius)
+        self._appearance_layout.addLayout(row)
+        return combo, radius
 
     def _add_opacity_row(self, current, on_change):
         """Opacity as a slider with its value beside it (QSlider is integer-only)."""
@@ -5451,8 +5529,10 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Export failed", str(exc))
 
     def _on_clip_on_select_toggled(self, on: bool) -> None:
-        """The checkbox is the clip sphere's only control, so it works on the
-        standing selection both ways: off lifts it, on puts it back."""
+        """The checkbox is the policy for *new* selections, and it works on the
+        standing selection-clip both ways: off lifts it, on puts it back. (The
+        sphere's standing state itself — visible and editable — is the Appearance
+        pane's Sphere row.)"""
         self._desktop._settings.setValue(
             "selection/clip_on_apply", "true" if on else "false")
         if on:
@@ -10800,8 +10880,9 @@ class DesktopApp:
             return {}
         out = {key: entry.get(key)
                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
-                           "radius", "negative_color", "negative_iso",
+                           "negative_color", "negative_iso",
                            "negative_opacity", "negative_style")}
+        out["sphere"] = self._sphere_state(entry)
         out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
         # The Level slider spans up to here, so its right end genuinely empties the map.
@@ -10879,12 +10960,16 @@ class DesktopApp:
         A crystallographic map fills the unit cell, and contouring the whole thing buries
         the model in density — this is the control Coot has for that, and it follows the
         view. Unlike the mask it edits nothing: the map is whole, just not all drawn.
+        It writes the "view" sphere mode on every open map; a map's own Sphere row in
+        its Appearance pane is the per-map version of the same control.
         """
         entry = self._volume_entry(vid)
         radius = None if radius is None else float(radius)
-        if entry is None or entry.get("radius") == radius:
+        want = ({"mode": "view", "radius": radius, "center": None}
+                if radius is not None else dict(self._SPHERE_OFF))
+        if entry is None or self._sphere_state(entry) == want:
             return
-        entry["radius"] = radius
+        entry["sphere"] = want
         self._send_volume_clip(entry)
 
     def _reassert_volume_clips(self) -> None:
@@ -10897,7 +10982,8 @@ class DesktopApp:
         is new. So the clips are re-asserted on every reload rather than sent once.
         """
         for entry in self._volumes:
-            if entry.get("radius") is not None or entry.get("clip") != (0.0, 1.0):
+            if (self._sphere_state(entry)["mode"] != "off"
+                    or entry.get("clip") != (0.0, 1.0)):
                 self._send_volume_clip(entry)
 
     def _reassert_hidden_volumes(self) -> None:
@@ -10919,16 +11005,115 @@ class DesktopApp:
                     pass
 
     def _send_volume_clip(self, entry) -> None:
-        """Push a volume's whole clip: the slab and the radius are one thing to the
+        """Push a volume's whole clip: the slab and the sphere are one thing to the
         viewer, so a change to either re-sends both."""
         control = self._control_session()
         if control is None:
             return
         front, back = entry.get("clip") or (0.0, 1.0)
+        radius, center = self._resolved_sphere(entry)
         try:
-            control.set_clip(front, back, radius=entry.get("radius"), ref=entry["ref"])
+            control.set_clip(front, back, radius=radius, center=center,
+                             ref=entry["ref"])
         except Exception:  # pragma: no cover - defensive
             pass
+
+    # -- clip state: slab ∩ sphere ---------------------------------------------------
+    #
+    # An object's clip is a region: the front/rear depth slab the Appearance pane's
+    # Slab row drives, INTERSECTED with an optional sphere (a *place* clip). The sphere
+    # has three modes — "selection" (center and radius re-fit to each applied
+    # selection; this is what the Selection pane's Clip checkbox writes), "view"
+    # (center follows the camera target, Coot-style — what the view-radius setting
+    # means for maps) and "point" (frozen at a coordinate). Both halves compose on the
+    # wire (LiveSession.set_clip carries front/back + radius/center together), so every
+    # send goes through one funnel — a slab change must not wipe a standing sphere and
+    # a sphere change must not wipe a standing slab.
+    _SPHERE_OFF = {"mode": "off", "radius": None, "center": None}
+
+    @staticmethod
+    def _sphere_state(entry) -> dict:
+        """An object's clip sphere, normalized to ``{"mode", "radius", "center"}``."""
+        sph = entry.get("sphere")
+        return sph if isinstance(sph, dict) else dict(DesktopApp._SPHERE_OFF)
+
+    def _resolved_sphere(self, entry):
+        """The sphere's wire values: (radius, center). ``center`` None means the sphere
+        follows the camera target — mode "view"."""
+        sph = self._sphere_state(entry)
+        if sph["mode"] == "off" or sph.get("radius") is None:
+            return None, None
+        if sph["mode"] in ("selection", "point"):
+            return sph["radius"], sph.get("center")
+        return sph["radius"], None
+
+    def _send_model_clip(self, entry, *, depth=None) -> None:
+        """Push a model's whole clip — slab and sphere together."""
+        front, back = entry.get("clip") or (0.0, 1.0)
+        radius, center = self._resolved_sphere(entry)
+        kw = {} if depth is None else {"depth": depth}
+        entry["session"].set_clip(front, back, radius=radius, center=center, **kw)
+
+    def _apply_model_sphere(self, entry, mode, radius=None, center=None,
+                            *, depth=None, refresh=True) -> None:
+        """Write the model's sphere state and send the composed clip.
+
+        The one funnel for sphere changes: it keeps ``_auto_clip`` (this sphere stands
+        on a selection's behalf) and ``_auto_clip_depth`` (the camera slab a clipped
+        orient parked) in step with the mode — a hand-set mode drops the auto-clip
+        bookkeeping the lift paths check.
+        """
+        entry["sphere"] = {"mode": mode, "radius": radius,
+                           "center": None if center is None else [float(c) for c in center]}
+        if mode == "selection":
+            entry["_auto_clip"] = True
+        else:
+            entry.pop("_auto_clip", None)
+            # NB: ``_auto_clip_depth`` is the callers' bookkeeping — a plain lift must
+            # keep it, because reapply re-parks that camera slab.
+        self._send_model_clip(entry, depth=depth)
+        # The sphere row in the Appearance pane is this state's readout — refresh if
+        # the pane is showing this object (signature-gated, so a no-op if unchanged).
+        # Row-originated changes pass refresh=False: the widget already shows what the
+        # user just set, and rebuilding under a still-editing spin would kill it.
+        try:
+            if (refresh and self._controls._focused == ("model", entry.get("id"))):
+                self._controls._update_appearance("model", entry.get("id"))
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _lift_model_sphere(self, entry, *, depth=None) -> None:
+        """Drop an object's sphere, whatever mode put it there (slab untouched)."""
+        if self._sphere_state(entry)["mode"] == "off":
+            return
+        self._apply_model_sphere(entry, "off", depth=depth)
+
+    def _default_sphere_center(self, entry):
+        """Where a fresh fixed-point sphere lands: the standing sphere's own spot, then
+        the model's selection, then the object's middle (atoms for a model, the grid
+        center for a map)."""
+        sph = self._sphere_state(entry)
+        if sph.get("center") is not None:
+            return list(sph["center"])
+        mid = entry.get("id")
+        model = getattr(entry.get("session"), "model", None)
+        if model is not None:
+            with self._scene_lock:
+                indices = list(self._scene_selection.get(mid, ()))
+            atoms = model.get_hierarchy().atoms()
+            xyz = np.array([atoms[i].xyz for i in indices if 0 <= i < len(atoms)],
+                           dtype=float)
+            if not len(xyz):
+                xyz = np.array([a.xyz for a in atoms], dtype=float)
+            return list(xyz.mean(axis=0)) if len(xyz) else None
+        data = entry.get("data")          # a volume's: the middle of its own grid
+        mm = getattr(data, "map_manager", None)
+        if mm is None:
+            return None
+        from .volume_io import grid_affine
+        origin, steps = grid_affine(mm)
+        dims = np.asarray(mm.map_data().all(), dtype=float)
+        return list(origin + steps @ (dims / 2.0))
 
     def set_model_clip(self, mid: str, front: float, back: float) -> None:
         """Clip a model's representations to a front/rear slab.
@@ -10943,14 +11128,101 @@ class DesktopApp:
             return
         entry["clip"] = clip
         try:
-            entry["session"].set_clip(front, back)
+            self._send_model_clip(entry)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def model_sphere_state(self, mid: str) -> dict:
+        """A model's clip sphere for the Appearance pane's Sphere row."""
+        entry = self._model_entry(mid)
+        return dict(self._sphere_state(entry)) if entry else dict(self._SPHERE_OFF)
+
+    def volume_sphere_state(self, vid: str) -> dict:
+        """A volume's clip sphere for the Appearance pane's Sphere row."""
+        entry = self._volume_entry(vid)
+        return dict(self._sphere_state(entry)) if entry else dict(self._SPHERE_OFF)
+
+    def set_model_sphere(self, mid: str, mode: str, radius: Optional[float] = None,
+                         *, refresh=True) -> None:
+        """Set a model's clip sphere — the Appearance pane's Sphere row.
+
+        "selection" needs a selection to measure; without one the mode is stored and
+        the next selection sizes the sphere. "point" freezes the current sphere's spot
+        (or the selection's, or the model's middle). "view" follows the camera target.
+        ``refresh`` is False for the radius spin's own ticks — it is the readout, and
+        rebuilding the pane under a still-editing widget would kill it.
+        """
+        entry = self._model_entry(mid)
+        if entry is None or mode not in ("off", "selection", "view", "point"):
+            return
+        if mode != "selection":
+            # A user-chosen sphere (or off) displaces the selection's clip, so the
+            # camera slab it parked is no longer ours to restore.
+            entry.pop("_auto_clip_depth", None)
+        try:
+            if mode == "point":
+                center = self._default_sphere_center(entry)
+                if center is None:
+                    return
+                self._apply_model_sphere(entry, mode, radius=radius or 10.0,
+                                         center=center, refresh=refresh)
+                return
+            if mode == "selection":
+                with self._scene_lock:
+                    indices = list(self._scene_selection.get(mid, ()))
+                model = getattr(entry["session"], "model", None)
+                if indices and model is not None:
+                    atoms = model.get_hierarchy().atoms()
+                    xyz = np.array([atoms[i].xyz for i in indices
+                                    if 0 <= i < len(atoms)], dtype=float)
+                    if len(xyz):
+                        center = xyz.mean(axis=0)
+                        reach = float(np.linalg.norm(xyz - center, axis=1).max())
+                        self._apply_model_sphere(
+                            entry, mode, radius=reach + self._clip_padding(),
+                            center=center, depth=entry.get("_auto_clip_depth"),
+                            refresh=refresh)
+                        return
+                self._apply_model_sphere(entry, mode, refresh=refresh)
+                # dormant until a selection lands
+                return
+            self._apply_model_sphere(
+                entry, mode,
+                radius=(radius if radius is not None else 10.0) if mode == "view"
+                else None, refresh=refresh)
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def set_volume_sphere(self, vid: str, mode: str, radius: Optional[float] = None,
+                          *, refresh=True) -> None:
+        """Set a volume's clip sphere — "view" is the classic map-around-target bound."""
+        entry = self._volume_entry(vid)
+        if entry is None or mode not in ("off", "view", "point"):
+            return
+        if mode == "point":
+            center = self._default_sphere_center(entry)
+            if center is None:
+                return
+            entry["sphere"] = {"mode": mode, "radius": radius or 10.0,
+                               "center": list(center)}
+        else:
+            entry["sphere"] = {"mode": mode,
+                               "radius": ((radius if radius is not None else 10.0)
+                                          if mode == "view" else None),
+                               "center": None}
+        self._send_volume_clip(entry)
+        try:
+            if (refresh and
+                    self._controls._focused in (("volume", vid), ("negative", vid))):
+                self._controls._update_appearance(*self._controls._focused)
         except Exception:  # pragma: no cover - defensive
             pass
 
     def model_appearance(self, mid: str) -> dict:
-        """A model's current clip slab (see :meth:`volume_appearance`)."""
+        """A model's clip state for the Appearance pane (see :meth:`volume_appearance`)."""
         entry = self._model_entry(mid)
-        return {} if entry is None else {"clip": entry.get("clip")}
+        return {} if entry is None else {"clip": entry.get("clip"),
+                                         "sphere": self._sphere_state(entry)}
 
     def set_volume_scroll_target(self, vid: Optional[str]) -> None:
         """Point the scroll wheel's contouring at a volume (None = nothing).
@@ -11144,7 +11416,11 @@ class DesktopApp:
             # map draws a random default from the session's current palette group.
             "color": color or self._palettes.next_color(),
             "opacity": 1.0, "style": style, "clip": (0.0, 1.0), "mask_radius": None,
-            "radius": self.view_radius, "negative_color": negative_color,
+            # The map opens bounded by the session's view-radius default; its own
+            # Appearance pane's Sphere row is the per-map override.
+            "sphere": ({"mode": "view", "radius": float(self.view_radius), "center": None}
+                       if self.view_radius is not None else dict(self._SPHERE_OFF)),
+            "negative_color": negative_color,
             "iso_kind": iso_kind,
             # A difference map's negative contour is an object in its own right: its own
             # row in the panel, its own pane. Only the level has a tie to the map's --
@@ -12880,18 +13156,16 @@ class DesktopApp:
             return 4.0
 
     def lift_auto_clips(self) -> None:
-        """Drop every standing selection-clip sphere.
+        """Drop every sphere a selection put up (sphere mode "selection").
 
-        The sphere only ever exists on a selection's behalf (``_auto_clip`` is set
-        nowhere else), so the "Clip to selection" checkbox doubling as its removal
-        control is honest: turning it off lifts what it put on. A manually set slab
-        (the Appearance pane's Clipping row) is a different control's state and is
-        left alone.
+        The checkbox doubling as the removal control is honest: turning it off lifts
+        what it put on. A sphere the user set by hand (view or point) is a different
+        control's state and is left alone; the slab row always is.
         """
         for m in self._models:
             try:
                 if m.pop("_auto_clip", False):
-                    m["session"].set_clip(0.0, 1.0, radius=None)
+                    self._apply_model_sphere(m, "off")
             except Exception:  # pragma: no cover - defensive
                 pass
 
@@ -12919,10 +13193,9 @@ class DesktopApp:
                     continue
                 center = xyz.mean(axis=0)  # same sphere _select_fragment draws
                 reach = float(np.linalg.norm(xyz - center, axis=1).max())
-                session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                                 center=center,
-                                 depth=entry.get("_auto_clip_depth"))
-                entry["_auto_clip"] = True
+                self._apply_model_sphere(
+                    entry, "selection", radius=reach + self._clip_padding(),
+                    center=center, depth=entry.get("_auto_clip_depth"))
             except Exception:  # pragma: no cover - defensive
                 pass
 
@@ -12932,7 +13205,7 @@ class DesktopApp:
                 m["session"].clear_selection()
                 if m.pop("_auto_clip", False):
                     m.pop("_auto_clip_depth", None)
-                    m["session"].set_clip(0.0, 1.0, radius=None)
+                    self._apply_model_sphere(m, "off")
                 self._set_context_rep(m, None)
             except Exception:  # pragma: no cover - defensive
                 pass
@@ -13311,7 +13584,7 @@ class DesktopApp:
         entry = self._model_entry(mid)
         if entry is not None and entry.pop("_auto_clip", False):
             entry.pop("_auto_clip_depth", None)
-            session.set_clip(0.0, 1.0, radius=None)
+            self._apply_model_sphere(entry, "off")
         self._set_context_rep(entry, None)        # a whole object needs no context view
         session.focus(list(sel))                  # Mol*'s own whole-object framing
         self._on_model_selection(mid, sel)        # table + label follow
@@ -13335,9 +13608,9 @@ class DesktopApp:
         if not text:
             session.clear_selection()
             if entry is not None and entry.pop("_auto_clip", False):
-                entry.pop("_auto_clip_depth", None)
                 # The isolation sphere was ours; clearing the selection lifts it.
-                session.set_clip(0.0, 1.0, radius=None)
+                entry.pop("_auto_clip_depth", None)
+                self._apply_model_sphere(entry, "off")
             self._set_context_rep(entry, None)
             with self._scene_lock:
                 dropped = self._scene_selection.pop(mid, None) is not None
@@ -13412,7 +13685,7 @@ class DesktopApp:
             session.clear_selection()
             if entry.pop("_auto_clip", False):
                 entry.pop("_auto_clip_depth", None)
-                session.set_clip(0.0, 1.0, radius=None)
+                self._apply_model_sphere(entry, "off")
             self._set_context_rep(entry, None)
             with self._scene_lock:
                 self._scene_selection.pop(mid, None)
@@ -13426,13 +13699,13 @@ class DesktopApp:
             xyz = np.array([atoms[i].xyz for i in indices])
             center = xyz.mean(axis=0)
             reach = float(np.linalg.norm(xyz - center, axis=1).max())
-            session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                             center=center)
-            entry["_auto_clip"] = True
+            self._apply_model_sphere(entry, "selection",
+                                     radius=reach + self._clip_padding(),
+                                     center=center)
             entry["_auto_clip_depth"] = None   # the camera never oriented here
         elif entry.pop("_auto_clip", False):
             entry.pop("_auto_clip_depth", None)
-            session.set_clip(0.0, 1.0, radius=None)
+            self._apply_model_sphere(entry, "off")
         self._set_context_rep(entry, indices if context else None)
         self._on_model_selection(mid, sel)
         return self._selection_expression(entry, indices)
@@ -13505,10 +13778,10 @@ class DesktopApp:
                 atoms = session.model.get_hierarchy().atoms()
                 reach = max(float(np.linalg.norm(np.asarray(atoms[i].xyz) - center))
                             for i in indices)
-                session.set_clip(0.0, 1.0, radius=reach + self._clip_padding(),
-                                 center=center)
                 if entry is not None:
-                    entry["_auto_clip"] = True
+                    self._apply_model_sphere(
+                        entry, "selection", radius=reach + self._clip_padding(),
+                        center=center)
                     # The camera slab orient() parked is part of the clipped view:
                     # remember the depth so lifting and re-applying restore it too.
                     entry["_auto_clip_depth"] = (
@@ -13517,7 +13790,7 @@ class DesktopApp:
                 # Clip is off for this selection, so lift the sphere a previous
                 # clipped selection left -- otherwise it keeps cutting the new view.
                 entry.pop("_auto_clip_depth", None)
-                session.set_clip(0.0, 1.0, radius=None)
+                self._apply_model_sphere(entry, "off")
         # The neighborhood context rides the selection, not the camera: it shows (or
         # clears) whether or not the focus checkbox moved the view.
         self._set_context_rep(entry, list(sel) if context else None)
