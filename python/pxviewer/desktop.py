@@ -5745,7 +5745,7 @@ class ControlsWindow:
         if self._tutorial_timer is None:
             self._tutorial_timer = QTimer(self._window)
             self._tutorial_timer.setInterval(400)  # poll the step's done() predicate
-            self._tutorial_timer.timeout.connect(self._maybe_advance_tutorial)
+            self._tutorial_timer.timeout.connect(self._poll_tutorial_done)
         self._tutorial_timer.start()
         self._show_tutorial_step()
 
@@ -5778,11 +5778,28 @@ class ControlsWindow:
         vp.coach_text.setText(self._coach_markup(step.text))
         vp.coach_show.setVisible(step.target is not None)  # "Show me where" only if targeted
         vp.coach_back.setEnabled(self._tutorial_step > 0)
-        last = self._tutorial_step == len(tut.steps) - 1
-        vp.coach_next.setText("Finish" if last else ("Skip" if step.done else "Next"))
         self._tutorial_step_satisfied = False
+        self._sync_step_button()
 
-    def _maybe_advance_tutorial(self) -> None:
+    def _sync_step_button(self) -> None:
+        """Name the right-side button for the current step: Next (or Finish on the
+        last) once the step's task is done — or when there is nothing to wait for —
+        and Skip while a doable predicate is still unsatisfied. The name is the
+        acknowledgement the poll gives: it never moves the coach itself."""
+        if self._tutorial is None:
+            return
+        step = self._tutorial.steps[self._tutorial_step]
+        last = self._tutorial_step == len(self._tutorial.steps) - 1
+        skip = step.done is not None and not self._tutorial_step_satisfied
+        self._desktop._viewport.coach_next.setText(
+            "Skip" if skip else ("Finish" if last else "Next"))
+
+    def _poll_tutorial_done(self) -> None:
+        """Poll the step's done() predicate. The predicate *acknowledges* — flash the
+        status and swap Skip for Next on the false->true edge — but the coach never
+        advances itself: pressing Enter in a neighbouring field, for instance, must
+        not turn a finished step into a surprise page turn. Next is always the
+        user's click."""
         if self._tutorial is None:
             return
         step = self._tutorial.steps[self._tutorial_step]
@@ -5795,29 +5812,27 @@ class ControlsWindow:
         if satisfied == self._tutorial_step_satisfied:
             return
         self._tutorial_step_satisfied = satisfied
+        self._sync_step_button()
         if satisfied:
-            self._advance_tutorial(auto=True)
+            self._flash_status("✓ step done")
 
-    def _advance_tutorial(self, *, auto: bool) -> None:
+    def _advance_tutorial(self) -> None:
         if self._tutorial is None:
             return
         if self._tutorial_step >= len(self._tutorial.steps) - 1:
             self._tutorial_exit(finished=True)
             return
         self._tutorial_step += 1
-        if auto:
-            self._flash_status("✓ step done")
         self._show_tutorial_step()
 
     def _tutorial_next(self) -> None:
-        self._advance_tutorial(auto=False)
+        self._advance_tutorial()
 
     def _tutorial_back(self) -> None:
         """Step back for a re-read. The poll is edge-triggered, and this step is
-        latched to its predicate's *present* value: without that, returning to a
-        step whose task is still done would instantly fling the user forward
-        again — Back read as a dead key. A step not yet done still auto-advances
-        the moment it genuinely is (a false→true edge)."""
+        latched to its predicate's *present* value: a still-done step keeps reading
+        Next rather than flipping back to Skip, and one not yet done goes back to
+        acknowledging when it genuinely becomes done."""
         if self._tutorial is not None and self._tutorial_step > 0:
             self._tutorial_step -= 1
             self._show_tutorial_step()
@@ -5827,6 +5842,7 @@ class ControlsWindow:
                     bool(step.done(self)) if step.done is not None else False)
             except Exception:
                 self._tutorial_step_satisfied = False
+            self._sync_step_button()
 
     def _tutorial_exit(self, finished: bool = False) -> None:
         self._tutorial = None

@@ -34,6 +34,8 @@ import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpiler
 import { CustomInteractions, InteractionsShape } from 'molstar/lib/extensions/interactions/transforms';
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
 import { StructureFocusRepresentation } from 'molstar/lib/mol-plugin/behavior/dynamic/selection/structure-focus-representation';
+import { HighlightLoci } from 'molstar/lib/mol-plugin/behavior/dynamic/representation';
+import { Binding } from 'molstar/lib/mol-util/binding';
 import { StateTransforms } from 'molstar/lib/mol-plugin-state/transforms';
 import { OrderedSet, SortedArray } from 'molstar/lib/mol-data/int';
 import type { Canvas3DProps } from 'molstar/lib/mol-canvas3d/canvas3d';
@@ -746,6 +748,15 @@ export class LiveViewer {
         // atom, which measurement, restraint edits and marker snapping all need. Force
         // 'element' (atom) granularity so a click resolves to exactly the atom under it.
         plugin.managers.interactivity.setProps({ granularity: 'element' });
+        // Mol*'s HighlightLoci plugin behavior also binds shift+hover to "extend the
+        // highlight from the current selection to the hovered element along the polymer"
+        // — an unexplained red span sweeping the chain that reads as a bug, and our
+        // shift-click adds/removes the clicked unit rather than extending along anything.
+        // Take the binding away; the plain (unmodified) hover highlight stays.
+        await plugin.state.updateBehavior(HighlightLoci, (old: any) => ({
+            ...old,
+            bindings: { ...old.bindings, hoverHighlightOnlyExtend: Binding.Empty },
+        }));
         // Copy into a fresh ArrayBuffer-backed view (rawData wants Uint8Array<ArrayBuffer>).
         const bytes = new Uint8Array(topologyBcif);
         const data = await plugin.builders.data.rawData({ data: bytes, label: 'pxviewer-topology' });

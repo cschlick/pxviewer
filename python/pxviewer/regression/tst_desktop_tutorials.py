@@ -98,11 +98,22 @@ def progress(app):
     return app._viewport.coach_progress.text()
 
 
+def done_and_next(controls):
+    """The poll acknowledges a satisfied step (Skip -> Next) but never moves the
+    coach — the advance is always the user's click. This is that pair."""
+    controls._poll_tutorial_done()
+    assert controls._desktop._viewport.coach_next.text() in ("Next", "Finish"), (
+        "the step was not acknowledged — its predicate is not satisfied")
+    controls._tutorial_next()
+
+
 # -- the coach itself ---------------------------------------------------------
 
 
-def exercise_the_coach_advances_when_each_step_is_actually_done():
-    """Hidden until started, then advancing on real app state rather than on Next.
+def exercise_the_coach_marks_steps_done_but_only_advances_on_next():
+    """Hidden until started; the poll acknowledges a genuinely-done step — Skip
+    becomes Next, the status flashes — but the move itself is always the user's
+    click, never the poll's.
 
     "Show me where" is the other half: it points at a control and never acts, so a user
     who presses it has not accidentally completed the step it is explaining.
@@ -126,26 +137,31 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         # That first step is orientation: nothing to do but read it, so it offers Next
         # rather than a control to be shown.
         assert coach.coach_next.text() == "Next"
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 1 / 6"          # no predicate: it waits
+        controls._poll_tutorial_done()
+        assert progress(app) == "Step 1 / 6"          # the poll never advances
         controls._tutorial_next()
         assert progress(app) == "Step 2 / 6"
 
         # Step 2: loading the shared edits file -- drive the same call the Load
-        # button makes rather than the file dialog.
+        # button makes rather than the file dialog. The poll acknowledges it —
+        # Skip becomes Next — but the coach is still standing on step 2.
         mid = app._active_model_id
+        assert coach.coach_next.text() == "Skip"
         app.load_edits(mid, str(sample_structure_path("zn_site_edits.phil")))
-        controls._maybe_advance_tutorial()
+        controls._poll_tutorial_done()
+        assert progress(app) == "Step 2 / 6"          # done != advanced
+        assert coach.coach_next.text() == "Next"
+        controls._tutorial_next()
         assert progress(app) == "Step 3 / 6"
 
         # Step 3: removing the loaded edit so the same restraint can be authored.
         app.remove_edit(mid, 0)
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 4 / 6"
 
         # Step 4: selecting two atoms.
         app._scene_selection[mid] = [0, 1]
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 5 / 6"
 
         # Step 5: authoring an edit between two atoms in different residues.
@@ -154,7 +170,7 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
         other = next(k for k in range(len(atoms)) if resseqs[k] != resseqs[0])
         app._scene_selection[mid] = [0, other]
         app.add_edit_from_selection(mid, "bond")
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 6 / 6"
         assert coach.coach_next.text() == "Finish"
 
@@ -164,13 +180,10 @@ def exercise_the_coach_advances_when_each_step_is_actually_done():
 
 
 def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
-    """Going Back to a step whose task is still done must stay there.
-
-    The done-poll is edge-triggered, and Back seeds the latch with the
-    predicate's present value — without the seed, the next poll saw "satisfied"
-    and re-advanced, so Back read as a dead key. A revisited step that is not
-    yet done must still auto-advance the moment it genuinely becomes done.
-    """
+    """Back onto a step whose task is still done must stay there — and keep
+    saying Next, because the latch seeds itself with the predicate's present
+    value rather than demanding the task again. The poll itself never advances
+    the coach: a satisfied step only gets its Skip->Next acknowledgement."""
     with desktop() as app:
         controls, coach = app._controls, app._viewport
         controls._start_tutorial(tutorial.open_model_tutorial())
@@ -179,30 +192,26 @@ def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
         assert progress(app) == "Step 1 / 5"        # already at the top: a no-op
         controls._tutorial_next()
         assert progress(app) == "Step 2 / 5"
+        assert coach.coach_next.text() == "Skip"    # a doable step not yet done
 
-        # Satisfy step 2's predicate — it fires on any selection on the model —
-        # and the poll advances.
+        # Do the step's task (any selection satisfies it); the poll acknowledges
+        # — Skip becomes Next — but the coach does not move.
         controls._select_expr.setText("resseq 1")
         controls._on_select_expression()
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 5"
+        controls._poll_tutorial_done()
+        assert progress(app) == "Step 2 / 5"
+        assert coach.coach_next.text() == "Next"
 
-        # Back onto the still-satisfied step: however often the poll runs, it
-        # must not fling the user forward again.
+        # Forward over the satisfied step, then Back: it stays put however often
+        # the poll runs, and keeps offering Next rather than re-demanding the task.
+        controls._tutorial_next()
+        assert progress(app) == "Step 3 / 5"
         controls._tutorial_back()
         assert progress(app) == "Step 2 / 5"
+        assert coach.coach_next.text() == "Next"
         for _ in range(3):
-            controls._maybe_advance_tutorial()
+            controls._poll_tutorial_done()
         assert progress(app) == "Step 2 / 5", "a satisfied step re-flung the user"
-
-        # A revisited step not yet done still advances on a real false->true
-        # edge: un-satisfy, then satisfy again.
-        app.clear_selection()
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 2 / 5"
-        app.select_by_expression("resseq 1")
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 3 / 5", "a re-earned step did not advance"
 
 
 def exercise_starting_a_tutorial_loads_its_own_example():
@@ -290,12 +299,12 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
         process_events()
         assert [m["name"] for m in app._models] == ["3nir.pdb"]
         assert progress(app) == "Step 1 / 6"
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 1 / 6", "advanced without the user doing anything"
+        controls._poll_tutorial_done()
+        assert progress(app) == "Step 1 / 6", "acknowledged without the user doing anything"
 
         mid = app._active_model_id
         app.set_model_representation(mid, "ball-and-stick")
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 2 / 6"
         # The selection step points at a control that exists from startup.
         assert tutorial.altlocs_tutorial().steps[1].target(controls) is not None
@@ -304,24 +313,25 @@ def exercise_the_altlocs_tutorial_follows_the_users_hands():
 
         # A selection elsewhere is not enough: the predicate wants the example residue.
         app.select_by_expression("resseq 5")
-        controls._maybe_advance_tutorial()
+        controls._poll_tutorial_done()
         assert progress(app) == "Step 2 / 6", "any selection satisfied the residue step"
+        assert controls._desktop._viewport.coach_next.text() == "Skip"
 
         count = app.select_by_expression("resseq 29")
         assert count > 0, "the example residue selected nothing"
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 3 / 6"
 
         app.set_model_conformer(mid, "A")
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 4 / 6"
 
         app.set_model_conformer(mid, None)
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 5 / 6"
 
         app.set_model_color(mid, "occupancy")
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 6 / 6"
 
 
@@ -674,7 +684,7 @@ def exercise_the_validation_tutorial_advances_when_validation_runs():
         mid = app._active_model_id
         assert not app._model_entry(mid).get("validation")
         app._model_entry(mid)["validation"] = {"rotalyze": object()}
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 3 / 3"
         assert app._viewport.coach_next.text() == "Finish"
 
@@ -700,7 +710,7 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
         mid = app._active_model_id
         assert app._model_entry(mid).get("hotspots") is None
         app._model_entry(mid)["hotspots"] = object()
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 3 / 5"
 
         controls._tutorial_next()                     # reading the worklist
@@ -710,8 +720,8 @@ def exercise_the_hotspots_tutorial_advances_when_the_score_and_field_appear():
         # default, so a step whose predicate was "is the box ticked?" would tick itself
         # off the moment it was reached and teach nothing.
         assert controls._hotspot_show3d.isChecked(), "the 3-D field is not on by default"
-        controls._maybe_advance_tutorial()
-        assert progress(app) == "Step 4 / 5", "a describing step advanced on its own"
+        controls._poll_tutorial_done()
+        assert progress(app) == "Step 4 / 5", "a describing step moved on its own"
         controls._tutorial_next()
         assert progress(app) == "Step 5 / 5"
         assert app._viewport.coach_next.text() == "Finish"
@@ -747,7 +757,7 @@ def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
         mmm = app.group_mmm(gid)
         assert gid is not None and mmm is not None
         assert app.map_for_model() is not None
-        controls._maybe_advance_tutorial()   # step 1 waits on the pair; it is on screen
+        done_and_next(controls)   # step 1 waits on the pair; it is on screen
         assert progress(app) == "Step 2 / 3"
 
         mmm.set_resolution(3.0)
@@ -758,7 +768,7 @@ def exercise_the_cryo_em_tutorial_refines_a_shaken_model_into_its_density():
         app.minimize_model(use_map=True)
         pump_until(lambda: not app._minimize_idle.is_set(),
                    "minimization never started", timeout=REFINE_TIMEOUT_S)
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 3 / 3"
 
         # Let it settle into the density before reading the correlation back.
@@ -795,13 +805,13 @@ def exercise_the_xray_tutorial_walks_the_difference_map_loop():
         pump_until(lambda: app.map_for_model(mid) is not None,
                    "phasing never produced a map", timeout=PHASE_TIMEOUT_S)
         assert any("mFo-DFc" in v["name"] for v in app._volumes)
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 3 / 6"
 
         assert not app._live_diff
         app.set_live_difference_map(True)
         assert app._live_diff
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 4 / 6"
 
         # Step 4 waits for a live difference window to reach the viewport. Driving a real
@@ -809,16 +819,16 @@ def exercise_the_xray_tutorial_walks_the_difference_map_loop():
         # that the step keys off _diff_boxes, which only _diff_worker raises and nothing
         # ever resets.
         assert app._diff_boxes == 0
-        controls._maybe_advance_tutorial()
+        controls._poll_tutorial_done()
         assert progress(app) == "Step 4 / 6"                # no drag yet, so it waits
         app._diff_boxes += 1
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 5 / 6"
 
         app.minimize_model(use_map=True)
         pump_until(lambda: not app._minimize_idle.is_set(),
                    "minimization never started", timeout=REFINE_TIMEOUT_S)
-        controls._maybe_advance_tutorial()
+        done_and_next(controls)
         assert progress(app) == "Step 6 / 6"
         stop_minimizing(app)
 
