@@ -1,15 +1,15 @@
-"""Guided walkthroughs for the desktop app — a non-modal 'coach' that steps the user
-through a use case and advances itself when each task is actually done.
+"""Guided walkthroughs for the desktop app: a non-modal 'coach' that steps the user
+through a use case and acknowledges when each task is actually done.
 
 A tutorial is a list of :class:`Step`. Each step carries the instruction text, an optional
 ``done`` predicate the coach polls against live app state (so the step ticks itself off when
-the user really does it, not when they click a button), and an optional ``target`` — the
+the user really does it, not when they click a button), and an optional ``target``, the
 widget the step is about. The coach never does the task; it only offers a "Show me where"
 button that flashes ``target`` (revealing its tab first) so the user can find the control
 and do it themselves.
 
 Predicates and targets receive the ``ControlsWindow`` (``cw``), so they read app state via
-``cw._desktop`` and return a widget from ``cw``. Keeping the content here — plain data —
+``cw._desktop`` and return a widget from ``cw``. Keeping the content here, plain data,
 means adding another walkthrough is just another list. The coach widget lives in
 :mod:`pxviewer.desktop`.
 """
@@ -23,7 +23,7 @@ class Step:
     def __init__(self, text: str, *, done: Optional[Callable[[Any], bool]] = None,
                  target: Optional[Callable[[Any], Any]] = None) -> None:
         self.text = text
-        self.done = done        # (cw) -> bool; when True the coach auto-advances
+        self.done = done        # (cw) -> bool; when True the step reads Next, not Skip
         self.target = target    # (cw) -> QWidget the "Show me where" button flashes
 
 
@@ -127,7 +127,7 @@ def _ball_and_stick(cw: Any) -> bool:
 
 
 def _atoms_were_hidden(cw: Any) -> bool:
-    """Whether the active model has had atoms hidden — latched, so pressing Show
+    """Whether the active model has had atoms hidden; latched, so pressing Show
     to bring them back does not un-acknowledge the step that asked for it."""
     entry = _active_model_entry(cw)
     if entry is None:
@@ -146,60 +146,60 @@ def open_model_tutorial() -> Tutorial:
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
-            "The model appears as a row in the **Objects** list — where a model is "
+            "The model appears as a row in the **Objects** list, where a model is "
             "made active, hidden or removed. How it is drawn lives in the "
             "**Appearance** pane beside it.\n\n"
             "It opens as a ribbon (**Cartoon**): pretty, but with no atoms to aim "
-            "at. Set **Representation** to **Ball & stick** there — every atom "
+            "at. Set **Representation** to **Ball & stick** there: every atom "
             "drawn large enough to click.",
             done=_ball_and_stick,
             target=lambda cw: cw._appearance_box,
         ),
         Step(
             "The **Selection** box takes selection strings as well as clicks: type "
-            "**resseq 29** and press Enter — cctbx syntax, so `chain A and resseq "
-            "1:10` works too. Focus and Clip below the box aim the camera at what "
-            "matched.",
+            "`resseq 29` and press Enter. It is cctbx syntax, so `chain A and "
+            "resseq 1:10` works too. Focus and Clip below the box aim the camera at "
+            "what matched.",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
         ),
         Step(
             "With atoms selected, the buttons under **Selected:** act on them: "
-            "press {icon:eye-off} **Hide** — the selected atoms vanish from the "
-            "drawing — then {icon:eye} **Show** brings them back.",
+            "press {icon:eye-off} **Hide** and the selected atoms vanish from the "
+            "drawing; {icon:eye} **Show** brings them back.",
             done=_atoms_were_hidden,
             target=lambda cw: cw._hide_sel_btn,
         ),
         Step(
-            "{icon:circle-off} **Clear** empties the selection — the highlight, "
+            "{icon:circle-off} **Clear** empties the selection: the highlight, "
             "the clip sphere and the neighbourhood layer all fold away.",
             done=lambda cw: _selection_count(cw) == 0,
             target=lambda cw: cw._clear_btn,
         ),
         Step(
-            "**Click an atom in the viewport.** With **Click selects: Atom** — the "
-            "default — a click selects exactly the atom under the cursor: the "
+            "**Click an atom in the viewport.** With **Click selects: Atom**, the "
+            "default, a click selects exactly the atom under the cursor: the "
             "Selection pane describes it and the box echoes its expression "
             "(`chain … and resseq … and name …`).\n\n"
             "The same control also reads **Residue**, so each click takes the "
-            "atom's whole residue instead. It follows the last table you engage — "
-            "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
-            "or a validation table sets Residue — and you can always set it by hand.\n\n"
+            "atom's whole residue instead. It follows the last table you engage "
+            "(stepping the Atoms table or a restraint sub-tab sets Atom, Components "
+            "or a validation table sets Residue), and you can always set it by hand.\n\n"
             "On a ribbon there are no atom pixels to aim at, so Atom clicks there "
-            "take the residue — the representation bounds the aim.",
+            "take the residue; the representation bounds the aim.",
             done=lambda cw: _selection_count(cw) == 1,
             target=lambda cw: cw._pick_granularity,
         ),
         Step(
-            "**Shift-click** another atom — the selection grows by the same unit "
+            "**Shift-click** another atom: the selection grows by the same unit "
             "**Click selects** shows, and the **Selected:** count climbs. "
             "Shift-click a selected atom to take it back out.",
             done=lambda cw: _selection_count(cw) > 1,
             target=lambda cw: cw._selection_label,
         ),
         Step(
-            "To load a model yourself use the **Open** button to either: "
-            "**Open file(s)…** and **Fetch from PDB / EMDB…**)"
+            "To load a model yourself use the **Open** button: "
+            "**Open file(s)…** or **Fetch from PDB / EMDB…**."
             "\n\nEach tutorial, however, will also load their data automatically.",
         ),
     ], loader=lambda d: _load_bundled(d, "1ubq.pdb"))
@@ -207,14 +207,14 @@ def open_model_tutorial() -> Tutorial:
 
 #: The real cryo-EM pair the map+model tutorials fetch: the SARS-CoV-2 polymerase
 #: complex (nsp12–nsp7–nsp8) with template-primer RNA and remdesivir, at 2.5 Å
-#: (PDB 7BV2 / EMD-30210). Chosen deliberately small — a 28 MB map on a 192³ grid —
+#: (PDB 7BV2 / EMD-30210). Chosen deliberately small (a 28 MB map on a 192³ grid)
 #: so the download is short; both files are cached in the working directory. Real
 #: deposited data on principle: a synthetic density computed from the model has no
 #: noise floor and near-perfect correlation everywhere, and teaches habits the first
 #: real map immediately punishes (the X-ray demo learned this the hard way).
 CRYOEM_PDB_ID = "7bv2"
 CRYOEM_EMDB = "30210"
-#: The stretch the refinement tutorial pushes out of its density — rigidly, one
+#: The stretch the refinement tutorial pushes out of its density, rigidly, one
 #: translation for the whole selection, so every bond length stays exact and Mol*'s
 #: distance-based bond perception keeps drawing it correctly. A well-ordered helix
 #: (mean atom CC 0.85 as deposited), so the displacement is unambiguous.
@@ -243,26 +243,26 @@ def _pair_loaded(cw: Any) -> bool:
 
 
 def map_model_tutorial() -> Tutorial:
-    """A model paired with density — the everyday working scene, on real data."""
+    """A model paired with density: the everyday working scene, on real data."""
     return Tutorial("A model with its map", [
         Step(
             "Real deposited data is downloading: **7BV2**, the SARS-CoV-2 polymerase "
             "with template-primer RNA and remdesivir, and its 2.5 Å cryo-EM "
-            "reconstruction **EMD-30210** — about 28 MB, kept in your working "
-            "directory so the next run is instant.\n\nModel and map load *paired*, so "
+            "reconstruction **EMD-30210** (about 28 MB, kept in your working "
+            "directory so the next run is instant).\n\nModel and map load *paired*, so "
             "tools that need both (refinement, Q-score, tugging) know which map "
             "belongs to which model. The coach moves on when both are on screen.",
             done=_pair_loaded,
         ),
         Step(
             "The map's surface is a contour: select the map in the object list and drag "
-            "**Level** — or hover the viewport and **scroll** — to move it. Higher shows "
+            "**Level** (or hover the viewport and **scroll**) to move it. Higher shows "
             "only the strongest density; the slider's right end always clears the map "
             "entirely.",
         ),
         Step(
             "The rest of the map's look lives in the same pane: opacity, surface or "
-            "mesh, clipping, and colourings — a cryo-EM map with half-maps can be "
+            "mesh, clipping, and colourings. A cryo-EM map with half-maps can be "
             "coloured by local resolution from its **Color** dropdown.",
         ),
     ], loader=_fetch_cryoem_pair)
@@ -321,23 +321,23 @@ def altlocs_tutorial() -> Tutorial:
     conformer machinery, so the walkthrough teaches them on the way."""
     return Tutorial("Alternate conformations", [
         Step(
-            "**3NIR is loaded** — crambin at 0.48 Å, sharp enough that many side chains "
+            "**3NIR is loaded**: crambin at 0.48 Å, sharp enough that many side chains "
             "were refined in **two or more positions** (alternate conformations, "
             "\"altlocs\"), each with its own occupancy. You will not see them yet: the "
             "cartoon abstracts side chains away.\n\nSo, first thing: in the **Objects** "
-            "list, click the **3nir.pdb** row — its appearance controls open below — and "
+            "list, click the **3nir.pdb** row (its appearance controls open below) and "
             "set **Representation** to **Ball & stick**. Every atom is drawn, and the "
-            "doubled side chains appear (as fuzz, at this scale — next we zoom in on "
+            "doubled side chains appear (as fuzz, at this scale; next we zoom in on "
             "one).",
             done=_rep_is_ball_and_stick,
         ),
         Step(
             "Type `resseq 29` into the **Selection** box below the object list and "
-            "press **Enter** (or the arrow button). That is cctbx's selection language — "
-            "the same strings Phenix uses — and it selects **tyrosine 29**, which was "
+            "press **Enter** (or the arrow button). That is cctbx's selection language, "
+            "the same strings Phenix uses, and it selects **tyrosine 29**, which was "
             "refined in **three** positions.\n\nThe camera moves to it and frames it "
-            "the standard way — backbone **N on the left, C on the right, side chain "
-            "up** — so every residue you select reads the same. (The **Focus on "
+            "the standard way (backbone **N on the left, C on the right, side chain "
+            "up**), so every residue you select reads the same. (The **Focus on "
             "selection** box below turns the moving off.)",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
@@ -346,13 +346,13 @@ def altlocs_tutorial() -> Tutorial:
             "Look at the highlighted tyrosine: **three complete side-chain positions**, "
             "labelled A, B and C in the model. Now isolate one: in the model's "
             "appearance pane, set the **Conformer** dropdown to **A** (or B, or C).\n\n"
-            "The ring settles into a single position — one self-consistent model.",
+            "The ring settles into a single position, one self-consistent model.",
             done=_conformer_picked,
         ),
         Step(
             "Set **Conformer** back to **All** and watch the three positions return."
-            "\n\n**All** is the honest picture — the deposited model *is* the "
-            "ensemble — and the single-letter views are for working on one conformation "
+            "\n\n**All** is the honest picture (the deposited model *is* the "
+            "ensemble), and the single-letter views are for working on one conformation "
             "at a time.",
             done=_conformer_back_to_all,
         ),
@@ -360,12 +360,12 @@ def altlocs_tutorial() -> Tutorial:
             "The occupancies behind the split are numbers on the atoms. In the model's "
             "**Color** dropdown, pick **By occupancy**.\n\nTyr 29's three rings each "
             "hold a fraction of an atom's worth of electrons, and now they stand apart "
-            "from the full-occupancy backbone — blue is low, red is high, and the "
+            "from the full-occupancy backbone: blue is low, red is high, and the "
             "**Range** control that appears lets you set what the ramp spans.",
             done=_coloured_by_occupancy,
         ),
         Step(
-            "That's the whole skill — and two tools you will reuse everywhere: "
+            "That's the whole skill, and two tools you will reuse everywhere: "
             "**Representation** to choose what is drawn, the **Selection** box to name "
             "atoms precisely, **Conformer** to isolate one model, and **By occupancy** "
             "to see how the refinement split the density.",
@@ -374,27 +374,27 @@ def altlocs_tutorial() -> Tutorial:
 
 
 def validation_tutorial() -> Tutorial:
-    """Run MolProbity validation and read the results — find what looks wrong in a model."""
+    """Run MolProbity validation and read the results: find what looks wrong in a model."""
     return Tutorial("Validate a structure", [
         Step(
-            "MolProbity **validation** flags the parts of a model that look wrong — bad "
+            "MolProbity **validation** flags the parts of a model that look wrong: bad "
             "rotamers, Ramachandran and C-beta outliers, backbone (CaBLAM) problems, odd "
-            "cis-peptides.\n\n**1TEC is loaded** — a structure that trips every one of "
+            "cis-peptides.\n\n**1TEC is loaded**, a structure that trips every one of "
             "those checks. Let's run validation on it.",
         ),
         Step(
             "Open the **Validation** tab. The per-residue checks are all ticked already; "
-            "press the **play** button to run them on the active model in the background "
-            "— give it a moment. (The 'Clashes & contacts' check adds hydrogens and runs "
-            "probe2, so it starts unticked — queue it when you want it.)",
+            "press the **play** button to run them on the active model in the background; "
+            "give it a moment. (The 'Clashes & contacts' check adds hydrogens and runs "
+            "probe2, so it starts unticked; queue it when you want it.)",
             done=_validation_ran,
             target=lambda cw: cw._validate_btn,
         ),
         Step(
             "Each validator now has its own sub-tab: a summary, a table of outliers, and a "
             "**Markers** switch that draws the problems right in the viewport. Click any row "
-            "in a table to select and zoom to that residue — the first click switches the "
-            "model to ball-and-stick, so the atoms you are judging are actually visible.\n\nThat's the loop — find the "
+            "in a table to select and zoom to that residue; the first click switches the "
+            "model to ball-and-stick, so the atoms you are judging are actually visible.\n\nThat's the loop: find the "
             "outliers, see them in 3D, fix them (drag or minimize), and re-run.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
@@ -407,72 +407,72 @@ def _hotspots_ran(cw: Any) -> bool:
 
 
 def hotspots_tutorial() -> Tutorial:
-    """Aggregate the validation checks into one severity field and go where it points —
+    """Aggregate the validation checks into one severity field and go where it points:
     the judging tutorial that follows validation, on the same check-tripping structure."""
     return Tutorial("Hotspots", [
         Step(
-            "Validation gives one table per check — but a region worth rebuilding usually "
+            "Validation gives one table per check, but a region worth rebuilding usually "
             "trips **several** checks at once, and reading five tables to notice that is "
             "work a picture can do. **Hotspots** aggregates the per-residue checks "
             "(Ramachandran, rotamers, clashes) into one per-atom **severity** field, so "
             "the eye goes straight to where they agree.\n\nOne caveat before anything: "
-            "severity **ranks, it does not score**. It says *look here first* — the "
+            "severity **ranks, it does not score**. It says *look here first*; the "
             "component columns keep the *why*, and no combined number here measures "
-            "model quality.\n\n**1TEC is loaded** — the same structure the validation "
+            "model quality.\n\n**1TEC is loaded**, the same structure the validation "
             "tutorial uses, tripping every check.",
         ),
         Step(
             "On the **Validation** tab, tick **Hotspot severity** in the list of checks "
             "and press **play**. It runs in the background and colours the model by "
-            "severity when done — and because it aggregates the very checks queued "
+            "severity when done, and because it aggregates the very checks queued "
             "beside it, ticking them too costs almost nothing extra.\n\nThe fast pass "
             "finds heavy-atom clashes only; **Use hydrogens for clashes**, on the "
-            "Hotspots sub-tab, adds them first (reduce2 — the MolProbity clashscore "
+            "Hotspots sub-tab, adds them first (reduce2, the MolProbity clashscore "
             "treatment, much slower).",
             done=_hotspots_ran,
             target=lambda cw: cw._hotspots_check,
         ),
         Step(
-            "The model is now colored by severity on an **absolute** scale — clean atoms "
+            "The model is now colored by severity on an **absolute** scale: clean atoms "
             "fade into the background, then yellow through red, with **1.0 the community "
-            "outlier threshold** — so the same color means the same thing in every "
+            "outlier threshold**, so the same color means the same thing in every "
             "structure.\n\nThe table is the worklist, worst first. Click a row to zoom "
             "to that residue (the first click switches the model to ball-and-stick), and "
             "read its component columns for *why* it lit up.",
         ),
         Step(
-            "The cloud around the model is the same severity as a **3-D field** — "
+            "The cloud around the model is the same severity as a **3-D field**, "
             "because surface colour has a blind spot: a **buried** hotspot is hidden "
             "behind the atoms in front of it, and a field is visible *through* the "
             "structure.\n\nIt is on by default (**Show in 3-D**, untick to drop it). "
             "**Density** shades every voxel by its own value; **Contour** draws a shell "
-            "at the threshold; the **threshold** slider keeps only regions above it — "
+            "at the threshold; the **threshold** slider keeps only regions above it, "
             "all on the same absolute scale as the atom colours.",
             target=lambda cw: cw._hotspot_show3d,
         ),
         Step(
-            "That's the loop: find, click, fix (drag or minimize), re-run — a model "
+            "That's the loop: find, click, fix (drag or minimize), re-run. A model "
             "that moves drops its stale score.\n\nAnd when a hotspot needs its *why*: "
             "the table's component columns name which check raised each residue, and "
             "the **Validation** tab holds the full per-check detail. The aggregate "
-            "only ever navigates — it never stands alone.",
+            "only ever navigates; it never stands alone.",
         ),
     ], loader=lambda d: _load_bundled(d, "1tec.pdb"))
 
 
 def ligand_fitting_tutorial() -> Tutorial:
-    """Fit a ligand into difference density — pxviewer's take on Phenix's ligand-fitting
+    """Fit a ligand into difference density: pxviewer's take on Phenix's ligand-fitting
     tutorial, self-contained (no phenix, no external data)."""
     return Tutorial("Fit a ligand into density", [
         Step(
             "Phenix's ligand-fitting tutorial fits a flexible ligand into a difference map. "
             "Let's do the same, straight from data.\n\n**Loaded:** a ligand-free model, "
             "plus reflections that secretly contain an ATP. The model cannot explain that "
-            "density — which is exactly what a difference map is for.",
+            "density, which is exactly what a difference map is for.",
         ),
         Step(
             "Compute the maps: in the **Objects** list select the **reflections** object and "
-            "click **Make maps** in its panel. That phases the data against the model — and "
+            "click **Make maps** in its panel. That phases the data against the model, and "
             "the **mFo-DFc** difference map lights up a green blob where the model is missing "
             "atoms: the ATP.",
             done=lambda cw: cw._desktop.map_for_model() is not None,
@@ -486,16 +486,16 @@ def ligand_fitting_tutorial() -> Tutorial:
             target=lambda cw: cw._lig_place_btn,
         ),
         Step(
-            "Build and fit: in the Ligand placement panel type **ATP** in the monomer-code "
+            "Build and fit: in the Ligand placement panel type `ATP` in the monomer-code "
             "box, tick **Fit into density**, and click **Fit ligand here**. It builds ATP and "
             "settles it into the density (explode-and-refine).",
             done=lambda cw: any("ligand" in m["name"].lower() for m in cw._desktop._models),
             target=lambda cw: cw._lig_fit_btn,
         ),
         Step(
-            "Done — ATP is now modelled in the density that was empty. That is the whole "
+            "Done. ATP is now modelled in the density that was empty. That is the whole "
             "ligand-fitting loop, the same as Phenix's tutorial: difference map → place → "
-            "build → fit — with no phenix and no downloaded dataset.",
+            "build → fit, with no phenix and no downloaded dataset.",
         ),
     ], loader=lambda d: d.load_ligand_fitting_demo())
 
@@ -505,15 +505,15 @@ def _minimizing(cw: Any) -> bool:
 
 
 def cryo_em_refinement_tutorial() -> Tutorial:
-    """Real-space refine a model into a real cryo-EM density — pxviewer's take on
+    """Real-space refine a model into a real cryo-EM density: pxviewer's take on
     Phenix's real_space_refine, on deposited data (7BV2 / EMD-30210)."""
     return Tutorial("Real-space refine into cryo-EM density", [
         Step(
             "Cryo-EM refinement (phenix's `real_space_refine`) slides a model into a 3D "
-            "density map — a gradient-driven minimization, not against reflections but "
+            "density map: a gradient-driven minimization, not against reflections but "
             "against the map itself.\n\n**Downloading 7BV2 and its 2.5 Å map** (cached "
             "after the first run). One well-ordered helix of the polymerase has been "
-            "pushed ~2 Å out of its density — rigidly, so its geometry is intact; it "
+            "pushed ~2 Å out of its density, rigidly, so its geometry is intact; it "
             "simply sits in the wrong place. That is exactly the state refinement "
             "fixes.",
             done=_pair_loaded,
@@ -521,16 +521,16 @@ def cryo_em_refinement_tutorial() -> Tutorial:
         Step(
             "Real-space refine it: on the **Tools** tab, in **Minimization**, tick **Into "
             "the density** (so the minimizer pulls toward the density, not just ideal "
-            "geometry) and click **Minimize**. Watch the model creep into the map — that "
+            "geometry) and click **Minimize**. Watch the model creep into the map. That "
             "*is* real-space refinement, streaming live.",
             done=_minimizing,
             target=lambda cw: cw._minimize_btn,
         ),
         Step(
-            "When the model stops shifting it has settled into the density — click **Stop**. "
+            "When the model stops shifting it has settled into the density. Click **Stop**. "
             "You just did what `phenix.real_space_refine` does: minimized an atomic model into "
-            "a cryo-EM map, no reflections and no phenix. Re-run **Make maps** isn't needed — "
-            "the map here is the target, fixed.",
+            "a cryo-EM map, no reflections and no phenix. Re-running **Make maps** isn't "
+            "needed: the map here is the target, fixed.",
             target=lambda cw: cw._minimize_map_check,
         ),
     ], loader=_fetch_cryoem_pair_displaced)
@@ -541,7 +541,7 @@ def _live_difference_seen(cw: Any) -> bool:
 
 
 def xray_refinement_tutorial() -> Tutorial:
-    """Refine against X-ray data and watch the difference map answer back — break the fit by
+    """Refine against X-ray data and watch the difference map answer back: break the fit by
     hand, see mFo-DFc light up live under the pointer, then minimize it back."""
     return Tutorial("X-ray: refine with a live difference map", [
         Step(
@@ -550,25 +550,25 @@ def xray_refinement_tutorial() -> Tutorial:
             "the data wants density the model does not explain, red where the model puts "
             "atoms the data will not support.\n\n**Loaded:** a model alongside amplitudes "
             "alongside its real deposited diffraction data, fetched from the PDB and "
-            "cached (offline, amplitudes are synthesized with realistic noise instead) "
-            "— so the maps behave exactly as they do on a real experiment.",
+            "cached (offline, amplitudes are synthesized with realistic noise instead), "
+            "so the maps behave exactly as they do on a real experiment.",
         ),
         Step(
             "Phase the data: in the **Objects** list select the **reflections**, then click "
-            "**Make maps** in the panel below. That computes **2mFo-DFc** — the map you build "
-            "into — and **mFo-DFc**, the difference map, and pairs both with the model so "
+            "**Make maps** in the panel below. That computes **2mFo-DFc**, the map you build "
+            "into, and **mFo-DFc**, the difference map, and pairs both with the model so "
             "they share a frame.\n\nCheck the R-work it reports: essentially zero, because "
             "this data came from this model. Contour the difference map and it has nothing to "
-            "say — which is a difference map doing its job.",
+            "say, which is a difference map doing its job.",
             done=lambda cw: cw._desktop.map_for_model() is not None,
         ),
         Step(
-            "Now arm the live feedback. On the **Tools** tab, turn on **Refine drag** — its "
-            "options fold open — and tick **Live difference map**.\n\nFrom here on every "
+            "Now arm the live feedback. On the **Tools** tab, turn on **Refine drag** (its "
+            "options fold open) and tick **Live difference map**.\n\nFrom here on every "
             "drag re-phases mFo-DFc in a small box around the atom you are holding and "
             "streams it to the viewport as you move.\n\nOnly that window updates *while "
-            "you drag* — the whole-structure maps are deliberately left alone until the "
-            "drag settles — so what you see under the pointer is the data disagreeing with "
+            "you drag*; the whole-structure maps are deliberately left alone until the "
+            "drag settles, so what you see under the pointer is the data disagreeing with "
             "you, not a stale map echoing the model back.",
             done=lambda cw: cw._desktop._live_diff,
             target=lambda cw: cw._tug_livemap_check,
@@ -577,7 +577,7 @@ def xray_refinement_tutorial() -> Tutorial:
             "Break the fit: with **Refine drag** on, drag an atom in the viewport and pull "
             "it out of its density.\n\nWatch the box that follows your pointer. **Red** blooms where you "
             "have just parked atoms the data does not support, and **green** stays behind in "
-            "the density they left — the difference map recomputing as fast as you can drag. "
+            "the density they left: the difference map recomputing as fast as you can drag. "
             "Let go and the window clears, leaving the model genuinely wrong.",
             done=_live_difference_seen,
             target=lambda cw: cw._tug_livemap_check,
@@ -585,7 +585,7 @@ def xray_refinement_tutorial() -> Tutorial:
         Step(
             "Refine it back. On the **Tools** tab, in **Minimization**, tick **Into the "
             "density** and click **Minimize**.\n\nThe minimizer pulls the model toward the "
-            "density while the geometry restraints keep bonds and angles honest — the two "
+            "density while the geometry restraints keep bonds and angles honest, the two "
             "targets X-ray refinement always balances. Watch the atom slide home, "
             "streaming live.",
             done=_minimizing,
@@ -593,40 +593,40 @@ def xray_refinement_tutorial() -> Tutorial:
         ),
         Step(
             "When it stops moving click **Stop**. The maps re-phase against the corrected "
-            "model on their own — a minimization always does it, and so does a settled "
-            "refine drag — and the difference density you created is gone. (The "
+            "model on their own (a minimization always does it, and so does a settled "
+            "refine drag), and the difference density you created is gone. (The "
             "reflections' **Update maps** button does the same thing by hand, for a model "
             "moved by some route that does not.)\n\nThat is the whole X-ray loop, and why "
-            "the difference map is the one to trust: it shows the error, you fix it — by "
-            "hand or by minimizing — then re-phase and look again.",
+            "the difference map is the one to trust: it shows the error, you fix it (by "
+            "hand or by minimizing), then re-phase and look again.",
             target=lambda cw: cw._minimize_stop_btn,
         ),
     ], loader=lambda d: d.load_xray_demo())
 
 
 def restraint_edits_tutorial() -> Tutorial:
-    """The whole restraint-edits loop on one zinc site — read a shared PHIL file,
+    """The whole restraint-edits loop on one zinc site: read a shared PHIL file,
     then clear it and author the same restraint by hand."""
     return Tutorial("Restraint edits", [
         Step(
-            "Restraint **edits** — custom bonds/angles the monomer library can't know — "
+            "Restraint **edits**, custom bonds/angles the monomer library can't know, "
             "can be shared as a phenix PHIL file, or authored from the atoms themselves. "
             "This walkthrough does both.\n\n**Loaded:** a zinc site. cctbx works out the "
             "Zn–His bonds on its own, but not the water in the fourth coordination "
-            "position — that restraint has to be supplied.",
+            "position; that restraint has to be supplied.",
         ),
         Step(
             "On the **Tools** tab, in the **Restraint edits** panel (below Measure), click "
             "**Load…** and open the sample file (`zn_site_edits.phil`, already selected). It "
-            "adds the **Zn–water** coordination bond — the one cctbx doesn't restrain on its "
-            "own — so watch it appear in the list.",
+            "adds the **Zn–water** coordination bond, the one cctbx doesn't restrain on its "
+            "own, so watch it appear in the list.",
             done=lambda cw: _edit_count(cw) >= 1,
             target=lambda cw: cw._edit_load_btn,
         ),
         Step(
             "Loaded! That Zn–water restraint now governs this app's minimize and drag, and "
-            "it came straight from a phenix `geometry_restraints.edits` file — the same "
-            "file phenix.refine reads.\n\nBut a file is only half the loop — the same "
+            "it came straight from a phenix `geometry_restraints.edits` file, the same "
+            "file phenix.refine reads.\n\nBut a file is only half the loop: the same "
             "restraint can be authored by hand. To prove it, clear the board: select the "
             "edit in the list and click **Remove**.",
             done=lambda cw: _edit_count(cw) == 0,
@@ -634,7 +634,7 @@ def restraint_edits_tutorial() -> Tutorial:
         ),
         Step(
             "Now author it yourself. Turn on atom picking with the **Pick** button, then "
-            "click the **zinc** and the **water oxygen** beside it — the pair that isn't "
+            "click the **zinc** and the **water oxygen** beside it, the pair that isn't "
             "coordinated. Each click adds to the selection; click empty space to start "
             "over.",
             done=lambda cw: _selection_count(cw) >= 2,
@@ -642,18 +642,18 @@ def restraint_edits_tutorial() -> Tutorial:
         ),
         Step(
             "Back on the **Tools** tab, in the **Restraint edits** panel, click **Bond**. "
-            "It takes the current Zn–water distance as the target and adds the restraint — "
+            "It takes the current Zn–water distance as the target and adds the restraint; "
             "watch it appear in the list, same as the file's did. (If it says the bond "
-            "already exists, you picked two atoms cctbx already coordinated — pick the "
+            "already exists, you picked two atoms cctbx already coordinated; pick the "
             "zinc and the lone water instead.)",
             done=lambda cw: _edit_count(cw) >= 1,
             target=lambda cw: cw._edit_bond_btn,
         ),
         Step(
-            "That's the whole loop — read a restraint from a phenix file, then write the "
+            "That's the whole loop: read a restraint from a phenix file, then write the "
             "same one from the atoms. The authored bond governs this app's minimize and "
             "drag exactly as the loaded one did.\n\n**Save…** writes it as a phenix "
-            "`geometry_restraints.edits` file — the same kind you opened earlier — for "
+            "`geometry_restraints.edits` file, the same kind you opened earlier, for "
             "phenix.refine or for sharing.",
             target=lambda cw: cw._edit_save_btn,
         ),
@@ -661,16 +661,16 @@ def restraint_edits_tutorial() -> Tutorial:
 
 
 def local_resolution_tutorial() -> Tutorial:
-    """Colour a cryo-EM map by local resolution — where the map is trustworthy, and where
+    """Colour a cryo-EM map by local resolution: where the map is trustworthy, and where
     it is not. The one tutorial whose data is fetched rather than bundled: half-maps are
     too large to ship, and the calculation needs them."""
     return Tutorial("Look at local resolution", [
         Step(
-            "A cryo-EM entry quotes **one** resolution — 4.2 Å for this one. That number "
+            "A cryo-EM entry quotes **one** resolution: 4.2 Å for this one. That number "
             "is an average over the whole reconstruction, and almost no map is uniform: a "
             "rigid core can be far better than the quoted figure while a flexible "
             "periphery is far worse.\n\n**Local resolution** answers the question the "
-            "single number cannot — *how much should I trust the density right here?* — "
+            "single number cannot (*how much should I trust the density right here?*), "
             "and it is the difference between building a side chain with confidence and "
             "inventing one.",
         ),
@@ -679,7 +679,7 @@ def local_resolution_tutorial() -> Tutorial:
             "particles each. Where they agree out to fine detail the resolution is high; "
             "where they diverge early it is low. cctbx computes the local half-map FSC "
             "throughout the map and records where it falls through 0.143.\n\n"
-            "**EMD-53478 and its model 9R04 are downloading now** — about 160 MB into your "
+            "**EMD-53478 and its model 9R04 are downloading now**, about 160 MB into your "
             "working directory (`~/pxviewer-data` unless you have changed it), then a minute "
             "or two to compute. Watch the status bar.\n\nBoth are kept: re-running this "
             "tutorial reuses the downloads *and* the computed resolution map, so the wait "
@@ -706,7 +706,7 @@ def local_resolution_tutorial() -> Tutorial:
 
 
 def all_tutorials() -> List[Tutorial]:
-    """Every walkthrough offered, in menu order — looking before judging before changing:
+    """Every walkthrough offered, in menu order: looking before judging before changing:
     the three viewing ones (open a model, a model with its map, alternate conformations),
     then the judging pair (validation, then its hotspot aggregate), then
     the fitting/refinement group, then restraint edits (read and write in one loop).

@@ -1410,7 +1410,7 @@ class ViewportWindow:
         v.addWidget(self.coach_text, stretch=1)
         row = QHBoxLayout()
         self.coach_show = QPushButton("Show me where")
-        self.coach_show.setToolTip("Flash the button this step is about — you still click it")
+        self.coach_show.setToolTip("Flash the button this step is about; you still click it")
         row.addWidget(self.coach_show)
         row.addStretch(1)
         self.coach_back = QPushButton("Back")
@@ -1788,7 +1788,7 @@ class ControlsWindow:
                                     + " QPushButton::menu-indicator { image: none; width: 0px; }")
         self._get_btn = _icon_button(
             "graduation-cap", "Tutorials",
-            "Guided tutorials — each loads its own example and walks one skill")
+            "Guided tutorials: each loads its own example and walks one skill")
         self._get_btn.setMenu(self._build_get_menu())
         self._get_btn.setStyleSheet(self._get_btn.styleSheet()
                                     + " QPushButton::menu-indicator { image: none; width: 0px; }")
@@ -5903,7 +5903,7 @@ class ControlsWindow:
         self._stop_highlight()
         self._desktop._viewport.coach_bar.setVisible(False)
         self._desktop._viewport.coach_text.setMinimumHeight(0)  # release the reserve
-        self._set_status("Tutorial complete — nicely done." if finished else "Tutorial closed.")
+        self._set_status("Tutorial complete. Nicely done." if finished else "Tutorial closed.")
 
     def _on_coach_show_me(self) -> None:
         """Flash the control the current step is about — the coach points, it never acts."""
