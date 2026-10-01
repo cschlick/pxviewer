@@ -129,27 +129,27 @@ def open_model_tutorial() -> Tutorial:
             "zoom, **click** an atom to select it (its details land in the status line).",
         ),
         Step(
-            "**Click an atom in the viewport.** With **Click selects: Atom** — the "
-            "default — a click selects exactly the atom under the cursor: the "
-            "Selection pane describes it and the box echoes its expression "
-            "(`chain … and resseq … and name …`).\n\n"
-            "The same control also reads **Residue**, so each click takes the "
-            "atom's whole residue instead. It follows the last table you engage — "
-            "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
-            "or a validation table sets Residue — and you can always set it by hand.\n\n"
-            "On a ribbon a click can only aim as fine as the residue — Atom picks "
-            "there still take the residue; switch to Ball & stick to pick atoms "
-            "directly.",
-            done=lambda cw: _selection_count(cw) > 0,
-            target=lambda cw: cw._pick_granularity,
-        ),
-        Step(
             "The **Selection** box takes selection strings as well as clicks: type "
             "**resseq 29** and press Enter — cctbx syntax, so `chain A and resseq "
             "1:10` works too. **Shift-click** in the viewport grows or shrinks the "
             "selection by the same unit **Click selects** shows.",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
+        ),
+        Step(
+            "The selected atoms are drawn up close in **ball & stick** — **click "
+            "one.** With **Click selects: Atom** — the default — a click selects "
+            "exactly the atom under the cursor: the Selection pane describes it "
+            "and the box echoes its expression (`chain … and resseq … and name "
+            "…`).\n\n"
+            "The same control also reads **Residue**, so each click takes the "
+            "atom's whole residue instead. It follows the last table you engage — "
+            "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
+            "or a validation table sets Residue — and you can always set it by hand.\n\n"
+            "Away from the ball & stick layer a click can only aim as fine as the "
+            "ribbon — Atom picks there still take the residue.",
+            done=lambda cw: _selection_count(cw) == 1,
+            target=lambda cw: cw._pick_granularity,
         ),
         Step(
             "The model appears a row in the **Objects** list. This is where a model is made active, and hidden/shown. "
