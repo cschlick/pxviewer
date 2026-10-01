@@ -71,6 +71,13 @@ export interface AtomInfo {
      * through id/name/resseq matching.
      */
     index: number;
+    /**
+     * The Mol* type name of the representation the click landed on ('cartoon',
+     * 'ball-and-stick', ...), or '' when the pick had none. A coarse visual like a
+     * ribbon only resolves to a residue's anchor atom, so the Python side needs to
+     * know whether an "atom" pick was really aimable.
+     */
+    repr: string;
 }
 
 interface LiveTrajectoryParams {
@@ -2137,6 +2144,10 @@ export class LiveViewer {
                 ? StructureElement.Loci.getFirstLocation(loci)
                 : undefined;
             if (this.pickHandler) {
+                // repr names the visual the click landed on: a ribbon face only ever
+                // resolves to its residue's anchor atom (element granularity or not —
+                // there are no atom pixels to aim at), so the GUI side needs to know
+                // whether the hit representation can even express an atom pick.
                 this.pickHandler(location ? {
                     id: StructureProperties.atom.id(location),
                     name: StructureProperties.atom.label_atom_id(location),
@@ -2145,6 +2156,7 @@ export class LiveViewer {
                     chain: StructureProperties.chain.label_asym_id(location),
                     altloc: StructureProperties.atom.label_alt_id(location),
                     index: location.element as unknown as number,
+                    repr: e.current.repr?.type.name ?? '',
                 } : null, !!e.modifiers?.shift);
             }
             if (this.clickMode === 'select') this.handleSelectionClick(location, !!e.modifiers?.shift);

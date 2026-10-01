@@ -136,7 +136,10 @@ def open_model_tutorial() -> Tutorial:
             "The same control also reads **Residue**, so each click takes the "
             "atom's whole residue instead. It follows the last table you engage — "
             "stepping the Atoms table or a restraint sub-tab sets Atom, Components "
-            "or a validation table sets Residue — and you can always set it by hand.",
+            "or a validation table sets Residue — and you can always set it by hand.\n\n"
+            "On a ribbon a click can only aim as fine as the residue — Atom picks "
+            "there still take the residue; switch to Ball & stick to pick atoms "
+            "directly.",
             done=lambda cw: _selection_count(cw) > 0,
             target=lambda cw: cw._pick_granularity,
         ),

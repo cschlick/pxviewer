@@ -250,7 +250,10 @@ Load a protein (1ubq works).
      whole residue); the Atoms table and restraint sub-tabs — whose rows are
      atom collections — flip it back. Setting it by hand holds until the next
      table engagement, and Shift-click grows and shrinks by the same unit —
-     atoms in Atom, residues in Residue.
+     atoms in Atom, residues in Residue. Representation bounds the aim too:
+     on a Cartoon ribbon a click can only aim at a residue, so even Atom
+     takes the residue there; on Ball & stick (and the ball-and-stick
+     neighbourhood layer under a standing selection) it is genuinely per-atom.
 
 ## Pass 6 — Local resolution (15 min)
 

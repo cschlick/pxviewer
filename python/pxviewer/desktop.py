@@ -581,7 +581,7 @@ def _make_bridge():
 
     class _Bridge(QObject):
         scene_selection_changed = Signal(object)  # {"scene": {model_id: [indices]}, "changed": model_id}
-        atom_picked = Signal(str, int, bool)  # (model id, atom index or -1, shift held) — a click, any mode
+        atom_picked = Signal(str, int, bool, str)  # (model id, atom index or -1, shift held, hit repr name) — a click, any mode
         status_changed = Signal(str)
         status_warned = Signal(str)  # like status_changed, but flashed so it is noticed
         interactions_changed = Signal(bool)
@@ -1888,7 +1888,9 @@ class ControlsWindow:
             "or the atom's whole residue. Follows the table you last engaged (the "
             "Atoms table and restraint tables imply atoms, residue-level tables "
             "imply residues); changing it by hand holds until the next table "
-            "engagement.")
+            "engagement. A ribbon face has no atoms to aim at, so a click on "
+            "cartoon still takes the residue — clicks on ball-and-stick "
+            "(including the neighbourhood layer) stay atom-precise.")
         gran_row.addWidget(self._pick_granularity)
         gran_row.addStretch(1)
         sl.addLayout(gran_row)
@@ -5977,7 +5979,8 @@ class ControlsWindow:
         # Viewer -> Geometry: reflect the picks in the atoms + restraint tables.
         self._apply_geometry_filter()
 
-    def _on_atom_picked(self, mid: str, index: int, shift: bool) -> None:
+    def _on_atom_picked(self, mid: str, index: int, shift: bool,
+                        rep: str = "") -> None:
         """An atom of ``mid`` was clicked. With no click mode armed this IS a
         selection: a plain click replaces it through the same pipeline a typed
         expression takes — oriented framing, clip, neighbourhood context, all
@@ -5987,7 +5990,13 @@ class ControlsWindow:
         granularity control, which the last engaged table already set. Either way
         the box shows the equivalent expression. While Pick mode accumulates,
         refine-drag tugs, or a measurement is being placed, the click belongs to
-        that tool, and the panel just follows the model."""
+        that tool, and the panel just follows the model.
+
+        ``rep`` is the representation the click landed on. Atom granularity is
+        only aimable where atoms are drawn: a ribbon face resolves to the
+        residue's anchor atom whatever Mol* granularity says, so a cartoon hit
+        promotes to the residue — the unit the click could actually have meant.
+        A hit on the ball-and-stick neighbourhood layer stays atom-precise."""
         desktop = self._desktop
         entry = desktop._model_entry(mid)
         tool_owns_click = (
@@ -5998,6 +6007,8 @@ class ControlsWindow:
             self._set_current_tree_row("model", mid)  # follow attention, touch nothing
             return
         granularity = self._pick_granularity.currentData()
+        if granularity == "atom" and rep and not _rep_shows_atoms(rep):
+            granularity = "residue"
         try:
             if shift:
                 expression = desktop.toggle_picked_residue(
@@ -8009,7 +8020,7 @@ class DesktopApp:
         session.on_pick(lambda info, mid=mid: (
             self.bridge.atom_picked.emit(
                 mid, info["index"] if isinstance(info.get("index"), int) else -1,
-                bool(info.get("shift")))
+                bool(info.get("shift")), str(info.get("repr") or ""))
             if info else None))
         # Volume commands ride whichever session is the control session, so contour
         # changes made in the viewport can come back on any of them.

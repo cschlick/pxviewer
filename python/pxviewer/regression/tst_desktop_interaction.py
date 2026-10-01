@@ -1194,6 +1194,20 @@ def exercise_a_viewport_click_uses_the_engaged_tables_unit():
         process_events()
         assert set(app._scene_selection.get(mid, ())) == {0}
 
+        # Atom is only aimable where atoms are drawn: a ribbon face resolves to
+        # the residue's anchor atom at best, so a cartoon hit promotes to the
+        # residue — while a ball-and-stick hit (the neighbourhood layer counts)
+        # stays atom-precise. An unknown repr keeps the control's setting.
+        controls._on_atom_picked(mid, 0, False, "cartoon")
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == residue
+        controls._on_atom_picked(mid, 0, False, "ball-and-stick")
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+        controls._on_atom_picked(mid, 0, False, "")
+        process_events()
+        assert set(app._scene_selection.get(mid, ())) == {0}
+
         # Shift-click toggles the same unit: two atoms of one residue is a partial
         # residue, which no whole-residue expression can honestly name — the box
         # clears rather than lie; toggling the second atom off restores the exact
