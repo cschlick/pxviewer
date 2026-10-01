@@ -188,11 +188,11 @@ def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
     with desktop() as app:
         controls, coach = app._controls, app._viewport
         controls._start_tutorial(tutorial.open_model_tutorial())
-        assert progress(app) == "Step 1 / 10"
+        assert progress(app) == "Step 1 / 9"
         controls._tutorial_back()
-        assert progress(app) == "Step 1 / 10"        # already at the top: a no-op
+        assert progress(app) == "Step 1 / 9"        # already at the top: a no-op
         controls._tutorial_next()
-        assert progress(app) == "Step 2 / 10"
+        assert progress(app) == "Step 2 / 9"
         assert coach.coach_next.text() == "Skip"    # a doable step not yet done
 
         # Do the step's task (the representation step asks for ball-and-stick);
@@ -200,42 +200,44 @@ def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
         pump_until(lambda: app._active_model_id is not None, "no model loaded")
         app.set_model_representation(app._active_model_id, "ball-and-stick")
         controls._poll_tutorial_done()
-        assert progress(app) == "Step 2 / 10"
+        assert progress(app) == "Step 2 / 9"
         assert coach.coach_next.text() == "Next"
 
         # Forward over the satisfied step, then Back: it stays put however often
         # the poll runs, and keeps offering Next rather than re-demanding the task.
         controls._tutorial_next()
-        assert progress(app) == "Step 3 / 10"
+        assert progress(app) == "Step 3 / 9"
         controls._tutorial_back()
-        assert progress(app) == "Step 2 / 10"
+        assert progress(app) == "Step 2 / 9"
         assert coach.coach_next.text() == "Next"
         for _ in range(3):
             controls._poll_tutorial_done()
-        assert progress(app) == "Step 2 / 10", "a satisfied step re-flung the user"
+        assert progress(app) == "Step 2 / 9", "a satisfied step re-flung the user"
 
 
-def exercise_the_zoom_and_clip_steps_watch_their_own_controls():
-    """The zoom step seeds its press baseline on the first poll (a press from an
-    earlier step does not pre-satisfy it) and acknowledges a real zoom press;
-    the clip step wants the whole gesture — off, then back on."""
+def exercise_the_zoom_clip_zoom_step_wants_the_whole_gesture():
+    """One page asks for a sequence: zoom out, lift the clip and put it back,
+    zoom in. The predicate baselines the press counters on first poll, then
+    wants each leg in turn — a zoom-in squeezed in early is not 'zoom back in'."""
     with desktop() as app:
         controls = app._controls
         tut = tutorial.open_model_tutorial()
-        zoom_done = next(s.done for s in tut.steps
-                         if s.target and s.target(controls) is controls._zoom_in_btn)
-        clip_done = next(s.done for s in tut.steps
-                         if s.target and s.target(controls) is controls._clip_on_select)
-        app.zoom_view(-1)                    # pressed before the step is showing
-        assert zoom_done(controls) is False  # first poll seeds the baseline
-        app.zoom_view(1)
-        assert zoom_done(controls) is True
-
-        assert clip_done(controls) is False  # still checked: nothing done yet
+        done = next(s.done for s in tut.steps
+                    if s.target and s.target(controls) is controls._clip_on_select)
+        app.zoom_view(1)                       # zoomed out before the step shows
+        assert done(controls) is False         # first poll seeds the baselines
+        app.zoom_view(-1)
+        assert done(controls) is False         # in before out: not the gesture
+        app.zoom_view(1)                       # leg 1: zoom out
+        assert done(controls) is False         # still wants the toggle
         controls._clip_on_select.setChecked(False)
-        assert clip_done(controls) is False  # lifted, but not restored
+        assert done(controls) is False         # leg 2a: lifted, not restored
+        app.zoom_view(-1)
+        assert done(controls) is False         # zoom-in too early does not count
         controls._clip_on_select.setChecked(True)
-        assert clip_done(controls) is True
+        assert done(controls) is False         # leg 2 done; leg 3 wants a press
+        app.zoom_view(-1)
+        assert done(controls) is True
 
 
 def exercise_starting_a_tutorial_loads_its_own_example():

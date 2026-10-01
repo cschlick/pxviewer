@@ -7007,9 +7007,10 @@ class DesktopApp:
         self._minimize_idle = threading.Event()
         self._minimize_idle.set()
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
-        # The zoom buttons' press count — how the tutorial's zoom step knows the
-        # camera was stepped (wheel zoom lives in the page and reports nothing).
-        self._zoom_presses = 0
+        # Zoom-button presses per direction — how the tutorial's zoom step knows
+        # the camera was stepped (wheel zoom lives in the page and reports nothing).
+        self._zoom_out_presses = 0
+        self._zoom_in_presses = 0
         # Dragging atoms: explicitly armed, one drag at a time (there is one pointer). Continuous
         # relaxation is on by default — a drag settles as a living motion, which reads better
         # than a nudge-and-stop; the checkbox in the Refine drag box mirrors this.
@@ -10341,7 +10342,10 @@ class DesktopApp:
         binding) and so cannot serve as zoom -- and to ctrl+wheel, which a trackpad has
         but a plain mouse makes awkward. The camera keeps its target and orientation.
         """
-        self._zoom_presses += 1
+        if direction > 0:
+            self._zoom_out_presses += 1
+        else:
+            self._zoom_in_presses += 1
         control = self._control_session()
         if control is not None:
             control.zoom_view(self.ZOOM_STEP if direction > 0 else 1.0 / self.ZOOM_STEP)

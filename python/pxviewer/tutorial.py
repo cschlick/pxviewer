@@ -137,35 +137,29 @@ def _atoms_were_hidden(cw: Any) -> bool:
     return bool(entry.get("_tut_atoms_were_hidden"))
 
 
-def _zoom_used() -> Callable[[Any], bool]:
-    """A zoom-button press after the step's first poll (its baseline).
+def _zoom_clip_zoom() -> Callable[[Any], bool]:
+    """The gesture in order: zoom out, clip off and back on, zoom back in.
 
-    Wheel zoom happens in the page and reports nothing, so the predicate watches
-    the buttons, the discoverable control the step points at. The baseline keeps
-    presses from earlier steps from pre-satisfying this one, and on a revisit the
-    stored baseline means a user who did zoom comes back to a step that still
-    reads done."""
-    baseline: dict = {}
-
-    def pred(cw: Any) -> bool:
-        n = cw._desktop._zoom_presses
-        if "n" not in baseline:
-            baseline["n"] = n
-            return False
-        return n > baseline["n"]
-
-    return pred
-
-
-def _clip_lifted_and_restored() -> Callable[[Any], bool]:
-    """Clip to selection went off and came back — the sphere lifted and returned."""
-    seen_off = {"v": False}
+    Each leg baselines what it watches, so the step acknowledges the sequence:
+    a zoom-in squeezed in ahead of the toggle is not 'zoom back in', and presses
+    from earlier steps do not pre-satisfy it. Wheel zoom happens in the page and
+    reports nothing, so the buttons carry the count."""
+    s = {"phase": 0, "out0": None, "in0": 0}
 
     def pred(cw: Any) -> bool:
-        if not cw._clip_on_select.isChecked():
-            seen_off["v"] = True
-            return False
-        return seen_off["v"]
+        d = cw._desktop
+        if s["phase"] == 0:
+            if s["out0"] is None:
+                s["out0"] = d._zoom_out_presses
+                return False
+            if d._zoom_out_presses > s["out0"]:
+                s["phase"] = 1
+        if s["phase"] == 1 and not cw._clip_on_select.isChecked():
+            s["phase"] = 2
+        if s["phase"] == 2 and cw._clip_on_select.isChecked():
+            s["phase"] = 3
+            s["in0"] = d._zoom_in_presses   # only a press from here counts
+        return s["phase"] == 3 and d._zoom_in_presses > s["in0"]
 
     return pred
 
@@ -200,21 +194,15 @@ def open_model_tutorial() -> Tutorial:
             target=lambda cw: cw._select_expr,
         ),
         Step(
-            "To drive the zoom yourself, step it with the {icon:zoom-out} and "
-            "{icon:zoom-in} buttons beside the status line; the camera keeps its "
-            "target. A right-drag (ctrl+scroll on a trackpad) does the same.\n\n"
-            "Zoom around the residue now.",
-            done=_zoom_used(),
-            target=lambda cw: cw._zoom_in_btn,
-        ),
-        Step(
-            "The sphere around the residue is **Clip to selection**'s: everything "
-            "outside it is undrawn. Uncheck it and the surroundings reappear; "
-            "check it again and the sphere returns. The same clip is the object's "
-            "**Sphere** row in the Appearance pane, which reads **On selection** "
-            "while this is checked.\n\n"
-            "Uncheck it, then check it again.",
-            done=_clip_lifted_and_restored(),
+            "Step the camera out with {icon:zoom-out} (a right-drag or ctrl+scroll "
+            "zooms too): the residue stays framed in its clip sphere while the "
+            "rest of the molecule is undrawn beyond it.\n\n"
+            "Now uncheck **Clip to selection** — the sphere lifts and the "
+            "surroundings reappear — then check it again.\n\n"
+            "Finally zoom back in with {icon:zoom-in}. The same clip is the "
+            "object's **Sphere** row in the Appearance pane, reading "
+            "**On selection** while this is checked.",
+            done=_zoom_clip_zoom(),
             target=lambda cw: cw._clip_on_select,
         ),
         Step(
