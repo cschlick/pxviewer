@@ -26,9 +26,9 @@ def run() -> None:
         entry = app._model_entry(mid)
 
         # -- typed selection with focus+clip -------------------------------
-        check("focus+clip+context checked by default",
+        check("focus+context checked, clip sphere armed by default",
               controls._focus_on_select.isChecked()
-              and controls._clip_on_select.isChecked()
+              and app._sphere_state(entry)["mode"] == "selection"
               and controls._context_on_select.isChecked())
         controls._select_expr.setText("resseq 29")
         controls._on_select_expression()
@@ -43,21 +43,21 @@ def run() -> None:
               clip_radius is not None and clip_radius < 20.0,
               "radius=%s" % clip_radius)
 
-        # -- clip checkbox lifts and re-applies ----------------------------
-        controls._clip_on_select.setChecked(False)
+        # -- the Clip sphere mode lifts and re-applies ----------------------
+        app.set_model_sphere(mid, "off")
         settle(2.0)
         lifted = shot_viewport(app, "v5-2-clip-lifted")
         lift_radius = (cam_state(app) or {}).get("radius")
-        check("unchecking lifts the sphere", "_auto_clip" not in entry)
+        check("switching to Off lifts the sphere", "_auto_clip" not in entry)
         check("lifting frees the depth slab too",
               lift_radius is not None and clip_radius is not None
               and lift_radius > clip_radius * 2,
               "radius %s -> %s" % (clip_radius, lift_radius))
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         settle(2.0)
         reapplied = shot_viewport(app, "v5-2-clip-reapplied")
         re_radius = (cam_state(app) or {}).get("radius")
-        check("re-checking re-clips the standing selection",
+        check("On selection re-clips the standing selection",
               entry.get("_auto_clip") is True)
         check("re-apply restores the depth slab",
               re_radius is not None and clip_radius is not None
@@ -178,13 +178,13 @@ def run() -> None:
               str(bview.currentIndex().row()))
 
         # clip off while stepping bonds
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid, "off")
         QTest.keyClick(bview, Qt.Key_Space)
         settle(2.0)
         check("bond step with clip off lifts the sphere",
               "_auto_clip" not in entry)
         shot_viewport(app, "v5-5a-bond-noclip")
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         settle(1.5)
 
         # sticky target: back on the Scene tab, space still steps the bond table

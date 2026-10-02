@@ -1071,41 +1071,40 @@ def exercise_the_selection_pane_describes_picked_atoms():
         assert controls._selection_label.text() == "None"
 
 
-def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
-    """'Clip to selection' is the policy for new selections AND the lift for the
-    sphere one put up, so it works on the standing selection both ways: unticking
-    lifts what a selection applied, re-ticking puts it back. (The standing sphere
-    itself is the Appearance pane's Sphere row — this exercises the checkbox.)
-    And because stepping a table row or walking residues with Space is just
-    selecting, the same checkbox governs both."""
+def exercise_the_clip_sphere_mode_lifts_a_standing_selection_clip():
+    """The Appearance pane's Clip sphere mode is the whole selection-clip policy:
+    "selection" (the default) fits a sphere to each selection, and switching the
+    standing clip to Off lifts it, to On selection puts it back. And because
+    stepping a table row or walking residues with Space is just selecting, the
+    same mode governs both."""
     with desktop() as app:
         mid = ubiquitin(app)
         controls = app._controls
         entry = app._model_entry(mid)
 
-        app.select_by_expression("resseq 5")        # clip is on by default
+        app.select_by_expression("resseq 5")        # mode is "selection" by default
         assert entry["_auto_clip"] is True
         assert None in entry["session"]._clips
 
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid, "off")
         assert "_auto_clip" not in entry
         assert None not in entry["session"]._clips
 
-        controls._clip_on_select.setChecked(True)   # symmetric: re-clips what stands
+        app.set_model_sphere(mid, "selection")      # symmetric: re-clips what stands
         assert entry["_auto_clip"] is True
         assert None in entry["session"]._clips
 
-        # Stepping a table row is a selection, so it answers to the same checkbox.
+        # Stepping a table row is a selection, so it answers to the same mode.
         model, view = controls._component_model, controls._component_view
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid, "off")
         view.selectRow(1)
         controls._push_component_selection_to_viewer()   # the debounced slot
-        assert "_auto_clip" not in entry                 # unchecked: stays open
+        assert "_auto_clip" not in entry                 # off: stays open
 
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         view.selectRow(2)
         controls._push_component_selection_to_viewer()
-        assert entry["_auto_clip"] is True               # checked: rows clip again
+        assert entry["_auto_clip"] is True               # armed: rows clip again
         assert None in entry["session"]._clips
 
         # The atoms table steps the same pipeline, one atom at a time.
@@ -1115,12 +1114,11 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         assert entry["_auto_clip"] is True
         assert app._scene_selection.get(mid) == [atom_model.row_atom(0)]
 
-        # And the space-bar residue walk honors it too: clicking the checkbox
-        # takes focus off the table, so the next Space lands here, not on a row.
-        controls._clip_on_select.setChecked(False)
+        # And the space-bar residue walk honors it too.
+        app.set_model_sphere(mid, "off")
         app.advance_residue(1)
         assert "_auto_clip" not in entry
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         app.advance_residue(1)
         assert entry["_auto_clip"] is True
 
@@ -1155,7 +1153,7 @@ def exercise_the_clip_checkbox_lifts_a_standing_selection_clip():
         app._settings.setValue("selection/clip_padding", 4.0)
 
         # And clip off lifts it again for the same path.
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid, "off")
         app.show_restraint_notations(mid, [("bond", (0, 1))])
         assert "_auto_clip" not in entry
         assert None not in entry["session"]._clips
@@ -1689,7 +1687,7 @@ def exercise_space_steps_the_focused_table_a_row_at_a_time():
         # Engaging a table makes it Space's target until another table takes over:
         # focus leaving for a plain pane (or the viewport) must not demote the
         # worklist to the residue walk.
-        app._controls._clip_on_select.setFocus()
+        app._controls._focus_on_select.setFocus()
         process_events()
         assert app._app.focusWidget() is not table
         app.step_next(1)

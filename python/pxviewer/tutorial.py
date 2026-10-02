@@ -138,25 +138,29 @@ def _atoms_were_hidden(cw: Any) -> bool:
 
 
 def _zoom_clip_zoom() -> Callable[[Any], bool]:
-    """The gesture in order: zoom out, clip off and back on, zoom back in.
+    """The gesture in order: zoom out, clip sphere off and back on, zoom in.
 
     Each leg baselines what it watches, so the step acknowledges the sequence:
     a zoom-in squeezed in ahead of the toggle is not 'zoom back in', and presses
     from earlier steps do not pre-satisfy it. Wheel zoom happens in the page and
-    reports nothing, so the buttons carry the count."""
+    reports nothing, so the buttons carry the count. The clip legs watch the
+    active model's Clip sphere mode leave and return to "selection" — the row's
+    own state, so switching it to Off or another mode both register."""
     s = {"phase": 0, "out0": None, "in0": 0}
 
     def pred(cw: Any) -> bool:
         d = cw._desktop
+        entry = d._model_entry(d._active_model_id)
+        mode = d._sphere_state(entry)["mode"] if entry is not None else "off"
         if s["phase"] == 0:
             if s["out0"] is None:
                 s["out0"] = d._zoom_out_presses
                 return False
             if d._zoom_out_presses > s["out0"]:
                 s["phase"] = 1
-        if s["phase"] == 1 and not cw._clip_on_select.isChecked():
+        if s["phase"] == 1 and mode != "selection":
             s["phase"] = 2
-        if s["phase"] == 2 and cw._clip_on_select.isChecked():
+        if s["phase"] == 2 and mode == "selection":
             s["phase"] = 3
             s["in0"] = d._zoom_in_presses   # only a press from here counts
         return s["phase"] == 3 and d._zoom_in_presses > s["in0"]
@@ -189,7 +193,7 @@ def open_model_tutorial() -> Tutorial:
             "resseq 1:10` works too.\n\n"
             "The camera zooms to what matched on its own (that is **Focus on "
             "selection**, checked below the box) and a clip sphere isolates it "
-            "(**Clip to selection**).",
+            "(the object's **Clip sphere** row, set to **On selection**).",
             done=_tyr29_selected,
             target=lambda cw: cw._select_expr,
         ),
@@ -197,13 +201,12 @@ def open_model_tutorial() -> Tutorial:
             "Step the camera out with {icon:zoom-out} (a right-drag or ctrl+scroll "
             "zooms too): the residue stays framed in its clip sphere while the "
             "rest of the molecule is undrawn beyond it.\n\n"
-            "Now uncheck **Clip to selection** — the sphere lifts and the "
-            "surroundings reappear — then check it again.\n\n"
-            "Finally zoom back in with {icon:zoom-in}. The same clip is the "
-            "object's **Sphere** row in the Appearance pane, reading "
-            "**On selection** while this is checked.",
+            "That sphere is the model's **Clip sphere** row in the **Appearance** "
+            "pane — set it **Off** and the sphere lifts, the surroundings "
+            "reappear; back to **On selection** and it returns.\n\n"
+            "Finally zoom back in with {icon:zoom-in}.",
             done=_zoom_clip_zoom(),
-            target=lambda cw: cw._clip_on_select,
+            target=lambda cw: cw._appearance_box,
         ),
         Step(
             "With atoms selected, the buttons under **Selected:** act on them: "

@@ -126,16 +126,17 @@ Load two models and one map first.
 4. Set a custom color where offered.
    - **Watch for:** swatches render as color chips, not hex strings; a picked custom
      color joins the list and stays selected after the pane rebuilds.
-5. The pane's clip controls are two independent rows — **Slab** (near/far along the
-   view axis) and **Sphere** (Off / On selection / Around view center / Fixed point,
-   with a radius). Select a residue with **Clip to selection** on, then open the
-   model's Appearance pane.
-   - **Watch for:** the Sphere row reads **On selection** — a selection clip is not
-     invisible state, it lands here and is editable. Switching the row to Off lifts
-     it without touching the slab; **Around view center** follows the camera target;
-     **Fixed point** stays put while the camera moves. The slab slider keeps its
-     positions through all of it — slab and sphere compose, they never overwrite
-     each other.
+5. The pane's clip controls are two independent rows — **Clip slab** (near/far along
+   the view axis) and **Clip sphere** (Off / On selection / Around view center /
+   Fixed point, with a radius). Select a residue, then open the model's Appearance
+   pane.
+   - **Watch for:** the Clip sphere row reads **On selection** — the default mode,
+     which is what makes selections clip at all. A selection clip is not invisible
+     state, it lands here and is editable. Switching the row to Off lifts the
+     standing sphere *and* disarms the policy (later selections won't re-clip);
+     **Around view center** follows the camera target; **Fixed point** stays put
+     while the camera moves. The slab slider keeps its positions through all of
+     it — slab and sphere compose, they never overwrite each other.
 
 ## Pass 4 — Map appearance (10 min)
 
@@ -210,18 +211,18 @@ Open a map (or the cryo-EM tutorial data).
 
 Load a protein (1ubq works).
 
-1. In the Selection pane, confirm **Focus on selection** and **Clip to selection** are
-   both checked by default. Type `resseq 29` and apply.
+1. In the Selection pane, confirm **Focus on selection** is checked by default, and
+   in the model's Appearance pane confirm **Clip sphere** reads **On selection**.
+   Type `resseq 29` and apply.
    - **Watch for:** the residue fills most of the frame; backbone N on the left, C on
      the right, side chain pointing up; nothing important lands offscreen; near/far
      clipping isolates the residue from the rest of the molecule.
-2. With a clip applied, uncheck **Clip to selection** without applying anything new.
-   - **Watch for:** the surrounding structure reappears immediately — the checkbox
-     governs the selection's clip both ways: off lifts it, back on puts it right
-     back without a fresh selection. The sphere itself also shows on the object's
-     Appearance pane as **Sphere: On selection** — switching that row to Off lifts
-     it too. Apply a selection while unchecked: same framing, but the whole
-     structure stays visible around it.
+2. With a clip applied, set the model's **Clip sphere** to **Off** without applying
+   anything new.
+   - **Watch for:** the surrounding structure reappears immediately — the mode
+     governs the selection's clip both ways: Off lifts it, On selection puts it
+     right back without a fresh selection. Apply a selection while Off: same
+     framing, but the whole structure stays visible around it.
 3. Uncheck **Focus on selection**, apply a different residue.
    - **Watch for:** the selection highlights but the camera stays put.
 4. Select a helix or a whole chain (e.g. `resseq 20:35`).
@@ -229,7 +230,8 @@ Load a protein (1ubq works).
      the frame — not a random skewed angle.
 5. Press space repeatedly (residue navigation), then shift/space back.
    - **Watch for:** each step lands oriented the same way as typed selections; stepping
-     honors the clip checkbox; no drift or roll accumulating over many steps.
+     honors the object's Clip sphere mode; no drift or roll accumulating over many
+     steps.
 5a. Click a row in any table — a validation sub-tab, the bonds or angles table, the
    atoms table — then press space repeatedly, and shift/space back.
    - **Watch for:** the *selection* walks the table a row at a time and the viewport
@@ -242,12 +244,11 @@ Load a protein (1ubq works).
      chain. The residue walk is only the default before any table has been touched;
      switching to another table (its sub-tab, a row) is what moves the key to it.
    - **Watch for:** each row is a real selection — Components/Atoms/restraint rows
-     alike frame, isolate and dress the neighborhood as the Selection pane's
-     Focus / Clip checkboxes and the Settings tab's Neighborhood checkbox say,
-     so stepping the list clips
-     only while **Clip to selection** is checked, and a restraint row's sphere
-     centers on the restraint's atoms rather than inheriting whatever a previous
-     selection left.
+     alike frame, isolate and dress the neighborhood as the Selection pane's Focus
+     checkbox, the object's Clip sphere mode and the Settings tab's Neighborhood
+     checkbox say, so stepping the list clips only while the mode is **On
+     selection**, and a restraint row's sphere centers on the restraint's atoms
+     rather than inheriting whatever a previous selection left.
 6. Pick atoms in the viewport; watch the description label and atoms table. Select rows
    in the atoms table instead.
    - **Watch for:** both directions agree; the label counts what you actually picked;
@@ -420,8 +421,8 @@ models are needed; 1ubq + one more protein works.
    - **Watch for:** the clip sphere survives the rebuild — clip objects are baked
      into each new representation, not just the one they were applied to; the view
      after the round trip is still the clipped residue, not the lifted scene.
-4. Uncheck **Clip to selection**, wait a beat, re-check it. Compare against the
-   clipped frame (screenshot diff or eye).
+4. Set the model's **Clip sphere** to **Off**, wait a beat, back to **On
+   selection**. Compare against the clipped frame (screenshot diff or eye).
    - **Watch for:** the same clipped view returns — depth slab included, not just
      the sphere. A reapplied frame that matches the *lifted* frame is the bug.
 5. With the clip standing, engage the Components table and Space-step five rows.
@@ -431,9 +432,9 @@ models are needed; 1ubq + one more protein works.
 6. *(manual)* Shift-click a second residue in the viewport to grow the selection.
    - **Watch for:** the sphere re-fits to the grown selection; nothing added is
      clipped out of view; the camera does not move.
-7. Clear the selection entirely, then toggle **Clip to selection** off and on with
-   nothing selected.
-   - **Watch for:** re-checking an empty selection is a calm no-op — no sphere
+7. Clear the selection entirely, then switch **Clip sphere** Off and back to
+   On selection with nothing selected.
+   - **Watch for:** re-arming an empty selection is a calm no-op — no sphere
      stranded mid-scene, no camera lurch, no state marker claiming a clip exists.
 8. Restore a selection clip (`resseq 29` again), then Minimize for a few seconds
    and pause.
@@ -445,7 +446,7 @@ models are needed; 1ubq + one more protein works.
    - **Watch for:** clip state is per-model — B's selection never writes into A's
      viewer; A returns still clipped around its own selection; B's view is
      unaffected.
-10. Rapid storm: toggle **Clip to selection** ten times fast, cycle A's
+10. Rapid storm: flip A's **Clip sphere** Off/On selection ten times fast, cycle A's
     representation five times, click three restraint rows quickly in succession.
     - **Watch for:** the final state wins everywhere (no mid-storm commit lands
       last); the last restraint row clicked stays selected after its WS echo; the

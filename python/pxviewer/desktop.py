@@ -1886,27 +1886,11 @@ class ControlsWindow:
                 "selection/focus_on_apply", "true" if on else "false"))
         sl.addWidget(self._focus_on_select)
 
-        # Whether the focus also clips a sphere around the selection. On by default --
-        # the sphere is what isolates the named atoms from everything in front of and
-        # behind them -- but sometimes the surroundings are the point, so it is a
-        # choice, made where the behavior happens. The sphere has no other control,
-        # so unchecking also lifts a standing one (see _on_clip_on_select_toggled).
-        self._clip_on_select = QCheckBox("Clip to selection")
-        self._clip_on_select.setToolTip(
-            "Clip the view to a sphere that just contains the selected atoms; "
-            "uncheck to keep the whole scene visible around them — and to lift a "
-            "clip a selection already applied. The standing sphere is a setting of "
-            "the object itself: the Appearance pane's Sphere row shows it and can "
-            "re-aim or resize it.")
-        self._clip_on_select.setChecked(
-            str(self._desktop._settings.value("selection/clip_on_apply", "true")).lower()
-            != "false")
-        self._clip_on_select.toggled.connect(self._on_clip_on_select_toggled)
-        sl.addWidget(self._clip_on_select)
-
-        # The neighborhood-in-ball-and-stick context is a standing style choice, not a
-        # per-selection gesture — it lives in the Settings tab's Selection box
-        # (_build_settings_tab), where _context_on_select is still built.
+        # Selection clipping is a property of the object, so it lives with the rest
+        # of the object's look: the Appearance pane's Clip sphere row ("On
+        # selection" = selections isolate, the default). The neighborhood
+        # context is likewise a standing style choice, in the Settings tab's
+        # Selection box (_build_settings_tab), where _context_on_select is built.
         # What a viewport click selects. Atom is the default — a click takes exactly
         # the atom under the cursor — while a residue-level worklist (Components, a
         # validation table) flips it to Residue, since a click there wants the whole
@@ -2989,7 +2973,6 @@ class ControlsWindow:
         expression = self._desktop.focus_residue(
             chain.text(), resid.text(),
             focus=self._focus_on_select.isChecked(),
-            clip=self._clip_on_select.isChecked(),
             context=self._context_on_select.isChecked())
         if expression is not None:
             self._select_expr.setText(expression)
@@ -3372,7 +3355,6 @@ class ControlsWindow:
             expression = self._desktop.focus_residue(
                 chain.text(), resid.text(),
                 focus=self._focus_on_select.isChecked(),
-                clip=self._clip_on_select.isChecked(),
                 context=self._context_on_select.isChecked())
             if expression is not None:
                 self._select_expr.setText(expression)
@@ -3493,8 +3475,7 @@ class ControlsWindow:
 
         def _pad_changed(value):
             self._desktop._settings.setValue("selection/clip_padding", float(value))
-            if (self._clip_on_select.isChecked()
-                    and any(m.get("_auto_clip") for m in self._desktop._models)):
+            if any(m.get("_auto_clip") for m in self._desktop._models):
                 self._safe(self._desktop.reapply_auto_clips)
 
         pad_spin.valueChanged.connect(_pad_changed)
@@ -4250,14 +4231,14 @@ class ControlsWindow:
 
         front, back = current if current else (0.0, 1.0)
         row = QHBoxLayout()
-        lab = QLabel("Slab")
+        lab = QLabel("Clip slab")
         lab.setMinimumWidth(80)
         row.addWidget(lab)
         slider = _make_range_slider()()
         slider.setToolTip(
             "Front and rear clipping planes for this object. Drag the handles to slice "
             "into it, or the span between them to move the slab. The slab follows the "
-            "camera and composes with the Sphere clip below — slicing the depth does "
+            "camera and composes with the Clip sphere below — slicing the depth does "
             "not lift a sphere, and lifting a sphere does not reopen the slab.")
         slider.set_values(front, back)
         slider.changed.connect(on_change)
@@ -4266,20 +4247,21 @@ class ControlsWindow:
         return slider
 
     def _add_sphere_row(self, sphere, allow_selection, on_pick, on_radius):
-        """The clip sphere — the *place* clip, complementing the Slab row's depth.
+        """The clip sphere — the *place* clip, complementing the Clip slab row's depth.
 
-        Where the sphere sits is the mode: on the current selection (what the
-        Selection pane's Clip checkbox writes — this row is its readout), around the
-        view center (the classic map bound, which follows the camera), or frozen at
-        a fixed point. The radius is the sphere's reach in Å — for a selection it is
-        fitted (selection + the clip padding), so it reads rather than edits there.
+        Where the sphere sits is the mode. "On selection" is both the policy and
+        the readout: armed, every selection fits the sphere to its components;
+        lifted by a clear, re-fitted by the next selection. "Around view center"
+        is the classic map bound (it follows the camera); "Fixed point" freezes
+        it. The radius is the sphere's reach in Å — for a selection it is fitted
+        (components + the clip padding), so it reads rather than edits there.
         """
         from PySide6.QtWidgets import QComboBox, QDoubleSpinBox, QHBoxLayout, QLabel
 
         sphere = dict(sphere or {})
         mode = sphere.get("mode") or "off"
         row = QHBoxLayout()
-        lab = QLabel("Sphere")
+        lab = QLabel("Clip sphere")
         lab.setMinimumWidth(80)
         row.addWidget(lab)
         combo = QComboBox()
@@ -4305,11 +4287,11 @@ class ControlsWindow:
             "clip padding (Settings ▸ Selection); edit it under 'Around view center' "
             "or 'Fixed point'.")
         combo.setToolTip(
-            "Draw only what is inside a sphere: 'On selection' fits the current "
-            "selection (and each new one — the Clip to selection checkbox), 'Around "
-            "view center' follows the camera's target like Coot's map radius, 'Fixed "
-            "point' freezes the sphere where it is. The Slab above still applies on "
-            "top.")
+            "Draw only what is inside a sphere: 'On selection' fits each new "
+            "selection's components (the default — uncheck by picking Off), "
+            "'Around view center' follows the camera's target like Coot's map "
+            "radius, 'Fixed point' freezes the sphere where it is. The Clip slab "
+            "above still applies on top.")
         combo.currentIndexChanged.connect(
             lambda _i, c=combo, r=radius: (r.setEnabled(c.currentData() in ("view", "point")),
                                            on_pick(c.currentData(),
@@ -5528,18 +5510,6 @@ class ControlsWindow:
         except Exception as exc:
             QMessageBox.warning(self._window, "Export failed", str(exc))
 
-    def _on_clip_on_select_toggled(self, on: bool) -> None:
-        """The checkbox is the policy for *new* selections, and it works on the
-        standing selection-clip both ways: off lifts it, on puts it back. (The
-        sphere's standing state itself — visible and editable — is the Appearance
-        pane's Sphere row.)"""
-        self._desktop._settings.setValue(
-            "selection/clip_on_apply", "true" if on else "false")
-        if on:
-            self._desktop.reapply_auto_clips()
-        else:
-            self._desktop.lift_auto_clips()
-
     def _on_select_expression(self) -> None:
         self._run_selection(self._select_expr.text())
 
@@ -5548,7 +5518,6 @@ class ControlsWindow:
         try:
             n = self._desktop.select_by_expression(
                 expr, focus=self._focus_on_select.isChecked(),
-                clip=self._clip_on_select.isChecked(),
                 context=self._context_on_select.isChecked())
         except Exception as exc:  # invalid syntax / no model
             self._selection_label.setText(
@@ -6154,13 +6123,11 @@ class ControlsWindow:
             if shift:
                 expression = desktop.toggle_picked_residue(
                     mid, index, granularity=granularity,
-                    clip=self._clip_on_select.isChecked(),
                     context=self._context_on_select.isChecked())
             else:
                 expression = desktop.select_picked_atom(
                     mid, index, granularity=granularity,
                     focus=self._focus_on_select.isChecked(),
-                    clip=self._clip_on_select.isChecked(),
                     context=self._context_on_select.isChecked())
         except Exception:  # a click must never surface a selection error dialogically
             self._set_current_tree_row("model", mid)
@@ -6764,9 +6731,10 @@ class ControlsWindow:
             self._component_sync_timer.start()  # debounce a drag-select
 
     def _selection_flags(self):
-        """The Selection pane's three checkboxes, as (focus, clip, context)."""
+        """The selection behavior switches, as (focus, context). Clip is not a
+        pane switch any more — it is the object's Clip sphere mode, read at the
+        selection sites themselves."""
         return (self._focus_on_select.isChecked(),
-                self._clip_on_select.isChecked(),
                 self._context_on_select.isChecked())
 
     def _push_component_selection_to_viewer(self) -> None:
@@ -6784,19 +6752,18 @@ class ControlsWindow:
         desktop = self._desktop
         self._engage_step_view(self._component_view)
         active = mid is not None and mid == desktop._active_model_id
-        focus, clip, context = self._selection_flags()
+        focus, context = self._selection_flags()
         if len(rows) == 1 and active:
             chain, resid = self._component_model.row_label(rows[0])
             if desktop.focus_residue(chain, resid,
-                                     focus=focus, clip=clip,
-                                     context=context) is not None:
+                                     focus=focus, context=context) is not None:
                 return
         atoms = [i for r in rows for i in self._component_model.row_atoms(r)]
         entry = desktop._model_entry(mid)
         session = entry["session"] if entry else None
         if session is not None and getattr(session, "model", None) is not None:
             desktop._select_fragment(mid, session, entry, atoms,
-                                     focus=focus, clip=clip, context=context)
+                                     focus=focus, context=context)
             if rows and active:
                 # Keep the residue walk anchored at the last row chosen, so an
                 # unfocused Space continues from here rather than an older pick.
@@ -6820,9 +6787,9 @@ class ControlsWindow:
         entry = self._desktop._model_entry(mid)
         session = entry["session"] if entry else None
         if session is not None and getattr(session, "model", None) is not None:
-            focus, clip, context = self._selection_flags()
+            focus, context = self._selection_flags()
             self._desktop._select_fragment(mid, session, entry, atoms,
-                                           focus=focus, clip=clip, context=context)
+                                           focus=focus, context=context)
         else:
             self._desktop.highlight_atoms_in(mid, atoms)
             self._desktop.focus_atoms_in(mid, atoms)
@@ -8142,6 +8109,11 @@ class DesktopApp:
                  "rep": rep, "reps": reps, "color": None,
                  "hidden_types": hidden_types, "hidden_atoms": set(),
                  "type_groups": type_groups, "clip": (0.0, 1.0),
+                 # The clip sphere starts in "selection" mode: dormant (no radius)
+                 # until a selection lands, then it re-fits each one. The retired
+                 # Selection-pane checkbox's saved preference seeds the mode once —
+                 # after that the Appearance pane's Clip sphere row is the control.
+                 "sphere": self._initial_sphere_mode(),
                  "interactions": self._default_model_interactions, "edits": None,
                  # Opening color: a random pick from the session's current palette group
                  # (see palettes.PaletteCycler). Overridden the moment the user sets one by
@@ -11029,15 +11001,26 @@ class DesktopApp:
     # -- clip state: slab ∩ sphere ---------------------------------------------------
     #
     # An object's clip is a region: the front/rear depth slab the Appearance pane's
-    # Slab row drives, INTERSECTED with an optional sphere (a *place* clip). The sphere
-    # has three modes — "selection" (center and radius re-fit to each applied
-    # selection; this is what the Selection pane's Clip checkbox writes), "view"
+    # Clip slab row drives, INTERSECTED with an optional sphere (a *place* clip).
+    # The sphere has three modes — "selection" (center and radius re-fit to each
+    # applied selection; the default, and the whole selection-clip policy), "view"
     # (center follows the camera target, Coot-style — what the view-radius setting
     # means for maps) and "point" (frozen at a coordinate). Both halves compose on the
     # wire (LiveSession.set_clip carries front/back + radius/center together), so every
     # send goes through one funnel — a slab change must not wipe a standing sphere and
     # a sphere change must not wipe a standing slab.
     _SPHERE_OFF = {"mode": "off", "radius": None, "center": None}
+
+    def _initial_sphere_mode(self) -> dict:
+        """A model's starting clip-sphere state — the armed selection policy.
+
+        "selection" with no radius is dormant: the next selection fits it. The
+        long-retired Selection-pane checkbox's preference (clip_on_apply) seeds
+        it, so an install that turned clipping off keeps it off."""
+        armed = str(self._settings.value(
+            "selection/clip_on_apply", "true")).lower() != "false"
+        return {"mode": "selection" if armed else "off",
+                "radius": None, "center": None}
 
     @staticmethod
     def _component_bounds(atoms, indices) -> list:
@@ -11091,8 +11074,8 @@ class DesktopApp:
         """
         entry["sphere"] = {"mode": mode, "radius": radius,
                            "center": None if center is None else [float(c) for c in center]}
-        if mode == "selection":
-            entry["_auto_clip"] = True
+        if mode == "selection" and radius is not None:
+            entry["_auto_clip"] = True    # a selection-fitted sphere is standing
         else:
             entry.pop("_auto_clip", None)
             # NB: ``_auto_clip_depth`` is the callers' bookkeeping — a plain lift must
@@ -11113,6 +11096,28 @@ class DesktopApp:
         if self._sphere_state(entry)["mode"] == "off":
             return
         self._apply_model_sphere(entry, "off", depth=depth)
+
+    def _lift_selection_sphere(self, entry) -> None:
+        """Drop a standing selection-fitted sphere, keeping "selection" armed.
+
+        Mode is the policy now: the sphere a selection put up comes down with the
+        selection, but the mode stays "selection" so the next one re-fits. Leaving
+        the policy entirely is the Clip sphere row's job (Off, or another mode)."""
+        if not entry.pop("_auto_clip", False):
+            return
+        entry.pop("_auto_clip_depth", None)
+        entry["sphere"] = {"mode": "selection", "radius": None, "center": None}
+        self._send_model_clip(entry)
+        try:
+            if self._controls._focused == ("model", entry.get("id")):
+                self._controls._update_appearance("model", entry.get("id"))
+        except Exception:  # pragma: no cover - defensive
+            pass
+
+    def _selection_clip_armed(self, entry) -> bool:
+        """Whether a selection may clip this object — the Clip sphere mode."""
+        return (entry is not None
+                and self._sphere_state(entry)["mode"] == "selection")
 
     def _default_sphere_center(self, entry):
         """Where a fresh fixed-point sphere lands: the standing sphere's own spot, then
@@ -11181,9 +11186,11 @@ class DesktopApp:
         entry = self._model_entry(mid)
         if entry is None or mode not in ("off", "selection", "view", "point"):
             return
-        if mode != "selection":
-            # A user-chosen sphere (or off) displaces the selection's clip, so the
-            # camera slab it parked is no longer ours to restore.
+        if mode in ("view", "point"):
+            # A user-placed sphere displaces the selection's clip, so the camera
+            # slab it parked is no longer ours to restore. "Off" is a pure lift —
+            # the parked slab stays, and re-arming "selection" puts the framed
+            # view back whole (the old checkbox's lift/re-apply semantics).
             entry.pop("_auto_clip_depth", None)
         try:
             if mode == "point":
@@ -13162,14 +13169,16 @@ class DesktopApp:
                      if enabled else "Refine drag disabled")
 
     def _selection_flags(self) -> tuple:
-        """The Selection pane's three checkboxes as persisted — (focus, clip, context).
+        """The persisted selection switches — (focus, context).
 
         Desktop-side paths read the same truth the widgets persist on every toggle
-        (``ControlsWindow._selection_flags`` reads the boxes themselves)."""
+        (``ControlsWindow._selection_flags`` reads the boxes themselves). Clip is
+        absent on purpose: it is a per-object property (the Clip sphere mode), so
+        :meth:`_selection_clip_armed` answers it for the model at hand, not a
+        setting."""
         return tuple(
             str(self._settings.value(key, "true")).lower() == "true"
             for key in ("selection/focus_on_apply",
-                        "selection/clip_on_apply",
                         "selection/context_rep"))
 
     def _clip_padding(self) -> float:
@@ -13181,32 +13190,16 @@ class DesktopApp:
         except (TypeError, ValueError):  # pragma: no cover - a hand-edited ini
             return 4.0
 
-    def lift_auto_clips(self) -> None:
-        """Drop every sphere a selection put up (sphere mode "selection").
-
-        The checkbox doubling as the removal control is honest: turning it off lifts
-        what it put on. A sphere the user set by hand (view or point) is a different
-        control's state and is left alone; the slab row always is.
-        """
-        for m in self._models:
-            try:
-                if m.pop("_auto_clip", False):
-                    self._apply_model_sphere(m, "off")
-            except Exception:  # pragma: no cover - defensive
-                pass
-
     def reapply_auto_clips(self) -> None:
-        """Clip the standing selection — the mirror of :meth:`lift_auto_clips`.
-
-        Re-checking "Clip to selection" should put the sphere back on whatever is
-        selected, the same way unchecking lifts it — waiting for the next click
-        would leave the toggle one-sided (and clicking the checkbox takes focus
-        off the table, so the next Space may not even reach a row).
-        """
+        """Re-fit every model's standing selection sphere (e.g. the clip padding
+        changed in Settings). Models whose Clip sphere mode is not "selection"
+        are left alone — that is the user saying no."""
         with self._scene_lock:
             selections = {mid: list(ix) for mid, ix in self._scene_selection.items()}
         for mid, indices in selections.items():
             entry = self._model_entry(mid)
+            if not self._selection_clip_armed(entry):
+                continue
             session = entry["session"] if entry else None
             model = getattr(session, "model", None) if session else None
             if not indices or model is None:
@@ -13231,9 +13224,7 @@ class DesktopApp:
         for m in self._models:
             try:
                 m["session"].clear_selection()
-                if m.pop("_auto_clip", False):
-                    m.pop("_auto_clip_depth", None)
-                    self._apply_model_sphere(m, "off")
+                self._lift_selection_sphere(m)
                 self._set_context_rep(m, None)
             except Exception:  # pragma: no cover - defensive
                 pass
@@ -13403,14 +13394,13 @@ class DesktopApp:
         return com, up, direction, radius, extents
 
     def focus_residue(self, chain: str, resid: str, *, focus: bool = True,
-                      clip: bool = False, context: bool = False):
+                      clip: bool = True, context: bool = False):
         """Select + focus a residue (by chain id and resid, MolProbity's resseq+icode
         string) on the active model — driven by a Validation or Components table
         row or space-bar navigation. Routed through the same fragment pipeline as a
-        click or a typed expression, so the caller's flags (the Selection pane's
-        checkboxes, for a table row) govern the framing, isolation clip and
-        neighborhood context identically. Space-bar navigation passes only the
-        clip checkbox — the walk is a selection each step — and keeps focus on
+        click or a typed expression, so the caller's flags (the Focus checkbox, or
+        the object's Clip sphere mode) govern the framing, isolation clip and
+        neighborhood context identically. Space-bar navigation keeps focus on
         and context off. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the residue names no
         atoms. The residue->atom-index map is built once from the model and cached
@@ -13483,9 +13473,9 @@ class DesktopApp:
         """Move the focused residue to the next/previous one in its chain (space-bar
         navigation). With nothing focused yet, start at the first residue.
 
-        The walk IS a selection each step, so it takes the Selection pane's clip
-        checkbox — otherwise stepping with the box checked would silently
-        differ from stepping the Components table. Focus stays on regardless:
+        The walk IS a selection each step, so it takes the object's Clip sphere
+        mode — otherwise stepping with it armed would silently differ from
+        stepping the Components table. Focus stays on regardless:
         a walk that does not move the camera is no walk. Context stays off:
         rebuilding a ball-and-stick neighborhood every keypress is too heavy
         for rapid stepping."""
@@ -13495,7 +13485,6 @@ class DesktopApp:
         model = getattr(entry["session"], "model", None)
         if model is None:
             return
-        clip = self._selection_flags()[1]
         order = entry.get("_chain_order")
         if order is None:
             order = entry["_chain_order"] = self._build_chain_order(model)
@@ -13503,18 +13492,18 @@ class DesktopApp:
         if cur is None:
             for cid, residues in order.items():
                 if residues:
-                    self.focus_residue(cid, residues[0], clip=clip)
+                    self.focus_residue(cid, residues[0])
                     return
             return
         chain, resid = cur
         residues = order.get(chain, [])
         if resid not in residues:
             if residues:
-                self.focus_residue(chain, residues[0], clip=clip)
+                self.focus_residue(chain, residues[0])
             return
         nxt = residues.index(resid) + step
         if 0 <= nxt < len(residues):
-            self.focus_residue(chain, residues[nxt], clip=clip)
+            self.focus_residue(chain, residues[nxt])
 
     @staticmethod
     def _build_chain_order(model):
@@ -13545,8 +13534,9 @@ class DesktopApp:
         of atoms, so stepping one IS a selection: the participating atoms take the
         same pipeline as a typed or clicked selection — highlighted (so you see
         exactly *which* atoms make up the restraint, not the whole residue),
-        framed, clip-sphered and context-dressed under the Selection pane's
-        checkboxes. On top of that, bonds/angles/dihedrals get their measurement
+        framed and context-dressed under the Selection pane's checkboxes,
+        clip-sphered while the object's Clip sphere mode is "selection". On top of
+        that, bonds/angles/dihedrals get their measurement
         notation drawn (the distance line, angle arc or dihedral fan);
         chirality/planarity have no simple notation, so they show as the highlight
         alone. Multiple rows -> multiple.
@@ -13577,9 +13567,9 @@ class DesktopApp:
                 pass
         entry = self._model_entry(mid)
         if getattr(session, "model", None) is not None:
-            focus, clip, context = self._selection_flags()
+            focus, context = self._selection_flags()
             self._select_fragment(mid, session, entry, sorted(marked),
-                                  focus=focus, clip=clip, context=context)
+                                  focus=focus, context=context)
         else:  # a model-less session keeps the plain highlight-and-aim it had
             try:  # (empty list clears the overlay)
                 session.highlight(sorted(marked))
@@ -13610,9 +13600,8 @@ class DesktopApp:
         sel = session.select_by(selection="all")
         session.highlight(sel)
         entry = self._model_entry(mid)
-        if entry is not None and entry.pop("_auto_clip", False):
-            entry.pop("_auto_clip_depth", None)
-            self._apply_model_sphere(entry, "off")
+        if entry is not None:
+            self._lift_selection_sphere(entry)
         self._set_context_rep(entry, None)        # a whole object needs no context view
         session.focus(list(sel))                  # Mol*'s own whole-object framing
         self._on_model_selection(mid, sel)        # table + label follow
@@ -13635,10 +13624,10 @@ class DesktopApp:
         entry = self._model_entry(mid)
         if not text:
             session.clear_selection()
-            if entry is not None and entry.pop("_auto_clip", False):
-                # The isolation sphere was ours; clearing the selection lifts it.
-                entry.pop("_auto_clip_depth", None)
-                self._apply_model_sphere(entry, "off")
+            if entry is not None:
+                # The isolation sphere was ours; clearing the selection lifts it
+                # (the "selection" mode stays armed for the next one).
+                self._lift_selection_sphere(entry)
             self._set_context_rep(entry, None)
             with self._scene_lock:
                 dropped = self._scene_selection.pop(mid, None) is not None
@@ -13711,9 +13700,7 @@ class DesktopApp:
         grown = (current - residue) if residue <= current else (current | residue)
         if not grown:
             session.clear_selection()
-            if entry.pop("_auto_clip", False):
-                entry.pop("_auto_clip_depth", None)
-                self._apply_model_sphere(entry, "off")
+            self._lift_selection_sphere(entry)
             self._set_context_rep(entry, None)
             with self._scene_lock:
                 self._scene_selection.pop(mid, None)
@@ -13721,7 +13708,7 @@ class DesktopApp:
             return ""
         indices = sorted(grown)
         sel = session.highlight(indices)
-        if clip:
+        if clip and self._selection_clip_armed(entry):
             # The same sphere the focus path fits, re-fit to the grown selection —
             # without it a residue added outside the standing sphere is invisible.
             bounds = self._component_bounds(atoms, indices)
@@ -13732,9 +13719,9 @@ class DesktopApp:
                                      radius=reach + self._clip_padding(),
                                      center=center)
             entry["_auto_clip_depth"] = None   # the camera never oriented here
-        elif entry.pop("_auto_clip", False):
-            entry.pop("_auto_clip_depth", None)
-            self._apply_model_sphere(entry, "off")
+        else:
+            # A clip-suppressed selection lifts the sphere a clipped one left.
+            self._lift_selection_sphere(entry)
         self._set_context_rep(entry, indices if context else None)
         self._on_model_selection(mid, sel)
         return self._selection_expression(entry, indices)
@@ -13761,7 +13748,7 @@ class DesktopApp:
         return " or ".join(terms)
 
     def _select_fragment(self, mid, session, entry, atoms_or_sel, *,
-                         focus: bool, clip: bool, context: bool) -> int:
+                         focus: bool, clip: bool = True, context: bool) -> int:
         """The one path every fragment selection takes — typed or clicked."""
         sel = session.highlight(atoms_or_sel)     # show it in the viewer
         if focus and len(sel):
@@ -13785,6 +13772,9 @@ class DesktopApp:
                 # -- frames by its principal axes; only shapes with no frame at all
                 # (a lone atom, a straight line) fall back to the plain focus.
                 orientation = self._principal_axes_orientation(session.model, indices)
+            # Whether this selection may isolate: the object's Clip sphere mode is
+            # the policy ("On selection"), the caller's flag a per-call override.
+            clip = clip and self._selection_clip_armed(entry)
             if orientation is not None:
                 session.orient_camera(*orientation, clip=clip)
                 center = np.asarray(orientation[0], dtype=float)
@@ -13819,11 +13809,10 @@ class DesktopApp:
                     # remember the depth so lifting and re-applying restore it too.
                     entry["_auto_clip_depth"] = (
                         orientation[4][2] if orientation is not None else None)
-            elif entry is not None and entry.pop("_auto_clip", False):
+            elif entry is not None:
                 # Clip is off for this selection, so lift the sphere a previous
                 # clipped selection left -- otherwise it keeps cutting the new view.
-                entry.pop("_auto_clip_depth", None)
-                self._apply_model_sphere(entry, "off")
+                self._lift_selection_sphere(entry)
         # The neighborhood context rides the selection, not the camera: it shows (or
         # clears) whether or not the focus checkbox moved the view.
         self._set_context_rep(entry, list(sel) if context else None)

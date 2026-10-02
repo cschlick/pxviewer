@@ -505,7 +505,8 @@ python -m pxviewer desktop --gpu hardware   # force the GPU and show its raw err
   cctbx geometry restraints, one virtualized table per type. Each row is a restraint
   (its atoms, ideal, model, delta, sigma, residual), read straight from the cctbx
   proxy arrays and computed on demand. Selecting a row is a real selection of the
-  atoms it involves — framed and clipped under the Selection pane's checkboxes —
+  atoms it involves — framed under the Selection pane's Focus checkbox and clipped
+  by the object's Clip sphere mode —
   with the measurement notation drawn on top. Needs the monomer library (see below).
 - **Console** — a live IPython shell (see below).
 - **Demos** — the built-in model and volume demos.

@@ -216,25 +216,28 @@ def exercise_the_back_button_isnt_flung_forward_by_a_satisfied_step():
 
 
 def exercise_the_zoom_clip_zoom_step_wants_the_whole_gesture():
-    """One page asks for a sequence: zoom out, lift the clip and put it back,
-    zoom in. The predicate baselines the press counters on first poll, then
-    wants each leg in turn — a zoom-in squeezed in early is not 'zoom back in'."""
+    """One page asks for a sequence: zoom out, lift the clip sphere and put it
+    back, zoom in. The predicate baselines the press counters on first poll, then
+    wants each leg in turn — a zoom-in squeezed in early is not 'zoom back in',
+    and the clip legs watch the Clip sphere row's mode, not a checkbox."""
     with desktop() as app:
         controls = app._controls
+        app.load_file(data_path("1ubq.pdb"))
+        process_events()
+        mid = app._active_model_id
         tut = tutorial.open_model_tutorial()
-        done = next(s.done for s in tut.steps
-                    if s.target and s.target(controls) is controls._clip_on_select)
+        done = next(s.done for s in tut.steps if "zoom back in" in s.text)
         app.zoom_view(1)                       # zoomed out before the step shows
         assert done(controls) is False         # first poll seeds the baselines
         app.zoom_view(-1)
         assert done(controls) is False         # in before out: not the gesture
         app.zoom_view(1)                       # leg 1: zoom out
         assert done(controls) is False         # still wants the toggle
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid, "off")
         assert done(controls) is False         # leg 2a: lifted, not restored
         app.zoom_view(-1)
         assert done(controls) is False         # zoom-in too early does not count
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         assert done(controls) is False         # leg 2 done; leg 3 wants a press
         app.zoom_view(-1)
         assert done(controls) is True
@@ -589,21 +592,22 @@ def exercise_a_single_residue_selection_gets_the_oriented_framing():
         session.set_clip = lambda front, back, radius=None, center=None, ref=None: \
             calls.append(("clip", front, back, radius, center))
 
-        # The Selection pane's two behavior switches, both defaulting on, both routed:
-        # unchecking Clip to selection frames and orients identically but asks the
-        # viewer to leave the scene unclipped -- and applies no isolation sphere either
-        # (it used to, which made the checkbox a lie: the sphere kept clipping).
+        # The selection behavior switches, routed: Focus is the pane checkbox; the
+        # clip side is the object's Clip sphere mode, defaulting to "selection".
+        # A mode-Off selection frames and orients identically but asks the viewer
+        # to leave the scene unclipped -- and applies no isolation sphere either.
         controls = app._controls
         assert controls._focus_on_select.isChecked()
-        assert controls._clip_on_select.isChecked()
-        controls._clip_on_select.setChecked(False)
+        assert app._sphere_state(entry)["mode"] == "selection"
+        app.set_model_sphere(mid := app._active_model_id, "off")
+        calls.clear()                     # the mode switch itself sent the lift
         controls._run_selection("resseq 29")
         unclipped = [c for c in calls if c[0] == "orient"]
         assert unclipped and unclipped[-1][2].get("clip") is False, (
-            "the Clip to selection checkbox did not route")
+            "the Clip sphere mode did not route")
         assert not [c for c in calls if c[0] == "clip"], (
             "a clip-off selection must not apply the isolation sphere")
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid, "selection")
         calls.clear()
 
         app.select_by_expression("resseq 29")

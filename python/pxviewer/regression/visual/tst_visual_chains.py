@@ -106,11 +106,11 @@ def run() -> None:
 
         # -- 4. lift/re-apply inside the chain --------------------------------
         section("lift and re-apply mid-chain")
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid_a, "off")
         settle(1.5)
         shot_viewport(app, "v11-4-lifted")
         check("lift drops the marker", "_auto_clip" not in entry_a)
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid_a, "selection")
         settle(1.5)
         reapplied = shot_viewport(app, "v11-4-reapplied")
         r2 = (cam_state(app) or {}).get("radius")
@@ -148,9 +148,9 @@ def run() -> None:
         app.clear_selection()
         settle(1.5)
         radius_clear = (cam_state(app) or {}).get("radius")
-        controls._clip_on_select.setChecked(False)
+        app.set_model_sphere(mid_a, "off")
         settle(0.8)
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid_a, "selection")
         settle(1.0)
         radius_after = (cam_state(app) or {}).get("radius")
         check("re-checking an empty selection is calm",
@@ -215,10 +215,10 @@ def run() -> None:
 
         # -- 10. rapid storm: final state wins ---------------------------------
         section("control storm")
-        for _ in range(10):
-            controls._clip_on_select.toggle()
+        for i in range(10):
+            app.set_model_sphere(mid_b, "off" if i % 2 else "selection")
             pump(interval=0.01)
-        controls._clip_on_select.setChecked(True)
+        app.set_model_sphere(mid_b, "selection")
         for rep in ("ball-and-stick", "spacefill", "cartoon",
                     "ball-and-stick", "cartoon"):
             app.set_model_representation(mid_b, rep)
