@@ -578,6 +578,9 @@ WebSocket; binary messages are little-endian and begin with a `uint32` tag.
 | server → client | computed-interactions | JSON `{"type":"computed-interactions","visible":bool}` (Mol\*-inferred contacts) |
 | server → client | clashes | JSON `{"type":"clashes","action":"set","pairs":[{a,b},…]}` or `{"type":"clashes","action":"clear"}` (steric clashes, drawn red) |
 | server → client | mouse-selection-mode | JSON `{"type":"mouse-selection-mode","enabled":bool}` |
+| server → client | camera-state | JSON `{"type":"camera-state","reqId":int}` — answered by `camera-state-result` |
+| server → client | camera-set | JSON `{"type":"camera-set","state":{target,position,up,radius,fov}}` — apply a `camera-state` snapshot (saved-view restore; queues behind the viewer build) |
+| server → client | background-set | JSON `{"type":"background-set","color":"#rrggbb"}` — the restore half of `query-background` |
 | client → server | ready | JSON `{"type":"ready"}` |
 | client → server | pick | JSON `{"type":"pick","empty":bool,"atom":{id,name,resname,resseq,chain}}` |
 | client → server | mouse-selection | JSON `{"type":"mouse-selection","indices":[int…]}` |

@@ -522,6 +522,11 @@ class LiveSession:
         # request waits on an Event keyed by a monotonic id.
         self._pending: dict = {}
         self._pending_lock = threading.Lock()
+        # Control messages armed while there is no client to send them to yet.
+        # Sent once, on the first "ready" -- the client's post-build ack, which
+        # is also the point its auto-frame is behind it. One-shot, not replayed
+        # state: a page reload minutes later must not snap back to a stale view.
+        self._once_on_ready: list = []
         self._req_counter = 0
         # Active drawing primitives (id -> the "add" message), replayed to late clients.
         self._primitives: dict = {}
@@ -1274,6 +1279,31 @@ class LiveSession:
         with self._pending_lock:
             self._pending.pop(req_id, None)
         return slot["state"] if answered else None
+
+    def set_camera(self, state: dict) -> None:
+        """Apply a :meth:`camera_state` snapshot — the restore half of a saved view.
+
+        Only the aiming fields travel (target/position/up/radius/fov); near/far are
+        the clip machinery's business and are restored through it, not the camera.
+        """
+        self._send_or_arm({"type": "camera-set", "state": dict(state)})
+
+    def set_background(self, color: str) -> None:
+        """Set the viewport's background color — the restore half of a saved view."""
+        self._send_or_arm({"type": "background-set", "color": color})
+
+    def _send_or_arm(self, message: dict) -> None:
+        """Send now when a client is connected, else hold for its "ready".
+
+        A connected client applies the message immediately (queued behind its
+        build if the viewer is still coming up -- these are viewer messages).
+        With no client the message is armed: it rides the first post-build ack,
+        landing after the auto-frame that would otherwise overwrite it.
+        """
+        if self._clients:
+            self._send_control(message)
+        else:
+            self._once_on_ready.append(message)
 
     def background_color(self, *, timeout: float = 5.0) -> Optional[str]:
         """The viewport's background color as ``#rrggbb``, asked of the browser (None if no
@@ -2291,6 +2321,10 @@ class LiveSession:
         finally:
             self._clients.discard(websocket)
             self._send_locks.pop(websocket, None)
+            if not self._clients:
+                # A reload reconnects: ready must mean THIS client's build, so a
+                # wait_for_client caller can hold a command until it lands.
+                self._client_ready.clear()
 
     def _on_message(self, message: str) -> None:
         try:
@@ -2300,6 +2334,13 @@ class LiveSession:
         etype = event.get("type")
         if etype == "ready":
             self._client_ready.set()
+            if self._once_on_ready:
+                # "ready" is this client's post-build ack; a reply lands after
+                # its auto-frame and after the pending-control flush it runs on
+                # send, so an armed camera restore is the last word.
+                for armed in self._once_on_ready:
+                    self._send_control(armed)
+                self._once_on_ready.clear()
         elif etype == "pick":
             info = None if event.get("empty") else event.get("atom")
             if info is not None:

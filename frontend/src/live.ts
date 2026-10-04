@@ -3640,6 +3640,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations',
         'click-mode', 'tug-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
         'localres', 'structure_visible', 'focus-surroundings',
+        // Queued so a restored view's camera lands AFTER the build's own first
+        // frame rather than being overwritten by it (saved views).
+        'camera-set',
         // Queued so it lands before the cloud it describes: queued control messages are
         // flushed ahead of pendingHotspotVolume, so the grid is built on the right scale
         // rather than painted once on the default ramp and corrected afterwards.
@@ -3811,10 +3814,55 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 const state = cam ? {
                     target: Array.from(cam.state.target), position: Array.from(cam.state.position),
                     up: Array.from(cam.state.up), radius: cam.state.radius,
+                    radiusMax: cam.state.radiusMax,
                     near: cam.near, far: cam.far, fov: cam.state.fov,
                     viewport: { width: cam.viewport.width, height: cam.viewport.height },
                 } : null;
                 ws.send(JSON.stringify({ type: 'camera-state-result', reqId: msg.reqId, state }));
+            } else if (msg.type === 'camera-set' && msg.state) {
+                // The restore half of a saved view: put the camera back on the
+                // snapshot camera-state returned. No transition -- a saved view is
+                // a state, not a camera move the user watches.
+                const cam = plugin.canvas3d?.camera;
+                const s = msg.state as any;
+                if (cam) {
+                    // A saved view is a fixed camera, so take it off the
+                    // bounding-sphere leash now: Mol* re-fits the camera on every
+                    // scene commit while camera.manualReset is false, and the
+                    // build's own lockCameraOnceFramed only lands ~400 ms after
+                    // the first frame — too late to stop the commits around this
+                    // restore from reframing over it.
+                    plugin.canvas3d!.setProps((p: Canvas3DProps) => {
+                        (p.camera as any).manualReset = true;
+                    });
+                    const snapshot: any = {
+                        target: Vec3.create(s.target[0], s.target[1], s.target[2]),
+                        position: Vec3.create(s.position[0], s.position[1], s.position[2]),
+                        up: Vec3.create(s.up[0], s.up[1], s.up[2]),
+                        radius: s.radius,
+                        fov: s.fov,
+                    };
+                    // The transition clamps radius to radiusMax — apply a restore
+                    // while radiusMax is still its 0 default and the saved radius
+                    // collapses to the 0.01 floor. It is also how commits tell
+                    // "framed at least once". Saved value wins; the current scene
+                    // bound is the fallback, the saved radius its floor.
+                    const sceneR = (plugin.canvas3d as any).boundingSphere?.radius;
+                    snapshot.radiusMax = Math.max(
+                        typeof s.radiusMax === 'number' ? s.radiusMax : 0,
+                        sceneR || 0, s.radius || 0, 0.01);
+                    cam.setState(snapshot, 0);
+                    // A reset requested before this message can still resolve on
+                    // a later frame — a queued reset runs resolveCameraReset off
+                    // the animation loop regardless of the manualReset gate, and
+                    // slow first frames (shader compiles, async volume builds)
+                    // can put that resolve hundreds of ms out. Re-assert twice:
+                    // once past the next frame, once past any reset tween that
+                    // was already running (cameraResetDurationMs) and the build's
+                    // own 400 ms camera lock.
+                    setTimeout(() => cam.setState(snapshot, 0), 150);
+                    setTimeout(() => cam.setState(snapshot, 0), 600);
+                }
             } else if (msg.type === 'screenshot') {
                 // The scene only exists here, so the picture is taken here and sent
                 // back — which works for a remote viewer as much as the desktop one.
@@ -3838,6 +3886,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     error = String(e);
                 }
                 ws.send(JSON.stringify({ type: 'background-result', reqId: msg.reqId, color, error }));
+            } else if (msg.type === 'background-set' && typeof msg.color === 'string') {
+                // The restore half of query-background: a saved view's backdrop.
+                const c = decodeColor(msg.color);
+                if (c !== undefined) {
+                    plugin.canvas3d?.setProps((p: Canvas3DProps) => {
+                        p.renderer.backgroundColor = c;
+                    });
+                }
             } else if (msg.type === 'clip') {
                 const slab: Slab = {
                     front: msg.front ?? 0, back: msg.back ?? 1, radius: msg.radius ?? null,

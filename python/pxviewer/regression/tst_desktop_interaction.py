@@ -1159,6 +1159,98 @@ def exercise_the_clip_sphere_mode_lifts_a_standing_selection_clip():
         assert None not in entry["session"]._clips
 
 
+def exercise_a_saved_view_round_trips():
+    """A view file is the scene, restorable: objects, representations, clip
+    slab and sphere, hidden atoms, the standing selection and the active model
+    all come back. Bundling is the default; opt-out keeps file references, but
+    anything without an external source (a computed map here) still
+    materializes — a reference that cannot resolve is not a view."""
+    import numpy as np
+
+    from pxviewer import viewstate
+    from pxviewer.volume_io import VolumeData
+
+    with tmp_dir() as tmp, desktop() as app:
+        app.load_file(data_path("1ubq.pdb"))
+        mid = app._active_model_id
+        entry = app._model_entry(mid)
+        app.set_model_representation(mid, "ball-and-stick")
+        app.select_by_expression("resseq 29")
+        selection = sorted(app._scene_selection.get(mid, ()))
+        entry["hidden_atoms"].update({1, 2, 3})
+        app._apply_model_rep(entry)
+        app.set_model_clip(mid, 0.1, 0.9)
+        grid = np.zeros((8, 8, 8), dtype=float)
+        grid[3:5, 3:5, 3:5] = 2.0
+        vid = app._add_volume(VolumeData.from_numpy(grid, name="fake"),
+                              "fake.map")
+        app.set_volume_opacity(vid, 0.4)
+
+        bundled = viewstate.save_view(
+            app, f"{tmp}/fig.pxview.json", bundle_data=True)
+        spec_m = next(o for o in bundled["objects"] if o["kind"] == "model")
+        spec_v = next(o for o in bundled["objects"] if o["kind"] == "volume")
+        assert spec_m["data"].endswith(".cif") and (f"{tmp}/{spec_m['data']}")
+        assert spec_v["data"].endswith(".map")
+        import os
+        assert os.path.isfile(f"{tmp}/{spec_m['data']}")
+        assert os.path.isfile(f"{tmp}/{spec_v['data']}")
+        assert spec_m["sphere"]["mode"] == "selection"
+
+        # Opt-out: the file-loaded model keeps its reference (no copy), the
+        # source-less volume still materializes.
+        referenced = viewstate.save_view(
+            app, f"{tmp}/light.pxview.json", bundle_data=False)
+        rm = next(o for o in referenced["objects"] if o["kind"] == "model")
+        rv = next(o for o in referenced["objects"] if o["kind"] == "volume")
+        assert rm["data"] is None and rm["source"]["path"].endswith("1ubq.pdb")
+        assert rv["data"] is not None, "a computed map cannot be a reference"
+
+        with desktop() as restored:
+            viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
+            assert len(restored._models) == 1 and len(restored._volumes) == 1
+            nmid = restored._models[0]["id"]
+            nentry = restored._model_entry(nmid)
+            assert nentry["rep"] == "ball-and-stick"
+            assert nentry["clip"] == (0.1, 0.9)
+            assert nentry["hidden_atoms"] == {1, 2, 3}
+            assert nentry["color_default"] == entry["color_default"]
+            sphere = restored._sphere_state(nentry)
+            assert sphere["mode"] == "selection" and sphere["radius"]
+            assert sorted(restored._scene_selection.get(nmid, ())) == selection
+            assert restored._active_model_id == nmid
+            nventry = restored._volumes[0]
+            assert abs(nventry["opacity"] - 0.4) < 1e-6
+
+        # The reference-mode file restores from the original paths too.
+        with desktop() as restored:
+            viewstate.load_view(restored, f"{tmp}/light.pxview.json")
+            assert len(restored._models) == 1 and len(restored._volumes) == 1
+
+        # A source path that no longer resolves strands its object, not the
+        # view: the model drops, the bundled volume still loads.
+        import json
+        with open(f"{tmp}/light.pxview.json") as fh:
+            moved = json.load(fh)
+        for obj in moved["objects"]:
+            if obj["kind"] == "model":
+                obj["source"]["path"] = f"{tmp}/not-there.pdb"
+        with open(f"{tmp}/moved.pxview.json", "w") as fh:
+            json.dump(moved, fh)
+        with desktop() as restored:
+            viewstate.load_view(restored, f"{tmp}/moved.pxview.json")
+            assert len(restored._models) == 0 and len(restored._volumes) == 1
+
+        # A view is a whole scene: loading one into a populated scene replaces
+        # it, it does not add to it.
+        with desktop() as restored:
+            restored.load_file(data_path("1ubq.pdb"))
+            restored.load_file(data_path("1ubq.pdb"))
+            assert len(restored._models) == 2
+            viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
+            assert len(restored._models) == 1 and len(restored._volumes) == 1
+
+
 def exercise_a_viewport_click_uses_the_engaged_tables_unit():
     """A click selects what the last engaged table is about: a single atom by
     default and under the Atoms and restraint worklists, the whole residue under a

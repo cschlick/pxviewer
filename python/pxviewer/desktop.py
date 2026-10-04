@@ -1976,6 +1976,9 @@ class ControlsWindow:
         menu.setObjectName("openMenu")
         menu.addAction("Open file(s)…", self._on_open_file)
         menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
+        menu.addSeparator()
+        menu.addAction("Save view as…", self._on_save_view)
+        menu.addAction("Open saved view…", self._on_open_view)
         return menu
 
     def _build_tools_tab(self):
@@ -5281,6 +5284,76 @@ class ControlsWindow:
                 self._window, "Could not compute local resolution", str(exc))
             return
 
+    def _on_save_view(self) -> None:
+        """Write the scene as a view file: JSON naming everything on screen, plus
+        a data directory the checkbox controls — bundled (self-contained, for
+        archiving and figures) by default, or references to the files objects
+        came from (light, when one dataset backs many views)."""
+        from PySide6.QtWidgets import (
+            QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout,
+            QMessageBox)
+
+        path, _ = QFileDialog.getSaveFileName(
+            self._window, "Save view", "view.pxview.json",
+            "pxviewer view (*.pxview.json)")
+        if not path:
+            return
+        dialog = QDialog(self._window)
+        dialog.setWindowTitle("Save view")
+        form = QFormLayout(dialog)
+        bundle = QCheckBox(
+            "Bundle all data files into the view (self-contained)")
+        bundle.setChecked(str(self._desktop._settings.value(
+            "view/bundle_data", "true")).lower() != "false")
+        bundle.setToolTip(
+            "Checked: every object's coordinates and maps are written beside the "
+            "file, so the view reproduces exactly anywhere — the figure case.\n"
+            "Unchecked: objects loaded from files are referenced by path instead "
+            "— light, when many views share one dataset that stays put.")
+        form.addRow(bundle)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._desktop._settings.setValue(
+            "view/bundle_data", "true" if bundle.isChecked() else "false")
+        try:
+            from . import viewstate
+            viewstate.save_view(self._desktop, path,
+                                bundle_data=bundle.isChecked())
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not save view", str(exc))
+
+    def _on_open_view(self) -> None:
+        """Restore a saved view file — its objects, their appearance, selections,
+        clip state and camera."""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+        path, _ = QFileDialog.getOpenFileName(
+            self._window, "Open saved view", "",
+            "pxviewer view (*.pxview.json *.json);;All files (*)")
+        if not path:
+            return
+        d = self._desktop
+        if d._models or d._volumes or d._reflections:
+            # Restoring replaces the scene (a view is a whole-scene snapshot),
+            # and what it replaces may hold unsaved edits — ask first.
+            answer = QMessageBox.question(
+                self._window, "Open saved view",
+                "Opening a view replaces everything in the current scene. Continue?")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        try:
+            from . import viewstate
+            viewstate.load_view(self._desktop, path)
+        except Exception as exc:
+            QMessageBox.warning(self._window, "Could not open view", str(exc))
+            return
+        self._file_label.setText(f"{Path(path).name}  (view)")
+
     def _on_save_picture(self) -> None:
         """Ask where to put it first, then photograph: the capture is a round trip to
         the viewer, and a file dialog in the middle of it would be a strange pause."""
@@ -7412,6 +7485,7 @@ class DesktopApp:
         """Drop the caches that describe the model's geometry. After the atoms move, the shared
         analysis, the validation results and the hotspot field all describe where the atoms
         *were* — recompute on the next request rather than show a stale fit."""
+        entry["_coords_dirty"] = True   # the file no longer describes these sites
         for key in ("analysis", "validation", "hotspots"):
             entry.pop(key, None)
         self._dim_stale_diff(entry.get("group"))
@@ -12048,9 +12122,17 @@ class DesktopApp:
                 with self._batch_load():
                     if full_map is not None:
                         iso_sigma = self._sigma_iso(full_map, contour)
-                        self._add_volume(
+                        vid = self._add_volume(
                             full_map, paths["map"].name,
                             **({"iso": iso_sigma} if iso_sigma is not None else {}))
+                        # The archive file IS on disk now — restore reads it as a
+                        # plain file rather than re-downloading. The ids stay as
+                        # metadata for anything that wants the remote provenance.
+                        self._volume_entry(vid)["source"] = {
+                            "kind": "file",
+                            "path": str(Path(paths["map"]).resolve()),
+                            "fetched": {"pdb_id": pdb_id,
+                                        "emdb_number": emdb_number}}
                         names.append(paths["map"].name)
                     if "model" in paths:
                         self._load_model_file(str(paths["model"]))
@@ -12630,7 +12712,9 @@ class DesktopApp:
         from .live import LiveSession
 
         session = LiveSession.from_model_file(path)  # _add_model applies the default rep
-        self._add_model(session, Path(path).name)
+        mid = self._add_model(session, Path(path).name)
+        self._model_entry(mid)["source"] = {
+            "kind": "file", "path": str(Path(path).resolve())}
         self._status(f"Loaded model: {Path(path).name} ({session._n_atoms} atoms)")
         return "model"
 
@@ -12641,7 +12725,10 @@ class DesktopApp:
 
         from .volume_io import VolumeData
 
-        self._add_volume(VolumeData.from_map_file(path), Path(path).name)
+        vid = self._add_volume(
+            VolumeData.from_map_file(path), Path(path).name)
+        self._volume_entry(vid)["source"] = {
+            "kind": "file", "path": str(Path(path).resolve())}
         self._status(f"Loaded volume: {Path(path).name}")
         return "volume"
 
@@ -12683,12 +12770,16 @@ class DesktopApp:
         # only place that survives the load (get_map_model_manager empties the
         # DataManager of the model and maps it consumed).
         gid = self._new_group(group_name, mmm=mmm)
+        group_source = {
+            "kind": "files", "paths": [str(Path(p).resolve()) for p in paths]}
         with self._batch_load():
             if model_data is not None and model_data.model is not None:
                 session = self._model_session(model_data.model, group_name)
-                self._add_model(session, group_name, group=gid)
+                mid = self._add_model(session, group_name, group=gid)
+                self._model_entry(mid)["source"] = dict(group_source)
             for vd in volumes:
-                self._add_volume(vd, vd.name, group=gid)
+                vid = self._add_volume(vd, vd.name, group=gid)
+                self._volume_entry(vid)["source"] = dict(group_source)
         self._status(f"Loaded group: {group_name} ({len(volumes)} map(s), model={'yes' if model_data else 'no'})")
         return "group"
 
