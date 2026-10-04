@@ -28,6 +28,12 @@ def run() -> None:
         pump(until=lambda: bool(app._scene_selection.get(mid)), timeout=15)
         settle(3.0)
 
+        # A non-default background, so the saved backdrop is a real change —
+        # figure work is exactly where a saved white page is wrong.
+        session = app._control_session()
+        session.set_background("#101018")
+        settle(1.0)
+
         before = cam_state(app)
         check("camera readable before save", before is not None)
         shot_before = shot_viewport(app, "view-before")
@@ -38,6 +44,9 @@ def run() -> None:
         check("camera captured in the file",
               doc.get("camera") and doc["camera"].get("radius"),
               "%s" % (doc.get("camera") or {}).get("radius"))
+        check("background captured in the file",
+              doc.get("background") == "#101018",
+              "%s" % doc.get("background"))
         check("model data bundled",
               any(o["kind"] == "model" and o["data"] for o in doc["objects"]))
         dispose(app)
@@ -70,6 +79,22 @@ def run() -> None:
             entry = app._model_entry(nmid)
             check("clip sphere restored",
                   app._sphere_state(entry)["mode"] == "selection")
+            bg = app._control_session().background_color()
+            check("background restored", bg == "#101018", "%s" % bg)
+
+            # The other delivery path: a camera-set on an already-connected
+            # client goes direct, not through the armed one-shot.
+            app._control_session().set_camera({
+                "target": [0.0, 0.0, 0.0], "position": [0.0, 0.0, 80.0],
+                "up": [0.0, 1.0, 0.0], "radius": 10.0, "radiusMax": 50.0})
+            settle(2.0)
+            direct = cam_state(app)
+            if direct:
+                dt = sum(t * t for t in direct["target"]) ** 0.5
+                check("connected camera-set lands", dt < 0.01
+                      and abs(direct["radius"] - 10.0) < 0.01,
+                      "target %s radius %s" % (direct["target"],
+                                               direct["radius"]))
         except Exception:
             check("restore ran clean", False, traceback.format_exc(limit=3))
     except Exception:

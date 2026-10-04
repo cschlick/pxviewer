@@ -1160,31 +1160,61 @@ def exercise_the_clip_sphere_mode_lifts_a_standing_selection_clip():
 
 
 def exercise_a_saved_view_round_trips():
-    """A view file is the scene, restorable: objects, representations, clip
-    slab and sphere, hidden atoms, the standing selection and the active model
-    all come back. Bundling is the default; opt-out keeps file references, but
+    """A view file is the scene, restorable: objects, representations, colors,
+    clip slab and sphere, hidden atoms and types, the standing selection and
+    its context, the active model and the volume's full appearance surface all
+    come back. Bundling is the default; opt-out keeps file references, but
     anything without an external source (a computed map here) still
     materializes — a reference that cannot resolve is not a view."""
+    import os
+
     import numpy as np
 
     from pxviewer import viewstate
     from pxviewer.volume_io import VolumeData
 
-    with tmp_dir() as tmp, desktop() as app:
+    # Each desktop context is sequential, never nested: dispose() waits for every
+    # pxviewer- thread in the process, so a restore built inside a live app's
+    # `with` would wait on that app's own server threads until the timeout.
+    with tmp_dir() as tmp:
+      with desktop(can_hide=True) as app:
         app.load_file(data_path("1ubq.pdb"))
         mid = app._active_model_id
         entry = app._model_entry(mid)
-        app.set_model_representation(mid, "ball-and-stick")
-        app.select_by_expression("resseq 29")
+        # Reach for the whole appearance surface, not the defaults: the point
+        # of the save is that nothing reverts.
+        app.set_model_representation(mid, "spacefill")
+        app.set_model_color(mid, "bfactor")          # a value-color path
+        app.set_model_value_domain(mid, 5.0, 50.0)
+        type_labels = app.model_structure_types(mid)
+        if type_labels:
+            app.set_model_type_hidden(mid, type_labels[-1], True)
+        app.select_by_expression("resseq 29")        # context comes along
         selection = sorted(app._scene_selection.get(mid, ()))
         entry["hidden_atoms"].update({1, 2, 3})
         app._apply_model_rep(entry)
         app.set_model_clip(mid, 0.1, 0.9)
+        entry["interactions"] = True
         grid = np.zeros((8, 8, 8), dtype=float)
         grid[3:5, 3:5, 3:5] = 2.0
         vid = app._add_volume(VolumeData.from_numpy(grid, name="fake"),
                               "fake.map")
+        app.set_volume_iso(vid, 1.5)
+        app.set_volume_style(vid, "mesh")
         app.set_volume_opacity(vid, 0.4)
+        app.set_volume_color(vid, "#abcdef")
+        app.set_volume_clip(vid, 0.2, 0.8)
+        app.set_volume_sphere(vid, "view", 12.0)
+        app.set_volume_negative_color(vid, "#ff0000")
+        app.set_volume_negative_iso(vid, 2.5)
+        app.set_volume_negative_opacity(vid, 0.3)
+        app.set_volume_negative_style(vid, "mesh")
+        app.set_volume_negative_visible(vid, True)
+        app.set_volume_visible(vid, False)
+        app.set_model_visible(mid, False)
+        # The camera slab a clipped orient parks is entry bookkeeping — it has
+        # to come back, or a re-apply would lift the sphere and lose the frame.
+        entry["_auto_clip_depth"] = 12.5
 
         bundled = viewstate.save_view(
             app, f"{tmp}/fig.pxview.json", bundle_data=True)
@@ -1192,10 +1222,11 @@ def exercise_a_saved_view_round_trips():
         spec_v = next(o for o in bundled["objects"] if o["kind"] == "volume")
         assert spec_m["data"].endswith(".cif") and (f"{tmp}/{spec_m['data']}")
         assert spec_v["data"].endswith(".map")
-        import os
         assert os.path.isfile(f"{tmp}/{spec_m['data']}")
         assert os.path.isfile(f"{tmp}/{spec_v['data']}")
         assert spec_m["sphere"]["mode"] == "selection"
+        assert spec_m["clip_depth"] == 12.5
+        assert spec_m["visible"] is False
 
         # Opt-out: the file-loaded model keeps its reference (no copy), the
         # source-less volume still materializes.
@@ -1206,49 +1237,173 @@ def exercise_a_saved_view_round_trips():
         assert rm["data"] is None and rm["source"]["path"].endswith("1ubq.pdb")
         assert rv["data"] is not None, "a computed map cannot be a reference"
 
-        with desktop() as restored:
-            viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
-            assert len(restored._models) == 1 and len(restored._volumes) == 1
-            nmid = restored._models[0]["id"]
-            nentry = restored._model_entry(nmid)
-            assert nentry["rep"] == "ball-and-stick"
-            assert nentry["clip"] == (0.1, 0.9)
-            assert nentry["hidden_atoms"] == {1, 2, 3}
-            assert nentry["color_default"] == entry["color_default"]
-            sphere = restored._sphere_state(nentry)
-            assert sphere["mode"] == "selection" and sphere["radius"]
-            assert sorted(restored._scene_selection.get(nmid, ())) == selection
-            assert restored._active_model_id == nmid
-            nventry = restored._volumes[0]
-            assert abs(nventry["opacity"] - 0.4) < 1e-6
+        expected_color_default = entry["color_default"]
 
-        # The reference-mode file restores from the original paths too.
-        with desktop() as restored:
-            viewstate.load_view(restored, f"{tmp}/light.pxview.json")
-            assert len(restored._models) == 1 and len(restored._volumes) == 1
+      # The reference-mode file restores from the original paths too.
+      with desktop() as restored:
+        viewstate.load_view(restored, f"{tmp}/light.pxview.json")
+        assert len(restored._models) == 1 and len(restored._volumes) == 1
 
-        # A source path that no longer resolves strands its object, not the
-        # view: the model drops, the bundled volume still loads.
-        import json
-        with open(f"{tmp}/light.pxview.json") as fh:
-            moved = json.load(fh)
-        for obj in moved["objects"]:
-            if obj["kind"] == "model":
-                obj["source"]["path"] = f"{tmp}/not-there.pdb"
-        with open(f"{tmp}/moved.pxview.json", "w") as fh:
-            json.dump(moved, fh)
-        with desktop() as restored:
-            viewstate.load_view(restored, f"{tmp}/moved.pxview.json")
-            assert len(restored._models) == 0 and len(restored._volumes) == 1
+      # A source path that no longer resolves strands its object, not the
+      # view: the model drops, the bundled volume still loads.
+      import json
+      with open(f"{tmp}/light.pxview.json") as fh:
+        moved = json.load(fh)
+      for obj in moved["objects"]:
+        if obj["kind"] == "model":
+            obj["source"]["path"] = f"{tmp}/not-there.pdb"
+      with open(f"{tmp}/moved.pxview.json", "w") as fh:
+        json.dump(moved, fh)
+      with desktop() as restored:
+        viewstate.load_view(restored, f"{tmp}/moved.pxview.json")
+        assert len(restored._models) == 0 and len(restored._volumes) == 1
 
-        # A view is a whole scene: loading one into a populated scene replaces
-        # it, it does not add to it.
-        with desktop() as restored:
-            restored.load_file(data_path("1ubq.pdb"))
-            restored.load_file(data_path("1ubq.pdb"))
-            assert len(restored._models) == 2
-            viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
-            assert len(restored._models) == 1 and len(restored._volumes) == 1
+      # A view is a whole scene: loading one into a populated scene replaces
+      # it, it does not add to it.
+      with desktop() as restored:
+        restored.load_file(data_path("1ubq.pdb"))
+        restored.load_file(data_path("1ubq.pdb"))
+        assert len(restored._models) == 2
+        viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
+        assert len(restored._models) == 1 and len(restored._volumes) == 1
+
+      # And the bundled file restores every appearance field that was set.
+      with desktop(can_hide=True) as restored:
+        viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
+        assert len(restored._models) == 1 and len(restored._volumes) == 1
+        nmid = restored._models[0]["id"]
+        nentry = restored._model_entry(nmid)
+        assert nentry["rep"] == "spacefill"
+        assert nentry["color"] == "bfactor"
+        assert nentry["attribute"]["name"] == "bfactor"
+        assert nentry["attribute"]["domain"] == (5.0, 50.0)
+        assert nentry["clip"] == (0.1, 0.9)
+        assert nentry["hidden_atoms"] == {1, 2, 3}
+        if type_labels:
+            assert type_labels[-1] in nentry["hidden_types"]
+        assert nentry["color_default"] == expected_color_default
+        assert nentry["interactions"] is True
+        assert nentry["visible"] is False
+        assert nentry["_auto_clip_depth"] == 12.5
+        sphere = restored._sphere_state(nentry)
+        assert sphere["mode"] == "selection" and sphere["radius"]
+        assert sorted(restored._scene_selection.get(nmid, ())) == selection
+        assert nentry["context_on"], "the selection's neighborhood restored"
+        assert restored._active_model_id == nmid
+        nventry = restored._volumes[0]
+        assert abs(nventry["iso"] - 1.5) < 1e-6
+        assert nventry["style"] == "mesh"
+        assert abs(nventry["opacity"] - 0.4) < 1e-6
+        assert nventry["color"] == "#abcdef"
+        assert nventry["clip"] == (0.2, 0.8)
+        vsphere = restored._sphere_state(nventry)
+        assert vsphere["mode"] == "view"
+        assert abs(vsphere["radius"] - 12.0) < 1e-6
+        assert nventry["negative_color"] == "#ff0000"
+        assert abs(nventry["negative_iso"] - 2.5) < 1e-6
+        assert abs(nventry["negative_opacity"] - 0.3) < 1e-6
+        assert nventry["negative_style"] == "mesh"
+        assert nventry["negative_visible"] is True
+        assert nventry["visible"] is False
+
+        # And the color path that isn't a computed attribute: an explicit hex
+        # restores verbatim, with no attribute riding along.
+        restored.set_model_color(nmid, "#112233")
+        viewstate.save_view(restored, f"{tmp}/explicit.pxview.json",
+                            bundle_data=False)
+
+      with desktop() as restored2:
+        viewstate.load_view(restored2, f"{tmp}/explicit.pxview.json")
+        n2 = restored2._models[0]
+        assert n2["color"] == "#112233"
+        assert not (n2.get("attribute") or {}).get("name")
+
+
+def exercise_a_saved_view_restores_linkage_and_provenance():
+    """The relationships between objects round-trip too: a model-map pairing
+    (and the mask that needs it), a resolution map's pin under its full map,
+    and the color-by-resolution second pass that has to wait for the pin to
+    exist. Provenance rules hold — a model whose coordinates moved since its
+    file was written materializes even under bundle opt-out — and the file's
+    own guards refuse non-views and newer formats."""
+    import json
+    import os
+
+    import numpy as np
+
+    from pxviewer import viewstate
+    from pxviewer.volume_io import VolumeData
+
+    # Sequential desktop contexts, as in the round-trip exercise: a nested one
+    # makes dispose() wait on the still-live outer app's server threads.
+    with tmp_dir() as tmp:
+      with desktop() as app:
+        app.load_file(data_path("1ubq.pdb"))
+        mid = app._active_model_id
+        mentry = app._model_entry(mid)
+
+        grid = np.zeros((8, 8, 8), dtype=float)
+        grid[3:5, 3:5, 3:5] = 2.0
+        vid = app._add_volume(VolumeData.from_numpy(grid, name="full"),
+                              "full.map")
+        res_grid = np.full((8, 8, 8), 2.5, dtype=float)
+        res_vid = app._add_volume(VolumeData.from_numpy(res_grid, name="res"),
+                                  "res.map")
+        # A model-map pairing is what masking and joint work mean; the saved
+        # group name is how a restore knows to rebuild it.
+        app.pair_model_with_map(mid, vid)
+        app.set_volume_mask(vid, 4.0)
+        # The resolution-map linkage the second pass rebuilds: res is pinned
+        # under full, full points back, and color-by-resolution rides on top.
+        full_e, res_e = app._volume_entry(vid), app._volume_entry(res_vid)
+        res_e["is_resolution"] = True
+        res_e["pinned_to"] = vid
+        full_e["resolution_map"] = res_vid
+        app.set_color_by_resolution(vid, True)
+
+        viewstate.save_view(app, f"{tmp}/linked.pxview.json")
+
+        # A model whose coordinates moved since its file was written is not a
+        # reference candidate — under opt-out it still materializes.
+        mentry["_coords_dirty"] = True
+        dirty = viewstate.save_view(
+            app, f"{tmp}/dirty.pxview.json", bundle_data=False)
+        dm = next(o for o in dirty["objects"] if o["kind"] == "model")
+        assert dm["data"] is not None and dm["data"].endswith(".cif")
+        assert os.path.isfile(f"{tmp}/{dm['data']}")
+
+        # The guards: not-a-view and newer-than-we-understand both refuse.
+        with open(f"{tmp}/notaview.pxview.json", "w") as fh:
+            json.dump({"format": "something-else"}, fh)
+        with open(f"{tmp}/newer.pxview.json", "w") as fh:
+            json.dump({"format": "pxviewer-view", "version": 99,
+                       "objects": []}, fh)
+        for path in (f"{tmp}/notaview.pxview.json",
+                     f"{tmp}/newer.pxview.json"):
+            try:
+                viewstate.load_view(app, path)
+                assert False, f"{path} should have been refused"
+            except ValueError:
+                pass
+
+      with desktop() as restored:
+        viewstate.load_view(restored, f"{tmp}/linked.pxview.json")
+        assert len(restored._models) == 1 and len(restored._volumes) == 2
+        nmid = restored._models[0]["id"]
+        ids = {v["name"]: v["id"] for v in restored._volumes}
+        nfull, nres = (restored._volume_entry(ids["full.map"]),
+                       restored._volume_entry(ids["res.map"]))
+        # Pairing came back: one shared group, the mask riding on it.
+        nmentry = restored._model_entry(nmid)
+        assert nmentry.get("group") is not None
+        assert nmentry["group"] == nfull.get("group")
+        assert abs(nfull["mask_radius"] - 4.0) < 1e-6
+        # The pin remapped to the new runtime ids — the linkage points the
+        # two volumes at each other, not at the saved strings.
+        assert nres["is_resolution"] is True
+        assert nres["pinned_to"] == nfull["id"]
+        assert nfull["resolution_map"] == nres["id"]
+        assert nfull["color_by_resolution"] is True
 
 
 def exercise_a_viewport_click_uses_the_engaged_tables_unit():

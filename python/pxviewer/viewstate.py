@@ -452,6 +452,11 @@ def _apply_model_state(app, spec, mid) -> None:
         app._apply_model_sphere(
             entry, mode, radius=sphere.get("radius"),
             center=sphere.get("center"), depth=spec.get("clip_depth"))
+    if "clip_depth" in spec:
+        # _auto_clip_depth is caller bookkeeping _apply_model_sphere declines to
+        # own — the restore is the caller here, and the parked slab has to come
+        # back onto the entry too or a re-save (or a later re-apply) loses it.
+        entry["_auto_clip_depth"] = spec["clip_depth"]
     if spec.get("visible") is not None:
         app.set_model_visible(mid, bool(spec["visible"]))
     entry["interactions"] = bool(spec.get("interactions"))
@@ -473,16 +478,17 @@ def _apply_volume_state(app, spec, vid) -> None:
         app.set_volume_opacity(vid, spec["opacity"])
     if spec.get("color") is not None:
         app.set_volume_color(vid, spec["color"])
-    if spec.get("negative_color"):
-        for key, setter in (
-                ("negative_iso", app.set_volume_negative_iso),
-                ("negative_opacity", app.set_volume_negative_opacity),
-                ("negative_style", app.set_volume_negative_style),
-                ("negative_color", app.set_volume_negative_color)):
-            if spec.get(key) is not None:
-                setter(vid, spec[key])
-        if spec.get("negative_visible") is not None:
-            app.set_volume_negative_visible(vid, bool(spec["negative_visible"]))
+    # Each leg guards on its own key: gating the block on negative_color would
+    # drop a negative iso/style saved with the default color.
+    for key, setter in (
+            ("negative_iso", app.set_volume_negative_iso),
+            ("negative_opacity", app.set_volume_negative_opacity),
+            ("negative_style", app.set_volume_negative_style),
+            ("negative_color", app.set_volume_negative_color)):
+        if spec.get(key) is not None:
+            setter(vid, spec[key])
+    if spec.get("negative_visible") is not None:
+        app.set_volume_negative_visible(vid, bool(spec["negative_visible"]))
     clip = spec.get("clip")
     if clip and len(clip) == 2:
         app.set_volume_clip(vid, clip[0], clip[1])
