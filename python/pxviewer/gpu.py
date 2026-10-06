@@ -16,6 +16,11 @@ The strategy:
     remembers the verdict and re-execs the process once with the software flags, so the
     second start renders on SwiftShader (Chromium's CPU WebGL). :func:`mark_hardware_ok`
     remembers a success, so neither the check nor a probe runs next time.
+  - A renderer that cannot *spawn* at all — the Chromium sandbox refuses on some
+    Linux kernels (seen on aarch64) — fails one layer below the probe: no renderer,
+    no page, no ``loadFinished``, no check. So the viewport additionally watches for
+    a load that never completes, and :func:`on_renderer_unavailable` re-execs once
+    with ``QTWEBENGINE_DISABLE_SANDBOX`` set, remembering that verdict too.
 
 The upshot: it just works — hardware where hardware works, software (slower, but
 universal) where it doesn't — with one restart the first time on a bad GPU and none
@@ -36,7 +41,8 @@ from typing import Callable, Optional
 
 __all__ = [
     "SOFTWARE_FLAGS", "configure", "autofix_enabled", "on_webgl_missing",
-    "mark_hardware_ok", "webgl_probe_js",
+    "mark_hardware_ok", "webgl_probe_js", "sandbox_autofix_enabled",
+    "mark_sandbox_ok", "on_renderer_unavailable",
 ]
 
 #: Chromium flags that route WebGL to the bundled SwiftShader (pure CPU), bypassing the
@@ -57,9 +63,14 @@ _MODES = ("auto", "hardware", "software")
 _RETRY_ENV = "_PXVIEWER_GL_RETRIED"   # sentinel: set on the re-exec, so we never loop
 _CACHE_VERSION = "1"                   # bump if SOFTWARE_FLAGS changes, to invalidate
 
+#: Qt reads this before WebEngine init and skips the Chromium sandbox — the escape
+#: hatch for kernels where the sandbox keeps the render process from spawning.
+_SANDBOX_ENV = "QTWEBENGINE_DISABLE_SANDBOX"
+_SANDBOX_RETRY_ENV = "_PXVIEWER_SANDBOX_RETRIED"  # like _RETRY_ENV, for that path
+
 # Module state, set by configure(): whether the app should check WebGL after load and
 # fall back. False once a decision is final (custom flags, forced mode, cached verdict).
-_STATE = {"autofix": False}
+_STATE = {"autofix": False, "sandbox_autofix": False}
 
 
 def resolve_mode(mode: Optional[str]) -> str:
@@ -78,9 +89,22 @@ def configure(mode: Optional[str] = None, *, log: Callable[[str], None] = print)
     back, and arms the post-load check when the outcome is not yet known.
     """
     _STATE["autofix"] = False
+    _STATE["sandbox_autofix"] = False
 
     if os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS"):
         return "custom"  # the user has taken the wheel; do not second-guess them
+
+    # The sandbox is an axis separate from the GL backend, and its failure is
+    # invisible to the WebGL probe — a render process that never spawns never
+    # delivers loadFinished. Same handling: disable once, restart, remember.
+    if os.environ.get(_SANDBOX_ENV):
+        pass  # already off — by the user's hand, or by our own re-exec
+    elif _cached_disable_sandbox():
+        _disable_sandbox()
+        log("pxviewer: running QtWebEngine with its sandbox disabled — the render "
+            "process could not start inside it on this machine last time.")
+    else:
+        _STATE["sandbox_autofix"] = os.environ.get(_SANDBOX_RETRY_ENV) is None
 
     chosen = resolve_mode(mode)
     if chosen == "software":
@@ -115,7 +139,7 @@ def mark_hardware_ok() -> None:
     if not _STATE["autofix"]:
         return
     _STATE["autofix"] = False
-    _remember("hardware")
+    _remember(verdict="hardware")
 
 
 def on_webgl_missing(
@@ -135,7 +159,7 @@ def on_webgl_missing(
     if not _STATE["autofix"]:
         return
     _STATE["autofix"] = False
-    _remember("software")
+    _remember(verdict="software")
     log("pxviewer: the GPU could not provide WebGL (common on VMs) — restarting with "
         "software rendering (SwiftShader). Slower, but it works anywhere.")
     log("          Remembered for next time. To see the raw GPU errors instead, run "
@@ -146,10 +170,51 @@ def on_webgl_missing(
     restart(sys.executable, _relaunch_argv())
 
 
+def sandbox_autofix_enabled() -> bool:
+    """Whether the app should watch for a renderer that never comes up (auto mode,
+    sandbox not already handled, not already retried)."""
+    return _STATE["sandbox_autofix"]
+
+
+def mark_sandbox_ok() -> None:
+    """A page load finished, so a render process is running inside the sandbox:
+    stop watching for one that never spawns. Unlike the WebGL verdict this is not
+    remembered — 'the sandbox works' is the default the cache falls back to."""
+    _STATE["sandbox_autofix"] = False
+
+
+def on_renderer_unavailable(
+    *,
+    log: Callable[[str], None] = print,
+    restart: Callable[[str, list], None] = os.execv,
+) -> None:
+    """The render process never came up or died abnormally: drop the Chromium
+    sandbox, remember it, and restart — once, guarded by the same sentinel idea as
+    :func:`on_webgl_missing`. The viewport stays usable WebGL-wise either way; this
+    only trades process isolation the app never relied on (it serves local content
+    to itself) for a renderer that exists."""
+    if not _STATE["sandbox_autofix"]:
+        return
+    _STATE["sandbox_autofix"] = False
+    _remember(disable_sandbox=True)
+    log("pxviewer: the viewport's render process could not start — the Chromium "
+        "sandbox fails to spawn it on some Linux kernels (seen on aarch64). "
+        "Restarting with the sandbox disabled.")
+    log("          Remembered for next time.")
+    sys.stdout.flush()
+    os.environ[_SANDBOX_RETRY_ENV] = "1"
+    _disable_sandbox()
+    restart(sys.executable, _relaunch_argv())
+
+
 # -- internals ---------------------------------------------------------------
 
 def _enable_software() -> None:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = SOFTWARE_FLAGS
+
+
+def _disable_sandbox() -> None:
+    os.environ[_SANDBOX_ENV] = "1"
 
 
 def _relaunch_argv() -> list:
@@ -181,24 +246,45 @@ def _cache_file() -> Path:
     return Path(base) / "pxviewer" / "gpu.json"
 
 
-def _cached_verdict() -> Optional[str]:
-    """The remembered ``"hardware"``/``"software"`` verdict for this machine, or None."""
+def _cached() -> Optional[dict]:
+    """The remembered record for this machine, or None (absent, unreadable, or
+    keyed to a different GPU/OS signature)."""
     try:
         data = json.loads(_cache_file().read_text())
     except Exception:
         return None
-    if (data.get("version") == _CACHE_VERSION
-            and data.get("signature") == _signature()
-            and data.get("verdict") in ("hardware", "software")):
+    if data.get("version") == _CACHE_VERSION and data.get("signature") == _signature():
+        return data
+    return None
+
+
+def _cached_verdict() -> Optional[str]:
+    """The remembered ``"hardware"``/``"software"`` verdict for this machine, or None."""
+    data = _cached()
+    if data and data.get("verdict") in ("hardware", "software"):
         return data["verdict"]
     return None
 
 
-def _remember(verdict: str) -> None:
+def _cached_disable_sandbox() -> bool:
+    """Whether this machine's renderer could not spawn inside the sandbox last time."""
+    data = _cached()
+    return bool(data and data.get("disable_sandbox"))
+
+
+def _remember(**fields) -> None:
+    """Merge ``fields`` into the cached record. Merging — not overwriting — so a later
+    WebGL verdict does not drop a remembered sandbox failure, or vice versa."""
     try:
         path = _cache_file()
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            data = {}
+        data.update(fields)
+        data["version"] = _CACHE_VERSION
+        data["signature"] = _signature()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(
-            {"version": _CACHE_VERSION, "signature": _signature(), "verdict": verdict}))
+        path.write_text(json.dumps(data))
     except Exception:  # pragma: no cover - cache is best-effort
         pass

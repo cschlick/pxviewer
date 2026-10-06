@@ -23,7 +23,8 @@ from pxviewer.regression.tst_utils import tmp_dir
 
 #: Everything the chooser reads. Cleared per exercise so one cannot leak into the next --
 #: the module decides from the environment, so a stale variable is a wrong answer.
-GPU_ENV = ("QTWEBENGINE_CHROMIUM_FLAGS", "PXVIEWER_GPU", "_PXVIEWER_GL_RETRIED",
+GPU_ENV = ("QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX",
+           "PXVIEWER_GPU", "_PXVIEWER_GL_RETRIED", "_PXVIEWER_SANDBOX_RETRIED",
            "XDG_CACHE_HOME")
 
 
@@ -46,6 +47,7 @@ def clean_environment():
         with tmp_dir() as cache:
             os.environ["XDG_CACHE_HOME"] = cache
             gpu._STATE["autofix"] = False
+            gpu._STATE["sandbox_autofix"] = False
             yield cache
     finally:
         for name, value in saved.items():
@@ -54,6 +56,7 @@ def clean_environment():
             else:
                 os.environ[name] = value
         gpu._STATE["autofix"] = False
+        gpu._STATE["sandbox_autofix"] = False
 
 
 def flags():
@@ -249,6 +252,100 @@ def exercise_an_unreadable_cache_is_not_fatal():
 
         assert gpu.configure("auto", log=quiet) == "hardware"
         assert gpu.autofix_enabled()
+
+
+# -- the renderer-that-never-spawns path --------------------------------------
+#
+# A renderer the Chromium sandbox refuses to create never delivers loadFinished, so
+# none of the WebGL logic above can see it. The viewport watches for a stalled load
+# instead, and on_renderer_unavailable applies the same remember-and-restart shape.
+
+
+def exercise_auto_arms_the_sandbox_watch():
+    """Until a page finishes loading, a dead renderer is indistinguishable from a slow
+    one -- so the watch is armed on every start that has not already settled it."""
+    with clean_environment():
+        gpu.configure("auto", log=quiet)
+        assert gpu.sandbox_autofix_enabled()
+        gpu.mark_sandbox_ok()                      # a load finished; renderer exists
+        assert not gpu.sandbox_autofix_enabled()
+
+
+def exercise_dead_renderer_disables_sandbox_and_restarts():
+    """Same shape as the WebGL fallback: remember, mark the child, set the escape
+    hatch, re-exec -- and the next launch disables the sandbox up front."""
+    with clean_environment():
+        restart = Recording_restart()
+        gpu.configure("auto", log=quiet)
+        gpu.on_renderer_unavailable(log=quiet, restart=restart)
+
+        assert len(restart.calls) == 1
+        path, argv = restart.calls[0]
+        assert path == sys.executable
+
+        assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+        assert os.environ["_PXVIEWER_SANDBOX_RETRIED"] == "1"   # the child cannot loop
+
+        # Remembered: the next launch sets it before WebEngine init, no watch needed.
+        del os.environ["QTWEBENGINE_DISABLE_SANDBOX"]
+        del os.environ["_PXVIEWER_SANDBOX_RETRIED"]
+        gpu.configure("auto", log=quiet)
+        assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+        assert not gpu.sandbox_autofix_enabled()
+
+
+def exercise_dead_renderer_restart_happens_at_most_once():
+    with clean_environment():
+        restart = Recording_restart()
+        gpu.configure("auto", log=quiet)
+        gpu.on_renderer_unavailable(log=quiet, restart=restart)
+        gpu.on_renderer_unavailable(log=quiet, restart=restart)
+        assert len(restart.calls) == 1
+
+
+def exercise_sandbox_watch_stays_off_after_its_own_retry():
+    """The re-exec'd child must not arm the watch again — if the renderer still cannot
+    start without the sandbox, restarting again would loop forever."""
+    with clean_environment():
+        os.environ["_PXVIEWER_SANDBOX_RETRIED"] = "1"
+        gpu.configure("auto", log=quiet)
+        assert not gpu.sandbox_autofix_enabled()
+
+
+def exercise_user_disabled_sandbox_is_left_alone():
+    """QTWEBENGINE_DISABLE_SANDBOX set by hand: nothing to fix, nothing to watch."""
+    with clean_environment():
+        os.environ["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+        gpu.configure("auto", log=quiet)
+        assert not gpu.sandbox_autofix_enabled()
+
+
+def exercise_sandbox_verdict_survives_a_later_gpu_verdict():
+    """The cache merges: a hardware verdict written after a sandbox failure must not
+    drop the sandbox verdict, or the next launch loses the fix that let it run."""
+    import json
+
+    with clean_environment() as cache:
+        restart = Recording_restart()
+        gpu.configure("auto", log=quiet)
+        gpu.on_renderer_unavailable(log=quiet, restart=restart)
+        del os.environ["QTWEBENGINE_DISABLE_SANDBOX"]
+        del os.environ["_PXVIEWER_SANDBOX_RETRIED"]
+
+        gpu.configure("auto", log=quiet)
+        gpu.mark_sandbox_ok()
+        gpu._STATE["autofix"] = True               # the relaunched child still probes
+        gpu.mark_hardware_ok()
+
+        data = json.loads(open(os.path.join(cache, "pxviewer", "gpu.json")).read())
+        assert data["verdict"] == "hardware"
+        assert data["disable_sandbox"] is True
+
+        # And the merged record drives the next start: no flags, but sandbox off.
+        del os.environ["QTWEBENGINE_DISABLE_SANDBOX"]
+        gpu.configure("auto", log=quiet)
+        assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+        assert flags() is None                     # hardware verdict trusted too
 
 
 def run():

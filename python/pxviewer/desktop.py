@@ -1362,6 +1362,14 @@ class ViewportWindow:
         layout.addWidget(self._view, stretch=4)
         layout.addWidget(self._build_coach_pane(), stretch=1)
         self._view.loadFinished.connect(self._verify_webgl)
+        self._load_done = True     # a watchdog reads this; set False by load()
+        self._closed = False
+        # A renderer that cannot spawn at all — the Chromium sandbox refuses on some
+        # Linux kernels (aarch64 among them) — never delivers loadFinished, so the
+        # WebGL check alone can never see that failure. The signal below covers a
+        # spawned-then-killed renderer; the watchdog in load() covers one that never
+        # registered a process at all. Both feed pxviewer.gpu's one-shot restart.
+        self._view.page().renderProcessTerminated.connect(self._renderer_gone)
 
     def _build_coach_pane(self):
         """The guided-tutorial coach: a pane docked below the viewer (hidden until a
@@ -1422,9 +1430,34 @@ class ViewportWindow:
         self.coach_bar = bar
         return bar
 
+    #: How long a load may run before a never-spawned renderer is assumed. The
+    #: frontend is served from localhost, so even a slow machine answers in seconds.
+    _RENDERER_WATCHDOG_MS = 15000
+
     def load(self, url: str) -> None:
-        from PySide6.QtCore import QUrl
+        from PySide6.QtCore import QTimer, QUrl
+        from . import gpu
+        self._load_done = False
         self._view.load(QUrl(url))
+        if gpu.sandbox_autofix_enabled():
+            QTimer.singleShot(self._RENDERER_WATCHDOG_MS, self._watchdog)
+
+    def _renderer_gone(self, status, exit_code) -> None:
+        """A spawned renderer died (or was killed). Normal teardown is ignored —
+        close() releases the page deliberately."""
+        if self._closed:
+            return
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        if status != QWebEnginePage.RenderProcessTerminationStatus.NormalTerminationStatus:
+            from . import gpu
+            gpu.on_renderer_unavailable()
+
+    def _watchdog(self) -> None:
+        """A load that never finished means no renderer ever ran the page — the
+        signal-free form of the same failure _renderer_gone sees."""
+        if not self._closed and not self._load_done:
+            from . import gpu
+            gpu.on_renderer_unavailable()
 
     def _verify_webgl(self, ok: bool) -> None:
         """Once the page has loaded, confirm it actually got a WebGL context.
@@ -1436,6 +1469,10 @@ class ViewportWindow:
         """
         from . import gpu
 
+        self._load_done = True
+        # A finished load — even a failed one, ok=False — proves a renderer is
+        # running inside the sandbox, so the spawn watch can stand down.
+        gpu.mark_sandbox_ok()
         if not ok or not gpu.autofix_enabled():
             return
         self._view.page().runJavaScript(
@@ -1462,6 +1499,7 @@ class ViewportWindow:
         here: this runs from ``DesktopApp.stop`` (on ``aboutToQuit`` in the real app),
         where re-entering the loop would be unsafe.
         """
+        self._closed = True          # stand down the renderer watchdog for teardown
         try:
             self._view.stop()
             self._view.setPage(None)   # detaches and tears down the render process
