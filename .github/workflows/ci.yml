@@ -102,16 +102,19 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           PXVIEWER_CAN_HIDE: "1"
         run: |
-          Xvfb :99 -screen 0 1600x1200x24 &
-          export DISPLAY=:99
+          # xvfb-run owns the server: it waits for readiness and exports DISPLAY
+          # into the child, so openbox inside the session connects reliably.
+          cat > /tmp/run_visuals.sh <<'EOF'
           openbox &
-          sleep 2
+          sleep 1
           failed=0
           for t in python/pxviewer/regression/visual/tst_visual_*.py; do
             echo "===== $t"
             libtbx.python "$t" || failed=1
           done
           exit "$failed"
+          EOF
+          xvfb-run -a -s "-screen 0 1600x1200x24" bash /tmp/run_visuals.sh
 
       - uses: actions/upload-artifact@v4
         if: failure()
