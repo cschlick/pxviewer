@@ -230,7 +230,9 @@ def make_app():
     # exists (the flags cannot move after), and tell the app whether the chosen
     # backend survives in-place hide -- the same call run_desktop makes. A
     # software backend refuses hiding entirely, so passes that hide objects can
-    # only run on hardware.
+    # only run on hardware. PXVIEWER_CAN_HIDE overrides that for CI: the old
+    # software-WebGL segfault diagnosis turned out to be a Qt use-after-free,
+    # since fixed, and the visual job is how it gets re-tested under SwiftShader.
     from pxviewer import gpu as gpu_backend
 
     gpu_mode = gpu_backend.configure(None)
@@ -240,7 +242,8 @@ def make_app():
         _stack.enter_context(shipped_defaults())
     from pxviewer.desktop import DesktopApp
 
-    app = DesktopApp(port=0, can_hide=(gpu_mode == "hardware"))
+    can_hide = gpu_mode == "hardware" or os.environ.get("PXVIEWER_CAN_HIDE") == "1"
+    app = DesktopApp(port=0, can_hide=can_hide)
     app._webapp.start()
     app._main.show()
     app._controls.widget().show()

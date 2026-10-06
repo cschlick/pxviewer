@@ -85,15 +85,31 @@ jobs:
           npm --prefix frontend ci
           ./scripts/build_frontend.sh
 
+      # Xvfb alone is not enough: a bare X server has no window manager, so Qt
+      # windows are never activated and WindowShortcut key events (the space-key
+      # stepping passes) silently go nowhere. openbox grants real activation.
+      - name: Window manager for Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends openbox dbus-x11
+
+      # PXVIEWER_CAN_HIDE exercises in-place hiding on SwiftShader. Production
+      # still refuses it (the old segfault verdict was never re-tested); this
+      # job is the re-test — if hide on software still crashes, it crashes here.
       - name: Visual passes
         env:
           PXVIEWER_GPU: software
           LIBGL_ALWAYS_SOFTWARE: "1"
+          PXVIEWER_CAN_HIDE: "1"
         run: |
+          Xvfb :99 -screen 0 1600x1200x24 &
+          export DISPLAY=:99
+          openbox &
+          sleep 2
           failed=0
           for t in python/pxviewer/regression/visual/tst_visual_*.py; do
             echo "===== $t"
-            xvfb-run -a -s "-screen 0 1600x1200x24" libtbx.python "$t" || failed=1
+            libtbx.python "$t" || failed=1
           done
           exit "$failed"
 

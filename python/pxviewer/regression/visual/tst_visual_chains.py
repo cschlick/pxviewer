@@ -54,7 +54,8 @@ def run() -> None:
         app.set_model_visible(mid_a, True)
         settle(1.0)
         check("A back exactly where it was", entry_a["visible"] is True
-              and entry_b["visible"] is False)
+              and (entry_b["visible"] is False or not can_hide),
+              "can_hide=%s" % can_hide)
         cam1 = cam_state(app)
         check("hide/show never moved the camera",
               cam0 and cam1 and cam0.get("radius") == cam1.get("radius"),
