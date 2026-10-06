@@ -151,12 +151,18 @@ def _appearance_values_are_well_formed(app) -> None:
         assert v["iso"] >= 0, f"volume {v['id']} iso {v['iso']} < 0"
         assert 0.0 <= v["opacity"] <= 1.0, f"volume {v['id']} opacity {v['opacity']} out of range"
         assert _well_formed_clip(v["clip"]), f"volume {v['id']} clip {v['clip']} malformed"
-        assert v["radius"] is None or v["radius"] > 0, f"volume {v['id']} radius {v['radius']}"
-        # Bounding is one setting for every map (see set_view_radius); a map drawn at
-        # some radius of its own is the unevenness that control exists to end.
-        assert v["radius"] == app.view_radius, (
-            f"volume {v['id']} radius {v['radius']} is not the view radius "
-            f"{app.view_radius}")
+        sph = app._sphere_state(v)
+        assert sph["mode"] in ("off", "selection", "view", "point"), (
+            f"volume {v['id']} sphere mode {sph['mode']!r}")
+        assert sph["radius"] is None or sph["radius"] > 0, (
+            f"volume {v['id']} sphere radius {sph['radius']}")
+        if sph["mode"] == "off":
+            assert sph["radius"] is None, (
+                f"volume {v['id']} sphere {sph} — 'off' carries no radius")
+        # "selection" may also sit radius-None — armed, dormant until a
+        # selection lands. And bounding is one setting for every map only for
+        # maps still following it: a map's own Sphere row is a legitimate
+        # per-map override, so radius == view_radius is not an invariant here.
         if v.get("negative_color"):
             assert 0.0 <= v["negative_opacity"] <= 1.0, (
                 f"volume {v['id']} negative_opacity {v['negative_opacity']} out of range")

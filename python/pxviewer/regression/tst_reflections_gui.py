@@ -193,26 +193,28 @@ def exercise_every_map_draws_at_the_one_view_radius():
         assert app.view_radius is None
         app.load_file(path)
         # However it was made: from reflections...
-        assert all(v["radius"] is None for v in app._volumes)
+        assert all(app._sphere_state(v)["mode"] == "off" for v in app._volumes)
         # ...or read straight from a file.
         vid = app._add_volume(VolumeData.from_numpy(np.ones((8, 8, 8))), "cryoem")
-        assert app._volume_entry(vid)["radius"] is None
+        assert app._sphere_state(app._volume_entry(vid))["mode"] == "off"
 
         # Turning it on reaches what is already open, not just what opens next.
         app.set_view_radius(_VIEW_RADIUS_DEFAULT)
-        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
+        assert all(app._sphere_state(v)["radius"] == _VIEW_RADIUS_DEFAULT
+                   for v in app._volumes)
         assert app._add_volume(
             VolumeData.from_numpy(np.ones((8, 8, 8))), "later") is not None
-        assert all(v["radius"] == _VIEW_RADIUS_DEFAULT for v in app._volumes)
+        assert all(app._sphere_state(v)["radius"] == _VIEW_RADIUS_DEFAULT
+                   for v in app._volumes)
 
         # ...and off again draws every map in full -- again, all of them.
         app.set_view_radius(None)
-        assert all(v["radius"] is None for v in app._volumes)
+        assert all(app._sphere_state(v)["mode"] == "off" for v in app._volumes)
         assert app.view_radius is None
 
         # The per-map primitive is still there for the API; the GUI drives the global.
         app.set_volume_radius(vid, 20.0)
-        assert app.volume_appearance(vid)["radius"] == 20.0
+        assert app.volume_appearance(vid)["sphere"]["radius"] == 20.0
 
 
 # -- phasing ------------------------------------------------------------------
