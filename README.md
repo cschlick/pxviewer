@@ -55,6 +55,9 @@ pip install -e ./python --no-deps      # the pxviewer package itself
 ./scripts/setup_chem_data.sh           # (optional) build the validation caches
 ```
 
+On Linux `./scripts/install_linux.sh` runs the whole thing — Miniforge first if no
+conda is found (`--yes` for no prompts).
+
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
 
 `--no-deps` matters: every runtime dependency is already installed by conda, and
