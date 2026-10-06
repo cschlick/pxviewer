@@ -39,10 +39,16 @@ jobs:
           npm --prefix frontend ci
           ./scripts/build_frontend.sh
 
-      # No DISPLAY on the runner, so qt_application() takes the offscreen
-      # platform on its own — the same path the suite is proven under headless.
-      # The registry itself skips a test whose imports are unavailable.
+      # qt_application() would choose offscreen anyway, but pin it: a child
+      # process that bypasses the helper must not try xcb. The WebEngine flags
+      # are load-bearing, not cosmetic — the Chromium GPU process aborts
+      # (SIGABRT, "GLOzone not found") initializing GL under the offscreen
+      # platform, and the sandbox cannot spawn renderers in a container.
+      # GUI tests never read rendered pixels, so no GPU is needed at all.
       - name: Test suite
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu"
         run: libtbx.python -m pxviewer.run_tests
 
   # The scripted visual passes need a real compositor (screenshots of the Mol*
