@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: pxviewer
+          environment-file: environment.yml
+          cache-environment: true
+
+      - name: Install pxviewer
+        run: pip install -e ./python --no-deps
+
+      - name: Validation caches
+        run: ./scripts/setup_chem_data.sh
+
+      - name: Frontend bundle
+        run: |
+          npm --prefix frontend ci
+          ./scripts/build_frontend.sh
+
+      # No DISPLAY on the runner, so qt_application() takes the offscreen
+      # platform on its own — the same path the suite is proven under headless.
+      # The registry itself skips a test whose imports are unavailable.
+      - name: Test suite
+        run: libtbx.python -m pxviewer.run_tests
+
+  # The scripted visual passes need a real compositor (screenshots of the Mol*
+  # frame), which means Xvfb here — and no GPU, so the renderer is SwiftShader.
+  # Two things follow: tests that hide objects refuse on a software backend
+  # (harness can_hide rule), and pixel-diff thresholds tuned on Metal may not
+  # transfer. Manual trigger until those are characterized.
+  linux-visual:
+    name: Linux visual (xvfb, manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          activate-environment: pxviewer
+          environment-file: environment.yml
+          cache-environment: true
+
+      - name: Install pxviewer
+        run: pip install -e ./python --no-deps
+
+      - name: Validation caches
+        run: ./scripts/setup_chem_data.sh
+
+      - name: Frontend bundle
+        run: |
+          npm --prefix frontend ci
+          ./scripts/build_frontend.sh
+
+      - name: Visual passes
+        env:
+          PXVIEWER_GPU: software
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          failed=0
+          for t in python/pxviewer/regression/visual/tst_visual_*.py; do
+            echo "===== $t"
+            xvfb-run -a -s "-screen 0 1600x1200x24" libtbx.python "$t" || failed=1
+          done
+          exit "$failed"
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-visual-artifacts
+          path: /tmp/pxviewer-visual
+          if-no-files-found: ignore
