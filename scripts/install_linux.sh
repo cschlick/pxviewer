@@ -45,7 +45,9 @@ confirm() { # $1 = prompt; returns 0 for yes
 # the fallback because it defaults to conda-forge, which is where every pxviewer
 # dependency lives — a defaults-first distribution (Anaconda's Miniconda) would
 # solve the same env but pulls the channels explicitly anyway.
+conda_was_on_path=1
 if ! command -v conda >/dev/null 2>&1; then
+  conda_was_on_path=0
   for prefix in "$HOME/miniforge3" "$HOME/mambaforge" "$HOME/miniconda3"; do
     if [[ -x "$prefix/bin/conda" ]]; then
       eval "$("$prefix/bin/conda" shell.bash hook)"
@@ -54,6 +56,7 @@ if ! command -v conda >/dev/null 2>&1; then
   done
 fi
 
+installed_fresh=0
 if ! command -v conda >/dev/null 2>&1; then
   if ! confirm "conda not found — install Miniforge into \$HOME/miniforge3?"; then
     echo "conda is required: https://github.com/conda-forge/miniforge" >&2
@@ -75,9 +78,12 @@ if ! command -v conda >/dev/null 2>&1; then
   fi
   bash "$tmp/$installer" -b -p "$HOME/miniforge3"
   eval "$("$HOME/miniforge3/bin/conda" shell.bash hook)"
+  # Batch install skips the interactive "conda init?" step — do it here so new
+  # shells get conda without a manual follow-up (and this one is covered by the
+  # hook eval above).
+  "$HOME/miniforge3/bin/conda" init "$(basename "${SHELL:-bash}")"
+  installed_fresh=1
   echo "installed Miniforge to $HOME/miniforge3"
-  echo "(new shells need: source \$HOME/miniforge3/etc/profile.d/conda.sh"
-  echo " or run: $HOME/miniforge3/bin/conda init bash)"
 fi
 
 # `conda activate` is a shell function, not a binary call: load the hook in this
@@ -104,12 +110,48 @@ pip install -e ./python --no-deps
 ( cd frontend && npm ci )
 ./scripts/build_frontend.sh
 
-cat <<'EOF'
+# A script cannot activate the caller's shell. Fresh installs got conda init
+# (future shells just work); prefix-found or on-path condas are assumed set up.
+# Either way, THIS shell needs the hook sourced once if conda wasn't on PATH.
+if [[ "$installed_fresh" == 1 ]]; then
+  cat <<EOF
+
+done. 'conda init' ran, so every NEW shell has conda. For THIS shell, once:
+
+  eval "\$("$HOME/miniforge3/bin/conda" shell.bash hook)"
+
+then:
+
+  conda activate pxviewer
+  python -m pxviewer desktop            # the app
+  libtbx.python -m pxviewer.run_tests   # the headless suite
+
+EOF
+elif [[ "$conda_was_on_path" == 0 ]]; then
+  cat <<EOF
+
+done. conda was found at a prefix but is not on this shell's PATH. For THIS
+shell, once:
+
+  eval "\$($(command -v conda) shell.bash hook)"
+
+(or permanently: '$(command -v conda) init bash', then open a new shell)
+
+then:
+
+  conda activate pxviewer
+  python -m pxviewer desktop            # the app
+  libtbx.python -m pxviewer.run_tests   # the headless suite
+
+EOF
+else
+  cat <<'EOF'
 
 done. To run:
 
   conda activate pxviewer
-  python -m pxviewer desktop          # the app
-  libtbx.python -m pxviewer.run_tests # the headless suite
+  python -m pxviewer desktop            # the app
+  libtbx.python -m pxviewer.run_tests   # the headless suite
 
 EOF
+fi
