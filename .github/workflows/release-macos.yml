@@ -13,6 +13,10 @@ on:
   push:
     tags: ["v*"]
 
+# the tag path creates a release and uploads the dmg to it
+permissions:
+  contents: write
+
 jobs:
   dmg:
     name: macOS dmg (arm64)
