@@ -1,0 +1,55 @@
+name: release-macos
+
+# Builds the double-clickable installer: pxviewer.app (a conda-packed env inside
+# a real bundle) wrapped in a .dmg. Runs on demand or when a v* tag is pushed —
+# tag pushes also attach the dmg to a GitHub Release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# or Actions → release-macos → Run workflow for a test build (artifact only).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  dmg:
+    name: macOS dmg (arm64)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The build script needs a conda binary to create the app env and to run
+      # its bootstrapped tools; it does NOT need the pxviewer env itself — the
+      # recipe builds the package and the env is created fresh from it.
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+
+      # The recipe bundles frontend/build/index.js into the package; runners
+      # carry a system node, so npm ci + the vendored esbuild build it without
+      # the dev env.
+      - name: Frontend bundle
+        run: |
+          npm --prefix frontend ci
+          ./scripts/build_frontend.sh
+
+      - name: Build pxviewer.app + dmg
+        run: ./scripts/build_macos_app.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pxviewer-macos-dmg
+          path: build/macos-app/*.dmg
+
+      - name: Attach dmg to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --generate-notes
+          gh release upload "$tag" build/macos-app/*.dmg --clobber
