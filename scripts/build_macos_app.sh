@@ -130,22 +130,35 @@ ENV_DIR="$HERE/Resources/env"
 
 # Prefix-embedded files (bin/ shebangs, conda-meta, build configs) were
 # rewritten to the build-time staging path by conda-unpack. If the app has been
-# moved since, re-prefix them to the current location — scan once, then record
-# the location so later launches skip the scan. Skip entirely on a read-only
-# env (launched straight off the dmg): nothing could be rewritten anyway.
+# moved since, re-prefix them to the current location. Nothing at runtime reads
+# those records, so the repair runs in the background — blocking here would
+# leave users staring at a bouncing icon for minutes on first launch. Skip
+# entirely on a read-only env (launched straight off the dmg): nothing could
+# be rewritten anyway. The mkdir lock keeps a rapid second launch from racing
+# the first repair.
 MARKER="$ENV_DIR/.pxviewer-prefix"
+LOCK="$ENV_DIR/.prefix-repair.lock"
 STORED="$(cat "$MARKER" 2>/dev/null || true)"
 if [[ -w "$ENV_DIR" && "$STORED" != "$ENV_DIR" ]]; then
-  if [[ -n "$STORED" ]]; then
-    find "$ENV_DIR" -type f -print0 2>/dev/null \
-      | xargs -0 grep -IlF "$STORED" 2>/dev/null \
-      | while IFS= read -r f; do
-          sed -i '' "s|$STORED|$ENV_DIR|g" "$f"
-        done
-  else
-    "$ENV_DIR/bin/python" "$ENV_DIR/bin/conda-unpack" >/dev/null
-  fi
-  echo "$ENV_DIR" > "$MARKER"
+  # a lock older than an hour was orphaned by a killed repair — clear it
+  find "$LOCK" -maxdepth 0 -type d -mmin +60 -exec rmdir {} \; 2>/dev/null || true
+fi
+if [[ -w "$ENV_DIR" && "$STORED" != "$ENV_DIR" ]] \
+  && mkdir "$LOCK" 2>/dev/null; then
+  (
+    trap 'rmdir "$LOCK"' EXIT
+    if [[ -n "$STORED" ]]; then
+      find "$ENV_DIR" -type f -print0 2>/dev/null \
+        | xargs -0 grep -IlF "$STORED" 2>/dev/null \
+        | while IFS= read -r f; do
+            sed -i '' "s|$STORED|$ENV_DIR|g" "$f"
+          done
+    else
+      "$ENV_DIR/bin/python" "$ENV_DIR/bin/conda-unpack"
+    fi
+    echo "$ENV_DIR" > "$MARKER"
+  ) &>/dev/null &
+  disown
 fi
 
 export PATH="$ENV_DIR/bin:$PATH"
