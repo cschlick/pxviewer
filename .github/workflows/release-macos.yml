@@ -17,7 +17,9 @@ jobs:
   dmg:
     name: macOS dmg (arm64)
     runs-on: macos-latest
-    timeout-minutes: 120
+    # rattler-build's test-env solve + 7 GB env link/pack + single-threaded
+    # lzfse dmg compression: ~90 min observed locally. Leave headroom.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 

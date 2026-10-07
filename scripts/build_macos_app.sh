@@ -131,10 +131,11 @@ ENV_DIR="$HERE/Resources/env"
 # Prefix-embedded files (bin/ shebangs, conda-meta, build configs) were
 # rewritten to the build-time staging path by conda-unpack. If the app has been
 # moved since, re-prefix them to the current location — scan once, then record
-# the location so later launches skip the scan.
+# the location so later launches skip the scan. Skip entirely on a read-only
+# env (launched straight off the dmg): nothing could be rewritten anyway.
 MARKER="$ENV_DIR/.pxviewer-prefix"
 STORED="$(cat "$MARKER" 2>/dev/null || true)"
-if [[ "$STORED" != "$ENV_DIR" ]]; then
+if [[ -w "$ENV_DIR" && "$STORED" != "$ENV_DIR" ]]; then
   if [[ -n "$STORED" ]]; then
     find "$ENV_DIR" -type f -print0 2>/dev/null \
       | xargs -0 grep -IlF "$STORED" 2>/dev/null \
