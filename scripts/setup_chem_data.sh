@@ -47,9 +47,12 @@ fi
 
 # Validation caches — build the pickles the rotamer/Ramachandran and CaBLAM
 # analyses load. One-off and idempotent (a rebuild just re-converts the *.data).
+# `python -m` rather than the mmtbx.* dispatcher scripts: the dispatchers are
+# generated shell/batch shims (no bin/ dir exists under a Windows conda env),
+# while the modules work on every platform.
 echo "building rotamer/Ramachandran cache (mmtbx.rebuild_rotarama_cache)…"
-mmtbx.rebuild_rotarama_cache
+python -m mmtbx.command_line.rebuild_rotarama_cache
 echo "building CaBLAM cache (mmtbx.rebuild_cablam_cache)…"
-mmtbx.rebuild_cablam_cache
+python -m mmtbx.command_line.rebuild_cablam_cache
 
 echo "done."

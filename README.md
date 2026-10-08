@@ -23,6 +23,22 @@ frontend + validation caches) — nothing else to install. Apple Silicon only.
 The app is ad-hoc signed but **not notarized**, so the first launch needs a
 right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/pxviewer.app`).
 
+### Install (Windows, no terminal needed)
+
+Download `pxviewer-<version>-windows-x86_64-setup.exe` from the release assets
+and run it. It installs per-user into `%LOCALAPPDATA%\Programs\pxviewer` (no
+admin needed) with a Start Menu shortcut — a self-contained conda environment,
+same as the macOS app.
+
+The installer is **unsigned**, so SmartScreen shows *"Windows protected your
+PC"* → **More info** → **Run anyway**.
+
+To build it yourself on Windows (needs conda, Git Bash and NSIS):
+
+```bash
+./scripts/build_windows_installer.sh   # -> build/windows-installer/*-setup.exe
+```
+
 To build it yourself on an arm64 Mac (needs conda and the Xcode CLT for clang):
 
 ```bash
