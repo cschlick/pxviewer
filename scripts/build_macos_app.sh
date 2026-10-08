@@ -228,12 +228,20 @@ codesign --deep --force --sign "${SIGNING_IDENTITY:--}" "$APP"
 
 # -- dmg ----------------------------------------------------------------------
 ln -sfn /Applications "$STAGE/Applications"
-rm -f "$DMG"
+rm -f "$DMG" "$DMG".*.dmgpart "$BUILD/"*-full.dmg
 # ULFO = lzfse: several times faster than UDZO/zlib on a 7 GB env at about the
 # same ratio; requires macOS 10.11+, and the plist already floors at 12.0.
-hdiutil create -volname pxviewer -srcfolder "$STAGE" -ov -format ULFO "$DMG" >/dev/null
+hdiutil create -volname pxviewer -srcfolder "$STAGE" -ov -format ULFO \
+  "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg" >/dev/null
+# GitHub caps release assets at 2 GiB and the dmg is ~2.4 GB, so split it into
+# segments (hdiutil's only remaining route — create -segmentSize is ignored
+# with -srcfolder). Users download the .dmg plus every .dmgpart into one
+# folder and open the .dmg; macOS reassembles the segments transparently.
+hdiutil segment -segmentSize 1900m -o "$DMG" \
+  "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg" >/dev/null
+rm "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg"
 
 echo
-echo "==> built: $DMG ($(du -h "$DMG" | cut -f1) dmg)"
+echo "==> built: $DMG + .dmgpart segments ($(du -hc "$DMG" "$DMG".*.dmgpart | tail -1 | cut -f1) total)"
 echo "    unsigned: first launch needs right-click -> Open, or:"
 echo "      xattr -dr com.apple.quarantine /Applications/pxviewer.app"
