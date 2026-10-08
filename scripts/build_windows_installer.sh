@@ -58,15 +58,20 @@ if [[ ! -f frontend/build/index.js ]]; then
 fi
 
 # -- build tools (rattler-build), isolated from base --------------------------
+# rattler-build is a Rust binary, not a Python entry point, so it does not land
+# at Scripts/ where conda puts shims — locate it rather than assume the dir.
 TOOLS="$BUILD/tools"
-if [[ ! -x "$TOOLS/Scripts/rattler-build.exe" ]]; then
+RATTLER="$(find "$TOOLS" -name 'rattler-build*' -type f 2>/dev/null | head -1)"
+if [[ -z "$RATTLER" ]]; then
   echo "==> creating build-tools env (rattler-build)"
   "$CONDA" create -y -p "$(to_win "$TOOLS")" -c conda-forge rattler-build
+  RATTLER="$(find "$TOOLS" -name 'rattler-build*' -type f | head -1)"
 fi
+[[ -n "$RATTLER" ]] || { echo "rattler-build not found in tools env" >&2; exit 1; }
 
 # -- build the conda package (the recipe is the single source of run deps) ---
 echo "==> building pxviewer conda package"
-"$TOOLS/Scripts/rattler-build.exe" build --recipe "$(to_win conda-recipe/recipe.yaml)" \
+"$RATTLER" build --recipe "$(to_win conda-recipe/recipe.yaml)" \
   -c conda-forge -c chem_data --output-dir "$(to_win "$BUILD/pkg")"
 PKG="$(ls "$BUILD"/pkg/noarch/pxviewer-*.conda | head -1)"
 echo "    package: $(basename "$PKG")"
