@@ -15,11 +15,9 @@ through cctbx, then maps onto Mol\*'s data on the Python side.
 
 ### Install (macOS app, no terminal needed)
 
-Download `pxviewer-<version>-macos-arm64.dmg` **and every `.dmgpart` file**
-from the release assets into the same folder (the image is segmented because
-GitHub caps release assets at 2 GB). Open the `.dmg` — macOS reassembles the
-parts — and drag `pxviewer.app` into Applications. The app is a self-contained
-conda environment (cctbx + chem_data + PySide6/Qt WebEngine + the built Mol\*
+Download `pxviewer-<version>-macos-arm64.dmg` from the release assets, open it,
+and drag `pxviewer.app` into Applications. The app is a self-contained conda
+environment (cctbx + chem_data + PySide6/Qt WebEngine + the built Mol\*
 frontend + validation caches) — nothing else to install. Apple Silicon only.
 
 The app is ad-hoc signed but **not notarized**, so the first launch needs a

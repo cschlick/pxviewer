@@ -96,6 +96,20 @@ echo "==> building validation caches (rotamer/CaBLAM)"
 PATH="$ENV_STAGING/bin:$PATH" CONDA_PREFIX="$ENV_STAGING" \
   bash scripts/setup_chem_data.sh
 
+# Trim chem_data datasets nothing in the app can consume. Done post-pull so the
+# recipe keeps depending on the upstream chem_data package unchanged — this is
+# packaging-only, and the fat is what pushes the dmg past GitHub's 2 GiB asset
+# cap. ligand_lib (1.5 GB): BLAST databases for eLBOW, which cctbx-base does not
+# ship (nothing can reach it; only iotbx.local_blast references the path and
+# pxviewer never calls that). segment_lib (357 MB): feeds only the standalone
+# mmtbx.secondary_structure.regularize_from_pdb CLI tool, which pxviewer does
+# not invoke. Everything else is load-bearing — geostd (geometry restraints),
+# chemical_components (novel ligands), mon_lib (HEM etc.), and the
+# rotamer/rotarama/cablam data behind the Validation tab.
+echo "==> trimming unused chem_data (ligand_lib, segment_lib)"
+rm -rf "$ENV_STAGING"/lib/python*/site-packages/chem_data/ligand_lib \
+       "$ENV_STAGING"/lib/python*/site-packages/chem_data/segment_lib
+
 # -- sanity: the env actually imports the app --------------------------------
 "$ENV_STAGING/bin/python" -c "import pxviewer.desktop"
 
@@ -228,20 +242,13 @@ codesign --deep --force --sign "${SIGNING_IDENTITY:--}" "$APP"
 
 # -- dmg ----------------------------------------------------------------------
 ln -sfn /Applications "$STAGE/Applications"
-rm -f "$DMG" "$DMG".*.dmgpart "$BUILD/"*-full.dmg
-# ULFO = lzfse: several times faster than UDZO/zlib on a 7 GB env at about the
-# same ratio; requires macOS 10.11+, and the plist already floors at 12.0.
-hdiutil create -volname pxviewer -srcfolder "$STAGE" -ov -format ULFO \
-  "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg" >/dev/null
-# GitHub caps release assets at 2 GiB and the dmg is ~2.4 GB, so split it into
-# segments (hdiutil's only remaining route — create -segmentSize is ignored
-# with -srcfolder). Users download the .dmg plus every .dmgpart into one
-# folder and open the .dmg; macOS reassembles the segments transparently.
-hdiutil segment -segmentSize 1900m -o "$DMG" \
-  "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg" >/dev/null
-rm "$BUILD/pxviewer-$VERSION-macos-$ARCH-full.dmg"
+rm -f "$DMG" "$DMG".*.dmgpart
+# ULMO = lzma: the strongest codec hdiutil ships, and the trimmed env needs it
+# to stay under GitHub's 2 GiB release-asset cap. Slower than ULFO/lzfse, but
+# this runs on CI. Requires macOS 10.15+, and the plist already floors at 12.0.
+hdiutil create -volname pxviewer -srcfolder "$STAGE" -ov -format ULMO "$DMG" >/dev/null
 
 echo
-echo "==> built: $DMG + .dmgpart segments ($(du -hc "$DMG" "$DMG".*.dmgpart | tail -1 | cut -f1) total)"
+echo "==> built: $DMG ($(du -h "$DMG" | cut -f1) dmg)"
 echo "    unsigned: first launch needs right-click -> Open, or:"
 echo "      xattr -dr com.apple.quarantine /Applications/pxviewer.app"
