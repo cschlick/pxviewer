@@ -131,11 +131,13 @@ fi
 [[ -n "$MAKENSIS" ]] || { echo "makensis not found — install NSIS (choco install nsis)" >&2; exit 1; }
 echo "==> makensis: $MAKENSIS"
 
+# -D defines, not /D: an argument starting with / gets path-mangled by MSYS2
+# ("/DVERSION=..." becomes "C:/Program Files/Git/DVERSION=...").
 rm -f "$SETUP"
-"$MAKENSIS" "/DVERSION=$VERSION" \
-  "/DSTAGEDIR=$(to_win "$STAGE")" \
-  "/DBUILDPREFIX=$(to_win "$ENV_STAGING")" \
-  "/DOUTFILE=$(to_win "$SETUP")" \
+"$MAKENSIS" "-DVERSION=$VERSION" \
+  "-DSTAGEDIR=$(to_win "$STAGE")" \
+  "-DBUILDPREFIX=$(to_win "$ENV_STAGING")" \
+  "-DOUTFILE=$(to_win "$SETUP")" \
   packaging/windows/installer.nsi
 
 echo
