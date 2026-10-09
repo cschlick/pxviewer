@@ -36,7 +36,8 @@ build:
   python:
     entry_points:
       - pxviewer = pxviewer.__main__:main
-  # build.sh (in this directory) is auto-run: it bundles the frontend and pip-installs.
+  # build.sh (unix) / build.bat (Windows) are auto-detected. bld.bat remains for
+  # conda-build (meta.yaml) and just calls build.bat.
 
 requirements:
   host:
