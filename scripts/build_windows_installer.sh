@@ -61,6 +61,7 @@ fi
 # rattler-build is a Rust binary, not a Python entry point, so it does not land
 # at Scripts/ where conda puts shims — locate it rather than assume the dir.
 TOOLS="$BUILD/tools"
+mkdir -p "$TOOLS"   # find below must not fail under pipefail on a fresh build dir
 RATTLER="$(find "$TOOLS" -name 'rattler-build*' -type f 2>/dev/null | head -1)"
 if [[ -z "$RATTLER" ]]; then
   echo "==> creating build-tools env (rattler-build)"
