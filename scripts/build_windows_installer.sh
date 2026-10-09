@@ -72,7 +72,11 @@ fi
 
 # -- build the conda package (the recipe is the single source of run deps) ---
 echo "==> building pxviewer conda package"
-"$RATTLER" build --recipe "$(to_win conda-recipe/recipe.yaml)" \
+# --test skip: the recipe tests install a throwaway env that re-downloads the
+# 1.25 GB chem_data package, and rattler-build's download of it stalls on
+# Windows. The app env created below covers the same ground (it installs
+# chem_data and the script imports pxviewer.desktop from it).
+"$RATTLER" build --recipe "$(to_win conda-recipe/recipe.yaml)" --test skip \
   -c conda-forge -c chem_data --output-dir "$(to_win "$BUILD/pkg")"
 PKG="$(ls "$BUILD"/pkg/noarch/pxviewer-*.conda | head -1)"
 echo "    package: $(basename "$PKG")"
