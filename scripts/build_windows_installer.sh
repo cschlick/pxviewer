@@ -81,8 +81,10 @@ echo "    package: $(basename "$PKG")"
 # Same reasoning as scripts/build_macos_app.sh: scipy named explicitly,
 # qtconsole via pip to avoid conda-forge's PyQt5 (GPL) pin.
 echo "==> creating the app environment"
+# A bare path is a valid channel; file://<win path> misparses ("d" becomes the
+# URL host) — do not prepend the scheme on Windows.
 "$CONDA" create -y -p "$(to_win "$ENV_STAGING")" --override-channels \
-  -c "file://$(to_win "$BUILD/pkg")" -c conda-forge -c chem_data \
+  -c "$(to_win "$BUILD/pkg")" -c conda-forge -c chem_data \
   "pxviewer=$VERSION" scipy pip
 "$ENV_STAGING/python.exe" -m pip install --quiet "qtconsole>=5.5"
 
