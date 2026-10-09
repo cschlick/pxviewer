@@ -3,7 +3,10 @@
 ; Build:  makensis /DVERSION=0.1.0 /DSTAGEDIR=<dir> /DBUILDPREFIX=<dir> installer.nsi
 ;
 ; STAGEDIR must contain:
-;   env\            the conda environment (pythonw.exe at env\pythonw.exe)
+;   env.tar.xz      the conda environment as ONE archive — NSIS cannot mmap a
+;                   datablock of ~300k files / multi-GB payload, so the env is
+;                   embedded compressed and extracted by the OS's own tar.exe
+;                   at install time
 ;   prefix_fixup.py post-install path rewriter
 ;   pxviewer.ico    app icon
 ;   LICENSE
@@ -14,6 +17,7 @@
 
 Unicode true
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -53,6 +57,16 @@ SetCompressor /SOLID lzma
 Section "pxviewer" SecMain
   SetOutPath "$INSTDIR"
   File /r "${STAGEDIR}\*.*"
+
+  ; Unpack the env archive with the OS's bsdtar (C:\Windows\System32\tar.exe,
+  ; present since Windows 10 17063 — our floor is far above that).
+  DetailPrint "Extracting environment (a few minutes)..."
+  nsExec::ExecToLog '"$SYSDIR\tar.exe" -xf "$INSTDIR\env.tar.xz" -C "$INSTDIR"'
+  Pop $0
+  ${If} $0 != 0
+    Abort "Failed to extract the bundled environment (tar.exe exit $0)"
+  ${EndIf}
+  Delete "$INSTDIR\env.tar.xz"
 
   ; The env was built at ${BUILDPREFIX}; rewrite embedded paths to $INSTDIR.
   DetailPrint "Finalizing environment (rewriting install paths)..."

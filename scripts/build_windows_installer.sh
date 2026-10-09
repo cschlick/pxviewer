@@ -104,11 +104,14 @@ rm -rf "$ENV_STAGING"/Lib/site-packages/chem_data/ligand_lib \
 # -- sanity: the env actually imports the app ---------------------------------
 "$ENV_STAGING/python.exe" -c "import pxviewer.desktop"
 
-# -- staging: env + fixup + icon + license ------------------------------------
+# -- staging: env archive + fixup + icon + license ----------------------------
+# The env goes in as ONE tar.xz, not loose files: NSIS cannot mmap a multi-GB
+# datablock (~300k files) into the installer. System32's bsdtar extracts it at
+# install time — same binary exists on the build box, so use it here too.
 echo "==> staging install payload"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-cp -r "$ENV_STAGING" "$STAGE/env"
+/c/Windows/System32/tar.exe -cJf "$(to_win "$STAGE/env.tar.xz")" -C "$(to_win "$BUILD")" env
 cp packaging/windows/prefix_fixup.py "$STAGE/"
 cp LICENSE "$STAGE/"
 "$ENV_STAGING/python.exe" - "$ROOT" "$(to_win "$STAGE")" <<'PY'
