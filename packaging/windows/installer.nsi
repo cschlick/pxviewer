@@ -37,7 +37,10 @@ Name "pxviewer ${VERSION}"
 OutFile "${OUTFILE}"
 InstallDir "$LOCALAPPDATA\Programs\pxviewer"
 RequestExecutionLevel user          ; per-user install, no admin prompt
-SetCompressor /SOLID lzma
+; Not /SOLID: env.tar.xz is stored as-is (SetCompress off below), which a solid
+; block would ignore. Recompressing the xz gained nothing (101% of input) and
+; cost an extra full LZMA pass at both build and install time.
+SetCompressor lzma
 
 !define MUI_ICON "${STAGEDIR}\pxviewer.ico"
 !define MUI_UNICON "${STAGEDIR}\pxviewer.ico"
@@ -56,7 +59,10 @@ SetCompressor /SOLID lzma
 
 Section "pxviewer" SecMain
   SetOutPath "$INSTDIR"
-  File /r "${STAGEDIR}\*.*"
+  File /r /x env.tar.xz "${STAGEDIR}\*.*"
+  SetCompress off
+  File "${STAGEDIR}\env.tar.xz"
+  SetCompress auto
 
   ; Unpack the env archive with the OS's bsdtar (C:\Windows\System32\tar.exe,
   ; present since Windows 10 17063 — our floor is far above that).
@@ -106,6 +112,14 @@ Section "pxviewer" SecMain
 SectionEnd
 
 Section "Uninstall"
+  ; RMDir /r removes the env's ~300k files one by one, printing each — over 10
+  ; minutes. rd /s /q does the same in a fraction of that. Guarded on a file
+  ; only our env has, so a broken $INSTDIR can never point rd at something else.
+  ${If} ${FileExists} "$INSTDIR\env\python.exe"
+    DetailPrint "Removing environment (a minute or two)..."
+    nsExec::Exec '"$SYSDIR\cmd.exe" /c rd /s /q "$INSTDIR\env"'
+    Pop $0
+  ${EndIf}
   RMDir /r "$INSTDIR"
   RMDir /r "$SMPROGRAMS\pxviewer"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\pxviewer"

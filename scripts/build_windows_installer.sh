@@ -122,7 +122,15 @@ cp "$ENV_STAGING/Library/lib/qt6/QtWebEngineProcess.exe" "$ENV_STAGING/Library/b
 echo "==> staging install payload"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
-/c/Windows/System32/tar.exe -cJf "$(to_win "$STAGE/env.tar.xz")" -C "$(to_win "$BUILD")" env
+# Record which env files embed the build prefix, so the install-time fixup
+# rewrites those few hundred instead of reading all ~300k files. Last change to
+# the env before archiving — anything modified after this would be missed.
+"$ENV_STAGING/python.exe" packaging/windows/prefix_fixup.py \
+  "$(to_win "$ENV_STAGING")" "$(to_win "$ENV_STAGING")" --write-list
+# xz:threads=0 uses every core (~4x faster than the single-threaded default);
+# the output is a standard multi-block .xz that any xz decoder extracts.
+/c/Windows/System32/tar.exe -cJf "$(to_win "$STAGE/env.tar.xz")" --options xz:threads=0 \
+  -C "$(to_win "$BUILD")" env
 cp packaging/windows/prefix_fixup.py "$STAGE/"
 cp LICENSE "$STAGE/"
 "$ENV_STAGING/python.exe" - "$ROOT" "$(to_win "$STAGE")" <<'PY'
