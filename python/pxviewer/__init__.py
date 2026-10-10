@@ -12,6 +12,13 @@ if _sys.platform == "win32":
     _dll_dir = _Path(_sys.prefix) / "Library" / "bin"
     if _dll_dir.is_dir():
         _os.add_dll_directory(str(_dll_dir))
+    # add_dll_directory does not reach child processes, and Chromium strips PATH
+    # from its sandboxed ones, so QtWebEngineProcess.exe (conda ships it in
+    # Library/lib/qt6) dies with STATUS_DLL_NOT_FOUND. The installer build puts a
+    # copy next to the Qt DLLs, where the loader finds them from the exe's own dir.
+    _webengine = _dll_dir / "QtWebEngineProcess.exe"
+    if _webengine.is_file():
+        _os.environ.setdefault("QTWEBENGINEPROCESS_PATH", str(_webengine))
 del _os, _sys, _Path
 
 __version__ = "0.1.0"

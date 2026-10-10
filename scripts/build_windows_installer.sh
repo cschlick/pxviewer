@@ -105,6 +105,13 @@ echo "==> trimming unused chem_data (ligand_lib, segment_lib)"
 rm -rf "$ENV_STAGING"/Lib/site-packages/chem_data/ligand_lib \
        "$ENV_STAGING"/Lib/site-packages/chem_data/segment_lib
 
+# QtWebEngine's render process must sit next to the Qt DLLs: with no conda
+# activation (and Chromium stripping PATH from sandboxed children) it otherwise
+# dies with STATUS_DLL_NOT_FOUND and the viewport stays blank. pxviewer's
+# __init__ points QTWEBENGINEPROCESS_PATH at this copy when it exists.
+echo "==> placing QtWebEngineProcess.exe beside the Qt DLLs"
+cp "$ENV_STAGING/Library/lib/qt6/QtWebEngineProcess.exe" "$ENV_STAGING/Library/bin/"
+
 # -- sanity: the env actually imports the app ---------------------------------
 "$ENV_STAGING/python.exe" -c "import pxviewer.desktop"
 
