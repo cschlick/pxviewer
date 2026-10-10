@@ -60,8 +60,11 @@ Section "pxviewer" SecMain
 
   ; Unpack the env archive with the OS's bsdtar (C:\Windows\System32\tar.exe,
   ; present since Windows 10 17063 — our floor is far above that).
+  ; The installer is a 32-bit process, so $SYSDIR is redirected to SysWOW64,
+  ; whose 32-bit tar fails on this archive ("Lzma library error: Corrupted
+  ; input data"). Sysnative reaches the real 64-bit System32 from WOW64.
   DetailPrint "Extracting environment (a few minutes)..."
-  nsExec::ExecToLog '"$SYSDIR\tar.exe" -xf "$INSTDIR\env.tar.xz" -C "$INSTDIR"'
+  nsExec::ExecToLog '"$WINDIR\Sysnative\tar.exe" -xf "$INSTDIR\env.tar.xz" -C "$INSTDIR"'
   Pop $0
   ${If} $0 != 0
     Abort "Failed to extract the bundled environment (tar.exe exit $0)"
