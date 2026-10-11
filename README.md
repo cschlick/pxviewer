@@ -23,12 +23,21 @@ frontend + validation caches) — nothing else to install. Apple Silicon only.
 The app is ad-hoc signed but **not notarized**, so the first launch needs a
 right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/pxviewer.app`).
 
+To build it yourself on an arm64 Mac (needs conda and the Xcode CLT for clang):
+
+```bash
+(cd frontend && npm ci)          # once, to vendor molstar/esbuild
+./scripts/build_frontend.sh
+./scripts/build_macos_app.sh     # -> build/macos-app/pxviewer-*.dmg
+```
+
 ### Install (Windows, no terminal needed)
 
 Download `pxviewer-<version>-windows-x86_64-setup.exe` from the release assets
 and run it. It installs per-user into `%LOCALAPPDATA%\Programs\pxviewer` (no
 admin needed) with a Start Menu shortcut — a self-contained conda environment,
-same as the macOS app.
+same as the macOS app. A `pxviewer (console)` shortcut is also installed for
+debugging output.
 
 The installer is **unsigned**, so SmartScreen shows *"Windows protected your
 PC"* → **More info** → **Run anyway**.
@@ -39,12 +48,16 @@ To build it yourself on Windows (needs conda, Git Bash and NSIS):
 ./scripts/build_windows_installer.sh   # -> build/windows-installer/*-setup.exe
 ```
 
-To build it yourself on an arm64 Mac (needs conda and the Xcode CLT for clang):
+### Install (Linux)
+
+No GUI installer yet — Linux installs through conda, but
+`./scripts/install_linux.sh` runs the whole thing in one go (Miniforge first
+if no conda is found; `--yes` skips the prompts, handy over ssh):
 
 ```bash
-(cd frontend && npm ci)          # once, to vendor molstar/esbuild
-./scripts/build_frontend.sh
-./scripts/build_macos_app.sh     # -> build/macos-app/pxviewer-*.dmg
+./scripts/install_linux.sh
+conda activate pxviewer
+python -m pxviewer desktop     # launch the app
 ```
 
 ### Install (conda package)
@@ -89,8 +102,8 @@ pip install -e ./python --no-deps      # the pxviewer package itself
 ./scripts/setup_chem_data.sh           # validation caches; on Windows also fixes the viewport
 ```
 
-On Linux `./scripts/install_linux.sh` runs the whole thing — Miniforge first if no
-conda is found (`--yes` for no prompts).
+(On Linux `./scripts/install_linux.sh` does this whole block for you — see the
+install section above.)
 
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
 
