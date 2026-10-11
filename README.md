@@ -52,7 +52,8 @@ To build it yourself on Windows (needs conda, Git Bash and NSIS):
 
 No GUI installer yet — Linux installs through conda, but one script bootstraps
 the whole thing, even from curl (installs git/Miniforge if missing, clones the
-repo, builds the env; `--yes` skips the prompts, handy over ssh):
+repo, builds the env; `--yes` skips the prompts, handy over ssh). With no
+flags it installs the **latest release tag**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cschlick/pxviewer/main/scripts/install.sh | bash
@@ -60,7 +61,16 @@ conda activate pxviewer
 python -m pxviewer desktop     # launch the app
 ```
 
-Or from a checkout: `./scripts/install.sh`.
+For a development install that tracks `main` — or to pin a different release:
+
+```bash
+curl -fsSL .../install.sh | bash -s -- --dev          # latest git main
+curl -fsSL .../install.sh | bash -s -- --ref v0.1.0   # a specific tag
+```
+
+Or from a checkout: `./scripts/install.sh` (uses your checkout as-is unless
+`--ref` is passed). `git -C pxviewer describe --tags` tells you which ref an
+install is on.
 
 ### Install (conda package)
 

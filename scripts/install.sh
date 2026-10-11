@@ -5,12 +5,15 @@
 #   curl -fsSL https://raw.githubusercontent.com/cschlick/pxviewer/main/scripts/install.sh | bash
 #   ./scripts/install.sh            asks before installing git/Miniforge
 #   ./scripts/install.sh --yes      no prompts (e.g. a fresh box over ssh)
+#   ./scripts/install.sh --dev      track main instead of the latest release
+#   ./scripts/install.sh --ref v0.1.0   pin an explicit tag or branch
 #
 # What it does, in order:
 #
 #   conda?    — install Miniforge into ~/miniforge3 if no conda is found
 #   git?      — `conda install git` if missing; no sudo or Xcode CLT needed
 #   checkout  — clone https://github.com/cschlick/pxviewer if not already in one
+#               (newest v* tag by default; --dev/--ref change that)
 #   conda env create -f environment.yml   (or update, if the env exists)
 #   pip install -e ./python --no-deps
 #   ./scripts/setup_chem_data.sh          validation caches; Windows viewport fix
@@ -24,11 +27,16 @@
 set -euo pipefail
 
 yes=0
-for arg in "$@"; do
-  case "$arg" in
+dev=0
+ref=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
     -y|--yes) yes=1 ;;
-    *) echo "unknown option: $arg" >&2; exit 2 ;;
+    --dev) dev=1 ;;
+    --ref) ref="${2:?--ref needs a value}"; shift ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 uname_s="$(uname -s)"
@@ -115,19 +123,42 @@ fi
 # --- checkout ------------------------------------------------------------------
 # Running inside a pxviewer checkout (the environment.yml + python/pxviewer
 # signature) uses it in place; piped-from-curl runs clone beside the cwd.
+in_checkout=0
 if [[ -f environment.yml && -d python/pxviewer ]]; then
-  :
+  in_checkout=1
 elif [[ -f pxviewer/environment.yml && -d pxviewer/python/pxviewer ]]; then
   cd pxviewer
-else
-  if ! confirm "no pxviewer checkout here — clone https://github.com/cschlick/pxviewer into ./pxviewer?"; then
+  in_checkout=1
+fi
+
+if [[ "$in_checkout" == 0 ]]; then
+  # Ref precedence: --ref wins, --dev tracks main, and the default is the
+  # newest v* tag so `curl | bash` installs a release, not HEAD.
+  target="$ref"
+  if [[ -z "$target" && "$dev" == 0 ]]; then
+    target="$(git ls-remote --tags https://github.com/cschlick/pxviewer 'v*' \
+      | sed -n 's|.*refs/tags/\([^^]*\)|\1|p' | sort -V | tail -1)"
+    [[ -n "$target" ]] && echo "latest release: $target"
+  fi
+  [[ -z "$target" ]] && target=main
+  if ! confirm "no pxviewer checkout here — clone $target into ./pxviewer?"; then
     echo "a pxviewer checkout is required." >&2
     exit 1
   fi
-  git clone https://github.com/cschlick/pxviewer
+  # A tag only needs the one commit; dev gets a full clone so branches work.
+  if [[ "$dev" == 1 && -z "$ref" ]]; then
+    git clone https://github.com/cschlick/pxviewer
+  else
+    git clone --depth 1 --branch "$target" https://github.com/cschlick/pxviewer
+  fi
   cd pxviewer
+elif [[ -n "$ref" ]]; then
+  # An existing checkout is used as-is unless --ref was given explicitly.
+  git fetch --tags --quiet
+  git checkout "$ref"
 fi
-echo "checkout: $(pwd)"
+
+echo "checkout: $(pwd)  ($(git describe --tags --always 2>/dev/null || echo unknown))"
 
 # --- environment -------------------------------------------------------------
 # The env name comes from environment.yml itself; an existing env is updated
