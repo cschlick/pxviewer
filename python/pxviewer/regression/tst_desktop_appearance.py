@@ -1293,7 +1293,9 @@ def exercise_tests_never_touch_the_users_settings():
 
     with desktop() as app:
         path = app._settings.fileName()
-        assert path.startswith(TEST_SETTINGS_DIR), path
+        # Qt reports '/' separators on every platform; compare normalized paths.
+        import os
+        assert os.path.normpath(path).startswith(os.path.normpath(TEST_SETTINGS_DIR)), path
         assert "Library/Preferences" not in path, path
         app._settings.setValue("test/sentinel", "yes")
         app._settings.sync()

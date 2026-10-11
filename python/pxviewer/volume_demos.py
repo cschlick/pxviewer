@@ -11,6 +11,7 @@ import dataclasses
 import functools
 import http.server
 import os
+import posixpath
 import socketserver
 import tempfile
 import threading
@@ -262,7 +263,7 @@ class _VolumeDemoHandler(http.server.SimpleHTTPRequestHandler):
         path = path.split("?", 1)[0]
         path = path.split("#", 1)[0]
         path = urllib.parse.unquote(path)
-        path = os.path.normpath(path)
+        path = posixpath.normpath(path)  # URL paths are POSIX; os.path turns "/" into "\\" on Windows
         words = [w for w in path.split("/") if w and w not in (os.curdir, os.pardir)]
         for base in (self.volume_dir, self.frontend_dir):
             candidate = base

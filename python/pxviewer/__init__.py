@@ -12,6 +12,12 @@ if _sys.platform == "win32":
     _dll_dir = _Path(_sys.prefix) / "Library" / "bin"
     if _dll_dir.is_dir():
         _os.add_dll_directory(str(_dll_dir))
+        # add_dll_directory only covers imports. MKL (numpy's BLAS/LAPACK here) loads
+        # its CPU-specific kernels by name at first use, which searches PATH; without
+        # this, the first lstsq/svd kills the process with 0xC06D007F.
+        _path = _os.environ.get("PATH", "")
+        if str(_dll_dir).lower() not in _path.lower().split(_os.pathsep):
+            _os.environ["PATH"] = str(_dll_dir) + _os.pathsep + _path
     # add_dll_directory does not reach child processes, and Chromium strips PATH
     # from its sandboxed ones, so QtWebEngineProcess.exe (conda ships it in
     # Library/lib/qt6) dies with STATUS_DLL_NOT_FOUND. The installer build puts a

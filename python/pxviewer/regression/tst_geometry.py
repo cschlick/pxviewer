@@ -83,8 +83,9 @@ def exercise_geostd_monomer_path_resolves():
         return
     root = monomer_library_root()
     ala = geostd_monomer_path(root, "ALA")
-    assert ala is not None and ala.endswith("a/data_ALA.cif") and os.path.isfile(ala)
-    assert geostd_monomer_path(root, "MET").endswith("m/data_MET.cif")
+    assert ala is not None and ala.endswith(os.path.join("a", "data_ALA.cif"))
+    assert os.path.isfile(ala)
+    assert geostd_monomer_path(root, "MET").endswith(os.path.join("m", "data_MET.cif"))
     # No file in an empty root, and no library at all -> None.
     with tmp_dir() as work:
         assert geostd_monomer_path(work, "ALA") is None
