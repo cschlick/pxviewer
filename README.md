@@ -50,15 +50,17 @@ To build it yourself on Windows (needs conda, Git Bash and NSIS):
 
 ### Install (Linux)
 
-No GUI installer yet — Linux installs through conda, but
-`./scripts/install_linux.sh` runs the whole thing in one go (Miniforge first
-if no conda is found; `--yes` skips the prompts, handy over ssh):
+No GUI installer yet — Linux installs through conda, but one script bootstraps
+the whole thing, even from curl (installs git/Miniforge if missing, clones the
+repo, builds the env; `--yes` skips the prompts, handy over ssh):
 
 ```bash
-./scripts/install_linux.sh
+curl -fsSL https://raw.githubusercontent.com/cschlick/pxviewer/main/scripts/install.sh | bash
 conda activate pxviewer
 python -m pxviewer desktop     # launch the app
 ```
+
+Or from a checkout: `./scripts/install.sh`.
 
 ### Install (conda package)
 
@@ -93,7 +95,14 @@ your local build with `conda install --use-local -c conda-forge -c chem_data pxv
 
 ### Environment (conda, from source)
 
-For development from a checkout:
+For development from a checkout — `./scripts/install.sh` runs all of the below
+(or just pipe it from curl; it clones for you):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/cschlick/pxviewer/main/scripts/install.sh | bash
+```
+
+The individual steps, if you'd rather drive them:
 
 ```bash
 conda env create -f environment.yml   # python, cctbx-base, chem_data, PySide6, …
@@ -102,8 +111,8 @@ pip install -e ./python --no-deps      # the pxviewer package itself
 ./scripts/setup_chem_data.sh           # validation caches; on Windows also fixes the viewport
 ```
 
-(On Linux `./scripts/install_linux.sh` does this whole block for you — see the
-install section above.)
+(The script installs git and Miniforge if they're missing — on macOS git comes
+via the Xcode CLT dialog it triggers; re-run the script after it finishes.)
 
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
 
