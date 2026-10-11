@@ -85,6 +85,14 @@ echo "    package: $(basename "$PKG")"
 # Same reasoning as scripts/build_macos_app.sh: scipy named explicitly,
 # qtconsole via pip to avoid conda-forge's PyQt5 (GPL) pin.
 echo "==> creating the app environment"
+# Every build produces the same file name (pxviewer-<version>-<build string>), and
+# conda reuses a package already extracted in its pkgs cache rather than the newer one
+# in the local channel -- so without this, every build after the first silently ships
+# the first build's code. Evict our package from each cache dir before installing it.
+while IFS= read -r pkgs_dir; do
+  pkgs_dir="$(to_posix "$pkgs_dir")"
+  rm -rf "$pkgs_dir"/pxviewer-"$VERSION"-*
+done < <("$CONDA" config --show pkgs_dirs | sed -n 's/^  - //p' | tr -d '\r')
 # A bare path is a valid channel; file://<win path> misparses ("d" becomes the
 # URL host) — do not prepend the scheme on Windows.
 "$CONDA" create -y -p "$(to_win "$ENV_STAGING")" --override-channels \
