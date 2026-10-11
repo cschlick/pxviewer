@@ -46,8 +46,10 @@ def exercise_single_copy():
         os.path.abspath(pxviewer.__file__))))
     copies = []
     for dirpath, dirnames, filenames in os.walk(root):
+        # build/ is gitignored output; an installer build leaves a whole conda env
+        # (with an installed pxviewer) in build/windows-installer/env.
         dirnames[:] = [d for d in dirnames
-                       if d not in ("__pycache__", ".git", "node_modules")]
+                       if d not in ("__pycache__", ".git", "node_modules", "build")]
         if "validation_events.py" in filenames:
             copies.append(os.path.join(dirpath, "validation_events.py"))
     assert len(copies) == 1, "expected exactly one validation_events.py, found %s" % copies
