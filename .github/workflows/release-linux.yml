@@ -1,0 +1,62 @@
+name: release-linux
+
+# Builds the Linux bundle: a self-contained .tar.xz holding the conda-packed
+# environment plus a launcher — the same "ship the whole env" model as the
+# macOS dmg and the Windows setup.exe. Runs on demand or when a v* tag is
+# pushed — tag pushes attach the tarball to the release (whichever of the
+# release workflows finishes first creates it).
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# or Actions → release-linux → Run workflow for a test build (artifact only).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# the tag path creates a release and uploads the bundle to it
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    name: Linux tarball (x86_64)
+    # conda-forge binaries target an old glibc sysroot, so a bundle built on a
+    # current runner still runs on older distros.
+    runs-on: ubuntu-latest
+    # conda solve + 5 GB env link + xz over ~300k files.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # The build script needs a conda binary to create the app env and its
+      # bootstrapped tools; it does not need the pxviewer env itself.
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+
+      # The recipe bundles frontend/build/index.js into the package; runners
+      # carry a system node, so npm ci + the vendored esbuild build it.
+      - name: Frontend bundle
+        run: |
+          npm --prefix frontend ci
+          ./scripts/build_frontend.sh
+
+      - name: Build bundle
+        run: bash scripts/build_linux_bundle.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pxviewer-linux-bundle
+          path: build/linux-bundle/*.tar.xz
+
+      - name: Attach bundle to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          gh release view "$tag" >/dev/null 2>&1 \
+            || gh release create "$tag" --generate-notes
+          gh release upload "$tag" build/linux-bundle/*.tar.xz --clobber

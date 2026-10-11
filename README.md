@@ -50,10 +50,20 @@ To build it yourself on Windows (needs conda, Git Bash and NSIS):
 
 ### Install (Linux)
 
-No GUI installer yet — Linux installs through conda, but one script bootstraps
-the whole thing, even from curl (installs git/Miniforge if missing, clones the
-repo, builds the env; `--yes` skips the prompts, handy over ssh). With no
-flags it installs the **latest release tag**:
+**Offline bundle** — the same self-contained model as the macOS/Windows
+installers. Download `pxviewer-<version>-linux-x86_64.tar.xz` from the release
+assets, untar it anywhere, and run the launcher — nothing else to install, no
+network needed at run time:
+
+```bash
+tar -xf pxviewer-*-linux-x86_64.tar.xz
+./pxviewer-*-linux-x86_64/pxviewer          # launches the app
+./pxviewer-*-linux-x86_64/install.sh        # optional: desktop-menu entry
+```
+
+**From source** — one script bootstraps everything, even from curl (installs
+git/Miniforge if missing, clones the repo, builds the env; `--yes` skips the
+prompts, handy over ssh). With no flags it installs the **latest release tag**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/cschlick/pxviewer/main/scripts/install.sh | bash
@@ -71,6 +81,12 @@ curl -fsSL .../install.sh | bash -s -- --ref v0.1.0   # a specific tag
 Or from a checkout: `./scripts/install.sh` (uses your checkout as-is unless
 `--ref` is passed). `git -C pxviewer describe --tags` tells you which ref an
 install is on.
+
+To build the bundle yourself on Linux (needs conda):
+
+```bash
+./scripts/build_linux_bundle.sh    # -> build/linux-bundle/pxviewer-*.tar.xz
+```
 
 ### Install (conda package)
 
