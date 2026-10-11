@@ -145,7 +145,7 @@ def mark_hardware_ok() -> None:
 def on_webgl_missing(
     *,
     log: Callable[[str], None] = print,
-    restart: Callable[[str, list], None] = os.execv,
+    restart: Optional[Callable[[str, list], None]] = None,
 ) -> None:
     """The viewport could not get WebGL: remember it and restart on software rendering.
 
@@ -167,7 +167,7 @@ def on_webgl_missing(
     sys.stdout.flush()
     os.environ[_RETRY_ENV] = "1"
     os.environ["PXVIEWER_GPU"] = "software"
-    restart(sys.executable, _relaunch_argv())
+    (restart or _restart)(sys.executable, _relaunch_argv())
 
 
 def sandbox_autofix_enabled() -> bool:
@@ -186,7 +186,7 @@ def mark_sandbox_ok() -> None:
 def on_renderer_unavailable(
     *,
     log: Callable[[str], None] = print,
-    restart: Callable[[str, list], None] = os.execv,
+    restart: Optional[Callable[[str, list], None]] = None,
 ) -> None:
     """The render process never came up or died abnormally: drop the Chromium
     sandbox, remember it, and restart — once, guarded by the same sentinel idea as
@@ -204,7 +204,7 @@ def on_renderer_unavailable(
     sys.stdout.flush()
     os.environ[_SANDBOX_RETRY_ENV] = "1"
     _disable_sandbox()
-    restart(sys.executable, _relaunch_argv())
+    (restart or _restart)(sys.executable, _relaunch_argv())
 
 
 # -- internals ---------------------------------------------------------------
@@ -217,8 +217,23 @@ def _disable_sandbox() -> None:
     os.environ[_SANDBOX_ENV] = "1"
 
 
+def _restart(executable: str, argv: list) -> None:
+    """Replace this process with ``argv``: :func:`os.execv`, made to mean that on Windows.
+
+    Windows has no exec. Its ``os.execv`` starts a new process and exits this one with
+    status 0, so whoever launched the app sees a clean exit at once while the restarted
+    app runs detached -- a test or script that started pxviewer reads success for a run
+    that has not happened. Run the restart as a child instead and leave with its status.
+    """
+    if sys.platform != "win32":
+        os.execv(executable, argv)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(subprocess.call([executable, *argv[1:]]))
+
+
 def _relaunch_argv() -> list:
-    """Reconstruct the command that started us, for ``os.execv``."""
+    """Reconstruct the command that started us, for :func:`_restart`."""
     if os.path.basename(sys.argv[0]) == "__main__.py":  # `python -m pxviewer …`
         return [sys.executable, "-m", "pxviewer", *sys.argv[1:]]
     return [sys.executable, *sys.argv]

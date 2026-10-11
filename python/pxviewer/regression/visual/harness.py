@@ -222,10 +222,12 @@ def make_app():
     # A visual pass needs the real compositor: an offscreen WebEngine renders
     # nothing to screenshot. qt_application() defaults to the offscreen platform
     # when DISPLAY is unset -- correct for the headless suite, but wrong here on
-    # macOS, where cocoa is native and DISPLAY is an X11-ism. Pin cocoa so a
-    # display-less *shell* on a machine that has a display still renders.
-    if sys.platform == "darwin" and "QT_QPA_PLATFORM" not in os.environ:
-        os.environ["QT_QPA_PLATFORM"] = "cocoa"
+    # macOS and Windows, whose native platforms (cocoa, windows) have no DISPLAY --
+    # an X11-ism -- so a shell on a machine that has a display would otherwise get
+    # offscreen and screenshot blank frames. Pin the native platform there.
+    _native = {"darwin": "cocoa", "win32": "windows"}.get(sys.platform)
+    if _native and "QT_QPA_PLATFORM" not in os.environ:
+        os.environ["QT_QPA_PLATFORM"] = _native
     # The app's real startup sequence: pick the GL backend *before* QApplication
     # exists (the flags cannot move after), and tell the app whether the chosen
     # backend survives in-place hide -- the same call run_desktop makes. A

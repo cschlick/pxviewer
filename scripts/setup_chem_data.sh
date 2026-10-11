@@ -55,4 +55,17 @@ python -m mmtbx.command_line.rebuild_rotarama_cache
 echo "building CaBLAM cache (mmtbx.rebuild_cablam_cache)…"
 python -m mmtbx.command_line.rebuild_cablam_cache
 
+# Windows: put QtWebEngine's render process beside the Qt DLLs. conda ships it in
+# Library/lib/qt6, apart from them, and Chromium strips PATH from its sandboxed
+# children, so it dies with STATUS_DLL_NOT_FOUND and the viewport stays blank (the app
+# then falls back to running without the sandbox). pxviewer's __init__ points
+# QTWEBENGINEPROCESS_PATH at this copy when it exists. Not chem_data, but this is the
+# one script every env runs once after creation; build_windows_installer.sh does the
+# same for the bundled env.
+webengine="$CONDA_PREFIX/Library/lib/qt6/QtWebEngineProcess.exe"
+if [[ -f "$webengine" ]]; then
+  cp -f "$webengine" "$CONDA_PREFIX/Library/bin/"
+  echo "placed QtWebEngineProcess.exe beside the Qt DLLs (Library/bin)"
+fi
+
 echo "done."

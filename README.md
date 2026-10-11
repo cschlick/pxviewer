@@ -86,7 +86,7 @@ For development from a checkout:
 conda env create -f environment.yml   # python, cctbx-base, chem_data, PySide6, …
 conda activate pxviewer
 pip install -e ./python --no-deps      # the pxviewer package itself
-./scripts/setup_chem_data.sh           # (optional) build the validation caches
+./scripts/setup_chem_data.sh           # validation caches; on Windows also fixes the viewport
 ```
 
 On Linux `./scripts/install_linux.sh` runs the whole thing — Miniforge first if no

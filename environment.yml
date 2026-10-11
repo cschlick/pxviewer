@@ -5,7 +5,7 @@
 #
 #   conda env create -f environment.yml
 #   conda activate pxviewer
-#   ./scripts/setup_chem_data.sh                # validation caches (rotamer/CaBLAM)
+#   ./scripts/setup_chem_data.sh                # validation caches (rotamer/CaBLAM); Windows viewport fix
 #   pip install -e ./python --no-deps           # the pxviewer package itself
 #   (cd frontend && npm ci)                     # populate node_modules, once
 #   ./scripts/build_frontend.sh                 # -> frontend/build/index.js
