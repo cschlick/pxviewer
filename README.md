@@ -111,8 +111,8 @@ pip install -e ./python --no-deps      # the pxviewer package itself
 ./scripts/setup_chem_data.sh           # validation caches; on Windows also fixes the viewport
 ```
 
-(The script installs git and Miniforge if they're missing — on macOS git comes
-via the Xcode CLT dialog it triggers; re-run the script after it finishes.)
+(The script installs Miniforge if no conda is found, then gets git *from conda*
+to bootstrap the clone — no sudo, no Xcode CLT, no system package manager.)
 
 (cctbx pins numpy ≤ 2.4 — `environment.yml` handles this.)
 

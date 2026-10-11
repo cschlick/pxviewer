@@ -8,8 +8,8 @@
 #
 # What it does, in order:
 #
-#   git?      — install Xcode CLT (macOS) or the system package (Linux) if missing
 #   conda?    — install Miniforge into ~/miniforge3 if no conda is found
+#   git?      — `conda install git` if missing; no sudo or Xcode CLT needed
 #   checkout  — clone https://github.com/cschlick/pxviewer if not already in one
 #   conda env create -f environment.yml   (or update, if the env exists)
 #   pip install -e ./python --no-deps
@@ -43,34 +43,6 @@ confirm() { # $1 = prompt; returns 0 for yes
   read -r -p "$1 [y/N] " reply
   [[ "$reply" =~ ^[Yy] ]]
 }
-
-# --- git ---------------------------------------------------------------------
-# Needed to clone when the script runs outside a checkout. macOS gets git from
-# the Xcode Command Line Tools — xcode-select pops a dialog the user must
-# accept, so we trigger it and ask for a re-run rather than wait.
-if ! command -v git >/dev/null 2>&1; then
-  if [[ "$uname_s" == "Darwin" ]]; then
-    echo "git not found — triggering the Xcode Command Line Tools installer."
-    xcode-select --install 2>/dev/null || true
-    echo "finish the CLT install, then re-run this script." >&2
-    exit 1
-  fi
-  if confirm "git not found — install it with the system package manager?"; then
-    if command -v apt-get >/dev/null 2>&1; then
-      sudo apt-get update && sudo apt-get install -y git
-    elif command -v dnf >/dev/null 2>&1; then
-      sudo dnf install -y git
-    elif command -v pacman >/dev/null 2>&1; then
-      sudo pacman -S --noconfirm git
-    else
-      echo "no apt/dnf/pacman found — install git by hand and re-run." >&2
-      exit 1
-    fi
-  else
-    echo "git is required to fetch the pxviewer checkout." >&2
-    exit 1
-  fi
-fi
 
 # --- conda -------------------------------------------------------------------
 # An existing conda is used as-is; nothing is installed next to it. Miniforge is
@@ -121,6 +93,24 @@ fi
 # script even when conda was already on PATH, or the activate below fails.
 eval "$(conda shell.bash hook)"
 echo "using: $(command -v conda)  ($(conda --version))"
+
+# --- git ---------------------------------------------------------------------
+# Only needed to clone. conda-forge's git works on every platform, needs no
+# sudo, and skips macOS's Xcode CLT dialog entirely — so it is the bootstrap
+# rather than the system package manager.
+if ! command -v git >/dev/null 2>&1; then
+  if ! confirm "git not found — install it into the base conda env?"; then
+    echo "git is required to fetch the pxviewer checkout." >&2
+    exit 1
+  fi
+  conda install -y -n base -c conda-forge git
+  # `auto_activate_base: false` leaves base's bin off PATH even in this shell.
+  conda activate base 2>/dev/null || true
+  if ! command -v git >/dev/null 2>&1; then
+    echo "installed git into base but it is not on PATH — check conda config" >&2
+    exit 1
+  fi
+fi
 
 # --- checkout ------------------------------------------------------------------
 # Running inside a pxviewer checkout (the environment.yml + python/pxviewer
