@@ -187,6 +187,13 @@ def run():
         # normal case today -- dist_path returns None rather than raising. Fall back rather
         # than fail: the scripts are ordinary programs and do not need the build system.
         return _run_standalone()
+    import shutil
+    if shutil.which("libtbx.python") is None:
+        # libtbx's runner launches every script through `libtbx.python`. In a conda env
+        # that is not activated (the bundled Windows app's env) it is not on PATH: each
+        # script fails to start, the runner still exits 0, and nothing was tested.
+        print("libtbx.python is not on PATH; running the scripts directly instead")
+        return _run_standalone()
     test_utils.run_tests(build_dir, dist_dir, _assemble())
 
 

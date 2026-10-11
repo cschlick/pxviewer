@@ -17,6 +17,7 @@ from __future__ import absolute_import, division, print_function
 
 import os
 import shutil
+import glob
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,11 @@ from pxviewer.regression.tst_utils import skip
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _frontend = os.path.abspath(os.path.join(_here, os.pardir, os.pardir, os.pardir, "frontend"))
-_esbuild = os.path.join(_frontend, "node_modules", "@esbuild", "darwin-arm64", "bin", "esbuild")
+# The vendored binary for whichever platform npm installed: @esbuild/<os>-<arch>/bin/esbuild,
+# or @esbuild/win32-<arch>/esbuild.exe on Windows (as scripts/build_frontend.sh finds it).
+_vendored = os.path.join(_frontend, "node_modules", "@esbuild", "*")
+_esbuild = next(iter(sorted(glob.glob(os.path.join(_vendored, "bin", "esbuild"))
+                            + glob.glob(os.path.join(_vendored, "esbuild.exe")))), "")
 if not os.path.isdir(_frontend):
     skip("no frontend/ in this tree (installed package)")
 if not os.path.isfile(os.path.join(_frontend, "src", "localres-grids.test.ts")):
