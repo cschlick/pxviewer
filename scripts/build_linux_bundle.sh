@@ -186,6 +186,42 @@ echo "installed: $apps/pxviewer.desktop"
 INSTALL
 chmod +x "$STAGE/install.sh"
 
+# Self-contained instructions — an offline install can't reach the GitHub README.
+cat > "$STAGE/INSTALL.txt" <<'TXT'
+pxviewer — Linux offline bundle
+===============================
+
+Run it
+------
+  ./pxviewer
+
+That is the whole install. The bundle is a self-contained conda environment;
+nothing else needs to be installed and no network access is needed.
+
+Optional: app-menu entry
+------------------------
+  ./install.sh
+
+Adds a "pxviewer" entry to your desktop's application menu (writes to
+~/.local/share — no sudo needed).
+
+Notes
+-----
+- Needs a display: the app is a Qt GUI; on a headless box it will fail to
+  connect to X11/Wayland. There is no headless mode in this bundle.
+- Extraction needs xz: if `tar -xf` errors, your system lacks xz-utils
+  (Debian/Ubuntu: xz-utils; Fedora: xz; almost always preinstalled).
+- You can move the whole pxviewer-* directory anywhere; the launcher repairs
+  paths automatically on next launch.
+- Console output goes to the terminal you launch from — if the window fails
+  to appear, run ./pxviewer from a terminal to see the error.
+- Uninstall: delete the directory (and ~/.local/share/applications/pxviewer.desktop
+  if you ran install.sh).
+
+Bundled: cctbx + chem_data monomer/validation libraries, PySide6/Qt WebEngine,
+Mol* frontend, and prebuilt rotamer/CaBLAM validation caches.
+TXT
+
 cp assets/icon.png "$STAGE/icon.png"
 cp LICENSE "$STAGE/"
 
