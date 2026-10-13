@@ -122,7 +122,15 @@ echo "$ENV_APP" > "$ENV_APP/.pxviewer-prefix"
 cat > "$STAGE/pxviewer" <<'LAUNCHER'
 #!/usr/bin/env bash
 # Launch pxviewer from the conda environment bundled beside this script.
-HERE="$(cd "$(dirname "$0")" && pwd)"
+# Resolve symlinks so `ln -s <bundle>/pxviewer ~/.local/bin/pxviewer` works —
+# plain dirname "$0" would look for env/ next to the symlink, not the target.
+SOURCE="$0"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+HERE="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 ENV_DIR="$HERE/env"
 
 # Prefix-embedded files (bin/ shebangs, conda-meta, build configs) were
@@ -167,19 +175,23 @@ cat > "$STAGE/install.sh" <<'INSTALL'
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 apps="$HOME/.local/share/applications"
-icons="$HOME/.local/share/icons/hicolor/256x256/apps"
-mkdir -p "$apps" "$icons"
-cp "$HERE/icon.png" "$icons/pxviewer.png"
+mkdir -p "$apps"
+# Icon=<absolute path> works without an icon-cache rebuild; a theme name would
+# only resolve after gtk-update-icon-cache, which many systems lack.
+# Exec is quoted: freedesktop quoting handles bundle paths containing spaces.
 cat > "$apps/pxviewer.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=pxviewer
 Comment=Mol*-based viewer for cctbx objects
-Exec=$HERE/pxviewer
-Icon=pxviewer
+Exec="$HERE/pxviewer"
+Icon=$HERE/icon.png
 Terminal=false
 Categories=Science;Education;
 EOF
+# Refreshes the menu cache. It scans every file in the dir, so it may print
+# warnings about OTHER malformed .desktop files — those are not ours and are
+# harmless; the pxviewer entry is already written at this point.
 command -v update-desktop-database >/dev/null 2>&1 \
   && update-desktop-database "$apps" || true
 echo "installed: $apps/pxviewer.desktop"
@@ -207,12 +219,18 @@ Adds a "pxviewer" entry to your desktop's application menu (writes to
 
 Notes
 -----
+- ./pxviewer only runs the app — it installs nothing outside this directory.
 - Needs a display: the app is a Qt GUI; on a headless box it will fail to
   connect to X11/Wayland. There is no headless mode in this bundle.
 - Extraction needs xz: if `tar -xf` errors, your system lacks xz-utils
   (Debian/Ubuntu: xz-utils; Fedora: xz; almost always preinstalled).
 - You can move the whole pxviewer-* directory anywhere; the launcher repairs
-  paths automatically on next launch.
+  paths automatically on next launch. The pxviewer script itself cannot be
+  moved alone (it finds env/ beside itself), but it is symlink-safe:
+    ln -s "$PWD/pxviewer" ~/.local/bin/pxviewer
+- If install.sh prints warnings about OTHER .desktop files (e.g.
+  xfce4-about.desktop), those are pre-existing files on your system being
+  scanned by update-desktop-database — not this bundle failing.
 - Console output goes to the terminal you launch from — if the window fails
   to appear, run ./pxviewer from a terminal to see the error.
 - Uninstall: delete the directory (and ~/.local/share/applications/pxviewer.desktop
