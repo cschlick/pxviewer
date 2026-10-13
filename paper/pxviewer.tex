@@ -1,0 +1,421 @@
+% pxviewer manuscript draft.
+% Target genre: the "introduce a GUI application" software paper, modelled on
+%   Emsley & Cowtan 2004 (Coot), Pettersen et al. 2021 (ChimeraX),
+%   Croll 2018 (ISOLDE).
+% For Acta Crystallographica D submission, switch to the IUCr class:
+%   \documentclass{iucr}  (iucr.cls from journals.iucr.org) — the section
+%   structure below maps onto it directly. For a preprint this compiles as-is.
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage{xcolor}
+\newcommand{\pxviewer}{\emph{pxviewer}}
+\newcommand{\angstrom}{\AA}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\setlength{\parskip}{0.4em}
+\setlength{\parindent}{0pt}
+
+\title{\pxviewer: an interactive environment for macromolecular model
+inspection, validation and refinement}
+
+\author{Christopher Schlicksup%
+  \thanks{\todo{affiliation and contact email}}}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\pxviewer{} is an interactive application for inspecting, validating and
+refining macromolecular models against experimental data. Atomic models are
+read with the Computational Crystallography Toolbox (cctbx) into its
+\emph{mmtbx} model framework, so every view, table and selection in the
+application is derived from the same validated objects used by the Phenix
+suite; structures are rendered by the Mol* toolkit, with Python and the
+renderer connected by a live coordinate bridge that streams conformation
+changes into the view without reloading topology. The desktop application
+organizes inspection around the crystallographer's workflow rather than the
+implementation's: residue, atom and geometry-restraint tables act as literal
+selections that drive navigation, focus and clipping; MolProbity-style
+validation is presented the same way, so a flagged residue is one click from
+the camera. Interactive workflows built on the bridge include real-space
+refinement into cryo-EM density, X-ray refinement judged against a live
+mFo--DFc difference map, ligand fitting and restraint editing. Guided
+tutorials walk new users through each of these tasks inside the running
+program. \pxviewer{} is distributed as self-contained installers for macOS,
+Windows and Linux that require no terminal or package manager.
+\end{abstract}
+
+\textbf{Keywords:} molecular graphics; model building; structure validation;
+cryo-EM; crystallographic refinement; interactive refinement.
+
+%% =====================================================================
+\section{Introduction}
+
+Molecular graphics has occupied a special place in protein crystallography
+since \emph{FRODO} \citep{frodo1978} and then \emph{O} \citep{o1991} showed
+what interactive display could do for model building; the tradition continued
+with \emph{Coot} \citep{coot2004, coot2010}, which remains the standard
+interactive model-building tool for X-ray crystallography. Along a parallel
+track, UCSF \emph{Chimera} and \emph{ChimeraX} \citep{chimera2004,
+chimerax2018, chimerax2021} built the field's most capable general-purpose
+visualization environment, and \emph{ISOLDE} \citep{isolde2018} demonstrated
+that physically realistic interactive simulation could make low-resolution
+remodelling both safer and faster.
+
+Two changes have reshaped the technical landscape since these tools were
+designed. First, the data side of macromolecular crystallography has
+consolidated around cctbx \citep{cctbx2002, phenix2010}, whose
+\emph{mmtbx} model hierarchy, geometry-restraint machinery and validation
+metrics encode decades of crystallographic correctness; a viewer that reads
+models through cctbx inherits all of it. Second, the best molecular renderer
+available today runs not on the desktop but in the browser: Mol*
+\citep{molstar2021} delivers publication-quality representations, per-atom
+color theming and very large structures entirely in WebGL. Between them lies
+a gap: cctbx owns the crystallography but renders nothing interactively,
+while Mol* renders superbly but understands no crystallography.
+
+\pxviewer{} bridges that gap. It keeps every crystallographic decision on the
+Python side --- model I/O through cctbx's \texttt{DataManager}, geometry
+restraints from cctbx's own proxies, MolProbity-derived validation --- and
+lets Mol* do what it does best. The two halves are joined by a live
+coordinate bridge: a persistent channel over which Python streams the model
+topology once, then conformation frames, selections, representations,
+measurements and camera state as the model and the user's intent evolve.
+Because the bridge is symmetric, interactive tools such as refinement and
+ligand fitting present their progress in the renderer as it happens rather
+than at the end.
+
+A second design commitment shapes the interface. Crystallographers think in
+\emph{tables of things} --- residues, atoms, restraints, validation flags ---
+and in \emph{selections} of those things. In \pxviewer{} a table row \emph{is}
+a selection: clicking a restraint row selects the atoms it restrains, and the
+same selection machinery governs viewport picking, camera focus, clipping,
+representations and filtering. Guided tutorials use the same state, so the
+program can watch what the user does and acknowledge each step only when it
+is truly done.
+
+The result is intended to sit naturally beside the tools it learns from:
+Coot-like in its crystallographic substance, ChimeraX-like in its rendering
+and tutorial-driven onboarding, and ISOLDE-like in its insistence that
+refinement be something you watch, not something you wait for.
+
+%% =====================================================================
+\section{Overview and architecture}
+
+\begin{figure}[h]
+\centering
+\fbox{\parbox{0.85\textwidth}{\centering\vspace{2em}
+\todo{Figure 1: architecture diagram --- cctbx data layer $\rightarrow$ live
+bridge $\rightarrow$ Mol* renderer, with the Qt desktop shell around both.}
+\vspace{2em}}}
+\caption{\pxviewer{} architecture. All crystallographic logic lives in Python
+(cctbx model I/O, geometry restraints, validation, refinement); all rendering
+lives in Mol*. The live bridge streams the topology once and then coordinates,
+selections, representations, measurements and camera state in both
+directions.}
+\label{fig:arch}
+\end{figure}
+
+The application has three components (Fig.~\ref{fig:arch}).
+
+\textbf{The data layer} is the \pxviewer{} Python package. Atomic models are
+read by cctbx's \texttt{DataManager} into an \texttt{mmtbx.model.manager};
+the viewer never parses structural data itself. Maps arrive through the same
+path for CCP4, MRC and related formats, and reflection data through cctbx's
+\emph{miller} arrays --- so experimental quantities (amplitudes, phases,
+R-free flags) retain their meaning rather than being flattened into
+coordinates. Structures fetched by accession code from the Protein Data Bank
+or EMDB take the identical path.
+
+\textbf{The live coordinate bridge} is a versioned WebSocket protocol. On
+connect, Python sends the model topology once, as BinaryCIF; afterwards the
+wire carries binary coordinate frames (one \texttt{float32} triple per atom),
+a compact binary channel for per-atom attributes (e.g.\ B-factor or
+local-resolution values used for coloring), and small JSON messages for
+selections, representations, measurement primitives, non-covalent
+interaction notation, clashes, camera state and background. Atom identity is
+positional and fixed for a session: index $i$ on the wire is always atom
+$i$ of the topology, which is what makes streamed conformation updates safe.
+
+\textbf{The renderer} is a Mol*-based frontend (TypeScript/React). It applies
+each frame to the streamed topology in place --- representations update
+coordinates rather than rebuild --- and reports viewport picks back over the
+bridge. Representation state (type, coloring, opacity, scope) is owned by
+Python via MolViewSpec and replayed to viewers that connect later.
+
+\textbf{The desktop shell} embeds the same frontend in QtWebEngine
+(PySide6) beside a native controls window. Users who prefer it can instead
+point any browser at a session served by \texttt{pxviewer serve}; the wire
+protocol is identical either way.
+
+%% =====================================================================
+\section{Inspecting models and data}
+
+\subsection{Loading and viewing structures}
+
+The \emph{Open} action accepts local model files (PDB, mmCIF and other
+cctbx-supported formats), density maps and reflection files, or an accession
+code to fetch from the PDB/EMDB. Several models can be loaded at once and
+independently shown, hidden or made active. Representations follow
+MolViewSpec's vocabulary --- cartoon/ribbon, ball-and-stick, spacefill,
+surface, carbohydrate --- with coloring by element, chain, secondary
+structure, residue properties, arbitrary uniform colors, or any per-atom
+attribute (B-factor, occupancy, or values supplied or computed by the user)
+mapped through a named palette and domain.
+
+\subsection{Tables are selections}
+
+The Geometry tab presents the model as the crystallographer already thinks
+of it: \emph{Components} lists residue groups (residues, ligands, waters);
+\emph{Atoms} is a virtualized table of per-atom attributes that remains
+responsive past $10^5$ atoms; and one virtualized table per restraint type
+lists bonds, angles, dihedrals, chiralities and planarities, read directly
+from the cctbx restraint proxies. Every row is a literal selection of the
+atoms it describes, and selections are shared state across the whole
+application: a row selected in a table highlights those atoms in the
+viewport, an atom picked in the viewport selects its row, camera focus and
+the clip sphere can be bound to the running selection, and keyboard stepping
+walks the table one residue or one atom at a time. Pick granularity is
+explicit --- atom-level by default, promoted to residue where the displayed
+representation offers no atom-sized target --- and is visible and
+overridable in the Selection pane.
+
+\subsection{Measurements, interactions and clipping}
+
+Distance, angle, dihedral and label measurements are drawn between atoms or
+selection centroids and track the structure as it moves. Non-covalent
+interaction notation (hydrogen bonds, salt bridges, hydrophobic and other
+contact kinds) can be supplied explicitly from Python or inferred by Mol*;
+steric clashes are computed from the coordinates themselves and drawn in a
+distinct ``bad contact'' style. Clipping is unified across slab, sphere and
+selection-driven modes, so isolating a binding site is a property of the
+selection rather than a separate mechanism.
+
+%% =====================================================================
+\section{Validation}
+
+Validation in \pxviewer{} is not a report but an interface. The
+\emph{Validation} tab runs the MolProbity-derived checks available through
+cctbx --- rotamer outliers, Ramachandran outliers, CaBLAM backbone outliers,
+C$\beta$ deviations, cis- and twisted-peptide flags --- each producing a
+table of flagged residues. Tables behave exactly like the geometry tables:
+a row is a selection of the atoms involved, so the path from ``this residue
+is an outlier'' to ``show me'' is one click.
+
+Two further tools consolidate the picture. \emph{Hotspots} aggregates the
+per-residue checks into a single per-atom severity field mapped onto the
+structure, because a region worth rebuilding usually trips several checks
+at once and a picture finds such regions faster than five tables. For cryo-EM
+models, \emph{Q-score} \citep{qscore2020} reports per-atom and per-residue
+map-model correlation, colorable directly onto the structure. Steric clashes
+computed from the coordinates complete the validation set.
+
+%% =====================================================================
+\section{Interactive workflows}
+
+The bridge changes what refinement looks like: instead of a batch job whose
+result is inspected afterwards, refinement becomes a sequence the user
+watches and can interrupt, adjust and resume. Four worked workflows ship in
+the application and in its guided tutorials.
+
+\subsection{Real-space refinement into cryo-EM density}
+
+Real-space refinement \citep{rsr2018} minimizes the model against the
+density map itself. In \pxviewer{} the cctbx machinery runs on the Python
+side while the bridge streams each accepted conformation into the viewport,
+so the user watches the fit converge in the map rather than waiting for a
+final structure. Restraints, weighting and secondary-structure constraints
+are the same ones the Phenix suite applies.
+
+\subsection{X-ray refinement with a live difference map}
+
+X-ray refinement is judged against data. \pxviewer{} computes the
+mFo--DFc difference map from the loaded reflections as the model changes and
+streams it live: positive and negative contours update around the region
+being rebuilt, so the map functions as real-time feedback rather than a
+post-hoc verdict. This mirrors the working loop experienced
+crystallographers run between refinement rounds, compressed into the
+interactive session.
+
+\subsection{Ligand fitting and restraint editing}
+
+The ligand-fitting workflow locates unmodeled difference density and fits a
+flexible ligand into it. Restraint edits --- custom bonds, angles or
+metal-coordination restraints the monomer library cannot know --- are
+authored from the atoms themselves inside the GUI and can be shared as a
+PHIL file for use in Phenix refinement, so an interactive session produces
+artifacts that survive it.
+
+\subsection{Local resolution}
+
+A deposited cryo-EM resolution is a global average; \pxviewer{} computes
+local resolution and colors the structure or map by it, making the
+soft-periphery/sharp-core distinction directly visible.
+
+%% =====================================================================
+\section{Guided tutorials}
+
+Every workflow above is also a guided tutorial, built into the application's
+\emph{Tutorials} menu. A tutorial is a non-modal ``coach'' that loads its
+own example data (so its instructions always describe the structure actually
+on screen), then steps the user through the task one instruction at a time.
+Two properties distinguish it from documentation: each step carries a
+predicate over live application state, so the step is acknowledged only when
+the user has genuinely done the thing; and a \emph{Show me where} button
+flashes the exact widget the step refers to. The tutorials double as
+regression tests --- the same step sequences run headlessly in the test
+suite --- so they cannot drift out of sync with the interface.
+
+%% =====================================================================
+\section{Scripting and reproducibility}
+
+The same bridge that drives the GUI is a public API. A
+\texttt{LiveSession} can be created from a model file, an existing
+\emph{mmtbx} manager or synthetic coordinates; it exposes selections (by
+index, by the Phenix atom-selection language, or by mask), representations,
+per-atom coloring, measurements, interaction notation, clashes, camera
+state and mouse selection reported back to Python. The desktop app embeds an
+IPython console bound to the active model's session, so the GUI and scripts
+drive the same object.
+
+Views are reproducible: \emph{Save view} serializes the session --- loaded
+objects, representations, colors, clipping, selections, visibility,
+background and camera --- to a file that restores the scene exactly, with
+optional bundling of the source data for archival. This is intended to make
+published figures reproducible artifacts rather than screenshots of a state
+no one can reconstruct.
+
+%% =====================================================================
+\section{Distribution and availability}
+
+\pxviewer{} is distributed as self-contained installers for macOS
+(Apple~Silicon), Windows~10/11 (x86\_64) and Linux (x86\_64), downloadable
+from the project releases page. Each packages a complete conda environment
+--- Python, cctbx, the chem\_data monomer and validation libraries, Qt and
+the built Mol* frontend --- so installation needs neither a terminal nor a
+package manager, and the Linux bundle works fully offline. A source
+install (a single script that bootstraps conda, builds the environment and
+the frontend) supports development on macOS and Linux, and a
+\texttt{noarch} conda package is available for managed deployments.
+
+\pxviewer{} is source-available software (see the license accompanying the
+distribution); source code, issue tracking and releases are at
+\url{https://github.com/cschlick/pxviewer}.
+
+%% =====================================================================
+\section{Implementation notes}
+
+\textbf{Atom identity.} Frames, selections and per-atom attributes are
+positional throughout: atom $i$ is row $i$ of the topology. The atom set may
+not change mid-session, which turns the streaming problem into a fixed-size
+contract rather than a reconciliation problem.
+
+\textbf{Packaging.} The conda recipe is the single source of dependency
+truth; platform build scripts pack a fresh environment into the artifact
+(dmg, NSIS archive-in-installer, tar.xz), build the validation caches inside
+it, and trim the chem\_data datasets the application cannot reach (BLAST
+databases for eLBOW, the standalone secondary-structure regularization
+library). Prefix fixup is deferred to launch/install time so the bundles are
+relocatable.
+
+\textbf{Testing.} A headless suite covers the Python layer and GUI
+invariants; visual passes run the renderer on all three platforms, including
+the tutorial step sequences --- the walkthroughs ship only if they still
+work.
+
+%% =====================================================================
+\section{Discussion and outlook}
+
+\pxviewer{} deliberately occupies the space its predecessors left between
+them. From Coot it takes the premise that crystallographic primitives ---
+restraints, monomer chemistry, validation --- should drive the interface;
+from ChimeraX it takes the standard for rendering quality, onboarding and
+distribution; from ISOLDE it takes the conviction that refinement should be
+visible and interruptible. Its distinguishing choices are the ones those
+tools could not have made at their inception: cctbx as the sole authority
+for crystallographic meaning, a browser-grade renderer as the sole
+authority for pixels, and a persistent bidirectional bridge in between.
+
+Natural directions follow from that architecture: multiple simultaneous
+viewers on one session, collaboration on shared selections and views,
+deeper integration of the live bridge with Phenix refinement programs, and
+extension of the tutorial framework into user-authorable walkthroughs for
+teaching.
+
+%% =====================================================================
+\section*{Acknowledgements}
+\todo{acknowledgements --- testers, beta users, funding.}
+
+%% =====================================================================
+\begin{thebibliography}{99}
+
+\bibitem{frodo1978} Jones TA (1978). A graphics model building and refinement
+system for macromolecules. \emph{J. Appl. Cryst.} \textbf{11}, 268--272.
+
+\bibitem{o1991} Jones TA, Zou J-Y, Cowan SW, Kjeldgaard M (1991). Improved
+methods for building protein models in electron density maps and the location
+of errors in these models. \emph{Acta Cryst. A} \textbf{47}, 110--119.
+
+\bibitem{coot2004} Emsley P, Cowtan K (2004). Coot: model-building tools for
+molecular graphics. \emph{Acta Cryst. D} \textbf{60}, 2126--2132.
+
+\bibitem{coot2010} Emsley P, Lohkamp B, Scott WG, Cowtan K (2010). Features
+and development of Coot. \emph{Acta Cryst. D} \textbf{66}, 486--501.
+
+\bibitem{chimera2004} Pettersen EF, Goddard TD, Huang CC, Couch GS,
+Greenblatt DM, Meng EC, Ferrin TE (2004). UCSF Chimera --- a visualization
+system for exploratory research and analysis. \emph{J. Comput. Chem.}
+\textbf{25}, 1605--1612.
+
+\bibitem{chimerax2018} Goddard TD, Huang CC, Meng EC, Pettersen EF, Couch GS,
+Morris JH, Ferrin TE (2018). UCSF ChimeraX: meeting modern challenges in
+visualization and analysis. \emph{Protein Sci.} \textbf{27}, 14--25.
+
+\bibitem{chimerax2021} Pettersen EF, Goddard TD, Huang CC, Meng EC, Couch GS,
+Croll TI, Morris JH, Ferrin TE (2021). UCSF ChimeraX: structure visualization
+for researchers, educators, and developers. \emph{Protein Sci.} \textbf{30},
+70--82.
+
+\bibitem{isolde2018} Croll TI (2018). ISOLDE: a physically realistic
+environment for model building into low-resolution electron-density maps.
+\emph{Acta Cryst. D} \textbf{74}, 519--530.
+
+\bibitem{cctbx2002} Grosse-Kunstleve RW, Sauter NK, Moriarty NW, Adams PD
+(2002). The Computational Crystallography Toolbox: crystallographic
+algorithms in a reusable software framework. \emph{J. Appl. Cryst.}
+\textbf{35}, 126--136.
+
+\bibitem{phenix2010} Adams PD, Afonine PV, Bunk\'oczi G, \emph{et al.} (2010).
+PHENIX: a comprehensive Python-based system for macromolecular structure
+solution. \emph{Acta Cryst. D} \textbf{66}, 213--221.
+
+\bibitem{molstar2021} Sehnal D, Bittrich S, Deshpande M, \emph{et al.} (2021).
+Mol* Viewer: modern web app for 3D visualization and analysis of large
+biomolecular structures. \emph{Nucleic Acids Res.} \textbf{49}, W431--W437.
+
+\bibitem{molprobity2010} Chen VB, Arendall WB, Headd JJ, \emph{et al.} (2010).
+MolProbity: all-atom structure validation for macromolecular crystallography.
+\emph{Acta Cryst. D} \textbf{66}, 12--21.
+
+\bibitem{molprobity2018} Williams CJ, Headd JJ, Moriarty NW, \emph{et al.}
+(2018). MolProbity: more and better reference data for improved all-atom
+structure validation. \emph{Protein Sci.} \textbf{27}, 293--315.
+
+\bibitem{rsr2018} Afonine PV, Poon BK, Read RJ, \emph{et al.} (2018).
+Real-space refinement in PHENIX for cryo-EM and crystallography.
+\emph{Acta Cryst. D} \textbf{74}, 531--544.
+
+\bibitem{qscore2020} Pintilie G, Zhang K, Su Z, Li S, Schmid MF, Chiu W
+(2020). Measurement of atom resolvability in cryo-EM maps with Q-scores.
+\emph{Nat. Methods} \textbf{17}, 328--334.
+
+\bibitem{mvs} \todo{MolViewSpec citation if one exists; otherwise cite the
+project URL.}
+
+\end{thebibliography}
+\end{document}
