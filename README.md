@@ -11,14 +11,18 @@ through cctbx, then maps onto Mol\*'s data on the Python side.
 - `frontend/` — TypeScript/React frontend using the `molstar` React plugin helpers.
 - `python/` — Python package: `cctbx` for model I/O, `ciftools` to write BinaryCIF, `molviewspec` for volume scenes, and a `LiveSession` WebSocket server that streams the topology and coordinates.
 
-## Quick start
+## Install
 
-### Install (macOS app, no terminal needed)
+Download the installer for your platform from the
+[latest release](https://github.com/cschlick/pxviewer/releases/latest).
+Every installer is a self-contained environment — cctbx, the chem_data monomer
+and validation libraries, PySide6/Qt WebEngine, the built Mol\* frontend, and
+prebuilt validation caches — so nothing else needs installing.
 
-Download `pxviewer-<version>-macos-arm64.dmg` from the release assets, open it,
-and drag `pxviewer.app` into Applications. The app is a self-contained conda
-environment (cctbx + chem_data + PySide6/Qt WebEngine + the built Mol\*
-frontend + validation caches) — nothing else to install. Apple Silicon only.
+### macOS (Apple Silicon)
+
+Download `pxviewer-<version>-macos-arm64.dmg`, open it,
+and drag `pxviewer.app` into Applications. Apple Silicon only.
 
 The app is ad-hoc signed but **not notarized**, so the first launch needs a
 right-click → **Open** (or `xattr -dr com.apple.quarantine /Applications/pxviewer.app`).
@@ -31,13 +35,12 @@ To build it yourself on an arm64 Mac (needs conda and the Xcode CLT for clang):
 ./scripts/build_macos_app.sh     # -> build/macos-app/pxviewer-*.dmg
 ```
 
-### Install (Windows, no terminal needed)
+### Windows
 
 Download `pxviewer-<version>-windows-x86_64-setup.exe` from the release assets
 and run it. It installs per-user into `%LOCALAPPDATA%\Programs\pxviewer` (no
-admin needed) with a Start Menu shortcut — a self-contained conda environment,
-same as the macOS app. A `pxviewer (console)` shortcut is also installed for
-debugging output.
+admin needed) with a Start Menu shortcut; a `pxviewer (console)` shortcut is
+also installed for debugging output.
 
 The installer is **unsigned**, so SmartScreen shows *"Windows protected your
 PC"* → **More info** → **Run anyway**.
@@ -48,7 +51,7 @@ To build it yourself on Windows (needs conda, Git Bash and NSIS):
 ./scripts/build_windows_installer.sh   # -> build/windows-installer/*-setup.exe
 ```
 
-### Install (Linux)
+### Linux
 
 **Offline bundle** — the same self-contained model as the macOS/Windows
 installers. Download `pxviewer-<version>-linux-x86_64.tar.xz` from the release
@@ -88,7 +91,41 @@ To build the bundle yourself on Linux (needs conda):
 ./scripts/build_linux_bundle.sh    # -> build/linux-bundle/pxviewer-*.tar.xz
 ```
 
-### Install (conda package)
+## Getting started
+
+Launch the app — `pxviewer.app` in Applications (macOS), the **pxviewer** Start
+Menu shortcut (Windows), or `./pxviewer` inside the untarred bundle (Linux). Two
+windows open: the 3D viewport and a controls window.
+
+**Start with the Tutorials button** in the toolbar. Each guided walkthrough
+loads its own example structure and steps you through one skill — it watches the
+app and checks each task off only when you have actually done it:
+
+| Tutorial | What it walks you through |
+| --- | --- |
+| Open a model | viewport basics on 1UBQ: rotate, zoom, select |
+| A model with its map | a paired model + cryo-EM map (SARS-CoV-2 polymerase) |
+| Alternate conformations | finding altlocs in a 0.48 Å crambin structure |
+| Validate a structure | MolProbity checks on a deliberately flawed model |
+| Hotspots | rolling validation up into per-atom severity |
+| Fit a ligand into density | a difference-map ligand fit from real data |
+| Real-space refine into cryo-EM density | live map-driven refinement |
+| X-ray: refine with a live difference map | mFo-DFc feedback while refining |
+| Restraint edits | custom bonds/angles the monomer library can't know |
+| Look at local resolution | per-region map quality vs. the quoted average |
+
+For your own data, use the **Open** button — local model, reflection and map
+files, or fetch straight from the PDB/EMDB by accession code. The controls
+tabs run roughly left to right through a workflow: **Scene** (what is loaded
+and how it looks) → **Geometry** (components, atoms, restraints) →
+**Validation** → **Tools** → **Console** (a live Python shell) → **Settings**.
+
+## Developers
+
+Everything below this point is for scripting pxviewer or building it from
+source. End users do not need any of it.
+
+### Conda package
 
 Model I/O needs **cctbx** and its **geostd** monomer library, which ship only on conda
 channels (not PyPI), so pxviewer installs via conda:
