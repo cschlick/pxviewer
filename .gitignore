@@ -37,3 +37,4 @@ python/pxviewer/frontend/
 
 # Local debugging artifacts (perf screenshots, capture logs)
 debug/
+paper/*.pdf
