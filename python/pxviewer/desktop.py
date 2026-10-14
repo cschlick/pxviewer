@@ -1688,7 +1688,8 @@ class ControlsWindow:
         # the panel floats (it uses the native window frame then), so this is the reliable
         # way back — and the way out, from either state.
         self._dock_btn = self._make_icon_button(
-            "maximize-2", "Detach", "Detach the controls to their own window")
+            "picture-in-picture-2", "Detach",
+            "Detach the controls to their own window")
         self._dock_btn.clicked.connect(self._desktop.toggle_controls_dock)
         status_row.addWidget(self._dock_btn)
         self._mouse_btn = self._make_icon_button(
@@ -6150,9 +6151,11 @@ class ControlsWindow:
             node = node.parentWidget()
 
     def reflect_dock_state(self, floating: bool) -> None:
-        """Keep the dock/detach button in step with the panel's state: maximize-2 to detach
-        while docked, minimize-2 to re-dock while floating."""
-        icon = self._icon("minimize-2" if floating else "maximize-2")
+        """Keep the dock/detach button in step with the panel's state:
+        picture-in-picture-2 to detach while docked, minimize-2 to re-dock
+        while floating."""
+        icon = self._icon(
+            "minimize-2" if floating else "picture-in-picture-2")
         if icon is not None:
             self._dock_btn.setIcon(icon)
         else:

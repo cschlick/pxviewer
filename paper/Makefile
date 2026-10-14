@@ -12,8 +12,12 @@ FIGURES := fig_gui.png
 
 figures: $(FIGURES)
 
-fig_gui.png: figure1.pxview.json regen_figure.py
+# FORCE: the pixels reflect the current UI, which mtime deps cannot see —
+# `make figures` always re-photographs, never reports "up to date".
+fig_gui.png: figure1.pxview.json regen_figure.py FORCE
 	$(PYTHON) regen_figure.py figure1.pxview.json $@ --controls
+
+FORCE:
 
 pxviewer.pdf: pxviewer.tex $(FIGURES)
 	tectonic pxviewer.tex
