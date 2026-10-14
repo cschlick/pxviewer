@@ -1832,8 +1832,12 @@ class ControlsWindow:
         self._get_btn.setStyleSheet(self._get_btn.styleSheet()
                                     + " QPushButton::menu-indicator { image: none; width: 0px; }")
         self._write_btn = _icon_button(
-            "save", "Save", "Save the focused object to disk — model coordinates, or a map",
-            self._on_write_object)
+            "save", "Save",
+            "Write the focused object to disk, or save the scene as a view")
+        self._write_btn.setMenu(self._build_save_menu())
+        for _menu_btn in (self._write_btn,):
+            _menu_btn.setStyleSheet(_menu_btn.styleSheet()
+                                    + " QPushButton::menu-indicator { image: none; width: 0px; }")
         self._pair_btn = _icon_button(
             "combine", "Pair",
             "Pair an unpaired model with a map, or check an existing pair for a missing "
@@ -2016,8 +2020,19 @@ class ControlsWindow:
         menu.addAction("Open file(s)…", self._on_open_file)
         menu.addAction("Fetch from PDB / EMDB…", self._on_fetch)
         menu.addSeparator()
-        menu.addAction("Save view as…", self._on_save_view)
         menu.addAction("Open saved view…", self._on_open_view)
+        return menu
+
+    def _build_save_menu(self):
+        """The two things Save can produce: the focused object's data, or the
+        whole scene as a restorable view."""
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self._window)
+        menu.setObjectName("saveMenu")
+        menu.addAction("Write object…", self._on_write_object)
+        menu.addSeparator()
+        menu.addAction("Save view as…", self._on_save_view)
         return menu
 
     def _build_tools_tab(self):

@@ -375,8 +375,8 @@ Load the X-ray demo or a model with restraints available.
    mouse-bindings and help dialogs.
    - **Watch for:** dialogs open centered and close cleanly; the saved screenshot matches
      the viewport; reset view actually reframes.
-5. Frame a residue selection, then File → Save view as… (leave Bundle data checked).
-   Load something else, then Open saved view… and pick the file.
+5. Frame a residue selection, then Save → Save view as… (leave Bundle data checked).
+   Load something else, then Open → Open saved view… and pick the file.
    - **Watch for:** the confirm dialog before replacing the scene; the view comes back
      framed on the residue, same representation, clip sphere standing — the saved
      pixels. Saving again unchecked writes a file whose model is a source reference,
