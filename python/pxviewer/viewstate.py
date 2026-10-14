@@ -233,25 +233,6 @@ def load_view(app, path) -> dict:
             f"{path.name} is a newer view format (version {doc['version']})")
 
     app.stop_demo()
-    # A saved view is a whole scene, so restore means replace: objects already
-    # loaded leave first, or the result is a hybrid neither file describes. The
-    # menu path confirms before it gets here — the scene may hold unsaved work.
-    for rid in [r["id"] for r in list(app._reflections)]:
-        try:
-            app.remove_reflections(rid)
-        except Exception:
-            pass
-    for vid in [v["id"] for v in list(app._volumes)]:
-        try:
-            app.remove_volume(vid)
-        except Exception:
-            pass
-    for mid in [m["id"] for m in list(app._models)]:
-        try:
-            app.remove_model(mid)
-        except Exception:
-            pass
-
     id_map = {}
     pending = []          # (spec, kind, new_id) — state applied after all loads
     groups: dict = {}     # saved group name -> {"models": [], "volumes": []}
@@ -266,54 +247,81 @@ def load_view(app, path) -> dict:
                 groups.setdefault(g, {"models": [], "volumes": []})[
                     "models" if kind == "model" else "volumes"].append(nid)
 
-    for spec in doc.get("objects") or []:
-        kind = spec.get("kind")
-        try:
-            nid = _load_object(app, spec, path, data_dir)
-        except Exception:
-            nid = None    # a missing source strands its object, not the view
-        note(spec, kind, nid)
-
-    # Pairing: objects that shared a group are re-paired so mask/alignment
-    # semantics hold. Both blobs are already in one frame, so the relocation
-    # inside pair_model_with_map is a no-op where it matters.
-    for members in groups.values():
-        for mid in members["models"]:
-            for vid in members["volumes"]:
-                try:
-                    app.pair_model_with_map(mid, vid)
-                except Exception:
-                    pass
-
-    for spec, kind, nid in pending:
-        try:
-            if kind == "model":
-                _apply_model_state(app, spec, nid)
-            else:
-                _apply_volume_state(app, spec, nid)
-        except Exception:
-            pass
-
-    # Resolution pins reference other volumes by the *saved* id — remap to the
-    # new one, then enable color-by-resolution (it needs its pin first).
-    for spec, kind, nid in pending:
-        if kind != "volume":
-            continue
-        entry = app._volume_entry(nid)
-        if entry is None:
-            continue
-        pinned = spec.get("pinned_to")
-        if pinned and pinned in id_map:
-            entry["pinned_to"] = id_map[pinned]
-            parent = app._volume_entry(id_map[pinned])
-            if parent is not None:
-                parent["resolution_map"] = nid
-    for spec, kind, nid in pending:
-        if kind == "volume" and spec.get("color_by_resolution"):
+    # One scene, composed once: teardown, loads and appearance replay all run
+    # inside the batch so the viewport reloads once at the end. Without it a
+    # volume's scene (MVSJ) is written at _add_volume time, before its saved
+    # appearance lands on the entry — opacity/negative-contour/etc. render at
+    # defaults, and the correcting live commands reach a page that has no such
+    # surface yet (the user's "opacity didn't survive" bug).
+    with app._batch_load():
+        # A saved view is a whole scene, so restore means replace: objects
+        # already loaded leave first, or the result is a hybrid neither file
+        # describes. The menu path confirms first — the scene may hold unsaved
+        # work.
+        for rid in [r["id"] for r in list(app._reflections)]:
             try:
-                app.set_color_by_resolution(nid, True)
+                app.remove_reflections(rid)
             except Exception:
                 pass
+        for vid in [v["id"] for v in list(app._volumes)]:
+            try:
+                app.remove_volume(vid)
+            except Exception:
+                pass
+        for mid in [m["id"] for m in list(app._models)]:
+            try:
+                app.remove_model(mid)
+            except Exception:
+                pass
+
+        for spec in doc.get("objects") or []:
+            kind = spec.get("kind")
+            try:
+                nid = _load_object(app, spec, path, data_dir)
+            except Exception:
+                nid = None    # a missing source strands its object, not the view
+            note(spec, kind, nid)
+
+        # Pairing: objects that shared a group are re-paired so mask/alignment
+        # semantics hold. Both blobs are already in one frame, so the relocation
+        # inside pair_model_with_map is a no-op where it matters.
+        for members in groups.values():
+            for mid in members["models"]:
+                for vid in members["volumes"]:
+                    try:
+                        app.pair_model_with_map(mid, vid)
+                    except Exception:
+                        pass
+
+        for spec, kind, nid in pending:
+            try:
+                if kind == "model":
+                    _apply_model_state(app, spec, nid)
+                else:
+                    _apply_volume_state(app, spec, nid)
+            except Exception:
+                pass
+
+        # Resolution pins reference other volumes by the *saved* id — remap to
+        # the new one, then enable color-by-resolution (it needs its pin first).
+        for spec, kind, nid in pending:
+            if kind != "volume":
+                continue
+            entry = app._volume_entry(nid)
+            if entry is None:
+                continue
+            pinned = spec.get("pinned_to")
+            if pinned and pinned in id_map:
+                entry["pinned_to"] = id_map[pinned]
+                parent = app._volume_entry(id_map[pinned])
+                if parent is not None:
+                    parent["resolution_map"] = nid
+        for spec, kind, nid in pending:
+            if kind == "volume" and spec.get("color_by_resolution"):
+                try:
+                    app.set_color_by_resolution(nid, True)
+                except Exception:
+                    pass
 
     active = id_map.get(doc.get("active") or "")
     if active:

@@ -1306,6 +1306,30 @@ def exercise_a_saved_view_round_trips():
         assert nventry["negative_visible"] is True
         assert nventry["visible"] is False
 
+        # The entry was right even while the render was wrong: a volume's
+        # appearance is baked into the scene MVSJ, which was composed at
+        # _add_volume time — before the saved appearance landed — and the
+        # correcting live command raced a page with no such surface. Batching
+        # the restore means one compose, so assert on the artifact the
+        # renderer actually reads, not just the entry.
+        scene = (restored._webapp.volume_dir / "scene"
+                 / str(restored._scene_counter) / "scene.mvsj")
+        opacities = []
+
+        def _collect(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "opacity":
+                        opacities.append(value)
+                    else:
+                        _collect(value)
+            elif isinstance(node, list):
+                for item in node:
+                    _collect(item)
+
+        _collect(json.loads(scene.read_text()))
+        assert 0.4 in opacities and 0.3 in opacities
+
         # And the color path that isn't a computed attribute: an explicit hex
         # restores verbatim, with no attribute riding along.
         restored.set_model_color(nmid, "#112233")
