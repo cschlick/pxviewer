@@ -9,6 +9,9 @@
 \usepackage[margin=1in]{geometry}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{float}
+\usepackage{tikz}
+\usetikzlibrary{positioning,fit,calc,arrows.meta}
 \usepackage{hyperref}
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage{xcolor}
@@ -18,8 +21,7 @@
 \setlength{\parskip}{0.4em}
 \setlength{\parindent}{0pt}
 
-\title{\pxviewer: an interactive environment for macromolecular model
-inspection, validation and refinement}
+\title{\pxviewer: an interactive environment for macromolecular models and data}
 
 \author{Christopher Schlicksup%
   \thanks{\todo{affiliation and contact email}}}
@@ -67,70 +69,153 @@ visualization environment, and \emph{ISOLDE} \citep{isolde2018} demonstrated
 that physically realistic interactive simulation could make low-resolution
 remodelling both safer and faster.
 
+\begin{figure}[t]
+\centering
+\IfFileExists{fig_gui.png}
+  {\includegraphics[width=\textwidth]{fig_gui.png}}
+  {\fbox{\parbox{0.9\textwidth}{\centering\vspace{3em}
+   [screenshot placeholder --- save as \texttt{paper/fig\_gui.png}]
+   \vspace{3em}}}}
+\caption{The \pxviewer{} desktop application. The controls window (left)
+organizes the session around the Scene, Geometry, Validation, Tools, Console
+and Settings tabs; the 3D viewport (right) is the Mol* frontend described in
+the text.}
+\label{fig:gui}
+\end{figure}
+
 Two changes have reshaped the technical landscape since these tools were
-designed. First, the data side of macromolecular crystallography has
-consolidated around cctbx \citep{cctbx2002, phenix2010}, whose
-\emph{mmtbx} model hierarchy, geometry-restraint machinery and validation
-metrics encode decades of crystallographic correctness; a viewer that reads
-models through cctbx inherits all of it. Second, the best molecular renderer
-available today runs not on the desktop but in the browser: Mol*
+designed. First, the graphical interface of the PHENIX package
+\citep{phenix2010, phenixgui2012} was a landmark in making sophisticated
+crystallographic refinement accessible to non-experts. Behind it sits cctbx
+\citep{cctbx2002}, whose \emph{mmtbx} model hierarchy, geometry-restraint
+machinery and validation metrics encode decades of crystallographic
+correctness. A viewer that reads models through cctbx would inherit all of
+that. Yet the PHENIX GUI orchestrates workflows rather than visualising the
+underlying objects: there is no viewer that natively presents cctbx model
+hierarchies, restraints or validation results, and although PHENIX can launch
+and drive Coot through an integration socket, Coot remains independent with respect to datatypes and data handling paradigms. 
+In deciding how to implement a cctbx object viewer, we considered all available options.
+One of the most competent molecular visualizers available runs not on the desktop but in the browser: Mol*
 \citep{molstar2021} delivers publication-quality representations, per-atom
 color theming and very large structures entirely in WebGL. Between them lies
-a gap: cctbx owns the crystallography but renders nothing interactively,
-while Mol* renders superbly but understands no crystallography.
+a gap: cctbx owns the refinement competence but renders nothing interactively,
+while Mol* renders superbly but is not yet used for refinement.
 
-\pxviewer{} bridges that gap. It keeps every crystallographic decision on the
+\pxviewer{} (Fig.~\ref{fig:gui}) bridges that gap. It keeps every crystallographic decision on the
 Python side --- model I/O through cctbx's \texttt{DataManager}, geometry
-restraints from cctbx's own proxies, MolProbity-derived validation --- and
-lets Mol* do what it does best. The two halves are joined by a live
+restraints from cctbx's own proxies, MolProbity-derived validation, etc. It then
+lets Mol* do visualization, what it does best. The two halves are joined by a live
 coordinate bridge: a persistent channel over which Python streams the model
 topology once, then conformation frames, selections, representations,
 measurements and camera state as the model and the user's intent evolve.
-Because the bridge is symmetric, interactive tools such as refinement and
-ligand fitting present their progress in the renderer as it happens rather
-than at the end.
+The channel carries traffic in both directions: Python pushes conformation
+frames while a minimization or ligand fit runs, so progress appears as molecular motion in the
+renderer as it happens rather than at the end, and the renderer returns
+picks, drags and iso-value changes to Python, so a running tool can respond
+to the user mid-run.
 
-A second design commitment shapes the interface. Crystallographers think in
-\emph{tables of things} --- residues, atoms, restraints, validation flags ---
-and in \emph{selections} of those things. In \pxviewer{} a table row \emph{is}
+A second design commitment shapes the interface. Tables of data are inherent to macromolecular tasks, researchers think in
+\emph{tables of things} --- residues, atoms, restraints, validation flags, and in \emph{selections} of those things. 
+In \pxviewer{} tables are a first class view into the underlying python objects. A table row \emph{is}
 a selection: clicking a restraint row selects the atoms it restrains, and the
 same selection machinery governs viewport picking, camera focus, clipping,
 representations and filtering. Guided tutorials use the same state, so the
 program can watch what the user does and acknowledge each step only when it
 is truly done.
 
-The result is intended to sit naturally beside the tools it learns from:
-Coot-like in its crystallographic substance, ChimeraX-like in its rendering
-and tutorial-driven onboarding, and ISOLDE-like in its insistence that
-refinement be something you watch, not something you wait for.
+The result is intended to offer a complementary tool for users who already use the cctbx library in their work. 
+Pxviewer provides a way to look at those objects graphically, analyze them, and even manipulate them with a user friendly point-and-click interface.
 
 %% =====================================================================
-\section{Overview and architecture}
-
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
-\fbox{\parbox{0.85\textwidth}{\centering\vspace{2em}
-\todo{Figure 1: architecture diagram --- cctbx data layer $\rightarrow$ live
-bridge $\rightarrow$ Mol* renderer, with the Qt desktop shell around both.}
-\vspace{2em}}}
-\caption{\pxviewer{} architecture. All crystallographic logic lives in Python
-(cctbx model I/O, geometry restraints, validation, refinement); all rendering
-lives in Mol*. The live bridge streams the topology once and then coordinates,
-selections, representations, measurements and camera state in both
-directions.}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small,
+  node distance=7mm and 9mm,
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=6pt,
+              fill=black!4},
+  shellbox/.style={draw, rounded corners=4pt, inner sep=3mm},
+  lbl/.style={font=\footnotesize, align=left},
+  oneway/.style={thick, -{Stealth[length=2.2mm]}},
+  bothway/.style={thick, dashed,
+                  {Stealth[length=2.2mm]}-{Stealth[length=2.2mm]}}
+]
+  % --- visualizer: desktop shell -------------------------------------
+  \node[font=\footnotesize\itshape] (dtitle) {desktop application (PySide6/Qt)};
+  \node[box, below=1.5mm of dtitle] (controls)
+    {\textbf{Controls window}\\
+     \footnotesize Qt Widgets\\
+     \footnotesize tables, tools, tutorials};
+  \node[box, right=of controls, minimum width=4.6cm] (viewA)
+    {\textbf{3D viewport}\\
+     \footnotesize QtWebEngine\\
+     \footnotesize Mol* frontend};
+  \node[shellbox, fit=(dtitle)(controls)(viewA)] (desktop) {};
+
+  % --- visualization: web shell (sibling, aligned with desktop) -------
+  \coordinate (webx) at ($(desktop.east)+(35mm,0)$);
+  \node[font=\footnotesize\itshape] (wtitle) at (dtitle -| webx)
+    {web application};
+  \node[box, minimum width=4.6cm] (viewB) at (viewA -| webx)
+    {\textbf{3D viewport}\\
+     \footnotesize any browser\\
+     \footnotesize Mol* frontend};
+  \node[shellbox, fit=(wtitle)(viewB)] (webapp) {};
+
+  % --- visualization container -----------------------------------------
+  \node[font=\footnotesize\itshape] (vtitle)
+    at ($(desktop.north)!0.5!(webapp.north)+(0,7mm)$) {visualization};
+  \node[shellbox, fit=(desktop)(webapp)(vtitle)] (viz) {};
+
+  % --- pxviewer core (independent of any frontend) --------------------
+  \node[box, minimum width=15.6cm]
+    (py) at ($(viz.south)+(0,-36mm)$)
+    {\textbf{\pxviewer{} --- cctbx data layer}\\
+     \footnotesize model I/O~$\cdot$~geometry restraints~$\cdot$~validation
+       ~$\cdot$~refinement~$\cdot$~live bridge (WebSocket server)};
+
+  % --- in-process control link ----------------------------------------
+  \coordinate (inproc) at ($(controls.south west)+(3mm,0)$);
+  \draw[oneway] (inproc) -- (inproc |- py.north)
+    node[pos=0.75, left=2mm, lbl, align=right] {in-process};
+
+  % --- live bridge to the desktop viewport ----------------------------
+  \draw[oneway] ($(py.north -| viewA.south)+(-6mm,0)$)
+             -- ($(viewA.south)+(-6mm,0)$)
+    node[pos=0.3, left=3mm, lbl, align=right]
+      {topology once (BinaryCIF);\\ frames, selections,\\
+       representations, camera};
+  \draw[oneway] ($(viewA.south)+(6mm,0)$)
+             -- ($(py.north -| viewA.south)+(6mm,0)$)
+    node[pos=0.6, right=3mm, lbl]
+      {picks, drags,\\ measurements,\\ iso-value changes};
+
+  % --- identical bridge to the web-app viewport -----------------------
+  \draw[bothway] (py.north -| viewB.south) -- (viewB.south)
+    node[pos=0.3, right=3mm, lbl] {same protocol\\ (\texttt{pxviewer serve})};
+\end{tikzpicture}}
+\caption{\pxviewer{} architecture. The Python core (model I/O, geometry
+restraints, validation and refinement through cctbx, and the live coordinate
+bridge) is largely independent of the visualization. The visualization may
+be the desktop application, which pairs a QtWebEngine viewport with a native
+controls window, or a standalone web application served to any browser by
+\texttt{pxviewer serve}. }
 \label{fig:arch}
 \end{figure}
 
-The application has three components (Fig.~\ref{fig:arch}).
+\section{Overview and architecture}
+
+The application has four components (Fig.~\ref{fig:arch}).
 
 \textbf{The data layer} is the \pxviewer{} Python package. Atomic models are
 read by cctbx's \texttt{DataManager} into an \texttt{mmtbx.model.manager};
 the viewer never parses structural data itself. Maps arrive through the same
 path for CCP4, MRC and related formats, and reflection data through cctbx's
-\emph{miller} arrays --- so experimental quantities (amplitudes, phases,
-R-free flags) retain their meaning rather than being flattened into
-coordinates. Structures fetched by accession code from the Protein Data Bank
-or EMDB take the identical path.
+\emph{miller} arrays. Structures fetched by accession code from the Protein Data Bank
+or EMDB take the identical path through cctbx, not through the available Mol* pathways. 
+Enforcing this provides users a guarantee that whatever is seen in the viewer is a direct representation of 
+the cctbx object.
 
 \textbf{The live coordinate bridge} is a versioned WebSocket protocol. On
 connect, Python sends the model topology once, as BinaryCIF; afterwards the
@@ -140,18 +225,37 @@ local-resolution values used for coloring), and small JSON messages for
 selections, representations, measurement primitives, non-covalent
 interaction notation, clashes, camera state and background. Atom identity is
 positional and fixed for a session: index $i$ on the wire is always atom
-$i$ of the topology, which is what makes streamed conformation updates safe.
+$i$ of the topology, which is what makes streamed conformation updates safe and fast.
+This follows the convention of the underlying cctbx $i_seq$ atom property, and a provides a 
+natural way to specify atoms between the Python model and Mol* view domains. 
 
 \textbf{The renderer} is a Mol*-based frontend (TypeScript/React). It applies
-each frame to the streamed topology in place --- representations update
-coordinates rather than rebuild --- and reports viewport picks back over the
-bridge. Representation state (type, coloring, opacity, scope) is owned by
+each frame to the streamed topology in place, and representations update
+coordinates rather than rebuild. The frontend reports viewport picks back over the
+bridge. Representation state (type, coloring, opacity, scope) is specified in
 Python via MolViewSpec and replayed to viewers that connect later.
 
-\textbf{The desktop shell} embeds the same frontend in QtWebEngine
-(PySide6) beside a native controls window. Users who prefer it can instead
-point any browser at a session served by \texttt{pxviewer serve}; the wire
-protocol is identical either way.
+\textbf{The desktop app} embeds the same frontend in QtWebEngine
+(PySide6) beside a native controls window. Pyside is a natural fit for the Python-dominant cctbx ecosystem. 
+Users who prefer it can instead
+point any browser at a session served by \texttt{pxviewer serve}. 
+The protocol is identical either way, and anticipates future development where the controls window could be implemented in an alternative to PySide6/Qt.
+Enforcing a separation between the GUI widgets and the molecular view makes continued development as easy as possible.
+
+The four components aim to map onto a model--view--controller pattern, with the
+controller role split across two surfaces. The \emph{model} is the Python
+session state: the \texttt{mmtbx.model.manager}, the current selection,
+representation specifications, clipping and camera intent, etc. A single
+authoritative store of everything the interface displays. The \emph{view} is
+the Mol* frontend, which holds no  \pxviewer{} state of its own. It
+renders the topology and frames it is given, and because it can be
+reconstructed entirely from replayed state, additional or late-connecting
+viewers attach transparently. The \emph{controller} role is shared between
+the Qt controls window (which mutates model state in-process), and the
+bridge's inbound channel, which turns viewport picks, drags and iso-value
+changes into the same model mutations. Because the views and controllers are
+interchangeable while the model is not, alternative front ends inherit every capability
+without reimplementation.
 
 %% =====================================================================
 \section{Inspecting models and data}
@@ -285,10 +389,16 @@ drive the same object.
 
 Views are reproducible: \emph{Save view} serializes the session --- loaded
 objects, representations, colors, clipping, selections, visibility,
-background and camera --- to a file that restores the scene exactly, with
-optional bundling of the source data for archival. This is intended to make
-published figures reproducible artifacts rather than screenshots of a state
-no one can reconstruct.
+background and camera --- to a JSON file that restores the scene exactly.
+Two storage modes are offered. \emph{Bundled} (the default) writes every
+object's coordinates and maps beside the view file, so the figure reproduces
+anywhere and survives edits made since the data was loaded; data that cannot
+be reconstructed from an external file, such as a computed map or modified
+coordinates, is always bundled. \emph{Referenced} views instead point at the
+files objects were loaded from, keeping a suite of figures that share one
+dataset lightweight. This is intended to make published figures
+reproducible artifacts rather than screenshots of a state no one can
+reconstruct.
 
 %% =====================================================================
 \section{Distribution and availability}
@@ -393,6 +503,10 @@ algorithms in a reusable software framework. \emph{J. Appl. Cryst.}
 \bibitem{phenix2010} Adams PD, Afonine PV, Bunk\'oczi G, \emph{et al.} (2010).
 PHENIX: a comprehensive Python-based system for macromolecular structure
 solution. \emph{Acta Cryst. D} \textbf{66}, 213--221.
+
+\bibitem{phenixgui2012} Echols N, Grosse-Kunstleve RW, Afonine PV,
+\emph{et al.} (2012). Graphical tools for macromolecular crystallography in
+PHENIX. \emph{J. Appl. Cryst.} \textbf{45}, 581--586.
 
 \bibitem{molstar2021} Sehnal D, Bittrich S, Deshpande M, \emph{et al.} (2021).
 Mol* Viewer: modern web app for 3D visualization and analysis of large
