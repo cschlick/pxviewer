@@ -7,7 +7,7 @@ Usage::
 Loads the view into the real desktop app, waits for the Mol* page to come up
 and the saved camera to land, then writes the browser-side render to
 ``out.png``. ``--controls`` composites a Qt grab of the controls window to
-the left of the viewport, for full-GUI shots like the paper's Figure 1.
+the right of the viewport, for full-GUI shots like the paper's Figure 1.
 
 The viewport image comes from ``session.screenshot()`` — ``QWidget.grab()``
 on a QWebEngineView returns a blank frame, so the browser-side capture is the
@@ -33,7 +33,7 @@ from pxviewer.regression.visual.harness import (
 
 
 def _composite(app, viewport_png: bytes) -> bytes:
-    """Controls window (Qt grab) on the left, viewport render on the right."""
+    """Viewport render on the left, controls window (Qt grab) on the right."""
     from PIL import Image
 
     ctrl_path = Path(tempfile.mktemp(suffix=".png"))
@@ -44,8 +44,8 @@ def _composite(app, viewport_png: bytes) -> bytes:
     controls = controls.resize(
         (round(controls.width * height / controls.height), height))
     out = Image.new("RGB", (controls.width + view.width, height), "white")
-    out.paste(controls, (0, 0))
-    out.paste(view, (controls.width, 0))
+    out.paste(view, (0, 0))
+    out.paste(controls, (view.width, 0))
     buf = io.BytesIO()
     out.save(buf, "PNG")
     return buf.getvalue()
