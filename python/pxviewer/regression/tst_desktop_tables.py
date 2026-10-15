@@ -371,6 +371,40 @@ def exercise_restraint_table_filter():
 # -- the restraint tables against a real model --------------------------------
 
 
+def exercise_restraints_checkbox_marks_a_built_model():
+    """A model row's 'restraints' box is a state readout, not a toggle: it
+    ticks when the build lands (via restraints_changed), and the user cannot
+    click it into lying."""
+    if not monomer_library():
+        print("    (skipped: no monomer library)")
+        return
+
+    from PySide6.QtWidgets import QTreeWidgetItemIterator
+
+    app = ubiquitin_desktop()
+    try:
+        mid = app._models[0]["id"]
+        node = None
+        iterator = QTreeWidgetItemIterator(app._controls._loaded_tree)
+        while iterator.value():
+            candidate = iterator.value()
+            if candidate.data(0, Qt.ItemDataRole.UserRole) == ("model", mid):
+                node = candidate
+            iterator += 1
+        assert node is not None
+        assert node.text(2) == "restraints"
+        assert not (node.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+        # The warm may still be running; build + emit is the state transition
+        # every path funnels into, so drive it directly.
+        from pxviewer import edits as edits_mod
+        edits_mod.build_restraints(app._models[0]["session"].model)
+        app.bridge.restraints_changed.emit(mid)
+        assert node.checkState(2) == Qt.CheckState.Checked
+    finally:
+        dispose(app)
+
+
 def exercise_geometry_restraints_populate_the_tables():
     if not monomer_library():
         print("    (skipped: no monomer library)")

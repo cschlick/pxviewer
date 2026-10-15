@@ -321,6 +321,18 @@ def _set_macos_process_name(name: str = "pxviewer") -> None:
         pass
 
 
+def _restraints_built(entry) -> bool:
+    """Whether the model's geometry restraints have been processed — the state
+    the objects tree shows as its 'restraints' checkbox. pdb_interpretation
+    sets the manager (and the monomer mappings the selection grammar needs)
+    together; the check is the manager's availability."""
+    model = getattr(entry.get("session"), "model", None)
+    try:
+        return bool(model is not None and model.restraints_manager_available())
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 def _edit_summaries(scope) -> list:
     """``[{"kind", "summary"}]`` for a model's edits scope, for the tree and edits list.
 
@@ -1815,12 +1827,16 @@ class ControlsWindow:
         # pushes the rest of the pane into a scrollbar. On a 13" screen that space is the
         # difference between the pane fitting and not.
         self._loaded_tree.setMinimumHeight(_TREE_MIN_HEIGHT)
-        # Columns: [eye] [name]. One affordance each: the eye shows/hides the object,
-        # clicking anywhere on a row makes it the current object (the highlight) — the
-        # Appearance pane edits the current object, and a current *model* is also the
-        # active one (selection box, atoms table, geometry). No third control: the old
-        # active-model radio duplicated the highlight and just added a thing to decode.
-        self._loaded_tree.setColumnCount(2)
+        # Columns: [eye] [name] [restraints]. One affordance each: the eye
+        # shows/hides the object, clicking anywhere on a row makes it the current
+        # object (the highlight) — the Appearance pane edits the current object,
+        # and a current *model* is also the active one (selection box, atoms
+        # table, geometry). Column 2 is state, not a control: the "restraints"
+        # box on a model row ticks when its geometry restraints have been
+        # processed (the load-time warm, or on demand) — so a user can tell a
+        # model that is drag/selection-ready from one whose first use still pays
+        # the pdb_interpretation pass.
+        self._loaded_tree.setColumnCount(3)
         self._loaded_tree.setHeaderHidden(True)
         # Pin the selection paint. Native macOS uses the vivid accent with white text
         # (which drowned the dark eye icon) when focused, and a pale gray when not. A
@@ -1832,9 +1848,10 @@ class ControlsWindow:
             "QTreeWidget::item:selected { background: #b3d7ff;"
             " color: palette(text); }")
         header = self._loaded_tree.header()
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self._loaded_tree.currentItemChanged.connect(self._on_tree_current_changed)
         self._loaded_tree.itemClicked.connect(self._on_tree_item_clicked)
         # Double-clicks are caught at the raw event level, not via itemDoubleClicked:
@@ -6431,6 +6448,34 @@ class ControlsWindow:
         if self._table_model_id == mid:
             self._restraints_model_id = None      # force _ensure_restraints to refill
             self._ensure_restraints()
+        # Tick the row's "restraints" box without a whole-tree rebuild — and
+        # keep the items list agreeing, since a later rebuild reads it for
+        # tooltips/state outside _loaded_summary.
+        for it in self._items:
+            if it["kind"] == "model" and it["id"] == mid:
+                it["restraints_built"] = True
+        self._tick_restraints_box(mid, True)
+
+    def _tick_restraints_box(self, mid, built: bool) -> None:
+        """Set one model row's 'restraints' checkmark to the live build state."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QTreeWidgetItemIterator
+
+        iterator = QTreeWidgetItemIterator(self._loaded_tree)
+        while iterator.value():
+            node = iterator.value()
+            if node.data(0, Qt.ItemDataRole.UserRole) == ("model", mid):
+                node.setCheckState(2, Qt.CheckState.Checked if built
+                                   else Qt.CheckState.Unchecked)
+                node.setToolTip(2,
+                    "Geometry restraints built — bonds, angles and the "
+                    "structural selection keywords are ready"
+                    if built else
+                    "Geometry restraints not built yet — they process on "
+                    "first use (a drag, minimize, or a selection that needs "
+                    "them)")
+                return
+            iterator += 1
 
     def _on_origin_filter_changed(self, _index: int) -> None:
         self._apply_restraint_filter()
@@ -6695,6 +6740,25 @@ class ControlsWindow:
                 node.setText(1, indent + it["name"] + suffix.get(it["kind"], ""))
                 node.setToolTip(1, it["name"])  # full name on hover when elided
                 if it["kind"] == "model":
+                    # [restraints] — a state readout, not a toggle (the
+                    # checkable flag is stripped, so a click cannot lie about
+                    # whether the build has run). Ticked once the model's
+                    # restraints exist — usually seconds after load via the
+                    # background warm, or after whichever use first needed them.
+                    built = bool(it.get("restraints_built"))
+                    node.setCheckState(
+                        2, Qt.CheckState.Checked if built
+                        else Qt.CheckState.Unchecked)
+                    node.setText(2, "restraints")
+                    node.setFlags(
+                        node.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
+                    node.setToolTip(2,
+                        "Geometry restraints built — bonds, angles and the "
+                        "structural selection keywords are ready"
+                        if built else
+                        "Geometry restraints not built yet — they process on "
+                        "first use (a drag, minimize, or a selection that needs "
+                        "them)")
                     # The active model is the last model row you touched; the selection
                     # box, atoms table and geometry act on it. Bold — a foreground accent
                     # would vanish against the row-highlight background when the active
@@ -8391,10 +8455,14 @@ class DesktopApp:
             try:
                 from . import edits
 
+                built_now = False
                 with self._restraints_lock:
                     if not model.restraints_manager_available():
                         edits.build_restraints(model)
+                        built_now = True
                 entry.pop("restraints_error", None)
+                if built_now:
+                    self.bridge.restraints_changed.emit(mid)
             except Exception as exc:  # pragma: no cover - cctbx/runtime errors
                 # Recorded rather than swallowed. The warm runs on a thread and cannot ask
                 # the user anything, but a later minimize or drag can -- and asking is only
@@ -12474,6 +12542,7 @@ class DesktopApp:
              "types": list(self._type_groups(m).keys()), "hidden_types": sorted(m.get("hidden_types") or []),
              "conformers": self._conformers_of(m), "conformer": m.get("conformer"),
              "has_restraints_cif": bool(m.get("restraints_cif")),
+             "restraints_built": _restraints_built(m),
              "value_domain": ((m.get("attribute") or {}).get("domain")
                               if (m.get("attribute") or {}).get("name") in _MODEL_VALUE_COLORS
                               and m.get("color") == (m.get("attribute") or {}).get("name")
@@ -13842,7 +13911,19 @@ class DesktopApp:
             if dropped:
                 self._emit_scene_selection()
             return 0
+        # select_by can build the model's restraints on first use (the selection
+        # grammar's structural/spatial keywords need the processed model) — a
+        # real wait on a big structure, so say what it is doing before the GUI
+        # sits on it. Usually the load-time warm already did it and this is free.
+        built_before = _restraints_built(entry)
+        if not built_before:
+            self._status(f"Building geometry restraints for {entry['name']}…")
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()  # paint the status before the block
         sel = session.select_by(selection=text)  # cctbx; raises on invalid syntax
+        if not built_before and _restraints_built(entry):
+            self.bridge.restraints_changed.emit(mid)
+            self._status("Ready")
         return self._select_fragment(mid, session, entry, sel,
                                      focus=focus, clip=clip, context=context)
 

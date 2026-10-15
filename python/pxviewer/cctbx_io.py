@@ -472,14 +472,19 @@ class ModelData:
             )
         with self._lock:
             if self._process_for_selection is None:
-                # pdb_interpretation pass; ~0.5 s on 1ubq, scales with size.
-                # Failure just leaves the plain cache grammar (still has
-                # within() when crystal symmetry exists); attempted once.
+                # Funnel through edits.build_restraints — the serialized entry
+                # point that also folds in the user's custom bond/angle edits —
+                # not a bare model.process() (a concurrent bare build can race
+                # the load-time warm or a minimize build, and would ignore the
+                # edits scope). ~0.5 s on 1ubq, scales with size; a failure
+                # leaves the plain cache grammar (still has within() when
+                # crystal symmetry exists). Attempted once.
                 self._process_for_selection = True
                 if (hasattr(self.model, "selection")
                         and getattr(self.model, "_all_monomer_mappings", None) is None):
                     try:
-                        self.model.process(make_restraints=True)
+                        from .edits import build_restraints
+                        build_restraints(self.model)
                     except Exception:
                         pass
             if hasattr(self.model, "selection"):
