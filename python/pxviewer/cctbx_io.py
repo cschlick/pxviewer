@@ -407,6 +407,7 @@ class ModelData:
         # Custom per-atom scalar columns auto-detected from the model's mmCIF.
         self.attributes: dict = attributes or {}
         self._cache: Any = None
+        self._process_for_selection: Optional[bool] = None
         self._lock = threading.Lock()
 
     @classmethod
@@ -455,8 +456,14 @@ class ModelData:
     def selection_indices(self, expression: str) -> np.ndarray:
         """Resolve a cctbx atom-selection string to positional (i_seq) indices.
 
-        Uses `hierarchy.atom_selection_cache()` — the full Phenix selection language
-        — so nothing is reimplemented here. i_seq == our positional/wire index.
+        Routes through ``model.selection()`` — the mmtbx manager's cache is
+        built with ``special_position_settings`` (when crystal symmetry is
+        present) so spatial keywords like ``within``/``residues_within`` work,
+        and processing the model (done lazily below, once) turns on the
+        selection manager's extra predicates: ``backbone``, ``sidechain``,
+        ``rna``/``dna``/``nucleotide``, ``phosphate``, ``ribose``. The bare
+        ``hierarchy.atom_selection_cache()`` silently drops all of that.
+        i_seq == our positional/wire index.
         """
         if self.model is None:
             raise ValueError(
@@ -464,9 +471,23 @@ class ModelData:
                 "(build it via LiveSession.from_model_file / from_cctbx_model)"
             )
         with self._lock:
-            if self._cache is None:
-                self._cache = self.model.get_hierarchy().atom_selection_cache()
-            bsel = self._cache.selection(expression)  # flex.bool
+            if self._process_for_selection is None:
+                # pdb_interpretation pass; ~0.5 s on 1ubq, scales with size.
+                # Failure just leaves the plain cache grammar (still has
+                # within() when crystal symmetry exists); attempted once.
+                self._process_for_selection = True
+                if (hasattr(self.model, "selection")
+                        and getattr(self.model, "_all_monomer_mappings", None) is None):
+                    try:
+                        self.model.process(make_restraints=True)
+                    except Exception:
+                        pass
+            if hasattr(self.model, "selection"):
+                bsel = self.model.selection(expression)  # flex.bool
+            else:  # raw hierarchy — bare cache, no spatial keywords
+                if self._cache is None:
+                    self._cache = self.model.get_hierarchy().atom_selection_cache()
+                bsel = self._cache.selection(expression)
         return bsel.iselection().as_numpy_array()
 
     def diff(self, tol: float = 1e-3) -> Optional[str]:

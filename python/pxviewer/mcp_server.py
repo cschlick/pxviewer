@@ -32,32 +32,38 @@ _invoker = None      # _Invoker, main thread
 
 MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
 
-# The selection grammar below is verified against cctbx's
-# hierarchy.atom_selection_cache() on this build — several constructs from the
-# full Phenix reference (within(), backbone, xor, dash ranges, wildcards) are
-# NOT parsed here, and dash ranges fail *silently*, so the list must not
-# overpromise.
+# The selection grammar below is verified against this build's iotbx selection
+# machinery (model.selection() after lazy pdb_interpretation). Constructs that
+# fail are listed explicitly — several of them fail *silently* with zero atoms,
+# so the list must not overpromise.
 SELECTION_LANGUAGE = """\
-Selection strings are cctbx/Phenix selections (iotbx atom_selection_cache).
+Selection strings are cctbx/Phenix selections (iotbx/mmtbx selection).
 
 Fields: chain <id>, resseq <n> or resseq <n>:<m> (colon ranges), resid <n>[<icode>],
 resname <3-letter code>, name <atom name>, element <symbol>, altloc <id>,
 occupancy <op> <f> and bfactor <op> <f> where <op> is < <= > >= = !=
-Predicates: all, protein (alias peptide), water, hetero
+Predicates: all, protein (alias peptide), water, hetero, backbone, sidechain,
+rna, dna, nucleotide, phosphate, ribose
+Spatial: within(<angstroms>, <selection>) selects atoms within the radius;
+residues_within(<angstroms>, <selection>) selects whole residues within the radius
 Logic: and or not, parentheses. Multiple names/values need 'or'
 ('name CA or name CB'), never space lists.
 
 Examples:
-  chain A and resseq 5:14          first ten residues of chain A
-  resname LIG                      the ligand (check its code via structure_info)
-  element ZN                       zinc ions
-  chain A and resseq 29 and name CA    C-alpha of a residue
-  protein and not water            polymer atoms only
+  chain A and resseq 5:14               first ten residues of chain A
+  resname LIG                           the ligand (check codes via structure_info)
+  residues_within(6, resname HEM)       residues within 6 A of heme
+  within(4, chain B)                    atoms within 4 A of chain B
+  element ZN                            zinc ions
+  chain A and resseq 29 and name CA     C-alpha of a residue
+  backbone and resseq 23:34             just the helix backbone
+  protein and not water                 polymer atoms only
 
 NOT supported (syntax error or silent no-match):
-  within(...), backbone, sidechain, nucleic, xor, aniso, wildcards (name 'C*'),
   dash ranges (resseq 1-10 matches NOTHING — use resseq 1:10),
-  comparisons on resseq (resseq > 70 — use ranges).
+  comparisons on resseq (resseq > 70 — use a range),
+  value lists (resseq 5 7 9, name CA CB — use 'or'),
+  wildcards (name 'C*'), xor, aniso, nucleic (use nucleotide).
 
 Translating prose: call structure_info() or secondary_structure() FIRST to map
 requests like "the first helix tip" or "the ligand" onto real chains/resseqs,

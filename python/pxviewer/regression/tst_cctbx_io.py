@@ -166,6 +166,27 @@ def exercise_a_model_backed_session_uses_cctbx_selection():
     assert all(n == "CA" for n in sel.names)
 
 
+def exercise_spatial_and_structural_selection_keywords():
+    """The selection must go through the model's own machinery: its cache is
+    built with crystal special_position_settings (without which 'within' is a
+    syntax error) and lazy processing enables the selection manager's
+    backbone/sidechain predicates. A bare hierarchy.atom_selection_cache()
+    silently drops all of this — that's the bug this guards."""
+    session = LiveSession.from_model_file(UBIQUITIN)
+
+    near = session.select_by(selection="within(5, resseq 40)")
+    assert len(near) > 0
+
+    whole = session.select_by(selection="residues_within(5, resseq 40)")
+    # residue expansion strictly contains the atom-level within()
+    assert set(whole.indices) >= set(near.indices)
+    assert len(whole) > len(near)
+
+    backbone = session.select_by(selection="backbone")
+    assert all(n in ("N", "CA", "C", "O") for n in backbone.names)
+    assert len(backbone) == 304  # 76 residues x 4 backbone atoms
+
+
 def exercise_diff_detects_model_drift():
     loaded = load_model(UBIQUITIN)
     data = ModelData(loaded.arrays, model=loaded.model)
