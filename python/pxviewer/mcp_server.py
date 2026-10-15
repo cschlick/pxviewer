@@ -397,6 +397,137 @@ def _make_server():
         return {"atoms": n, "residues": residues[:40],
                 "truncated": len(residues) > 40, "focus": focus}
 
+    # -- python-side introspection -----------------------------------------
+    # The viewport wire shows a subset of the app's state; these read the
+    # model entries and cctbx data directly.
+
+    @mcp.tool()
+    async def selection_state() -> dict:
+        """The current scene selection — per model, the selected atom count
+        and residue labels. This is the same state the GUI tables and
+        clip-sphere see: a selection is a selection."""
+        def work():
+            out = {}
+            for mid, indices in _app._scene_selection.items():
+                entry = _app._model_entry(mid)
+                session = entry.get("session") if entry else None
+                residues, seen = [], set()
+                if session is not None:
+                    arrays = session._data.arrays
+                    for i in indices:
+                        key = (arrays.chain[i], int(arrays.resseq[i]),
+                               arrays.resname[i])
+                        if key not in seen:
+                            seen.add(key)
+                            residues.append(
+                                f"{key[0]}/{key[2]}{key[1]}" if key[0]
+                                else f"{key[2]}{key[1]}")
+                out[mid] = {"atoms": len(indices),
+                            "residues": residues[:40],
+                            "truncated": len(residues) > 40,
+                            "name": entry.get("name") if entry else None}
+            return out
+        return {"selection": await _qt(work)}
+
+    @mcp.tool()
+    async def atoms(expression: str, model: str = None) -> dict:
+        """Per-atom records for a selection without applying it — for
+        questions the grammar can't ask alone ('which tyrosine is closest to
+        residue 40': select resname TYR here and compare xyz against the
+        reference's). Fields: i (positional index), name, chain, resseq,
+        resname, element, xyz, b, occ. Capped at 2000 atoms; 'centroid' is
+        always over the full match."""
+        def work():
+            mid, session = _model_session(model)
+            data = session._data
+            indices = data.selection_indices(expression)
+            a = data.arrays
+            cap = 2000
+            atoms = []
+            for i in indices[:cap]:
+                i = int(i)
+                atoms.append({
+                    "i": i, "name": a.name[i], "chain": a.chain[i],
+                    "resseq": int(a.resseq[i]), "resname": a.resname[i],
+                    "element": a.element[i],
+                    "xyz": [round(float(a.x[i]), 3), round(float(a.y[i]), 3),
+                            round(float(a.z[i]), 3)],
+                    "b": None if a.b is None else round(float(a.b[i]), 2),
+                    "occ": None if a.occ is None else round(float(a.occ[i]), 3)})
+            centroid = None
+            if indices:
+                import numpy as np
+                centroid = np.stack([a.x, a.y, a.z],
+                                    axis=1)[list(indices)].mean(axis=0)
+                centroid = [round(float(v), 3) for v in centroid]
+            return {"model": mid, "atoms": atoms, "matched": len(indices),
+                    "truncated": len(indices) > cap, "centroid": centroid}
+        return await _qt(work)
+
+    @mcp.tool()
+    async def model_state(model: str) -> dict:
+        """Full Python-side state of one model: appearance (clip, sphere,
+        rep, color), structure-type layers, hidden-atom count, conformer,
+        attribute-coloring domain, restraint-edit count, and whether the
+        geometry restraints have been processed (the objects-tree checkbox)."""
+        def work():
+            mid = _model_id(model)
+            entry = _app._model_entry(mid) if mid else None
+            if entry is None:
+                raise ValueError("no such model: %r" % model)
+            from pxviewer.desktop import _restraints_built
+            session = entry["session"]
+            attribute = entry.get("attribute")
+            return {
+                "id": mid, "name": entry.get("name"),
+                "atoms": session._data.n_atoms if session else None,
+                "rep": entry.get("rep"), "color": entry.get("color"),
+                "visible": entry.get("visible", True),
+                "types": _app.model_structure_types(mid),
+                "hidden_atoms": len(entry.get("hidden_atoms") or ()),
+                "conformer": entry.get("conformer"),
+                "conformers": entry.get("conformers") or [],
+                "value_domain": attribute.get("domain") if attribute else None,
+                "edits": len(_app.model_edits(mid)),
+                "restraints_built": _restraints_built(entry),
+                "selected": len(_app._scene_selection.get(mid, ())),
+                **_app.model_appearance(mid),
+            }
+        return {"model": await _qt(work)}
+
+    @mcp.tool()
+    async def volume_state(volume: str) -> dict:
+        """Full Python-side state of one volume: style/color/iso/opacity,
+        clip, sphere, mask radius, negative contour, source and pairing."""
+        def work():
+            vid = _volume_id(volume)
+            entry = _app._volume_entry(vid) if vid else None
+            if entry is None:
+                raise ValueError("no such volume: %r" % volume)
+            state = _app.volume_appearance(vid)
+            state.update({"id": vid, "name": entry.get("name"),
+                          "source": entry.get("source")})
+            return state
+        return {"volume": await _qt(work)}
+
+    @mcp.tool()
+    async def reflections() -> dict:
+        """The loaded reflection files — ids and names for make_maps."""
+        def work():
+            return [{"id": r["id"], "name": r.get("name"),
+                     "group": r.get("group")} for r in _app._reflections]
+        return {"reflections": await _qt(work)}
+
+    @mcp.tool()
+    async def primitives() -> dict:
+        """The measurement/label primitives drawn on the control session —
+        ids for remove_primitive."""
+        session = _session()
+        out = []
+        for pid, message in session._primitives.items():
+            out.append({"id": pid, "kind": message.get("kind")})
+        return {"primitives": out}
+
     @mcp.tool()
     async def clear_selection() -> dict:
         """Clear the standing selection."""
