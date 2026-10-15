@@ -439,6 +439,22 @@ def _make_server():
         return {"volume": await _qt(work)}
 
     @mcp.tool()
+    async def set_clip_sphere(mode: str, radius: float = None,
+                              model: str = None) -> dict:
+        """Clip-sphere policy for a model: 'selection' (sphere re-fits to each
+        selection — armed even while dormant), 'view' (sphere follows the
+        camera target, Coot-style), 'point' (frozen at the current center),
+        'off'. radius is in angstroms; a selection-mode radius is fitted, so
+        pass one only for view/point."""
+        def work():
+            mid = _model_id(model)
+            if mid is None:
+                raise ValueError("no such model: %r" % model)
+            _app.set_model_sphere(mid, mode, radius)
+            return _app.model_sphere_state(mid)
+        return {"sphere": await _qt(work)}
+
+    @mcp.tool()
     async def set_background(color: str) -> dict:
         """Set the viewport background (hex color, e.g. '#101018')."""
         _session().set_background(color)
