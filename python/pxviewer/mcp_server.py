@@ -30,6 +30,29 @@ from pathlib import Path
 _app = None          # DesktopApp, main thread
 _invoker = None      # _Invoker, main thread
 
+MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
+
+
+def _make_invoker():
+    from PySide6.QtCore import QObject, Signal
+
+    class _Invoker(QObject):
+        run_job = Signal(object)
+
+        def __init__(self):
+            super().__init__()
+            self.run_job.connect(self._run)
+
+        def _run(self, job):
+            fn, fut = job
+            if fut.set_running_or_notify_cancel():
+                try:
+                    fut.set_result(fn())
+                except BaseException as exc:
+                    fut.set_exception(exc)
+
+    return _Invoker()
+
 
 def _invoke(fn):
     """Run ``fn`` on the Qt thread, return a Future for its result."""
@@ -88,28 +111,55 @@ def _volume_id(name):
     return None
 
 
+def attach(app, port: int = MCP_PORT) -> "str | None":
+    """Serve the MCP tool surface over HTTP for an already-running DesktopApp.
+
+    Called on the Qt thread during ``DesktopApp.start`` so the invoker's
+    signals land on the right loop. Returns the URL clients point at, or None
+    if the ``mcp`` package is absent or the port is taken (a second pxviewer
+    instance keeps working, just without an endpoint).
+    """
+    global _app, _invoker
+    try:
+        import mcp  # noqa: F401
+    except ImportError:
+        return None
+    import socket
+
+    probe = socket.socket()
+    try:
+        probe.bind(("127.0.0.1", port))
+    except OSError:
+        print(f"pxviewer: MCP port {port} in use — this instance serves no endpoint",
+              flush=True)
+        return None
+    finally:
+        probe.close()
+
+    _app = app
+    _invoker = _make_invoker()
+    server = _make_server()
+    server.settings.host = "127.0.0.1"
+    server.settings.port = port
+
+    def serve():
+        try:
+            server.run(transport="streamable-http")
+        except Exception as exc:  # noqa: BLE001 — nothing else reports it
+            print("pxviewer: MCP server stopped: %r" % exc, file=sys.stderr)
+
+    threading.Thread(target=serve, name="pxviewer-mcp", daemon=True).start()
+    url = f"http://127.0.0.1:{port}/mcp"
+    print(f"pxviewer: MCP tools at {url}  (PXVIEWER_MCP=0 to disable)", flush=True)
+    return url
+
+
 def _start_app():
     """Build the desktop app the way run_desktop starts it; return the app."""
     global _app, _invoker
-    from PySide6.QtCore import QObject, Signal
     from PySide6.QtWidgets import QApplication
 
     from pxviewer import gpu as gpu_backend
-
-    class _Invoker(QObject):
-        run_job = Signal(object)
-
-        def __init__(self):
-            super().__init__()
-            self.run_job.connect(self._run)
-
-        def _run(self, job):
-            fn, fut = job
-            if fut.set_running_or_notify_cancel():
-                try:
-                    fut.set_result(fn())
-                except BaseException as exc:
-                    fut.set_exception(exc)
 
     gpu_mode = gpu_backend.configure(None)
     qt_app = QApplication(sys.argv[:1])
@@ -124,7 +174,7 @@ def _start_app():
     app._controls.widget().show()
     app._main.resize(1400, 900)
     _app = app
-    _invoker = _Invoker()
+    _invoker = _make_invoker()
     return qt_app, app
 
 

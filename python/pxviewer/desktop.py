@@ -7283,6 +7283,17 @@ class DesktopApp:
         self._dismiss_splash()
         self._status(f"Ready — serving {self._webapp.url}")
         print(f"pxviewer desktop viewer running at {self._webapp.url}", flush=True)
+
+        # The MCP tool surface rides along with the app: agents attach to the
+        # HTTP endpoint and drive this live session rather than a detached
+        # instance. Localhost-only; opt out with PXVIEWER_MCP=0. (An agent that
+        # can call save_view can write files, so this is a convenience for the
+        # machine's owner, not a network API.)
+        import os as _os
+        if _os.environ.get("PXVIEWER_MCP", "1") not in ("0", "false", "no"):
+            from . import mcp_server
+            mcp_server.attach(self)
+
         print("Press Ctrl-C (or close a window) to stop.", flush=True)
 
         self._install_sigint_handler()
