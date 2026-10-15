@@ -157,25 +157,15 @@ def attach(app, port: int = MCP_PORT) -> "str | None":
 
     Called on the Qt thread during ``DesktopApp.start`` so the invoker's
     signals land on the right loop. Returns the URL clients point at, or None
-    if the ``mcp`` package is absent or the port is taken (a second pxviewer
-    instance keeps working, just without an endpoint).
+    if the ``mcp`` package is absent. If the port is already held (a second
+    pxviewer instance), the serve thread retries for a few minutes so the
+    endpoint comes up when the holder exits.
     """
     global _app, _invoker
     try:
         import mcp  # noqa: F401
     except ImportError:
         return None
-    import socket
-
-    probe = socket.socket()
-    try:
-        probe.bind(("127.0.0.1", port))
-    except OSError:
-        print(f"pxviewer: MCP port {port} in use — this instance serves no endpoint",
-              flush=True)
-        return None
-    finally:
-        probe.close()
 
     _app = app
     _invoker = _make_invoker()
@@ -184,10 +174,29 @@ def attach(app, port: int = MCP_PORT) -> "str | None":
     server.settings.port = port
 
     def serve():
-        try:
-            server.run(transport="streamable-http")
-        except Exception as exc:  # noqa: BLE001 — nothing else reports it
-            print("pxviewer: MCP server stopped: %r" % exc, file=sys.stderr)
+        # A second instance loses the port race — keep retrying briefly so it
+        # picks the endpoint up once the holder exits, rather than never
+        # having MCP at all. Bounded so a permanently busy port doesn't spam.
+        import errno
+        deadline = time.time() + 600
+        noted_busy = False
+        while True:
+            try:
+                server.run(transport="streamable-http")
+                return  # clean stop
+            except OSError:
+                if time.time() > deadline:
+                    print("pxviewer: MCP port still busy — no endpoint",
+                          file=sys.stderr)
+                    return
+                if not noted_busy:
+                    print("pxviewer: MCP port busy — retrying while the holder "
+                          "is up", file=sys.stderr)
+                    noted_busy = True
+                time.sleep(10)
+            except Exception as exc:  # noqa: BLE001 — nothing else reports it
+                print("pxviewer: MCP server stopped: %r" % exc, file=sys.stderr)
+                return
 
     threading.Thread(target=serve, name="pxviewer-mcp", daemon=True).start()
     url = f"http://127.0.0.1:{port}/mcp"
