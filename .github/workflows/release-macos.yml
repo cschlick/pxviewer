@@ -42,8 +42,44 @@ jobs:
           npm --prefix frontend ci
           ./scripts/build_frontend.sh
 
+      # Optional signing: present the secrets and the dmg ships signed +
+      # notarized; absent, the build stays ad-hoc (Gatekeeper warns on
+      # download). Secrets used: APPLE_CERTIFICATE (base64 .p12 of the
+      # Developer ID Application cert), APPLE_CERTIFICATE_PASSWORD,
+      # APPLE_SIGNING_IDENTITY, and either NOTARY_KEY{,_ID,_ISSUER} (App Store
+      # Connect API key) or APPLE_ID/APPLE_TEAM_ID/APPLE_APP_SPECIFIC_PASSWORD.
+      - name: Import signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        if: env.APPLE_CERTIFICATE != ''
+        run: |
+          CERT="$RUNNER_TEMP/developer-id.p12"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT"
+          security create-keychain -p build build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p build build.keychain
+          security set-keychain-settings build.keychain
+          security import "$CERT" -k build.keychain \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          # Without this the first codesign pops a GUI prompt and hangs CI.
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k build build.keychain
+
       - name: Build pxviewer.app + dmg
-        run: ./scripts/build_macos_app.sh
+        env:
+          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          NOTARY_KEY_FILE: ${{ runner.temp }}/notary-key.p8
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        run: |
+          if [[ -n "${{ secrets.NOTARY_KEY_B64 }}" ]]; then
+            echo "${{ secrets.NOTARY_KEY_B64 }}" | base64 --decode > "$NOTARY_KEY_FILE"
+          fi
+          ./scripts/build_macos_app.sh
 
       - uses: actions/upload-artifact@v4
         with:

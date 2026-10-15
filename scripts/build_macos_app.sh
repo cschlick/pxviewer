@@ -18,12 +18,22 @@
 #   pxviewer.app/Contents/Resources/env/        conda-packed environment
 #   pxviewer.app/Contents/Info.plist            bundle metadata + icon ref
 #
-# Signing: the bundle is ad-hoc signed, which is all arm64 requires to RUN
-# locally — but a downloaded unsigned app is quarantined by Gatekeeper, so the
-# first launch needs right-click -> Open (or `xattr -dr com.apple.quarantine`).
-# With a Developer ID identity this becomes a one-flag change: export
-# SIGNING_IDENTITY="Developer ID Application: <name>" and re-run; notarization
-# (`xcrun notarytool`) is then the remaining step for a warning-free install.
+# Signing + notarization, driven by environment:
+#
+#   SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+#       Real Developer ID signature with the hardened runtime. Every Mach-O
+#       inside the bundled env is signed inside-out, then the .app, then the
+#       dmg. Without it the bundle is ad-hoc signed, which is all arm64
+#       requires to RUN locally — but Gatekeeper quarantines a downloaded
+#       unsigned app, and recent macOS removed the right-click -> Open bypass.
+#
+#   Notarization (only meaningful with a real identity; it's what removes the
+#   download warning entirely) uses whichever credential set is present:
+#       NOTARY_PROFILE=<name>        a `notarytool store-credentials` profile
+#       APPLE_ID + APPLE_TEAM_ID + APPLE_APP_SPECIFIC_PASSWORD
+#       NOTARY_KEY_FILE + NOTARY_KEY_ID + NOTARY_ISSUER   (App Store Connect API key)
+#   With no notarization credentials the build stays signed-but-unnotarized:
+#   Gatekeeper still warns on download, just less cryptically.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -237,8 +247,76 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns -o "$APP/Contents/Resources/icon.icns" "$ICONSET"
 
-# -- ad-hoc sign (arm64 requires *some* signature; Developer ID is the real fix)
-codesign --deep --force --sign "${SIGNING_IDENTITY:--}" "$APP"
+# -- sign ---------------------------------------------------------------------
+SIGNED=""
+NOTARIZED=""
+if [[ -n "${SIGNING_IDENTITY:-}" && "${SIGNING_IDENTITY:-}" != "-" ]]; then
+  echo "==> signing with Developer ID: $SIGNING_IDENTITY"
+  ENTITLEMENTS="$BUILD/entitlements.plist"
+  cat > "$ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- WebKit's JS engine JIT-compiles; hardened runtime needs both of these. -->
+  <key>com.apple.security.cs.allow-jit</key>                       <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <!-- The bundled env is signed here, but a late dlopen (Qt plugin, user
+       extension) must not hard-fail the process. -->
+  <key>com.apple.security.cs.disable-library-validation</key>      <true/>
+</dict>
+</plist>
+PLIST
+
+  # Inside-out: every Mach-O in the bundled env first (executables get the
+  # entitlements, dylibs don't need them), then the bundle so its seal covers
+  # all of it. `file` decides Mach-O-ness — extensions lie.
+  echo "==> signing bundled binaries"
+  find "$ENV_APP" -type f \( -perm +111 -o -name "*.dylib" -o -name "*.so" \) -print0 |
+    while IFS= read -r -d '' f; do
+      if file -b "$f" | grep -q "Mach-O"; then
+        extra=()
+        [[ -x "$f" ]] && extra=(--entitlements "$ENTITLEMENTS")
+        codesign --force --options runtime --timestamp \
+          "${extra[@]}" --sign "$SIGNING_IDENTITY" "$f"
+      fi
+    done
+  echo "==> signing pxviewer.app"
+  codesign --force --options runtime --timestamp \
+    --entitlements "$ENTITLEMENTS" --sign "$SIGNING_IDENTITY" "$APP"
+  codesign --verify --deep --strict --verbose=2 "$APP" && SIGNED=1
+else
+  # Ad-hoc: enough for arm64 to run locally, not enough for a clean download.
+  codesign --deep --force --sign - "$APP"
+fi
+
+# -- notarize -----------------------------------------------------------------
+notary_args=()
+if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+  notary_args+=(--keychain-profile "$NOTARY_PROFILE")
+elif [[ -n "${NOTARY_KEY_FILE:-}" && -f "${NOTARY_KEY_FILE:-}" ]]; then
+  notary_args+=(--key "$NOTARY_KEY_FILE" --key-id "$NOTARY_KEY_ID"
+                --issuer "$NOTARY_ISSUER")
+elif [[ -n "${APPLE_ID:-}" ]]; then
+  notary_args+=(--apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID"
+                --password "$APPLE_APP_SPECIFIC_PASSWORD")
+fi
+
+notarize() {  # submit + wait + staple a file that carries a signature
+  xcrun notarytool submit "${notary_args[@]}" --wait "$1"
+  xcrun stapler staple "$1"
+}
+
+if [[ -n "$SIGNED" && ${#notary_args[@]} -gt 0 ]]; then
+  echo "==> notarizing pxviewer.app"
+  # notarytool wants a container; stapling lands on the .app itself.
+  ditto -c -k --keepParent "$APP" "$BUILD/pxviewer-app.zip"
+  xcrun notarytool submit "${notary_args[@]}" --wait "$BUILD/pxviewer-app.zip"
+  xcrun stapler staple "$APP"
+  NOTARIZED=1
+elif [[ -n "$SIGNED" ]]; then
+  echo "==> signed but no notary credentials — Gatekeeper will still warn on download"
+fi
 
 # -- dmg ----------------------------------------------------------------------
 ln -sfn /Applications "$STAGE/Applications"
@@ -248,7 +326,21 @@ rm -f "$DMG" "$DMG".*.dmgpart
 # this runs on CI. Requires macOS 10.15+, and the plist already floors at 12.0.
 hdiutil create -volname pxviewer -srcfolder "$STAGE" -ov -format ULMO "$DMG" >/dev/null
 
+if [[ -n "$SIGNED" ]]; then
+  echo "==> signing dmg"
+  codesign --force --timestamp --sign "$SIGNING_IDENTITY" "$DMG"
+fi
+if [[ -n "$NOTARIZED" ]]; then
+  echo "==> notarizing dmg"
+  notarize "$DMG"
+fi
+
 echo
 echo "==> built: $DMG ($(du -h "$DMG" | cut -f1) dmg)"
-echo "    unsigned: first launch needs right-click -> Open, or:"
-echo "      xattr -dr com.apple.quarantine /Applications/pxviewer.app"
+if [[ -n "$NOTARIZED" ]]; then
+  echo "    signed + notarized: opens clean on any Mac"
+elif [[ -n "$SIGNED" ]]; then
+  echo "    signed, unnotarized: Gatekeeper warns but Privacy & Security -> Open Anyway works"
+else
+  echo "    unsigned: first launch needs xattr -dr com.apple.quarantine /Applications/pxviewer.app"
+fi
