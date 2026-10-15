@@ -277,6 +277,50 @@ def _app_icon():
     return QIcon(str(_ICON_PATH)) if _ICON_PATH.exists() else None
 
 
+def _set_macos_process_name(name: str = "pxviewer") -> None:
+    """Rename the process so the macOS menubar app menu and Dock label read
+    ``pxviewer`` rather than ``python``.
+
+    Qt's ``applicationName``/``displayName`` cover the window title and about
+    box, but the bold app-menu name (and the Dock label for an unbundled
+    process) come from ``NSProcessInfo.processName``, which for a bare
+    interpreter is ``python``. Renamed via the Objective-C runtime (no pyobjc
+    dependency) right after QApplication exists, before the menubar is
+    assembled. A no-op off darwin or if the runtime is unavailable.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        libobjc = ctypes.CDLL(ctypes.util.find_library("libobjc"))
+        sel = libobjc.sel_registerName
+        sel.restype = ctypes.c_void_p
+        sel.argtypes = [ctypes.c_char_p]
+
+        def send(obj, selector: bytes, *args):
+            """objc_msgSend with an explicit per-call prototype — passing
+            varargs beyond ``argtypes`` crashes on ARM64, so each call declares
+            the full signature."""
+            fn = libobjc.objc_msgSend
+            fn.restype = ctypes.c_void_p
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [
+                type(a) for a in args]
+            return fn(ctypes.c_void_p(obj), sel(selector), *args)
+
+        get_class = libobjc.objc_getClass
+        get_class.restype = ctypes.c_void_p
+        get_class.argtypes = [ctypes.c_char_p]
+
+        info = send(get_class(b"NSProcessInfo"), b"processInfo")
+        ns_name = send(get_class(b"NSString"), b"stringWithUTF8String:",
+                       ctypes.c_char_p(name.encode("utf-8")))
+        send(info, b"setProcessName:", ctypes.c_void_p(ns_name))
+    except Exception:
+        pass
+
+
 def _edit_summaries(scope) -> list:
     """``[{"kind", "summary"}]`` for a model's edits scope, for the tree and edits list.
 
@@ -6966,6 +7010,7 @@ class DesktopApp:
         self._app = QApplication.instance()
         if self._app is None:
             self._app = QApplication(sys.argv[:1])
+        _set_macos_process_name()
         # Always the light theme, whatever the OS is set to. Dark mode never rendered
         # well here (half-dark panels, unreadable accents) and is not worth maintaining.
         # Pinned before any widget exists so nothing ever paints from a dark palette;
