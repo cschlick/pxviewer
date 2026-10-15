@@ -162,7 +162,9 @@ def _start_app():
     from pxviewer import gpu as gpu_backend
 
     gpu_mode = gpu_backend.configure(None)
-    qt_app = QApplication(sys.argv[:1])
+    from pxviewer.desktop import _set_macos_process_name
+    _set_macos_process_name()
+    qt_app = QApplication(["pxviewer"])
     qt_app.setApplicationName("pxviewer")
 
     from pxviewer.desktop import DesktopApp

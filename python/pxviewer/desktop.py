@@ -7006,11 +7006,16 @@ class DesktopApp:
         # this from the GL backend (hardware only). See pxviewer.gpu and [[gpu-webgl]].
         self._can_hide = bool(can_hide)
 
-        # Qt must be initialized before any widgets are created.
+        # Qt must be initialized before any widgets are created — and the
+        # process must be renamed before QApplication/NSApplication init, which
+        # snapshots the name the macOS menubar app menu will show.
+        _set_macos_process_name()
         self._app = QApplication.instance()
         if self._app is None:
-            self._app = QApplication(sys.argv[:1])
-        _set_macos_process_name()
+            # argv[0] of "pxviewer": an unbundled process derives its app name
+            # from it — leaving the interpreter's argv would say "python" (or
+            # "__main__" under -m) anywhere Qt falls back to the executable.
+            self._app = QApplication(["pxviewer"])
         # Always the light theme, whatever the OS is set to. Dark mode never rendered
         # well here (half-dark panels, unreadable accents) and is not worth maintaining.
         # Pinned before any widget exists so nothing ever paints from a dark palette;
