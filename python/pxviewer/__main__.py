@@ -120,6 +120,11 @@ def main() -> None:
              "settable with PXVIEWER_GPU.")
 
     subparsers.add_parser(
+        "mcp",
+        help="Run an MCP server that drives a live pxviewer session "
+             "(opens the real desktop windows)")
+
+    subparsers.add_parser(
         "install-desktop-entry",
         help="Install a Linux .desktop file so the launcher shows pxviewer's icon")
 
@@ -249,6 +254,11 @@ def main() -> None:
     elif args.command == "desktop":
         from .desktop import run_desktop
         sys.exit(run_desktop(host=args.host, port=args.port, gpu=args.gpu))
+
+    elif args.command == "mcp":
+        from .mcp_server import run as run_mcp
+
+        sys.exit(run_mcp())
 
     elif args.command == "install-desktop-entry":
         from .desktop import install_desktop_entry

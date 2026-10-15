@@ -1,0 +1,100 @@
+{
+  "format": "pxviewer-view",
+  "version": 1,
+  "saved": "2026-10-13 19:03:17",
+  "bundle_data": false,
+  "camera": {
+    "target": [
+      97.85100944836933,
+      93.85709069537468,
+      93.85709069537468
+    ],
+    "position": [
+      97.85100944836933,
+      93.85709069537468,
+      242.95515317795304
+    ],
+    "up": [
+      0,
+      1,
+      0
+    ],
+    "radius": 174.1252389825979,
+    "radiusMax": 174.1252389825979,
+    "near": 1,
+    "far": 323.2233014651763,
+    "fov": 0.7853981633974483,
+    "viewport": {
+      "width": 2558,
+      "height": 1864
+    }
+  },
+  "background": "#ffffff",
+  "active": "model-1",
+  "objects": [
+    {
+      "kind": "model",
+      "id": "model-1",
+      "name": "7BV2 model",
+      "source": null,
+      "data": "figure1.pxview.data/model-1.cif",
+      "visible": true,
+      "group": "7BV2 (EMD-30210)",
+      "rep": "ball-and-stick",
+      "color": null,
+      "color_default": "#FF6F61",
+      "attribute": null,
+      "hidden_types": [],
+      "hidden_atoms": [],
+      "clip": [
+        0.0,
+        1.0
+      ],
+      "sphere": {
+        "mode": "selection",
+        "radius": null,
+        "center": null
+      },
+      "clip_depth": null,
+      "interactions": false,
+      "edits": [],
+      "selection": {
+        "indices": [],
+        "expression": ""
+      },
+      "context": false
+    },
+    {
+      "kind": "volume",
+      "id": "volume-1",
+      "name": "EMD-30210 map",
+      "source": null,
+      "data": "figure1.pxview.data/volume-1.map",
+      "visible": true,
+      "group": "7BV2 (EMD-30210)",
+      "iso": 4.26962723803855,
+      "color": "#4CC9F0",
+      "opacity": 0.8,
+      "style": "surface",
+      "clip": [
+        0.0,
+        1.0
+      ],
+      "sphere": {
+        "mode": "off",
+        "radius": null,
+        "center": null
+      },
+      "negative_color": null,
+      "iso_kind": "relative",
+      "negative_iso": null,
+      "negative_visible": true,
+      "negative_opacity": 1.0,
+      "negative_style": "surface",
+      "mask_radius": null,
+      "is_resolution": false,
+      "pinned_to": null,
+      "color_by_resolution": false
+    }
+  ]
+}

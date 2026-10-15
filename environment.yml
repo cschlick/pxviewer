@@ -82,3 +82,7 @@ dependencies:
   - pip
   - pip:
       - qtconsole>=5.5
+      # mcp: the `pxviewer mcp` server (an agent-facing tool surface driving a
+      # live session). PyPI-only; pinned under 2.0, where the FastMCP API was
+      # renamed. Optional at runtime — only imported by the mcp subcommand.
+      - mcp>=1.10,<2
