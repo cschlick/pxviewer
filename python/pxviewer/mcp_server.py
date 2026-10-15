@@ -529,6 +529,123 @@ def _make_server():
         return {"primitives": out}
 
     @mcp.tool()
+    async def atom_table(model: str = None) -> dict:
+        """The model's full atom table as columnar arrays — the raw data behind
+        the viewport: name, resname, chain, resseq, element, altloc, x, y, z,
+        b, occ. Row order is the positional (i_seq) index everything else uses.
+        For a selection subset use atoms(expression)."""
+        def work():
+            mid, session = _model_session(model)
+            a = session._data.arrays
+            out = {"model": mid}
+            for key in ("name", "resname", "chain", "resseq", "element",
+                        "altloc", "x", "y", "z", "b", "occ"):
+                col = getattr(a, key, None)
+                out[key] = (col.tolist() if hasattr(col, "tolist")
+                            else (list(col) if col is not None else None))
+            out["n"] = session._data.n_atoms
+            return out
+        return await _qt(work)
+
+    @mcp.tool()
+    async def model_text(model: str = None, format: str = "pdb") -> dict:
+        """The model's coordinates as text — 'pdb' or 'mmcif' — exactly what
+        write_object would put on disk."""
+        def work():
+            mid, session = _model_session(model)
+            model_obj = getattr(session, "model", None)
+            if model_obj is None:
+                raise ValueError("the object has no cctbx model")
+            hierarchy = model_obj.get_hierarchy()
+            if format == "pdb":
+                text = hierarchy.as_pdb_string()
+            elif format == "mmcif":
+                try:
+                    text = hierarchy.as_mmcif_string()
+                except AttributeError:
+                    raise ValueError("this cctbx has no as_mmcif_string — "
+                                     "use format='pdb'")
+            else:
+                raise ValueError("format must be 'pdb' or 'mmcif'")
+            return {"model": mid, "format": format, "text": text}
+        return await _qt(work)
+
+    @mcp.tool()
+    async def map_data(volume: str, voxels: bool = False,
+                       decimate: int = 1) -> dict:
+        """A map's grid — metadata and statistics always; the voxel values
+        too with voxels=True (flattened, row-major over grid, refused above
+        ~2M voxels: raise decimate to subsample on-lattice, or write_object
+        the map file instead)."""
+        def work():
+            vid = _volume_id(volume)
+            entry = _app._volume_entry(vid) if vid else None
+            if entry is None:
+                raise ValueError("no such volume: %r" % volume)
+            data = entry["data"]
+            if decimate != 1:
+                data = data.decimated(decimate)
+            out = {"volume": vid, "name": entry.get("name"),
+                   "grid": list(data.grid), "origin": list(data.origin),
+                   "pixel_sizes": list(data.pixel_sizes),
+                   "unit_cell": list(data.unit_cell),
+                   "unit_cell_grid": list(data.unit_cell_grid),
+                   "space_group": data.space_group,
+                   "decimated": decimate,
+                   "stats": data.stats()}
+            if voxels:
+                arr = data.array
+                if arr.size > 2_000_000:
+                    raise ValueError(
+                        f"{arr.size} voxels — use decimate>1 or write_object")
+                out["voxels"] = arr.reshape(-1).tolist()
+            return out
+        return await _qt(work)
+
+    @mcp.tool()
+    async def reflection_data(rid: str) -> dict:
+        """A reflection file's arrays as columns — each array's label, hkl
+        indices and values (real/imag split for map coefficients; sigmas
+        included when the file carries them)."""
+        def work():
+            import numpy as np
+            entry = _app._reflection_entry(
+                next((r["id"] for r in _app._reflections
+                      if rid in (r["id"], r.get("name"))), rid))
+            if entry is None:
+                raise ValueError("no such reflections: %r" % rid)
+            data = entry["data"]
+            out = {"id": entry["id"], "name": entry.get("name"),
+                   "path": data.path, "labels": data.labels,
+                   "map_coefficients": data.map_coefficient_labels,
+                   "arrays": []}
+            for arr in data.arrays:
+                try:
+                    indices = arr.indices().as_vec3_double().as_numpy_array()
+                    values = arr.data().as_numpy_array()
+                except Exception:
+                    continue
+                rec = {"label": (arr.info().label_string()
+                                 if arr.info() else "?"),
+                       "n": len(values),
+                       "indices": [[int(h), int(k), int(l)]
+                                   for h, k, l in indices]}
+                if values.dtype == np.complex128:
+                    rec["real"] = values.real.tolist()
+                    rec["imag"] = values.imag.tolist()
+                else:
+                    rec["values"] = values.tolist()
+                    try:
+                        sig = arr.sigmas()
+                        if sig is not None:
+                            rec["sigmas"] = sig.as_numpy_array().tolist()
+                    except Exception:
+                        pass
+                out["arrays"].append(rec)
+            return out
+        return await _qt(work)
+
+    @mcp.tool()
     async def clear_selection() -> dict:
         """Clear the standing selection."""
         await _qt(lambda: _app.clear_selection())
