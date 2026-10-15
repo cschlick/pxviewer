@@ -32,6 +32,47 @@ _invoker = None      # _Invoker, main thread
 
 MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
 
+# The selection grammar below is verified against cctbx's
+# hierarchy.atom_selection_cache() on this build — several constructs from the
+# full Phenix reference (within(), backbone, xor, dash ranges, wildcards) are
+# NOT parsed here, and dash ranges fail *silently*, so the list must not
+# overpromise.
+SELECTION_LANGUAGE = """\
+Selection strings are cctbx/Phenix selections (iotbx atom_selection_cache).
+
+Fields: chain <id>, resseq <n> or resseq <n>:<m> (colon ranges), resid <n>[<icode>],
+resname <3-letter code>, name <atom name>, element <symbol>, altloc <id>,
+occupancy <op> <f> and bfactor <op> <f> where <op> is < <= > >= = !=
+Predicates: all, protein (alias peptide), water, hetero
+Logic: and or not, parentheses. Multiple names/values need 'or'
+('name CA or name CB'), never space lists.
+
+Examples:
+  chain A and resseq 5:14          first ten residues of chain A
+  resname LIG                      the ligand (check its code via structure_info)
+  element ZN                       zinc ions
+  chain A and resseq 29 and name CA    C-alpha of a residue
+  protein and not water            polymer atoms only
+
+NOT supported (syntax error or silent no-match):
+  within(...), backbone, sidechain, nucleic, xor, aniso, wildcards (name 'C*'),
+  dash ranges (resseq 1-10 matches NOTHING — use resseq 1:10),
+  comparisons on resseq (resseq > 70 — use ranges).
+
+Translating prose: call structure_info() or secondary_structure() FIRST to map
+requests like "the first helix tip" or "the ligand" onto real chains/resseqs,
+then select(). select() focuses the camera on the match by default."""
+
+
+def _model_session(name):
+    """Resolve a model name (or active/first) to (id, LiveSession)."""
+    mid = _model_id(name)
+    entry = _app._model_entry(mid) if mid else None
+    session = entry.get("session") if entry else None
+    if session is None:
+        raise ValueError("no such model: %r" % name)
+    return mid, session
+
 
 def _make_invoker():
     from PySide6.QtCore import QObject, Signal
@@ -186,7 +227,13 @@ def _make_server():
     global Image
     from mcp.server.fastmcp import FastMCP, Image
 
-    mcp = FastMCP("pxviewer")
+    mcp = FastMCP("pxviewer", instructions=(
+        "pxviewer is a macromolecular viewer; these tools drive a real, "
+        "visible instance the user is watching. Typical figure workflow: "
+        "load() -> select()/set_representation()/set_volume() -> "
+        "reset_view()/set_camera() -> screenshot() to inspect the frame -> "
+        "save_view() for a reproducible .pxview.json.\n\n"
+        + SELECTION_LANGUAGE))
 
     @mcp.tool()
     async def status() -> dict:
@@ -235,14 +282,105 @@ def _make_server():
         return {"saved": path, "objects": len(doc.get("objects", []))}
 
     @mcp.tool()
-    async def select(expression: str) -> dict:
-        """Apply a cctbx selection string (e.g. 'chain A and resseq 5:14')."""
+    async def structure_info(model: str = None) -> dict:
+        """Structural inventory of a model: chains with their residue ranges,
+        polymer residue counts, water count, and non-polymer (ligand/ion)
+        residues. Call this to ground prose requests like 'the ligand' or
+        'the C-terminus of chain B' into concrete chains and resseqs."""
+        def work():
+            mid, session = _model_session(model)
+            model_obj = getattr(session, "model", None)
+            if model_obj is None:
+                return {"model": mid, "atoms": session._data.n_atoms,
+                        "detail": "no coordinate model — chains unavailable"}
+            from iotbx.pdb import common_residue_names_get_class as get_class
+            polymer = {"common_amino_acid", "modified_amino_acid",
+                       "common_rna_dna", "modified_rna_dna"}
+            chains = {}
+            waters = 0
+            hetero = []
+            for chain in model_obj.get_hierarchy().chains():
+                cid = chain.id.strip()
+                info = chains.setdefault(cid, {"residues": 0, "seqs": []})
+                for rg in chain.residue_groups():
+                    resname = rg.atom_groups()[0].resname.strip()
+                    seq = rg.resseq_as_int()
+                    kind = get_class(resname)
+                    if kind in polymer:
+                        info["residues"] += 1
+                        info["seqs"].append(seq)
+                    elif kind == "common_water":
+                        waters += 1
+                    else:
+                        hetero.append({"chain": cid, "resname": resname,
+                                       "resseq": seq})
+            chain_rows = [
+                {"chain": cid, "residues": info["residues"],
+                 "first": min(info["seqs"]) if info["seqs"] else None,
+                 "last": max(info["seqs"]) if info["seqs"] else None}
+                for cid, info in chains.items()]
+            return {"model": mid, "atoms": session._data.n_atoms,
+                    "chains": chain_rows, "waters": waters, "hetero": hetero}
+        return {"info": await _qt(work)}
+
+    @mcp.tool()
+    async def secondary_structure(model: str = None) -> dict:
+        """Helix and strand segments per chain, in file order, as
+        {chain, start, end} resseq ranges — the grounding for 'the first
+        alpha helix' (helices[0]; its N-terminal tip is 'start') or 'the
+        sheet before the active site'. Empty when the model carries no
+        secondary-structure annotation."""
+        def work():
+            mid, session = _model_session(model)
+            helices = []
+            strands = []
+            for chain, beg, end, kind in session._data.secondary_structure:
+                row = {"chain": chain, "start": beg, "end": end}
+                (helices if kind == "helix" else strands).append(row)
+            return {"model": mid, "helices": helices, "strands": strands}
+        return await _qt(work)
+
+    @mcp.tool()
+    async def select(expression: str, focus: bool = True) -> dict:
+        """Apply a cctbx/Phenix selection string (see the server instructions
+        for the grammar) and, by default, aim the camera at the match.
+        Returns the atom count plus the matched residues so you can verify
+        the selection caught what the prose intended."""
         def work():
             controls = _app._controls
             controls._select_expr.setText(expression)
-            controls._on_select_expression()
-            return {mid: len(ix) for mid, ix in _app._scene_selection.items()}
-        return {"selected": await _qt(work)}
+            try:
+                n = _app.select_by_expression(expression, focus=focus)
+            except Exception as exc:
+                from pxviewer.desktop import _accent
+                controls._selection_label.setText(
+                    f"<span style='color:{_accent(_app._main, 'error')}'>"
+                    f"{exc}</span>")
+                raise
+            controls._select_expr_model = (
+                _app._active_model_id if expression.strip() else None)
+            controls._selection_label.setText(
+                "selection cleared" if not expression.strip()
+                else f"{n} atom(s) selected")
+            residues = []
+            seen = set()
+            mid = _app._active_model_id
+            entry = _app._model_entry(mid) if mid else None
+            session = entry.get("session") if entry else None
+            if session is not None and mid in _app._scene_selection:
+                arrays = session._data.arrays
+                for i in _app._scene_selection[mid]:
+                    key = (arrays.chain[i], int(arrays.resseq[i]),
+                           arrays.resname[i])
+                    if key not in seen:
+                        seen.add(key)
+                        residues.append(
+                            f"{key[0]}/{key[2]}{key[1]}" if key[0]
+                            else f"{key[2]}{key[1]}")
+            return n, residues
+        n, residues = await _qt(work)
+        return {"atoms": n, "residues": residues[:40],
+                "truncated": len(residues) > 40, "focus": focus}
 
     @mcp.tool()
     async def clear_selection() -> dict:
