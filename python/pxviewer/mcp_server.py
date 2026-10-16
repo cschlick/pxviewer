@@ -266,10 +266,30 @@ def _make_server():
 
     mcp = FastMCP("pxviewer", instructions=(
         "pxviewer is a macromolecular viewer; these tools drive a real, "
-        "visible instance the user is watching. Typical figure workflow: "
-        "load() -> select()/set_representation()/set_volume() -> "
-        "reset_view()/set_camera() -> screenshot() to inspect the frame -> "
-        "save_view() for a reproducible .pxview.json.\n\n"
+        "visible instance the user is watching — everything on screen is what "
+        "the user sees, and selections you make are the app's selections.\n\n"
+        "Getting data in: load(path) for local PDB/mmCIF/maps, "
+        "fetch(pdb_id|emdb_number, entities) for downloads, load_view(path) "
+        "for saved .pxview.json scenes.\n\n"
+        "Grounding prose in the structure: structure_info() (chains, residue "
+        "ranges, hetero/waters), secondary_structure() (helix/strand ranges — "
+        "'the first helix' = helices[0]), atoms(expr) (per-atom xyz/b/occ for "
+        "a selection without applying it), atom_table() (the whole model), "
+        "model_state()/volume_state()/reflections()/selection_state() for "
+        "what is set right now, map_data()/reflection_data() for raw grids.\n\n"
+        "Figure workflow: select()/set_representation()/color_by()/"
+        "set_volume() frame the subject; set_clip_sphere()/set_clip_slab() "
+        "isolate it; measure()/add_label() annotate; screenshot() inspects "
+        "the frame; save_view()/save_screenshot() keep the result. "
+        "focus_residue()/step()/zoom_view()/set_camera()/reset_view() move "
+        "the camera. Validation: run_validation() runs the checks, "
+        "validation_results() reads back the outlier tables.\n\n"
+        "Diagnostics and recovery: ping() answers whether the page is alive "
+        "and, if it is merely busy, what is holding its apply chain; "
+        "reload_viewport() rebuilds the page from scratch (Python-side "
+        "state survives). If a call fails with 'viewport never came up', "
+        "call ping() — a live-but-busy page resolves on its own, a dead one "
+        "needs reload_viewport().\n\n"
         + SELECTION_LANGUAGE))
 
     @mcp.tool()
@@ -278,18 +298,93 @@ def _make_server():
         def work():
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
-                            "rep": e.get("rep"), "color": e.get("color")}
+                            "rep": e.get("rep"), "color": e.get("color"),
+                            "active": e["id"] == _app._active_model_id}
                            for e in _app._models],
                 "volumes": [{"id": e["id"], "name": e.get("name"),
                              "iso": e.get("iso"), "opacity": e.get("opacity")}
                             for e in _app._volumes],
                 "selection": {mid: len(ix) for mid, ix in
                               _app._scene_selection.items()},
+                "markers": [{"id": m["id"], "position": m["position"],
+                             "visible": m["visible"]} for m in _app._markers],
             }
         state = await _qt(work)
         state["camera"] = _session().camera_state()
         state["background"] = _session().background_color()
         return state
+
+    @mcp.tool()
+    async def ping() -> dict:
+        """Liveness and health of the Mol* page, bypassing the apply chain.
+
+        Reports whether a viewer client is connected at all; when it is, the
+        page answers immediately with `pending` (messages queued behind
+        scene work) and `busy`/`busyMs` (the state-tree update currently
+        holding the chain, and for how long). A stalled chain makes every
+        other tool look dead — this tells "dead" from "busy", and names the
+        culprit. `lastStall` is the most recent stall report the page sent."""
+        session = _app._control_session()
+        if session is None:
+            return {"alive": False, "clients": 0, "detail": "no viewer session"}
+        if session.client_count < 1:
+            return {"alive": False, "clients": 0,
+                    "detail": "session up but no page connected"}
+        pong = session.ping(timeout=3)
+        if pong is None:
+            return {"alive": False, "clients": session.client_count,
+                    "detail": "page connected but not answering — render process dead?"}
+        return {"alive": True, "clients": session.client_count, **pong,
+                "lastStall": session._last_chain_stall}
+
+    @mcp.tool()
+    async def reload_viewport() -> dict:
+        """Reload the Mol* page — the recovery for a wedged or crashed viewer.
+
+        Python-side state (models, selections, representations, clips,
+        primitives) survives; the page rebuilds from it on reconnect. Use
+        when ping() reports the page is dead, or when tools fail with
+        'viewport never came up' and ping does not answer."""
+        await _qt(lambda: _app._reload_viewport())
+        _wait_ready(timeout=60)
+        return {"reloaded": True, "camera": _session().camera_state()}
+
+    @mcp.tool()
+    async def place_marker(position: list) -> dict:
+        """Drop a ligand marker at an absolute coordinate (Å).
+
+        Markers are the ligand-fitting targets: place one, then call
+        fit_ligand() on it. The position can come from atoms()/atom_table()
+        (e.g. a pocket centroid) — no mouse needed."""
+        def work():
+            before = len(_app._markers)
+            _app._on_marker([float(c) for c in position], None)
+            entry = _app._markers[-1] if len(_app._markers) > before else None
+            return entry
+        marker = await _qt(work)
+        if marker is None:
+            raise RuntimeError("marker was not placed")
+        return {"marker": marker["id"], "position": marker["position"]}
+
+    @mcp.tool()
+    async def fit_ligand(marker: str, code: str, fit: bool = True,
+                         trials: int = 20) -> dict:
+        """Fit a monomer-library ligand (three-letter code, e.g. 'GOL') at a
+        placed marker. Runs in the background; with a paired map the ligand
+        is settled into density. Waits for the resulting model to appear."""
+        def work():
+            before = {e["id"] for e in _app._models}
+            _app.fit_ligand_at_marker(marker, code, fit=fit, trials=trials)
+            return before
+        before = await _qt(work)
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            new = [e["id"] for e in _app._models if e["id"] not in before]
+            if new:
+                _wait_ready(timeout=30)
+                return {"model": new[0], "code": code}
+            await asyncio.sleep(0.5)
+        raise RuntimeError("ligand fit did not produce a model within 120s")
 
     @mcp.tool()
     async def load(path: str) -> dict:
@@ -1137,7 +1232,52 @@ def _make_server():
                                               hotspots=hotspots))
         return {"started": True,
                 "note": "running in the background; results land in the "
-                        "Validation tab"}
+                        "Validation tab — read them back with "
+                        "validation_results()"}
+
+    @mcp.tool()
+    async def validation_results(model: str = None, markup: bool = False) -> dict:
+        """Read back what run_validation() computed for a model, from the
+        cached results — the same tables the Validation tab shows. Per
+        validator: `key`, `title`, `summary` (one line: counts/percentages),
+        `columns`+`rows` (the outlier table), `notes` (what the numbers and
+        thresholds mean). `stale` flags results older than the current
+        coordinates. `markup=True` also returns each check's 3-D primitives."""
+        def work():
+            mid, session = _model_session(model)
+            entry = _app._model_entry(mid)
+            if entry is None:
+                return {"model": mid, "results": {}, "stale": False}
+            cached = entry.get("validation") or {}
+            fingerprint = entry.get("validated_fingerprint")
+            model_obj = getattr(session, "model", None)
+            stale = bool(fingerprint is not None and model_obj is not None
+                         and _app._sites_fingerprint(model_obj) != fingerprint)
+            out = {}
+            for key, r in cached.items():
+                row = {"title": r.title, "summary": r.summary,
+                       "columns": r.columns, "rows": r.rows,
+                       "notes": r.notes}
+                if markup:
+                    row["markup"] = r.markup
+                out[key] = row
+            return {"model": mid, "results": out, "stale": stale}
+        return await _qt(work)
+
+    @mcp.tool()
+    async def set_validation_markers(key: str, visible: bool = True) -> dict:
+        """Toggle one validator's 3-D markup in the viewport — the spikes/
+        dots drawn on outlier residues (e.g. 'ramachandran', 'rotamers',
+        'cbetadev'; validator keys are listed by validation_results()).
+        Requires results cached by a prior run_validation() — markup is
+        redrawn from cache, not recomputed."""
+        def work():
+            _app.set_validation_markers(key, bool(visible))
+            entry = _app._model_entry(_app._active_model_id)
+            cached = (entry.get("validation") or {}) if entry is not None else {}
+            return key in cached
+        available = await _qt(work)
+        return {"key": key, "visible": bool(visible), "results_cached": available}
 
     @mcp.tool()
     async def minimize(use_map: bool = False, wait: float = 120.0) -> dict:
