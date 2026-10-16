@@ -356,6 +356,36 @@ def model_secondary_structure(model: Any) -> List[Tuple[str, int, int, str]]:
                 (strand.start_chain_id.strip(), strand.get_start_resseq_as_int(),
                  strand.get_end_resseq_as_int(), "sheet")
             )
+
+    # Depositors routinely annotate SS on only one member of an NCS-related
+    # chain set (e.g. 6CVM declares _struct_conf rows for chain A alone). Mol*
+    # honours the annotation literally, so the unannotated copies draw as coil
+    # next to a fully-ribboned twin. The annotation is display data here —
+    # extend it to any chain whose deposited sequence is identical to an
+    # annotated one, since identical geometry gives identical SS. This is
+    # deliberately not written back into the model: a copied assignment is a
+    # rendering fact, not a restraint source.
+    annotated = {r[0] for r in rows}
+    if annotated:
+        from iotbx.pdb import common_residue_names_get_class as get_class
+        polymer = {"common_amino_acid", "modified_amino_acid",
+                   "common_rna_dna", "modified_rna_dna"}
+        signatures = {}
+        for chain in model.get_hierarchy().chains():
+            seq = tuple(
+                (rg.atom_groups()[0].resname.strip(), rg.resseq_as_int())
+                for rg in chain.residue_groups()
+                if get_class(rg.atom_groups()[0].resname) in polymer)
+            if seq:
+                signatures[chain.id.strip()] = seq
+        templates = {cid for cid in signatures if cid in annotated}
+        base = list(rows)
+        for cid, seq in signatures.items():
+            if cid in annotated:
+                continue
+            if any(signatures[t] == seq for t in templates):
+                rows.extend((cid, beg, end, kind) for c, beg, end, kind in base
+                            if signatures.get(c) == seq)
     return rows
 
 
