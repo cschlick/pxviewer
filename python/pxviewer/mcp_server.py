@@ -297,7 +297,8 @@ def _make_server():
         """Scene state: loaded objects, selections, camera, markers, plus
         `busy`/`job_errors` — running and recently-failed background jobs
         (fetch, validation, minimize). Check `job_errors` when a tool's
-        effect never appears."""
+        effect never appears. `camera`/`background` are null until a viewer
+        session exists; the scene lists answer regardless."""
         def work():
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
@@ -318,8 +319,9 @@ def _make_server():
         jobs = _app.job_state()
         state["busy"] = jobs["busy"]
         state["job_errors"] = jobs["errors"]
-        state["camera"] = _session().camera_state()
-        state["background"] = _session().background_color()
+        session = _app._control_session()
+        state["camera"] = session.camera_state() if session else None
+        state["background"] = session.background_color() if session else None
         return state
 
     @mcp.tool()
@@ -972,22 +974,26 @@ def _make_server():
 
     @mcp.tool()
     async def set_object_visible(kind: str, ident: str, visible: bool) -> dict:
-        """Show or hide an object — the eye icon. kind is 'model' or 'volume'."""
+        """Show or hide an object — the eye icon. kind is 'model' or 'volume'.
+        Reports the resulting visibility: the app may refuse to hide on
+        software rendering, in which case `visible` comes back unchanged."""
         def work():
             if kind == "model":
                 mid = _model_id(ident)
                 if mid is None:
                     raise ValueError("no such model: %r" % ident)
                 _app.set_model_visible(mid, visible)
+                entry = _app._model_entry(mid)
             elif kind == "volume":
                 vid = _volume_id(ident)
                 if vid is None:
                     raise ValueError("no such volume: %r" % ident)
                 _app.set_volume_visible(vid, visible)
+                entry = _app._volume_entry(vid)
             else:
                 raise ValueError("kind must be model or volume")
-        await _qt(work)
-        return {"visible": visible, "kind": kind, "id": ident}
+            return entry.get("visible", True)
+        return {"visible": await _qt(work), "kind": kind, "id": ident}
 
     @mcp.tool()
     async def write_object(kind: str, ident: str, path: str) -> dict:
@@ -1393,11 +1399,20 @@ def _make_server():
 
     @mcp.tool()
     async def save_screenshot(path: str) -> dict:
-        """Write the current viewport frame to a PNG file."""
-        def work():
-            _app.save_screenshot(str(Path(path).expanduser()))
-        await _qt(work)
-        return {"saved": path}
+        """Write the current viewport frame to a PNG file. Returns only after
+        the bytes are on disk: the page's screenshot answer is queued behind
+        its scene work, so the image shows the state the earlier calls
+        requested — never a pre-update frame, and 'saved' is never claimed
+        for a write that did not happen."""
+        session = _session()
+        png = session.screenshot(timeout=60)
+        if not png:
+            raise RuntimeError(
+                "the viewport did not answer — check ping() for a stuck "
+                "apply chain, or reload_viewport()")
+        out = Path(path).expanduser()
+        out.write_bytes(png)
+        return {"saved": str(out), "bytes": out.stat().st_size}
 
     @mcp.tool()
     async def set_background(color: str) -> dict:

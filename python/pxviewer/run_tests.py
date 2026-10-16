@@ -76,6 +76,7 @@ core_tests = [
     "$D/regression/tst_hotspots.py",
     "$D/regression/tst_concern.py",
     "$D/regression/tst_hotspots_standalone.py",
+    "$D/regression/tst_mcp_server.py",
 ]
 
 #: Need PySide6 + QtWebEngine (the desktop shell), websockets (the live session), or a
@@ -97,6 +98,7 @@ gui_tests = [
     "$D/regression/tst_webapp.py",
     "$D/regression/tst_hotspots_gui.py",
     "$D/regression/tst_localres_ui.py",
+    "$D/regression/tst_mcp_tools.py",
 ]
 
 #: The separable hotspots/ project. It sits beside python/ in a source checkout and is
