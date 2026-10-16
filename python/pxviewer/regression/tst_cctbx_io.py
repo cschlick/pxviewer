@@ -233,6 +233,111 @@ def exercise_multi_model_is_reduced_to_the_first():
     assert session._n_atoms == 2              # the session took model 1
 
 
+# One chain A (2 atoms) + an unlisted chain B (1 atom at x=100). The assembly
+# declares dimer ops on chain A only; the _struct_ncs_oper record (a +50 A
+# translation) is there to prove the declared assembly wins over cctbx's
+# MTRIX expansion — the bug that showed half of 1QGT's capsid (its 30 NCS ops
+# generate the crystal ASU; the 60-op assembly generates the full 240-subunit
+# shell).
+_ASSEMBLY_CIF = """\
+data_t
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1 C CA . ALA A 1 1 0.0 0.0 0.0 1 10 1 A 1
+ATOM 2 C CA . ALA A 1 2 4.0 0.0 0.0 1 10 2 A 1
+ATOM 3 C CA . GLY B 1 3 100.0 0.0 0.0 1 10 3 B 1
+#
+loop_
+_pdbx_struct_assembly.id
+_pdbx_struct_assembly.details
+1 author_defined_assembly
+#
+loop_
+_pdbx_struct_assembly_gen.assembly_id
+_pdbx_struct_assembly_gen.oper_expression
+_pdbx_struct_assembly_gen.asym_id_list
+1 '(1-2)' A
+#
+loop_
+_pdbx_struct_oper_list.id
+_pdbx_struct_oper_list.type
+_pdbx_struct_oper_list.name
+_pdbx_struct_oper_list.symmetry_operation
+_pdbx_struct_oper_list.matrix[1][1]
+_pdbx_struct_oper_list.matrix[1][2]
+_pdbx_struct_oper_list.matrix[1][3]
+_pdbx_struct_oper_list.vector[1]
+_pdbx_struct_oper_list.matrix[2][1]
+_pdbx_struct_oper_list.matrix[2][2]
+_pdbx_struct_oper_list.matrix[2][3]
+_pdbx_struct_oper_list.vector[2]
+_pdbx_struct_oper_list.matrix[3][1]
+_pdbx_struct_oper_list.matrix[3][2]
+_pdbx_struct_oper_list.matrix[3][3]
+_pdbx_struct_oper_list.vector[3]
+1 'identity operation' I 1_555 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0
+2 'point symmetry operation' P 2 1.0 0.0 0.0 10.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0
+#
+loop_
+_struct_ncs_oper.id
+_struct_ncs_oper.code
+_struct_ncs_oper.details
+_struct_ncs_oper.matrix[1][1]
+_struct_ncs_oper.matrix[1][2]
+_struct_ncs_oper.matrix[1][3]
+_struct_ncs_oper.vector[1]
+_struct_ncs_oper.matrix[2][1]
+_struct_ncs_oper.matrix[2][2]
+_struct_ncs_oper.matrix[2][3]
+_struct_ncs_oper.vector[2]
+_struct_ncs_oper.matrix[3][1]
+_struct_ncs_oper.matrix[3][2]
+_struct_ncs_oper.matrix[3][3]
+_struct_ncs_oper.vector[3]
+1 'given' ? 1.0 0.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0
+2 'generate' ? 1.0 0.0 0.0 50.0 0.0 1.0 0.0 0.0 0.0 0.0 1.0 0.0
+#
+"""
+
+
+def exercise_mmcif_biological_assembly_is_expanded():
+    from pxviewer.cctbx_io import _parse_oper_expression
+
+    # Oper-expression grammar: ranges, lists and (product)(groups).
+    assert _parse_oper_expression("(1-3)") == [("1",), ("2",), ("3",)]
+    assert _parse_oper_expression("(1,3)(2)") == [("1", "2"), ("3", "2")]
+    assert _parse_oper_expression("1") == [("1",)]
+
+    with tmp_dir() as work:
+        data = load_model(write(work, "asm.cif", _ASSEMBLY_CIF))
+        assert data.n_atoms == 5
+        xs = sorted(data.arrays.x)
+        assert np.allclose(xs, [0, 4, 10, 14, 100]), xs
+        # chain A emitted twice (deposited id + one fresh id); the unlisted
+        # chain B survives as a single unexpanded copy.
+        chains = sorted(set(data.arrays.chain))
+        assert "A" in chains and "B" in chains and len(chains) == 3, chains
+        # And selections still work on the expanded model.
+        session = LiveSession.from_model_file(os.path.join(work, "asm.cif"))
+        assert len(session.select_by(selection="chain B").indices) == 1
+
+
 def exercise_model_from_sites_roundtrips_coords_and_labels():
     sites = np.array([[0, 0, 0], [1.4, 0, 0], [2.8, 0, 0]], dtype=float)
     model = model_from_sites(sites, chains=["A", "A", "B"], resseqs=[1, 2, 3])

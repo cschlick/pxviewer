@@ -16,9 +16,11 @@ and the rest of the package works without cctbx installed.
 
 from __future__ import annotations
 
+import itertools
+import re
 import threading
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -513,6 +515,166 @@ class ModelData:
         return None if dev <= tol else f"coordinate drift: max |delta| = {dev:.4f} A"
 
 
+def _parse_oper_expression(expr: Any) -> List[Tuple[str, ...]]:
+    """An mmCIF ``oper_expression`` → op-id tuples to apply in sequence.
+
+    ``'(1-60)'`` is one group of sixty; ``'(1,2,6)(7)'`` is a product — every
+    combination of the groups, applied left group first. Bare ``'1'`` means the
+    single identity-class op.
+    """
+    text = str(expr).strip()
+    groups = re.findall(r"\(([^()]*)\)", text) or [text]
+    expanded = []
+    for group in groups:
+        ids: List[str] = []
+        for tok in group.split(","):
+            tok = tok.strip()
+            m = re.fullmatch(r"(\w+)-(\w+)", tok)
+            if m and m.group(1).isdigit() and m.group(2).isdigit():
+                ids.extend(str(i) for i in range(int(m.group(1)),
+                                                 int(m.group(2)) + 1))
+            elif tok:
+                ids.append(tok)
+        expanded.append(ids or ["1"])
+    return list(itertools.product(*expanded))
+
+
+def _assembly_plan(path: str) -> Optional[Dict[str, List[Tuple[Any, Any]]]]:
+    """The deposited file's preferred biological assembly, as a per-chain list
+    of transforms to apply: ``{chain_id: [(r, t), ...]}``.
+
+    mmCIF only. ``None`` when the file declares no ``_pdbx_struct_assembly`` —
+    legacy PDB MTRIX expansion still applies in that case via cctbx's default.
+    The first declared assembly id is preferred, matching the convention that
+    assembly '1' is the entry's primary biological unit.
+    """
+    try:
+        import iotbx.cif
+        reader = iotbx.cif.reader(file_path=path)
+        blocks = list(reader.model().values())
+        if not blocks:
+            return None
+        block = blocks[0]
+        gen_ids = block.get("_pdbx_struct_assembly_gen.assembly_id")
+        oper_exprs = block.get("_pdbx_struct_assembly_gen.oper_expression")
+        asym_lists = block.get("_pdbx_struct_assembly_gen.asym_id_list")
+        if gen_ids is None or oper_exprs is None:
+            return None
+        rows = list(zip(gen_ids, oper_exprs,
+                        asym_lists or [""] * len(gen_ids)))
+        chosen = rows[0][0]
+        from iotbx.mtrix_biomt import process_BIOMT_records_cif
+        ops = process_BIOMT_records_cif(block)
+        table = {}
+        for sn, r, t in zip(ops.serial_number, ops.r, ops.t):
+            table[str(sn[0] if isinstance(sn, tuple) else sn)] = (r, t)
+        plan: Dict[str, List[Tuple[Any, Any]]] = {}
+        for _asm, expr, asyms in rows:
+            if _asm != chosen:
+                continue
+            chains = [c.strip() for c in str(asyms).split(",") if c.strip()]
+            transforms = []
+            for combo in _parse_oper_expression(expr):
+                r_acc, t_acc = None, None
+                for oid in combo:
+                    op = table.get(str(oid))
+                    if op is None:
+                        r_acc = None
+                        break
+                    r_op, t_op = op
+                    if r_acc is None:
+                        r_acc, t_acc = r_op, t_op
+                    else:
+                        r_acc, t_acc = r_op * r_acc, r_op * t_acc + t_op
+                if r_acc is not None:
+                    transforms.append((r_acc, t_acc))
+            for chain in chains:
+                plan.setdefault(chain, []).extend(transforms)
+        return plan or None
+    except Exception:
+        return None
+
+
+def _expand_to_assembly(model: Any, plan: Dict[str, List[Tuple[Any, Any]]]) -> None:
+    """Replace the model's hierarchy with its declared biological assembly.
+
+    Each chain listed in the assembly's ``asym_id_list`` emits one copy per
+    transform; the first copy keeps the deposited chain id and later copies get
+    fresh ids (the same scheme cctbx's own MTRIX expansion uses, so the SS
+    annotation multiply still lines up). Chains the assembly does not name are
+    kept once, unexpanded — waters and ligands typically absent from
+    ``asym_id_list`` stay visible rather than silently dropping atoms.
+    """
+    import iotbx.pdb.hierarchy
+    from iotbx.pdb.utils import all_chain_ids
+
+    hierarchy = model.get_hierarchy()
+    src = hierarchy.only_model()
+    taken = {c.id for c in src.chains()}
+    fresh = iter(cid for cid in all_chain_ids() if cid not in taken)
+    result = iotbx.pdb.hierarchy.root()
+    out_model = iotbx.pdb.hierarchy.model()
+    ids_match: Dict[str, List[str]] = {}
+    n_copies = None
+    matched = False
+    for chain in src.chains():
+        ops = plan.get(chain.id.strip()) or plan.get(chain.id)
+        if not ops:
+            out_model.append_chain(chain.detached_copy())
+            continue
+        matched = True
+        if n_copies is None:
+            n_copies = len(ops)
+        new_ids = []
+        for i, (r, t) in enumerate(ops):
+            c = chain.detached_copy()
+            c.atoms().set_xyz(r.elems * c.atoms().extract_xyz() + t)
+            if i > 0:
+                c.id = next(fresh)
+                new_ids.append(c.id)
+            out_model.append_chain(c)
+        ids_match[chain.id] = new_ids
+    if not matched:
+        return
+    result.append_model(out_model)
+    result.atoms().reset_i_seq()
+    result.atoms().reset_serial()
+    model._pdb_hierarchy = result
+    if result.models_size() == 1:
+        result.only_model().id = ""
+    ssa = model.get_ss_annotation()
+    if ssa is not None and len({len(v) for v in ids_match.values()}) <= 1:
+        try:
+            ssa.multiply_to_asu_2(ids_match)
+            model.set_ss_annotation(ssa)
+        except Exception:
+            pass
+    model._xray_structure = None
+    model._update_atom_selection_cache()
+    model.restraints_manager = None
+
+
 def load_model(path: str | Path, *, data_manager: Any = None) -> ModelData:
-    """Read a model file (reduced to model 1) into a :class:`ModelData`."""
-    return ModelData.from_model(read_model(path, data_manager=data_manager))
+    """Read a model file (reduced to model 1) into a :class:`ModelData`.
+
+    When an mmCIF declares a biological assembly, the model is expanded to it
+    rather than to the crystallographic NCS records cctbx applies by default.
+    The two differ whenever the biological unit is not the ASU — e.g. 1QGT,
+    whose 30 ``_struct_ncs_oper`` records produce half a capsid (120 subunits)
+    while ``_pdbx_struct_assembly`` declares the complete 240-subunit shell.
+    """
+    path = str(path)
+    plan = _assembly_plan(path)
+    dm = _dm(data_manager)
+    if plan is not None:
+        opts = dm.custom_options
+        if not isinstance(opts, list):
+            opts = []
+        if "model_skip_expand_with_mtrix" not in opts:
+            opts.append("model_skip_expand_with_mtrix")
+        dm.custom_options = opts
+    dm.process_model_file(path)
+    model = first_model(dm.get_model(path))
+    if plan is not None and not model.mtrix_expanded():
+        _expand_to_assembly(model, plan)
+    return ModelData.from_model(model)
