@@ -455,7 +455,7 @@ def _make_server():
                     "b": None if a.b is None else round(float(a.b[i]), 2),
                     "occ": None if a.occ is None else round(float(a.occ[i]), 3)})
             centroid = None
-            if indices:
+            if len(indices):
                 import numpy as np
                 centroid = np.stack([a.x, a.y, a.z],
                                     axis=1)[list(indices)].mean(axis=0)
