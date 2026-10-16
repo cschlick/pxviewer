@@ -55,6 +55,26 @@ def exercise_focus_broadcasts_an_index_set():
         run_client(scenario)
 
 
+def exercise_non_finite_camera_payloads_are_rejected():
+    """NaN/Infinity cannot cross a JSON wire: they either serialize as invalid JSON
+    the page drops silently, or poison the camera outright. The wire boundary
+    refuses them instead."""
+    with session() as live:
+        nan = float("nan")
+        with raises(ValueError):
+            live.orient_camera([nan, 0, 0], [0, 1, 0], [0, 0, 1], 10.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0, 1], float("inf"))
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0, 1], 10.0,
+                               extents=[1.0, nan, 1.0])
+        with raises(ValueError):
+            live.set_camera({"target": [0, 0, 0], "position": [0, 0, nan],
+                             "up": [0, 1, 0], "radius": 10.0, "fov": 45.0})
+        with raises(ValueError):
+            live.set_camera({"radiusMax": float("inf")})
+
+
 def exercise_clear_selection_sends_an_empty_highlight():
     with session() as live:
         async def scenario():

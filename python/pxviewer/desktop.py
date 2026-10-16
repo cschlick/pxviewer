@@ -8048,6 +8048,9 @@ class DesktopApp:
             # dummy is the session the viewport is connected to.
             self._dummy.on_marker(lambda position, atom: self._on_marker(position, atom))
             self._dummy.on_marker_move(lambda mid_, pos, final: self._on_marker_move(mid_, pos, final))
+            self._dummy.on_chain_stall(lambda stall: self._status(
+                f"Viewer busy applying {stall.get('label')} "
+                f"({int((stall.get('ms') or 0) / 1000)}s)…"))
             # Render nothing: an empty `on` set draws no atoms, so an empty scene
             # is truly empty (the dummy only keeps the ws channel open).
             try:
@@ -8403,6 +8406,12 @@ class DesktopApp:
         # session's viewport reports one, so wiring every session is harmless.
         session.on_marker(lambda position, atom: self._on_marker(position, atom))
         session.on_marker_move(lambda mid_, pos, final: self._on_marker_move(mid_, pos, final))
+        # A chain-stall means the page is alive but one scene update has held its
+        # apply queue past the threshold — name the work in the status line so the
+        # freeze is diagnosable rather than silent.
+        session.on_chain_stall(lambda stall: self._status(
+            f"Viewer busy applying {stall.get('label')} "
+            f"({int((stall.get('ms') or 0) / 1000)}s)…"))
         if self._selection_enabled:
             session.enable_mouse_selection()  # handler already registered; just arm click mode
         if self._tug_enabled:

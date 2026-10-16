@@ -125,6 +125,8 @@ def _wait_ready(timeout: float = 60.0) -> None:
 
     Requests sent before the viewer's handler exists are dropped, so this is
     short repeated tries rather than one long wait (the wait_viewer pattern).
+    On timeout a chain-bypassing ping says whether the page is dead or just
+    stuck behind one slow state-tree update.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -136,7 +138,27 @@ def _wait_ready(timeout: float = 60.0) -> None:
             except Exception:
                 pass
         time.sleep(0.5)
-    raise RuntimeError("viewport never came up")
+    raise RuntimeError(_unready_reason())
+
+
+def _unready_reason() -> str:
+    """Why the viewport is not answering — a stalled apply chain reports its
+    blocker; silence means the page itself is gone."""
+    session = _app._control_session()
+    if session is not None:
+        try:
+            pong = session.ping(timeout=2)
+        except Exception:
+            pong = None
+        if pong is not None:
+            busy = pong.get("busy")
+            if busy:
+                return (
+                    f"viewport alive but its apply chain is held by {busy} "
+                    f"({pong.get('busyMs')}ms, {pong.get('pending')} queued)"
+                )
+            return "viewport alive but screenshots time out — render loop stalled?"
+    return "viewport never came up"
 
 
 def _model_id(name):

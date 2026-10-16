@@ -1220,9 +1220,17 @@ export class LiveViewer {
            extents?: number[], clip: boolean = true) {
         const camera = this.plugin.canvas3d?.camera;
         if (!camera) return;
+        const finite3 = (v: number[]) => v.length === 3 && v.every(Number.isFinite);
+        // A degenerate or non-finite frame must never reach setState: a zero-length
+        // axis normalizes to NaN and poisons the camera for every later message.
+        if (!finite3(target) || !finite3(up) || !finite3(direction)
+            || !Number.isFinite(radius) || radius <= 0) return;
         const t = Vec3.create(target[0], target[1], target[2]);
         const u = Vec3.create(up[0], up[1], up[2]);
         const d = Vec3.create(direction[0], direction[1], direction[2]);
+        if (Vec3.magnitude(u) < 1e-9 || Vec3.magnitude(d) < 1e-9) return;
+        if (extents !== undefined
+            && !(extents.length === 3 && extents.every((e) => Number.isFinite(e) && e >= 0))) return;
         if (extents && extents.length === 3) {
             // Fill the frame with the selection, and clip a slab that just contains it.
             // The camera's near/far planes derive from state.radius (near = distance -
@@ -2833,7 +2841,10 @@ function slabClip(plugin: PluginContext, slab: Slab) {
     const camera = plugin.canvas3d?.camera;
     if (!camera) return { variant: 'pixel', objects: [] };
     const dir = Vec3.sub(Vec3(), camera.state.target, camera.state.position);
-    Vec3.normalize(dir, dir);
+    // A degenerate eye (position == target) would normalize to NaN and hand the
+    // shader NaN clip objects — fall back to a fixed axis rather than poison it.
+    if (Vec3.magnitude(dir) < 1e-9) Vec3.set(dir, 0, 0, 1);
+    else Vec3.normalize(dir, dir);
     const extent = plugin.canvas3d?.boundingSphere.radius || 50;
     // Handles span the scene's depth: 0 is the near edge, 1 the far edge.
     const at = (t: number) =>
@@ -3371,9 +3382,37 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // they are latest-wins by design (targets + pumpLiveBox) and must never queue
     // behind a slow rebuild.
     let applyChain: Promise<void> = Promise.resolve();
-    const serializeApply = (work: () => Promise<void> | void): Promise<void> => {
-        applyChain = applyChain.then(work).catch(
-            (e) => console.warn('pxviewer: applying a viewer update failed:', e));
+    // Chain health, so a stalled item is visible instead of silently swallowing every
+    // message queued behind it (screenshots included). `busy` names the item currently
+    // holding the chain and `pending` counts what is queued behind it; a stall sends a
+    // wire event so the Python side can say "busy in <label>" rather than "never came up".
+    let chainPending = 0;
+    let chainBusySince: number | null = null;
+    let chainBusyLabel: string | null = null;
+    let chainStallTimer: ReturnType<typeof setTimeout> | null = null;
+    const STALL_WARN_MS = 5000;
+    const serializeApply = (work: () => Promise<void> | void, label = 'work'): Promise<void> => {
+        chainPending++;
+        applyChain = applyChain.then(() => {
+            chainPending--;
+            chainBusyLabel = label;
+            chainBusySince = performance.now();
+            const reportStall = () => {
+                if (chainBusySince === null) return;
+                const ms = Math.round(performance.now() - chainBusySince);
+                console.warn(`pxviewer: apply chain held ${ms} ms by ${chainBusyLabel}`);
+                try {
+                    ws.send(JSON.stringify({ type: 'chain-stall', ms, label: chainBusyLabel }));
+                } catch { /* a send failure must never touch the chain it reports on */ }
+                chainStallTimer = setTimeout(reportStall, 15000);
+            };
+            chainStallTimer = setTimeout(reportStall, STALL_WARN_MS);
+            return Promise.resolve().then(work).finally(() => {
+                if (chainStallTimer !== null) { clearTimeout(chainStallTimer); chainStallTimer = null; }
+                chainBusySince = null;
+                chainBusyLabel = null;
+            });
+        }).catch((e) => console.warn('pxviewer: applying a viewer update failed:', e));
         return applyChain;
     };
 
@@ -3400,7 +3439,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (!latestTargets.has(key)) { latestRunning.delete(key); return; }
                 const target = latestTargets.get(key);
                 latestTargets.delete(key);
-                await serializeApply(() => apply(target));
+                await serializeApply(() => apply(target), 'latest:' + key);
             }
         })();
     };
@@ -3427,7 +3466,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 await serializeApply(async () => {
                     for (const [ref, slab] of volumeSlabs) await setVolumeSlab(plugin, ref, slab);
                     if (viewer?.hasSlab()) await viewer.reaimSlab();
-                });
+                }, 'reaim');
             } while (reaimAgain);
         } finally {
             reaiming = false;
@@ -3825,7 +3864,14 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 // a state, not a camera move the user watches.
                 const cam = plugin.canvas3d?.camera;
                 const s = msg.state as any;
-                if (cam) {
+                const validVec = (v: any) => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+                // A corrupt snapshot must not touch the camera: non-finite or
+                // malformed components would stick in state (and in radiusMax) and
+                // poison every later setState/restore.
+                const valid = cam && validVec(s.target) && validVec(s.position) && validVec(s.up)
+                    && Number.isFinite(s.radius) && s.radius > 0
+                    && Number.isFinite(s.fov) && s.fov > 0 && s.fov < 180;
+                if (valid) {
                     // A saved view is a fixed camera, so take it off the
                     // bounding-sphere leash now: Mol* re-fits the camera on every
                     // scene commit while camera.manualReset is false, and the
@@ -3849,8 +3895,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     // bound is the fallback, the saved radius its floor.
                     const sceneR = (plugin.canvas3d as any).boundingSphere?.radius;
                     snapshot.radiusMax = Math.max(
-                        typeof s.radiusMax === 'number' ? s.radiusMax : 0,
-                        sceneR || 0, s.radius || 0, 0.01);
+                        Number.isFinite(s.radiusMax) ? s.radiusMax : 0,
+                        Number.isFinite(sceneR) ? sceneR : 0,
+                        s.radius, 0.01);
                     cam.setState(snapshot, 0);
                     // A reset requested before this message can still resolve on
                     // a later frame — a queued reset runs resolveCameraReset off
@@ -3987,7 +4034,20 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 pendingControl.push(msg);
                 return;
             }
-            await serializeApply(() => handleControlMessage(msg));
+            // Liveness probe, deliberately OFF the apply chain: everything else queues
+            // behind scene work, so a stalled chain item can only be told apart from a
+            // dead page by a message that does not join the queue.
+            if (msg.type === 'ping') {
+                ws.send(JSON.stringify({
+                    type: 'pong', reqId: msg.reqId,
+                    pending: chainPending,
+                    busy: chainBusyLabel,
+                    busyMs: chainBusySince === null ? 0 : Math.round(performance.now() - chainBusySince),
+                    viewer: !!viewer,
+                }));
+                return;
+            }
+            await serializeApply(() => handleControlMessage(msg), 'msg:' + msg.type);
             return;
         }
         const buffer = ev.data as ArrayBuffer;
@@ -4058,7 +4118,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // enqueued on the apply chain (in this order, ahead of anything arriving
             // from here on) rather than awaited in place, so a message landing while
             // this flush runs cannot interleave with it.
-            for (const m of pendingControl.splice(0)) void serializeApply(() => handleControlMessage(m));
+            for (const m of pendingControl.splice(0)) void serializeApply(() => handleControlMessage(m), 'msg:' + m.type);
             await serializeApply(async () => {
                 const v = viewer!;
                 for (const buf of pendingDots.splice(0)) await v.setProbeDots(buf, 4);
@@ -4069,7 +4129,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     pendingLocalres = null;
                     ws.send(JSON.stringify({ type: 'localres-shown' }));
                 }
-            });
+            }, 'post-build');
         } else if (tag === TAG_FRAME) {
             // [u32 tag][u32 frameIndex][f32 * 3N]; coordinates start at byte 8.
             const coords = new Float32Array(buffer, 8);
@@ -4100,7 +4160,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             // [u32 tag][u32 channel][u32 n][per dot: 6 f32 (loc, spike) + u32 rgb].
             // Buffer per channel if the viewer is still building (dots are not a
             // droppable frame).
-            if (viewer) { const v = viewer; await serializeApply(() => v.setProbeDots(buffer, 4)); }
+            if (viewer) { const v = viewer; await serializeApply(() => v.setProbeDots(buffer, 4), 'dots'); }
             else pendingDots.push(buffer);
         } else if (tag === TAG_MAP) {
             // A live density window (see viewer.setMapBox). Only the latest matters —
@@ -4114,7 +4174,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         } else if (tag === TAG_HOTSPOT_VOLUME) {
             // A validation-severity cloud (see viewer.setHotspotVolume). Like the map box,
             // only the most recent matters while the viewer is still building.
-            if (viewer) { const v = viewer; await serializeApply(() => v.setHotspotVolume(buffer, 4)); }
+            if (viewer) { const v = viewer; await serializeApply(() => v.setHotspotVolume(buffer, 4), 'hotspot_volume'); }
             else pendingHotspotVolume = buffer;
         } else if (tag === TAG_LOCALRES) {
             // The primary map surface colored by a second grid (see viewer.setLocalresSurface).
@@ -4127,7 +4187,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     // cubes over it is seconds -- the app holds its busy indicator up until
                     // this arrives, so "sent" is never mistaken for "on screen and usable".
                     ws.send(JSON.stringify({ type: 'localres-shown' }));
-                });
+                }, 'localres');
             } else pendingLocalres = buffer;
         }
     };

@@ -106,15 +106,16 @@ def exercise_custom_flags_are_left_alone():
 def exercise_software_mode_sets_the_flags():
     with clean_environment():
         assert gpu.configure("software", log=quiet) == "software"
-        assert flags() == gpu.SOFTWARE_FLAGS
+        assert flags() == f"{gpu.SOFTWARE_FLAGS} {gpu.KEEP_AWAKE_FLAGS}"
         assert not gpu.autofix_enabled()                       # the decision is final
 
 
 def exercise_hardware_mode_sets_nothing_and_does_not_arm():
-    """The debugging path: trust the GPU and show its raw errors if it fails."""
+    """The debugging path: trust the GPU and show its raw errors if it fails.
+    Only the first-party keep-awake flags are written — the GPU is untouched."""
     with clean_environment():
         assert gpu.configure("hardware", log=quiet) == "hardware"
-        assert flags() is None
+        assert flags() == gpu.KEEP_AWAKE_FLAGS
         assert not gpu.autofix_enabled()
 
 
@@ -122,8 +123,26 @@ def exercise_auto_without_a_cached_verdict_arms_the_check():
     """The optimistic default: start on hardware, and verify once the page has loaded."""
     with clean_environment():
         assert gpu.configure("auto", log=quiet) == "hardware"
-        assert flags() is None
+        assert flags() == gpu.KEEP_AWAKE_FLAGS
         assert gpu.autofix_enabled()
+
+
+def exercise_our_own_flags_on_reexec_are_not_custom():
+    """A restarted child inherits the flags its parent wrote — they must read as
+    ours, not as a user's custom choice, or the software fallback would re-exec
+    and never apply its own flags."""
+    with clean_environment():
+        # Inherited keep-awake flags plus a software mode request: still ours.
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = gpu.KEEP_AWAKE_FLAGS
+        os.environ["PXVIEWER_GPU"] = "software"
+        assert gpu.configure(None, log=quiet) == "software"
+        assert flags() == f"{gpu.SOFTWARE_FLAGS} {gpu.KEEP_AWAKE_FLAGS}"
+
+        # Inherited software+keep-awake flags: recognized, recomposed identically.
+        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{gpu.SOFTWARE_FLAGS} {gpu.KEEP_AWAKE_FLAGS}"
+        del os.environ["PXVIEWER_GPU"]
+        assert gpu.configure("hardware", log=quiet) == "hardware"
+        assert flags() == f"{gpu.SOFTWARE_FLAGS} {gpu.KEEP_AWAKE_FLAGS}"
 
 
 def exercise_auto_does_not_arm_after_a_retry():
@@ -147,10 +166,11 @@ def exercise_marking_hardware_ok_is_remembered_across_launches():
         gpu.mark_hardware_ok()
         assert not gpu.autofix_enabled()
 
-        # A fresh configure trusts the remembered verdict: no check, no flags.
+        # A fresh configure trusts the remembered verdict: no check, no GPU flags
+        # (the first-party keep-awake flags always apply).
         assert gpu.configure("auto", log=quiet) == "hardware"
         assert not gpu.autofix_enabled()
-        assert flags() is None
+        assert flags() == gpu.KEEP_AWAKE_FLAGS
 
 
 def exercise_marking_hardware_ok_does_nothing_when_not_armed():
@@ -182,7 +202,7 @@ def exercise_missing_webgl_remembers_software_and_restarts():
         del os.environ["PXVIEWER_GPU"]
         del os.environ["_PXVIEWER_GL_RETRIED"]
         assert gpu.configure("auto", log=quiet) == "software"
-        assert flags() == gpu.SOFTWARE_FLAGS
+        assert flags() == f"{gpu.SOFTWARE_FLAGS} {gpu.KEEP_AWAKE_FLAGS}"
 
 
 def exercise_missing_webgl_is_a_noop_when_not_armed():
@@ -345,7 +365,7 @@ def exercise_sandbox_verdict_survives_a_later_gpu_verdict():
         del os.environ["QTWEBENGINE_DISABLE_SANDBOX"]
         gpu.configure("auto", log=quiet)
         assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
-        assert flags() is None                     # hardware verdict trusted too
+        assert flags() == gpu.KEEP_AWAKE_FLAGS     # hardware verdict trusted too
 
 
 def run():

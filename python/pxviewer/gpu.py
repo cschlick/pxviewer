@@ -40,9 +40,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 __all__ = [
-    "SOFTWARE_FLAGS", "configure", "autofix_enabled", "on_webgl_missing",
-    "mark_hardware_ok", "webgl_probe_js", "sandbox_autofix_enabled",
-    "mark_sandbox_ok", "on_renderer_unavailable",
+    "SOFTWARE_FLAGS", "KEEP_AWAKE_FLAGS", "configure", "autofix_enabled",
+    "on_webgl_missing", "mark_hardware_ok", "webgl_probe_js",
+    "sandbox_autofix_enabled", "mark_sandbox_ok", "on_renderer_unavailable",
 ]
 
 #: Chromium flags that route WebGL to the bundled SwiftShader (pure CPU), bypassing the
@@ -50,6 +50,14 @@ __all__ = [
 #: virtual GPU has WebGL blocklisted.
 SOFTWARE_FLAGS = ("--enable-unsafe-swiftshader --disable-gpu --ignore-gpu-blocklist "
                   "--use-gl=angle --use-angle=swiftshader")
+
+#: Chromium flags that keep the page's renderer running while the window is occluded
+#: or minimized. The viewport is a first-party desktop surface that also answers
+#: wire-driven commands (live bridge, MCP screenshots) — not a browser tab whose
+#: frames may pause with visibility. An occluded window suspends rAF, and every
+#: screenshot waits on a rendered frame, so a parked window read as a dead page.
+KEEP_AWAKE_FLAGS = ("--disable-backgrounding-occluded-windows "
+                    "--disable-renderer-backgrounding")
 
 #: JS returning whether a WebGL context can be created in the page — the real check,
 #: run in the actual viewport once it has loaded.
@@ -67,6 +75,14 @@ _CACHE_VERSION = "1"                   # bump if SOFTWARE_FLAGS changes, to inva
 #: hatch for kernels where the sandbox keeps the render process from spawning.
 _SANDBOX_ENV = "QTWEBENGINE_DISABLE_SANDBOX"
 _SANDBOX_RETRY_ENV = "_PXVIEWER_SANDBOX_RETRIED"  # like _RETRY_ENV, for that path
+
+#: The flag values this module itself writes — recognized as ours on re-exec so a
+#: restarted child does not misread its own inherited environment as user-chosen.
+_OWN_FLAG_SETS = (
+    KEEP_AWAKE_FLAGS,
+    SOFTWARE_FLAGS,
+    f"{SOFTWARE_FLAGS} {KEEP_AWAKE_FLAGS}",
+)
 
 # Module state, set by configure(): whether the app should check WebGL after load and
 # fall back. False once a decision is final (custom flags, forced mode, cached verdict).
@@ -91,8 +107,16 @@ def configure(mode: Optional[str] = None, *, log: Callable[[str], None] = print)
     _STATE["autofix"] = False
     _STATE["sandbox_autofix"] = False
 
-    if os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS"):
+    # Only *foreign* flags mean the user took the wheel. Our own composed sets
+    # (a re-exec sees what the parent wrote) must not trigger the custom branch,
+    # or the software fallback would restart and never apply its own flags.
+    existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    if existing and existing not in _OWN_FLAG_SETS:
         return "custom"  # the user has taken the wheel; do not second-guess them
+
+    # Keep the renderer awake under occlusion; a later software fallback adds its
+    # own flags on top (see _enable_software). An inherited set stays verbatim.
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = existing or KEEP_AWAKE_FLAGS
 
     # The sandbox is an axis separate from the GL backend, and its failure is
     # invisible to the WebGL probe — a render process that never spawns never
@@ -210,7 +234,7 @@ def on_renderer_unavailable(
 # -- internals ---------------------------------------------------------------
 
 def _enable_software() -> None:
-    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = SOFTWARE_FLAGS
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{SOFTWARE_FLAGS} {KEEP_AWAKE_FLAGS}"
 
 
 def _disable_sandbox() -> None:

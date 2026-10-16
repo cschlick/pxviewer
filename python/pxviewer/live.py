@@ -31,6 +31,8 @@ Server -> client (UTF-8 JSON text control messages):
   - {"type": "representations", "reprs": [{...}, ...]}          declarative repr list
   - {"type": "click-mode", "mode": str}                        'select'|measure|'off'
   - {"type": "focus-surroundings", "enabled": bool}            native Mol* click focus view
+  - {"type": "ping", "reqId": int}                             liveness probe — bypasses
+                                                             the apply chain (see pong)
 
 Client -> server (UTF-8 JSON text):
   - {"type": "ready"}                              after topology is parsed
@@ -43,6 +45,13 @@ Client -> server (UTF-8 JSON text):
       (action "arm" — mode enabled, drag imminent — carries no atom/target)
   - {"type": "screenshot-result", "reqId": int, "dataUri": str}  rendered viewport
   - {"type": "background-result", "reqId": int, "color": str}   viewport background #rrggbb
+  - {"type": "pong", "reqId": int, "pending": int, "busy": str,  liveness probe answer:
+     "busyMs": int, "viewer": bool}                            answered off the apply
+                                                              chain — reports what
+                                                              holds it, not just life
+  - {"type": "chain-stall", "ms": int, "label": str}           one state-tree update
+                                                              held the apply chain
+                                                              past the stall threshold
 
 All atoms are addressed by *positional index* (row in the topology's _atom_site
 table). Selections are resolved to indices entirely on the Python side; the wire
@@ -57,6 +66,7 @@ import asyncio
 import base64
 import dataclasses
 import json
+import math
 import struct
 import threading
 from http import HTTPStatus
@@ -499,6 +509,10 @@ class LiveSession:
         # after its build) so a reload keeps a hidden coloring hidden.
         self._localres_visible: Optional[bool] = None
         self._pick_handlers: List[Callable[[Optional[dict]], None]] = []
+        # Apply-chain stall reports from the page ({ms, label}) — surfaced so a
+        # wedged frontend names the work holding it instead of looking dead.
+        self._stall_handlers: List[Callable[[dict], None]] = []
+        self._last_chain_stall: Optional[dict] = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._server: Any = None
@@ -622,6 +636,10 @@ class LiveSession:
     def on_pick(self, handler: Callable[[Optional[dict]], None]) -> None:
         """Register a callback invoked (on the server's loop thread) for each pick."""
         self._pick_handlers.append(handler)
+
+    def on_chain_stall(self, handler: Callable[[dict], None]) -> None:
+        """Register a callback (server loop thread) for apply-chain stall reports."""
+        self._stall_handlers.append(handler)
 
     def wait_for_client(self, timeout: Optional[float] = None) -> bool:
         """Block until a client has connected and reported it parsed the topology.
@@ -1280,13 +1298,44 @@ class LiveSession:
             self._pending.pop(req_id, None)
         return slot["state"] if answered else None
 
+    def ping(self, *, timeout: float = 2.0) -> Optional[dict]:
+        """Ask the page whether it is alive, bypassing the state-tree apply chain.
+
+        Every other control message queues behind serialized scene work, so a single
+        stalled update makes a healthy page look dead. ``ping`` is answered directly;
+        its ``pong`` reports ``pending`` (messages queued behind the current work) and
+        ``busy``/``busyMs`` (what the chain is in and for how long) — the difference
+        between "viewport dead" and "viewport stuck in one slow update"."""
+        req_id = self._next_req()
+        slot: dict = {"event": threading.Event(), "state": None}
+        with self._pending_lock:
+            self._pending[req_id] = slot
+        self._send_control({"type": "ping", "reqId": req_id})
+        answered = slot["event"].wait(timeout)
+        with self._pending_lock:
+            self._pending.pop(req_id, None)
+        return slot["state"] if answered else None
+
     def set_camera(self, state: dict) -> None:
         """Apply a :meth:`camera_state` snapshot — the restore half of a saved view.
 
         Only the aiming fields travel (target/position/up/radius/fov); near/far are
         the clip machinery's business and are restored through it, not the camera.
+        Non-finite components are refused here — the wire is JSON, so they would
+        either corrupt the frame or make the page drop the message silently.
         """
-        self._send_or_arm({"type": "camera-set", "state": dict(state)})
+        snapshot = dict(state)
+        values: List[float] = []
+        for key in ("target", "position", "up"):
+            vec = snapshot.get(key)
+            if isinstance(vec, (list, tuple)):
+                values += [float(c) for c in vec]
+        for key in ("radius", "fov", "radiusMax"):
+            if isinstance(snapshot.get(key), (int, float)):
+                values.append(float(snapshot[key]))
+        if not all(math.isfinite(v) for v in values):
+            raise ValueError("set_camera received a non-finite camera state")
+        self._send_or_arm({"type": "camera-set", "state": snapshot})
 
     def set_background(self, color: str) -> None:
         """Set the viewport's background color — the restore half of a saved view."""
@@ -1863,15 +1912,24 @@ class LiveSession:
         the numbers travel and the trigonometry stays client-side. Thread-safe.
         Used to show a residue N->C left-to-right, side chain up.
         """
+        numbers = ([float(c) for c in target] + [float(c) for c in up]
+                   + [float(c) for c in direction] + [float(radius)])
+        ext = [float(c) for c in extents] if extents is not None else None
+        if ext is not None:
+            numbers += ext
+        # A non-finite component would serialize as bare NaN/Infinity — invalid
+        # JSON the page drops silently — or worse, poison the camera outright.
+        if not all(math.isfinite(v) for v in numbers):
+            raise ValueError("orient_camera received a non-finite camera parameter")
         message = {
             "type": "orient",
-            "target": [float(c) for c in target],
-            "up": [float(c) for c in up],
-            "direction": [float(c) for c in direction],
-            "radius": float(radius),
+            "target": numbers[0:3],
+            "up": numbers[3:6],
+            "direction": numbers[6:9],
+            "radius": numbers[9],
         }
-        if extents is not None:
-            message["extents"] = [float(c) for c in extents]
+        if ext is not None:
+            message["extents"] = ext
         if not clip:
             message["clip"] = False  # frame and orient, but leave the scene unclipped
         self._send_control(message)
@@ -2419,6 +2477,24 @@ class LiveSession:
             for handler in self._localres_shown_handlers:
                 try:
                     handler()
+                except Exception:  # pragma: no cover - user callback errors
+                    pass
+        elif etype == "pong":
+            req_id = event.get("reqId")
+            with self._pending_lock:
+                slot = self._pending.get(req_id)
+            if slot is not None:
+                slot["state"] = {k: event.get(k) for k in ("pending", "busy", "busyMs", "viewer")}
+                slot["event"].set()
+        elif etype == "chain-stall":
+            # The page is alive but one state-tree update has held the apply chain
+            # past the warning threshold — everything else (screenshots included) is
+            # queued behind it. Surface the culprit, don't just look dead.
+            stall = {"ms": event.get("ms"), "label": event.get("label")}
+            self._last_chain_stall = stall
+            for handler in self._stall_handlers:
+                try:
+                    handler(stall)
                 except Exception:  # pragma: no cover - user callback errors
                     pass
         elif etype == "camera-state-result":
