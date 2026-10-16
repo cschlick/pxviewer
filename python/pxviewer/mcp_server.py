@@ -294,7 +294,10 @@ def _make_server():
 
     @mcp.tool()
     async def status() -> dict:
-        """Scene state: loaded objects, selections, camera."""
+        """Scene state: loaded objects, selections, camera, markers, plus
+        `busy`/`job_errors` — running and recently-failed background jobs
+        (fetch, validation, minimize). Check `job_errors` when a tool's
+        effect never appears."""
         def work():
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
@@ -308,8 +311,13 @@ def _make_server():
                               _app._scene_selection.items()},
                 "markers": [{"id": m["id"], "position": m["position"],
                              "visible": m["visible"]} for m in _app._markers],
+                "reflections": [{"id": r["id"], "name": r.get("name")}
+                                for r in _app._reflections],
             }
         state = await _qt(work)
+        jobs = _app.job_state()
+        state["busy"] = jobs["busy"]
+        state["job_errors"] = jobs["errors"]
         state["camera"] = _session().camera_state()
         state["background"] = _session().background_color()
         return state
@@ -882,23 +890,43 @@ def _make_server():
         def work():
             ents = entities or (["model", "map"] if emdb_number is not None
                                 and pdb_id is None else ["model"])
-            before = (len(_app._models), len(_app._volumes),
-                      len(_app._reflections))
+            before = ({e["id"] for e in _app._models},
+                      {e["id"] for e in _app._volumes},
+                      {r["id"] for r in _app._reflections})
             _app.fetch_and_load(pdb_id=pdb_id, emdb_number=emdb_number,
                                 entities=ents,
                                 work_dir=str(Path(work_dir).expanduser())
                                 if work_dir else None)
             return before, ents
         before, ents = await _qt(work)
-        deadline = time.time() + 120
+        started = time.time()
+        deadline = started + 120
         while time.time() < deadline:
-            counts = await _qt(lambda: (len(_app._models), len(_app._volumes),
-                                        len(_app._reflections)))
-            if counts != before:
+            def poll():
+                jobs = _app.job_state()
+                fresh = [e for e in jobs["errors"]
+                         if e["when"] >= started
+                         and e["name"] == "pxviewer-fetch"]
+                return (jobs["busy"], fresh,
+                        {e["id"] for e in _app._models} - before[0],
+                        {e["id"] for e in _app._volumes} - before[1],
+                        {r["id"] for r in _app._reflections} - before[2])
+            busy, errors, new_m, new_v, new_r = await _qt(poll)
+            if errors:
+                raise RuntimeError(errors[-1]["error"])
+            if (new_m or new_v or new_r) and not any(
+                    "Fetching" in b for b in busy):
                 break
             await asyncio.sleep(0.5)
+        else:
+            raise TimeoutError(
+                "fetch produced no objects after 120s and no error was "
+                "recorded — check status() job_errors")
         _wait_ready(timeout=60)
-        return {"fetched": ents, "pdb_id": pdb_id, "emdb_number": emdb_number}
+        return {"loaded": {"models": sorted(new_m), "volumes": sorted(new_v),
+                           "reflections": sorted(new_r)},
+                "requested": ents, "pdb_id": pdb_id,
+                "emdb_number": emdb_number}
 
     @mcp.tool()
     async def remove(kind: str, ident: str) -> dict:

@@ -7194,6 +7194,9 @@ class DesktopApp:
         # it up until the last one finishes.
         self._busy_labels: list = []
         self._busy_lock = threading.Lock()
+        # Recent background-job failures: an agent driving over MCP cannot see
+        # the _warn flash, so the last few are kept here for status() to report.
+        self._job_errors: list = []
         # Restraint-notation primitives currently drawn for the selected geometry rows.
         self._restraint_prim_ids: list = []
         self._restraint_prim_session = None
@@ -7609,6 +7612,11 @@ class DesktopApp:
                 work()
             except Exception as exc:
                 traceback.print_exc()
+                with self._busy_lock:
+                    self._job_errors.append({"name": name, "label": label,
+                                             "error": _first_line(exc),
+                                             "when": time.time()})
+                    del self._job_errors[:-8]
                 self._warn(f"{label} failed: {_first_line(exc)}")
             finally:
                 self._end_busy(label)
@@ -7645,6 +7653,14 @@ class DesktopApp:
         running = bool(self._busy_labels)
         current = self._busy_labels[-1] if running else ""
         self.bridge.busy_changed.emit((running, current, tuple(self._busy_labels)))
+
+    def job_state(self) -> dict:
+        """Background work as an agent sees it: what is running and what just
+        failed. A fetch that timed out or a validation that never landed is
+        answered here, not guessed at from the object lists."""
+        with self._busy_lock:
+            return {"busy": list(self._busy_labels),
+                    "errors": list(self._job_errors)}
 
     def _model_analysis(self, entry):
         """The per-model analysis cache (ramalyze/rotalyze/probe) shared by the Validation tab
