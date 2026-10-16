@@ -707,7 +707,7 @@ def exercise_the_current_row_is_the_active_model():
         assert app._active_model_id == b
 
         tree = app._controls._loaded_tree
-        assert tree.columnCount() == 2                   # [eye] [name] — no radio column
+        assert tree.columnCount() == 3                   # [eye] [name] [restraints] — no radio column
         current = tree.currentItem()
         assert current.data(0, Qt.ItemDataRole.UserRole) == ("model", b)
         assert node_for(app, "model", b).font(1).bold()
