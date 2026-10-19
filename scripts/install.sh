@@ -11,7 +11,9 @@
 # What it does, in order:
 #
 #   conda?    — install Miniforge into ~/miniforge3 if no conda is found
-#   git?      — `conda install git` if missing; no sudo or Xcode CLT needed
+#   git?      — `conda install git` into base if missing; used by full path so
+#               it works even with auto_activate_base: false; no sudo or Xcode
+#               CLT needed
 #   checkout  — clone https://github.com/cschlick/pxviewer if not already in one
 #               (newest v* tag by default; --dev/--ref change that)
 #   conda env create -f environment.yml   (or update, if the env exists)
@@ -48,8 +50,21 @@ esac
 
 confirm() { # $1 = prompt; returns 0 for yes
   [[ "$yes" == 1 ]] && return 0
-  read -r -p "$1 [y/N] " reply
-  [[ "$reply" =~ ^[Yy] ]]
+  local reply
+  # `curl ... | bash` runs with the script itself on stdin — a bare `read`
+  # would consume upcoming script lines (or EOF) as the "answer", and every
+  # prompt silently resolves to no. Ask the terminal on its own fd instead.
+  # A /dev/tty node exists everywhere but refuses to open without a real
+  # controlling terminal (CI, cron, containers) — and there the one-line
+  # install is itself the consent, so proceed.
+  if { exec 9<>/dev/tty; } 2>/dev/null; then
+    read -r -p "$1 [y/N] " reply <&9
+    exec 9>&-
+    [[ "$reply" =~ ^[Yy] ]]
+  else
+    echo "$1 — yes (no terminal to ask)"
+    return 0
+  fi
 }
 
 # --- conda -------------------------------------------------------------------
@@ -106,18 +121,23 @@ echo "using: $(command -v conda)  ($(conda --version))"
 # Only needed to clone. conda-forge's git works on every platform, needs no
 # sudo, and skips macOS's Xcode CLT dialog entirely — so it is the bootstrap
 # rather than the system package manager.
+GIT=git
 if ! command -v git >/dev/null 2>&1; then
-  if ! confirm "git not found — install it into the base conda env?"; then
-    echo "git is required to fetch the pxviewer checkout." >&2
-    exit 1
+  GIT="$(conda info --base)/bin/git"
+  if [[ ! -x "$GIT" ]]; then
+    if ! confirm "git not found — install it into the base conda env?"; then
+      echo "git is required to fetch the pxviewer checkout." >&2
+      exit 1
+    fi
+    conda install -y -n base -c conda-forge git
+    if [[ ! -x "$GIT" ]]; then
+      echo "installed git into base but $GIT is missing" >&2
+      exit 1
+    fi
   fi
-  conda install -y -n base -c conda-forge git
-  # `auto_activate_base: false` leaves base's bin off PATH even in this shell.
-  conda activate base 2>/dev/null || true
-  if ! command -v git >/dev/null 2>&1; then
-    echo "installed git into base but it is not on PATH — check conda config" >&2
-    exit 1
-  fi
+  # Used by full path from here on: whether base activates onto PATH or not
+  # (auto_activate_base: false) cannot matter, and an existing base git is
+  # never touched.
 fi
 
 # --- checkout ------------------------------------------------------------------
@@ -136,7 +156,7 @@ if [[ "$in_checkout" == 0 ]]; then
   # newest v* tag so `curl | bash` installs a release, not HEAD.
   target="$ref"
   if [[ -z "$target" && "$dev" == 0 ]]; then
-    target="$(git ls-remote --tags https://github.com/cschlick/pxviewer 'v*' \
+    target="$("$GIT" ls-remote --tags https://github.com/cschlick/pxviewer 'v*' \
       | sed -n 's|.*refs/tags/\([^^]*\)|\1|p' | sort -V | tail -1)"
     [[ -n "$target" ]] && echo "latest release: $target"
   fi
@@ -147,18 +167,18 @@ if [[ "$in_checkout" == 0 ]]; then
   fi
   # A tag only needs the one commit; dev gets a full clone so branches work.
   if [[ "$dev" == 1 && -z "$ref" ]]; then
-    git clone https://github.com/cschlick/pxviewer
+    "$GIT" clone https://github.com/cschlick/pxviewer
   else
-    git clone --depth 1 --branch "$target" https://github.com/cschlick/pxviewer
+    "$GIT" clone --depth 1 --branch "$target" https://github.com/cschlick/pxviewer
   fi
   cd pxviewer
 elif [[ -n "$ref" ]]; then
   # An existing checkout is used as-is unless --ref was given explicitly.
-  git fetch --tags --quiet
-  git checkout "$ref"
+  "$GIT" fetch --tags --quiet
+  "$GIT" checkout "$ref"
 fi
 
-echo "checkout: $(pwd)  ($(git describe --tags --always 2>/dev/null || echo unknown))"
+echo "checkout: $(pwd)  $("$GIT" describe --tags --always 2>/dev/null || echo unknown)"
 
 # --- environment -------------------------------------------------------------
 # The env name comes from environment.yml itself; an existing env is updated
