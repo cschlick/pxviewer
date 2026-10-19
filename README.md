@@ -697,6 +697,40 @@ jupyter console --existing /path/to/kernel-NNNN.json   # or a notebook
 Code run through an attached frontend executes in the pxviewer process against
 the same live objects — names assigned in one client are visible in the others.
 
+### Agents (MCP)
+
+An MCP server hands an agent that same kernel: its `python(code)` tool
+executes in the namespace above (`app`, `session`, `api`, `np`, `help`),
+alongside operational tools `status`, `ping`, `screenshot`, `save_screenshot`
+and `reload_viewport`. The tool descriptions teach the namespace, so the agent
+needs no extra instructions — point its MCP config at pxviewer and it can load
+structures, run validation, compose figures and inspect the result live.
+
+Two ways to connect:
+
+**Give the agent its own viewer** — `python -m pxviewer mcp` spawns a
+`DesktopApp` the server owns, over stdio (real windows open; you can watch the
+agent work):
+
+```json
+{"mcpServers": {"pxviewer": {
+  "command": "/path/to/miniforge3/envs/pxviewer/bin/python",
+  "args": ["-m", "pxviewer", "mcp"]}}}
+```
+
+**Attach to the app you already have open** — a running app also serves MCP
+over HTTP on a fixed port, so a client can drive the live window in front of
+you:
+
+```json
+{"mcpServers": {"pxviewer-live": {"url": "http://127.0.0.1:8753/mcp"}}}
+```
+
+For Devin this goes in `.devin/mcp_config.local.json`; for Claude Code,
+`claude mcp add pxviewer /path/to/env/bin/python -m pxviewer mcp` (or the same
+JSON in `.mcp.json`). Both endpoints listen on loopback only and refuse
+requests carrying a browser `Origin` header.
+
 ## Live wire protocol (`pxviewer-live/1`)
 
 WebSocket; binary messages are little-endian and begin with a `uint32` tag.
