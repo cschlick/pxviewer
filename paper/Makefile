@@ -8,7 +8,7 @@
 
 PYTHON ?= /opt/homebrew/Caskroom/miniforge/base/envs/pxviewer/bin/python
 
-FIGURES := fig_gui.png
+FIGURES := fig_gui.png fig_validation.png
 
 figures: $(FIGURES)
 
@@ -16,6 +16,11 @@ figures: $(FIGURES)
 # `make figures` always re-photographs, never reports "up to date".
 fig_gui.png: figure1.pxview.json regen_figure.py FORCE
 	$(PYTHON) regen_figure.py figure1.pxview.json $@ --controls
+
+# The validation figure drives the live app rather than a saved view: it must
+# run the validators and turn their markup on and off between panels.
+fig_validation.png: fig_validation.py FORCE
+	$(PYTHON) fig_validation.py
 
 FORCE:
 

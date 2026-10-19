@@ -141,66 +141,81 @@ Pxviewer provides a way to look at those objects graphically, analyze them, and 
   bothway/.style={thick, dashed,
                   {Stealth[length=2.2mm]}-{Stealth[length=2.2mm]}}
 ]
-  % --- visualizer: desktop shell -------------------------------------
-  \node[font=\footnotesize\itshape] (dtitle) {desktop application (PySide6/Qt)};
-  \node[box, below=1.5mm of dtitle] (controls)
+  % --- column A: visualization shells, one bubble per row -------------
+  \node[font=\footnotesize\itshape, align=center] (dtitle)
+    {desktop application\\ (PySide6/Qt)};
+  \node[box, below=1.5mm of dtitle, minimum width=2.8cm] (controls)
     {\textbf{Controls window}\\
      \footnotesize Qt Widgets\\
      \footnotesize tables, tools, tutorials};
-  \node[box, right=of controls, minimum width=4.6cm] (viewA)
+  \node[box, below=3mm of controls, minimum width=2.8cm] (viewA)
     {\textbf{3D viewport}\\
      \footnotesize QtWebEngine\\
      \footnotesize Mol* frontend};
   \node[shellbox, fit=(dtitle)(controls)(viewA)] (desktop) {};
 
-  % --- visualization: web shell (sibling, aligned with desktop) -------
-  \coordinate (webx) at ($(desktop.east)+(35mm,0)$);
-  \node[font=\footnotesize\itshape] (wtitle) at (dtitle -| webx)
+  \node[font=\footnotesize\itshape, below=6mm of desktop] (wtitle)
     {web application};
-  \node[box, minimum width=4.6cm] (viewB) at (viewA -| webx)
+  \node[box, below=1.5mm of wtitle, minimum width=2.8cm] (viewB)
     {\textbf{3D viewport}\\
      \footnotesize any browser\\
      \footnotesize Mol* frontend};
   \node[shellbox, fit=(wtitle)(viewB)] (webapp) {};
 
-  % --- visualization container -----------------------------------------
   \node[font=\footnotesize\itshape] (vtitle)
-    at ($(desktop.north)!0.5!(webapp.north)+(0,7mm)$) {visualization};
+    at ($(desktop.north)+(0,4mm)$) {visualization};
   \node[shellbox, fit=(desktop)(webapp)(vtitle)] (viz) {};
 
-  % --- pxviewer core (independent of any frontend) --------------------
-  \node[box, minimum width=15.6cm]
-    (py) at ($(viz.south)+(0,-36mm)$)
+  % --- column B: python layer, one bubble per row ----------------------
+  \node[box, anchor=north west] (core)
+    at ($(desktop.north east)+(42mm,-3mm)$)
     {\textbf{\pxviewer{} --- cctbx data layer}\\
-     \footnotesize model I/O~$\cdot$~geometry restraints~$\cdot$~validation
-       ~$\cdot$~refinement~$\cdot$~live bridge (WebSocket server)};
+     \footnotesize model I/O~$\cdot$~geometry restraints\\
+     \footnotesize validation~$\cdot$~refinement\\
+     \footnotesize live bridge (WebSocket server)};
+  \node[box, below=4mm of core] (mcpiface)
+    {\textbf{shared Python kernel}\\
+     \footnotesize Jupyter wire\\
+     \footnotesize MCP \texttt{python}};
+  \draw[oneway] (mcpiface.north) -- (core.south);
+  \node[font=\footnotesize\itshape] (pytitle)
+    at ($(core.north)+(0,7mm)$) {\pxviewer{} --- Python layer};
+  \node[shellbox, fit=(mcpiface)(core)(pytitle)] (py) {};
 
-  % --- in-process control link ----------------------------------------
-  \coordinate (inproc) at ($(controls.south west)+(3mm,0)$);
-  \draw[oneway] (inproc) -- (inproc |- py.north)
-    node[pos=0.75, left=2mm, lbl, align=right] {in-process};
+  \node[box, below=12mm of py, minimum width=3.4cm] (mcp)
+    {\textbf{external clients}\\
+     \footnotesize MCP agent \textperiodcentered{} Jupyter\\
+     \footnotesize HTTP, stdio, or wire};
+  \draw[bothway] (mcp.north) -- (mcpiface.south)
+    node[pos=0.55, right=2mm, lbl, align=left]
+      {exec drives\\ the same scene state};
 
-  % --- live bridge to the desktop viewport ----------------------------
-  \draw[oneway] ($(py.north -| viewA.south)+(-6mm,0)$)
-             -- ($(viewA.south)+(-6mm,0)$)
-    node[pos=0.3, left=3mm, lbl, align=right]
-      {topology once (BinaryCIF);\\ frames, selections,\\
-       representations, camera};
-  \draw[oneway] ($(viewA.south)+(6mm,0)$)
-             -- ($(py.north -| viewA.south)+(6mm,0)$)
-    node[pos=0.6, right=3mm, lbl]
+  % --- live bridge between the superboxes (two directions) ------------
+  \draw[oneway] ($(py.west |- viewA.east)+(0,3mm)$)
+    -- ($(viz.east |- viewA.east)+(0,3mm)$)
+    node[pos=0.45, above=0.5mm, lbl, align=center]
+      {topology once;\\ frames, selections,\\ representations};
+  \draw[oneway] ($(viz.east |- viewA.east)+(0,-3mm)$)
+    -- ($(py.west |- viewA.east)+(0,-3mm)$)
+    node[pos=0.55, below=0.5mm, lbl, align=center]
       {picks, drags,\\ measurements,\\ iso-value changes};
 
-  % --- identical bridge to the web-app viewport -----------------------
-  \draw[bothway] (py.north -| viewB.south) -- (viewB.south)
-    node[pos=0.3, right=3mm, lbl] {same protocol\\ (\texttt{pxviewer serve})};
+  % --- in-process control link ----------------------------------------
+  \draw[oneway] ($(controls.east)+(0,2.5mm)$)
+    -- ($(py.west |- controls.east)+(0,2.5mm)$)
+    node[pos=0.5, above=0.5mm, lbl] {in-process};
 \end{tikzpicture}}
 \caption{\pxviewer{} architecture. The Python core (model I/O, geometry
 restraints, validation and refinement through cctbx, and the live coordinate
 bridge) is largely independent of the visualization. The visualization may
 be the desktop application, which pairs a QtWebEngine viewport with a native
 controls window, or a standalone web application served to any browser by
-\texttt{pxviewer serve}. }
+\texttt{pxviewer serve}. A shared Python kernel sits in the same layer: the
+Console tab, an attached Jupyter frontend and the MCP \texttt{python} tool
+are all clients of it, so a human script and an agent execute against the
+same objects, and every call drives the scene through the same state and
+the same bridge as the controls window rather than a parallel or hidden
+representation. }
 \label{fig:arch}
 \end{figure}
 
@@ -227,7 +242,63 @@ interaction notation, clashes, camera state and background. Atom identity is
 positional and fixed for a session: index $i$ on the wire is always atom
 $i$ of the topology, which is what makes streamed conformation updates safe and fast.
 This follows the convention of the underlying cctbx $i_seq$ atom property, and a provides a 
-natural way to specify atoms between the Python model and Mol* view domains. 
+natural way to specify atoms between the Python model and Mol* view domains.
+Table~\ref{tab:wire} gives representative messages.
+
+\begin{table}[H]
+\centering
+\caption{Representative pxviewer-live/1 wire messages. Binary frames carry a
+little-endian \texttt{u32} tag; control messages are UTF-8 JSON. Atoms are
+always addressed positionally --- an \emph{index-set} is a run-length
+\texttt{\{"runs": [[start,end],...]\}} or an explicit
+\texttt{\{"list": [i,...]\}} --- so the wire never carries a query language.}
+\label{tab:wire}
+\begin{tabular}{@{}p{6.4cm}p{9cm}@{}}
+\toprule
+Message & Meaning \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{Binary, Python to the page}} \\
+\texttt{[0][BinaryCIF]} & the topology: which atoms exist, sent once \\
+\texttt{[1][frame][f32~$xyz\times N$]} & a whole conformation \\
+\texttt{[5][frame][$n$][$i_1..i_n$][f32~$xyz\times n$]} & delta frame: only
+the atoms that moved \\
+\texttt{[2]} / \texttt{[3]} / \texttt{[4]} & per-atom attribute values /
+probe contact dots / a live density box \\
+\texttt{[6]} / \texttt{[7]} & a validation-severity volume / a
+local-resolution grid \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{JSON, Python to the page}} \\
+\texttt{\{"type": "highlight", "atoms": \{...\}\}} & draw the selection
+overlay \\
+\texttt{\{"type": "focus", "atoms": \{...\}\}} & aim the camera at an
+index set \\
+\texttt{\{"type": "representations", "reprs": [...]\}} & the declarative
+MolViewSpec representation list \\
+\texttt{\{"type": "primitive", "action": "add",} \texttt{"kind":
+"distance", ...\}} & draw a measurement between atoms \\
+\texttt{\{"type": "clip", "ref": ..., "front": f,} \texttt{"back": b,
+"radius": r\}} & slab and sphere clipping \\
+\texttt{\{"type": "camera-set", "state": \{...\}\}} & restore a saved
+camera \\
+\texttt{\{"type": "ping", "reqId": n\}} & liveness probe, answered off the
+apply chain \\
+\midrule
+\multicolumn{2}{@{}l}{\emph{JSON, the page to Python}} \\
+\texttt{\{"type": "ready"\}} & topology parsed; replay begins \\
+\texttt{\{"type": "pick", "atom": \{...\}\}} & a viewport click ---
+becomes a Python-side selection \\
+\texttt{\{"type": "mouse-selection", "indices": [...]\}} & a click-built
+selection \\
+\texttt{\{"type": "tug", "atom": i, "target": [x,y,z]\}} & an atom drag \\
+\texttt{\{"type": "screenshot-result", "reqId": n,} \texttt{"dataUri":
+...\}} & the rendered frame \\
+\texttt{\{"type": "pong", "pending": 0, "busy": "msg:clip", ...\}} & what
+the apply chain is doing, and for how long \\
+\texttt{\{"type": "chain-stall", "ms": ..., "label": ...\}} & one
+state-tree update held the chain past the stall threshold \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \textbf{The renderer} is a Mol*-based frontend (TypeScript/React). It applies
 each frame to the streamed topology in place, and representations update
@@ -265,67 +336,103 @@ without reimplementation.
 The \emph{Open} action accepts local model files (PDB, mmCIF and other
 cctbx-supported formats), density maps and reflection files, or an accession
 code to fetch from the PDB/EMDB. Several models can be loaded at once and
-independently shown, hidden or made active. Representations follow
-MolViewSpec's vocabulary --- cartoon/ribbon, ball-and-stick, spacefill,
-surface, carbohydrate --- with coloring by element, chain, secondary
+independently shown, hidden or made active in an objects list.
+Often it is necessary for computation tasks to know which model and data (real space map or reflection file) 
+should be paired together. Within cctbx for real space maps this is expressed as a \texttt{map\_model\_manager} object.
+When opening files, \pxviewer{} automatically pairs map and data if both files are selected together. In the case
+where model and data are not opened together, the object list offers a user the option to 
+pair a map and data manually. Within the \pxviewer{} data model, a model and data paired this way would create the 
+appropriate underlying cctbx python object (a \texttt{map\_model\_manager} object). 
+
+\subsection{Representation}
+
+Below the object list is a Representation pane. Representations follow
+MolViewSpec's vocabulary: cartoon/ribbon, ball-and-stick, spacefill,
+surface, carbohydrate. Coloring can be done by element, chain, secondary
 structure, residue properties, arbitrary uniform colors, or any per-atom
-attribute (B-factor, occupancy, or values supplied or computed by the user)
-mapped through a named palette and domain.
+attribute (B-factor, occupancy, or values supplied or computed by the user). Clipping is available across slab, sphere and
+selection-driven modes.  Non-covalent
+interaction notation (hydrogen bonds, salt bridges, hydrophobic and other
+contact kinds) can be supplied explicitly from Python or inferred by Mol*.
 
-\subsection{Tables are selections}
+\subsection{Tables and selections}
 
-The Geometry tab presents the model as the crystallographer already thinks
-of it: \emph{Components} lists residue groups (residues, ligands, waters);
-\emph{Atoms} is a virtualized table of per-atom attributes that remains
-responsive past $10^5$ atoms; and one virtualized table per restraint type
+The Geometry tab presents the model as a list of tables: \emph{Components} lists residue groups (residues, ligands, waters);
+\emph{Atoms} is a table of per-atom attributes that remains
+responsive past $10^5$ atoms; and one table per restraint type
 lists bonds, angles, dihedrals, chiralities and planarities, read directly
 from the cctbx restraint proxies. Every row is a literal selection of the
 atoms it describes, and selections are shared state across the whole
-application: a row selected in a table highlights those atoms in the
-viewport, an atom picked in the viewport selects its row, camera focus and
+application. A row selected in a table highlights those atoms in the
+viewport, a group of rows selected in a table highlists the inclusive set of shared atoms. An atom picked in the viewport selects its atom row. Camera focus and
 the clip sphere can be bound to the running selection, and keyboard stepping
-walks the table one residue or one atom at a time. Pick granularity is
-explicit --- atom-level by default, promoted to residue where the displayed
-representation offers no atom-sized target --- and is visible and
-overridable in the Selection pane.
+walks the table one row at a time. Pick granularity is
+explicit: atom-level by default, promoted to residue where the displayed
+representation offers no atom-sized target (such as cartoon/ribbon), and is visible and
+overridable in the Selection pane. Also in the Selection pane, the user can enter arbitrary cctbx string selections.
+Internally, selections from any source are converted to cctbx integer selections, which are then passed along the wire to the viewer.
+Operating on strict integer selections ensures that the viewer always has a consistent and efficient way to reference atoms, 
+and removes the ambiguity surface inherent to string-based selection translation.
 
-\subsection{Measurements, interactions and clipping}
-
-Distance, angle, dihedral and label measurements are drawn between atoms or
-selection centroids and track the structure as it moves. Non-covalent
-interaction notation (hydrogen bonds, salt bridges, hydrophobic and other
-contact kinds) can be supplied explicitly from Python or inferred by Mol*;
-steric clashes are computed from the coordinates themselves and drawn in a
-distinct ``bad contact'' style. Clipping is unified across slab, sphere and
-selection-driven modes, so isolating a binding site is a property of the
-selection rather than a separate mechanism.
+\subsection{Restraint editing}
+Restraint edits --- custom bonds, angles or
+metal-coordination restraints the monomer library cannot know --- are
+authored from the atoms themselves inside the GUI and can be shared as a
+PHIL file for use in Phenix refinement, so an interactive session produces
+artifacts that survive it.
 
 %% =====================================================================
 \section{Validation}
 
-Validation in \pxviewer{} is not a report but an interface. The
-\emph{Validation} tab runs the MolProbity-derived checks available through
-cctbx --- rotamer outliers, Ramachandran outliers, CaBLAM backbone outliers,
-C$\beta$ deviations, cis- and twisted-peptide flags --- each producing a
-table of flagged residues. Tables behave exactly like the geometry tables:
-a row is a selection of the atoms involved, so the path from ``this residue
+The \emph{Validation} tab runs the MolProbity-derived checks available through
+cctbx: rotamer outliers, Ramachandran outliers, CaBLAM backbone outliers,
+C$\beta$ deviations, cis- and twisted-peptide flags. Each produces a
+table of flagged residues and deposits the corresponding MolProbity markup in
+the viewport (Fig.~\ref{fig:validation}). Tables behave exactly like the
+geometry tables: a row is a selection of the atoms involved, and table rows
+are selections, so the path from ``this residue
 is an outlier'' to ``show me'' is one click.
 
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{fig_validation.png}
+  \caption{Validator markup in the viewport, on the bundled demonstration
+  model (1TEC, chosen because it trips every check).
+  (a)~All residue-validator markup at once. (b)--(f)~One flagged residue per
+  check, framed the way a table-row click frames it --- ball-and-stick with
+  the marker standing alone: (b)~the MolProbity gold side chain of a rotamer
+  outlier (Arg~270, score 0.00); (c)~the C$\alpha$ flag of a Ramachandran
+  outlier (Asn~61); (d)~CaBLAM backbone flags (Thr~215); (e)~the
+  C$\beta$-deviation marker (Val~156, 0.59~\AA); (f)~the filled wedge of a
+  cis-Pro peptide (Pro~172). (g)~The all-atom-contacts check: reduce2 adds
+  hydrogens, probe2's contact and clash dots draw on the hydrogenated sibling
+  model, and the dot field marks the clashing atoms. All panels are real
+  viewport captures produced by \texttt{fig\_validation.py}.
+  \label{fig:validation}}
+\end{figure}
+
+\subsection{Hotspots}
 Two further tools consolidate the picture. \emph{Hotspots} aggregates the
 per-residue checks into a single per-atom severity field mapped onto the
 structure, because a region worth rebuilding usually trips several checks
-at once and a picture finds such regions faster than five tables. For cryo-EM
-models, \emph{Q-score} \citep{qscore2020} reports per-atom and per-residue
-map-model correlation, colorable directly onto the structure. Steric clashes
-computed from the coordinates complete the validation set.
+at once and a picture finds such regions faster than five tables.
+
+\subsection{Real space map-model aggreement}
+
+A deposited cryo-EM resolution is a global average; \pxviewer{} computes
+local resolution and colors the structure or map by it, making the
+soft-periphery/sharp-core distinction directly visible.
 
 %% =====================================================================
 \section{Interactive workflows}
 
-The bridge changes what refinement looks like: instead of a batch job whose
-result is inspected afterwards, refinement becomes a sequence the user
-watches and can interrupt, adjust and resume. Four worked workflows ship in
-the application and in its guided tutorials.
+Several interactive workflows are provided to demonstrate the capabilities of the bridge. 
+We are careful not to use the term "refinement" because nothing provided in \pxviewer{} is
+a sufficient replacement for a full refinement workflow. The best use of \pxviewer{} is as one
+component of an interative refinement workflow that includes a dedicated refinement engine. What
+\pxviewer{} can provide, is better referred to as "density guided minimization". It aims to provide
+the user with a tangible way to explore the relationship between the model and the density, as well as
+a proof of concept for how to integrate core cctbx functionality into an interactive viewer.
 
 \subsection{Real-space refinement into cryo-EM density}
 
@@ -342,29 +449,23 @@ X-ray refinement is judged against data. \pxviewer{} computes the
 mFo--DFc difference map from the loaded reflections as the model changes and
 streams it live: positive and negative contours update around the region
 being rebuilt, so the map functions as real-time feedback rather than a
-post-hoc verdict. This mirrors the working loop experienced
-crystallographers run between refinement rounds, compressed into the
-interactive session.
+post-hoc verdict. The precedent is established, Coot has long updated
+maps dynamically during model building, and ISOLDE made continuous feedback
+during interactive refinement an organizing principle
+\citep{coot2004,coot2010,isolde2018}. \pxviewer{} compresses the same
+working loop into the interactive session, driven by recomputation of the
+crystallographic difference map using cctbx computational primitives rather than by interactive
+dynamics.
 
-\subsection{Ligand fitting and restraint editing}
+\subsection{Ligand fitting}
 
 The ligand-fitting workflow locates unmodeled difference density and fits a
-flexible ligand into it. Restraint edits --- custom bonds, angles or
-metal-coordination restraints the monomer library cannot know --- are
-authored from the atoms themselves inside the GUI and can be shared as a
-PHIL file for use in Phenix refinement, so an interactive session produces
-artifacts that survive it.
-
-\subsection{Local resolution}
-
-A deposited cryo-EM resolution is a global average; \pxviewer{} computes
-local resolution and colors the structure or map by it, making the
-soft-periphery/sharp-core distinction directly visible.
+flexible ligand into it.
 
 %% =====================================================================
 \section{Guided tutorials}
 
-Every workflow above is also a guided tutorial, built into the application's
+Foundational tasks, including every workflow above is also a guided tutorial, built into the application's
 \emph{Tutorials} menu. A tutorial is a non-modal ``coach'' that loads its
 own example data (so its instructions always describe the structure actually
 on screen), then steps the user through the task one instruction at a time.
@@ -398,7 +499,184 @@ coordinates, is always bundled. \emph{Referenced} views instead point at the
 files objects were loaded from, keeping a suite of figures that share one
 dataset lightweight. This is intended to make published figures
 reproducible artifacts rather than screenshots of a state no one can
-reconstruct.
+reconstruct. MolViewSpec \citep{mvs2025, mvstoolkit2024} pursues the
+complementary approach: a declarative, viewer-neutral scene specification
+authored as data and rendered by any conforming viewer; a saved view
+instead records the state of a running application, including state that
+exists only in that session.
+
+\section{Interactive scripting}
+\label{sec:scripting}
+
+For work whose shape cannot be anticipated --- a one-off geometric check, a
+scripted color scheme, a figure staged just so --- the \emph{Console} tab
+embeds a full IPython kernel inside the application. Rather than reflect a
+subset of the API through bespoke widgets, the console puts the real objects
+in front of the user: the kernel runs in-process, so names in its namespace
+\emph{are} the objects the application holds. Evaluating
+\texttt{session.highlight(...)} in the console drives the live viewport
+directly, and state created there is visible to every panel --- the GUI and
+scripts manipulate one scene, not two views of it.
+
+Table~\ref{tab:console} lists what is bound at startup and the underlying
+cctbx objects one expression away. \texttt{session} rebinds automatically
+when the active model changes, so a script written against it always acts on
+the model the user is looking at. Because the underlying objects are cctbx's
+own --- the \emph{mmtbx} model, its \texttt{map\_model\_manager}, miller
+arrays --- console work composes with the same machinery the panels use
+rather than a parallel scripting dialect. Bare \texttt{help} prints this
+same list in the console itself, and \texttt{help(obj)} is still Python's.
+
+The kernel is a real Jupyter kernel on the standard wire protocol, not a
+private in-process loop, so the Console tab is only its most convenient
+frontend. It writes a connection file at startup, and any Jupyter client
+can attach to the same namespace --- \texttt{jupyter console --existing
+\emph{file}} for a terminal session, a notebook for cell-based work. Code
+executed through any of these frontends runs in the application's process
+against the same live objects; names assigned in one client are visible in
+the others. This is also what an agent executes against
+(Sec.~\ref{sec:mcp}). The console is optional: it requires
+\texttt{qtconsole} and \texttt{ipykernel} (the \texttt{console} extra), and
+the tab shows an install hint when they are absent.
+
+\begin{table}[H]
+\centering
+\caption{The console namespace: what is bound, and what each expression
+gives. Every row is runnable as typed, against whatever is loaded.}
+\label{tab:console}
+\begin{tabular}{@{}lp{9.6cm}@{}}
+\toprule
+Expression & Object \\
+\midrule
+\texttt{session} & the active model's \texttt{LiveSession} --- selections,
+representations, measurements, camera \\
+\texttt{app} & the \texttt{DesktopApp} --- every loaded object and every
+action the panels take (loading, validation, minimization, maps) \\
+\texttt{api} & a categorized, self-printing map of the session API;
+\texttt{api.find(``color'')} narrows it to a topic \\
+\texttt{np} & NumPy \\
+\midrule
+\texttt{session.model} & the \emph{mmtbx} \texttt{model.manager} ---
+hierarchy, geometry restraints, positional atom identity \\
+\texttt{app.model\_mmm()} & its \texttt{map\_model\_manager}, or
+\texttt{None} until a map is paired \\
+\texttt{app.map\_for\_model()} & the map data --- grid, origin, pixel
+sizes, unit cell --- or \texttt{None} \\
+\texttt{app.reflections\_for\_model()} & the reflections the model was
+phased against (whose \texttt{data} holds the miller arrays), or
+\texttt{None} \\
+\texttt{session.model.get\_sites\_cart()} & coordinates as a
+\texttt{flex.vec3\_double} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This arrangement inverts the usual relationship between a Jupyter kernel
+and a molecular viewer. Existing integrations embed the viewer inside the
+notebook: \emph{py3Dmol} \citep{py3dmol2015} renders a static 3Dmol.js
+scene into the cell output --- deliberately one-directional, so notebooks
+remain valid without a kernel --- while \emph{NGLview}
+\citep{nglview2018} couples an NGL widget to the kernel over ipywidget
+traitlets and, since release 4.0, offers a Mol* backend as well. Mol*
+itself reaches notebooks as the \texttt{ipymolstar} anywidget
+\citep{ipymolstar}, the trajectory-oriented \texttt{MolSysViewer} widget
+\citep{molsysviewer}, a static HTML rendering of a MolViewSpec state via
+\texttt{molstar\_notebook} \citep{mvs2025}, and the py3Dmol-compatible
+\texttt{molview} package \citep{molview}. All of these put the viewer
+inside the notebook, owned by its kernel and by the cell that created it.
+\pxviewer{} runs the other direction: the kernel belongs to the
+application, and the notebook is a client of it. There is no widget in
+the cell to go stale; a terminal session, a notebook and an MCP agent
+observe and drive the same running scene, and closing the client leaves
+the viewer --- and the state it displays --- intact.
+
+\section{Agentic control through MCP}
+\label{sec:mcp}
+
+\pxviewer{} exposes a Model Context Protocol (MCP) server, so an external
+agent --- a language-model client, a pipeline script or another program ---
+can drive the \emph{visible} viewer rather than a headless approximation of
+it. The server attaches to a running application over HTTP for interactive
+sessions, or spawns its own instance over stdio; in both cases the user
+watches the same window the agent is manipulating, which makes an automated
+figure-construction sequence inspectable and interruptible.
+
+Rather than mirror the API through a schema of wrapped verbs, the server
+hands the agent the application's own Python kernel: one tool,
+\texttt{python(code)}, executes in the same namespace the Console tab
+shows (Sec.~\ref{sec:scripting} describes the bindings;
+Table~\ref{tab:console} lists them). The objects are the API --- \texttt{session.model} is the
+real \emph{mmtbx} model, selections made by executed code \emph{are} the
+application's selections, and names assigned in one call persist for the
+next, so an agent can stage intermediate cctbx objects in the namespace
+rather than re-deriving them. Discovery is the namespace's own: the agent
+reads \texttt{api} and \texttt{help}, inspects \texttt{dir(session)}, and
+composes verbs the same way a user at the console would. What remains as
+named tools is what execution cannot do as well --- viewport liveness,
+page recovery, and binary image output (Table~\ref{tab:mcp}).
+
+The cost of that choice is real, and it is deliberate. A schema of named
+verbs is also a capability boundary --- a host can grant or deny each
+operation --- and \texttt{python(code)} collapses that to a single
+permission: execute code in the application's process. This is the
+code-execution pattern Anthropic's own MCP guidance recommends for
+composable APIs, on the reasoning that an agent composes more faithfully
+through real objects than through a large catalogue of thin wrappers; it
+suits a viewer whose value is exactly the breadth a live cctbx model
+exposes, provided the trust envelope is drawn correctly.
+
+\begin{table}[H]
+\centering
+\caption{The MCP surface: one execution tool, plus operational plumbing
+that exec cannot do as well. Everything the console can express is
+reachable through \texttt{python}.}
+\label{tab:mcp}
+\begin{tabular}{@{}lp{10.5cm}@{}}
+\toprule
+Tool & Purpose \\
+\midrule
+\texttt{python(code)} & execute in the app's IPython kernel --- the same
+namespace as the Console tab; returns
+\texttt{\{status, stdout, stderr, result, data, error\}}, with
+\texttt{data} the cell's mimebundle \\
+\texttt{status} & loaded objects, selections, markers, the kernel's
+connection file, and \texttt{busy}/\texttt{job\_errors} --- the state of
+every background job \\
+\texttt{ping} & page liveness off the apply chain --- names the state-tree
+update currently holding it, and for how long \\
+\texttt{screenshot} / \texttt{save\_screenshot} & the rendered frame,
+returned inline or written to disk after the bytes land \\
+\texttt{reload\_viewport} & rebuild a dead page; Python-side state is
+replayed on reconnect \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Two properties are treated as contract rather than convention. First,
+\emph{actions report postconditions, not requests}: exec'd code returns
+the real exception with its traceback, so a failed call cannot masquerade
+as success; \texttt{save\_screenshot} returns only after the bytes are on
+disk; and every background job --- fetch, validation, map computation ---
+records its outcome where \texttt{status} can read it. Second, \emph{the
+state is shared, not mirrored}: an agent reading
+\texttt{session.model.get\_sites\_cart()} holds the same array the panels
+are showing, and a selection it makes is simultaneously the selection the
+tables highlight --- there is no agent-only representation to keep in
+sync. The trust envelope is therefore drawn tightly: the endpoint listens
+on loopback only and refuses requests carrying a browser \texttt{Origin}
+header, so it gives an agent the same trust a console user already has
+without becoming a network surface.
+
+Recovery is likewise agent-visible. Because every viewport message queues
+behind serialized scene work, a single slow state-tree update makes a
+healthy page look dead; \texttt{ping} bypasses that chain and reports which
+update is holding it and for how long, distinguishing ``busy'' from
+``wedged''. When the page is genuinely dead, \texttt{reload\_viewport}
+rebuilds it --- Python-side state survives and is replayed on reconnect,
+since the model is authoritative and the view holds no state of its own. A
+regression test pins the tool list exactly, so a renamed or missing tool
+fails the suite rather than silently breaking agents that learned the
+surface.
 
 %% =====================================================================
 \section{Distribution and availability}
@@ -458,10 +736,7 @@ extension of the tutorial framework into user-authorable walkthroughs for
 teaching.
 
 %% =====================================================================
-\section*{Acknowledgements}
-\todo{acknowledgements --- testers, beta users, funding.}
 
-%% =====================================================================
 \begin{thebibliography}{99}
 
 \bibitem{frodo1978} Jones TA (1978). A graphics model building and refinement
@@ -528,8 +803,32 @@ Real-space refinement in PHENIX for cryo-EM and crystallography.
 (2020). Measurement of atom resolvability in cryo-EM maps with Q-scores.
 \emph{Nat. Methods} \textbf{17}, 328--334.
 
-\bibitem{mvs} \todo{MolViewSpec citation if one exists; otherwise cite the
-project URL.}
+\bibitem{py3dmol2015} Rego N, Koes D (2015). 3Dmol.js: molecular
+visualization with WebGL. \emph{Bioinformatics} \textbf{31}, 1322--1324.
+
+\bibitem{nglview2018} Nguyen H, Case DA, Rose AS (2018). NGLview ---
+interactive molecular graphics for Jupyter notebooks.
+\emph{Bioinformatics} \textbf{34}, 1241--1242.
+
+\bibitem{mvs2025} Midlik A, Bittrich S, Fleming JR, \emph{et al.} (2025).
+MolViewSpec: a Mol* extension for describing and sharing molecular
+visualizations. \emph{Nucleic Acids Res.} Advance access,
+\url{https://doi.org/10.1093/nar/gkaf370}.
+
+\bibitem{mvstoolkit2024} Bittrich S, Midlik A, V\'aradi M, \emph{et al.}
+(2024). Describing and sharing molecular visualizations using the
+MolViewSpec toolkit. \emph{Curr. Protoc.} \textbf{4}, e1099.
+
+\bibitem{ipymolstar} \emph{ipymolstar}: Mol* as a Jupyter anywidget.
+\url{https://github.com/molstar/ipymolstar}
+
+\bibitem{molsysviewer} \emph{MolSysViewer}: a Mol*-powered interactive
+viewer for molecular systems and trajectories in Jupyter.
+\url{https://github.com/uibcdf/molsysviewer}
+
+\bibitem{molview} \emph{molview}: a Mol*-based protein viewer for Jupyter
+notebooks with a py3Dmol-compatible API.
+\url{https://github.com/54yyyu/molview}
 
 \end{thebibliography}
 \end{document}
