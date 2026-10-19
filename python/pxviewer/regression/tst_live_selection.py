@@ -55,6 +55,33 @@ def exercise_focus_broadcasts_an_index_set():
         run_client(scenario)
 
 
+def exercise_selection_prose_never_reaches_the_wire():
+    """The whole selection flow resolves prose in Python via cctbx; every control
+    message the session can emit must carry index sets, never a query string."""
+    with session() as live:
+        sent = []
+        original = live._send_control
+        live._send_control = lambda m: (sent.append(m), original(m))[1]
+        sel = live.select_by(selection="resseq 1")
+        live.select(sel)
+        live.clear_selection()
+        live.focus(sel.indices)
+        for message in sent:
+            assert "expression" not in message, message
+            assert message["type"] != "select", message
+            if "atoms" in message:
+                decode_index_set(message["atoms"])  # must be an index set
+
+
+def exercise_viewing_specs_reject_prose():
+    """select/highlight/focus take resolved identity only — a bare string has no
+    grammar, so it must raise rather than guess one."""
+    with session() as live:
+        for method in (live.select, live.highlight, live.focus):
+            with raises(TypeError):
+                method("resseq 1")
+
+
 def exercise_non_finite_camera_payloads_are_rejected():
     """NaN/Infinity cannot cross a JSON wire: they either serialize as invalid JSON
     the page drops silently, or poison the camera outright. The wire boundary
@@ -76,6 +103,7 @@ def exercise_non_finite_camera_payloads_are_rejected():
 
 
 def exercise_clear_selection_sends_an_empty_highlight():
+    """Clearing also drops the replayed state, so a late client stays clear."""
     with session() as live:
         async def scenario():
             async with client(live) as ws:

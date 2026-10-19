@@ -1,13 +1,17 @@
 """The MCP tools exercised end-to-end against a real ``DesktopApp``.
 
 ``tst_mcp_server`` pins which tools exist; this file checks they do what the
-docstring claims — a selection is a selection, a saved screenshot is on disk,
-a failed background job is readable in ``status``. The browser is the only
-piece faked: a stand-in page connects to the app's control session over the
-real websocket and answers the four round-trip requests ``live.ts`` answers
-(screenshot, camera-state, ping, background). Everything the tools touch
-Python-side — models, selections, markers, primitives, job state — is the
-app's own.
+docstring claims — ``python`` executes in the app's shared kernel namespace
+(real objects, persistent bindings, ``app`` marshalled onto the Qt thread), a
+saved screenshot is on disk, a failed background job is readable in ``status``.
+The browser is the only piece faked: a stand-in page connects to the app's
+control session over the real websocket and answers the four round-trip
+requests ``live.ts`` answers (screenshot, camera-state, ping, background).
+
+Threading, faithfully exercised: tool calls run ``asyncio.run`` on a worker
+thread while the test's main thread pumps the Qt event loop — which is exactly
+how ``invoke_on_gui`` gets serviced in the running app. Nothing is stubbed
+except the webview page itself.
 """
 
 from __future__ import absolute_import, division, print_function
@@ -25,8 +29,8 @@ from pxviewer.regression.tst_utils import (
     shipped_defaults, skip, tmp_dir)
 
 if not have("mcp", "PySide6.QtWebEngineWidgets", "websockets.sync.client",
-            "iotbx.data_manager"):
-    skip("mcp / PySide6 QtWebEngine / websockets / iotbx.data_manager "
+            "iotbx.data_manager", "ipykernel", "jupyter_client", "qtconsole"):
+    skip("mcp / PySide6 QtWebEngine / websockets / iotbx / ipykernel "
          "not available")
 
 qt_application()
@@ -41,8 +45,32 @@ PNG_1PX = (
 
 
 def _call(server, name, **arguments):
-    """Call a tool by name, the way a client does — through the server."""
-    result = asyncio.run(server.call_tool(name, arguments))
+    """Call a tool by name, the way a client does — through the server.
+
+    The call runs on a worker thread while THIS thread (the main thread, where
+    the QApplication lives) pumps Qt events — so an exec'd ``app.*`` call that
+    the kernel proxies onto the GUI thread really runs while the tool call is
+    in flight, the same as in the live app.
+    """
+    box = {}
+
+    def go():
+        try:
+            box["value"] = asyncio.run(server.call_tool(name, arguments))
+        except BaseException as exc:
+            box["error"] = exc
+
+    thread = threading.Thread(target=go, name="mcp-call", daemon=True)
+    thread.start()
+    deadline = time.time() + 300
+    while thread.is_alive():
+        process_events()
+        thread.join(timeout=0.05)
+        if time.time() > deadline:
+            raise AssertionError("%s(%r) never returned" % (name, arguments))
+    if "error" in box:
+        raise box["error"]
+    result = box.get("value")
     if isinstance(result, dict):
         return result
     first = result[0] if result else None
@@ -51,11 +79,20 @@ def _call(server, name, **arguments):
     return result  # e.g. the ImageContent list `screenshot` returns
 
 
+def _python(server, code, **kw):
+    """Exec through the python tool; assert the cell itself succeeded."""
+    result = _call(server, "python", code=code, **kw)
+    assert result["status"] == "ok", "exec failed: %r" % result
+    return result
+
+
 def _expect_error(server, name, **arguments):
     """A tool's failure must surface to the caller, not vanish."""
     try:
         _call(server, name, **arguments)
     except ToolError as exc:
+        return str(exc)
+    except Exception as exc:  # call_tool may re-raise the raw error
         return str(exc)
     raise AssertionError("%s(%r) did not fail" % (name, arguments))
 
@@ -129,12 +166,6 @@ class _FakePage(threading.Thread):
         return None
 
 
-async def _inline_qt(fn):
-    """`_qt` normally marshals onto the Qt thread; the test *is* the Qt
-    thread, so the work runs inline — same thread, one hop fewer."""
-    return fn()
-
-
 @contextlib.contextmanager
 def _mcp_app():
     """A ``DesktopApp`` with the fake page attached, driven through its real
@@ -146,9 +177,8 @@ def _mcp_app():
     app = DesktopApp(port=0)
     app._webapp.start()
     app._viewport.load = lambda url: None
-    saved = mcp_server._app, mcp_server._qt
+    saved = mcp_server._app
     mcp_server._app = app
-    mcp_server._qt = _inline_qt
     page = _FakePage(app)
     page.start()
     with closing_modals():
@@ -157,20 +187,26 @@ def _mcp_app():
         finally:
             page.stop()
             page.join(timeout=5)
-            mcp_server._app, mcp_server._qt = saved
+            mcp_server._app = saved
+            app.shutdown_kernel()
             dispose(app)
 
 
-def exercise_tools_drive_a_real_app():
-    """The core journey an agent takes: load, inspect, select, draw, measure,
-    mark, screenshot, save — every step read back through a tool."""
+def exercise_python_exec_drives_a_real_app():
+    """The core journey an agent takes — through the shared kernel namespace:
+    load via app.*, verify via status(), drive selection via exec, read the
+    frame via screenshot — with the kernel's objects staying live between
+    calls the way the console's do."""
     with shipped_defaults(), _mcp_app() as (app, server):
         # Before anything loads, the honest answers are "nobody's here".
         assert _call(server, "ping")["alive"] is False
         _expect_error(server, "screenshot")
+        assert _call(server, "status")["kernel"] is None  # lazy: not started
 
-        loaded = _call(server, "load", path=data_path("1ubq.pdb"))
-        assert loaded["loaded"], loaded
+        # Loading is an app call — exec'd, marshalled onto the Qt thread.
+        path = data_path("1ubq.pdb")
+        result = _python(server, "app.load_file(%r)" % path)
+        assert result["result"] in ("'model'", '"model"'), result
 
         state = _call(server, "status")
         assert state["models"][0]["id"] == "model-1", state
@@ -178,86 +214,44 @@ def exercise_tools_drive_a_real_app():
         assert state["camera"]["radius"] == 40.0     # the fake page's answer
         assert state["background"] == "#000000"
         assert state["busy"] == [] and state["job_errors"] == []
+        kernel = state["kernel"]
+        assert kernel and kernel["connection_file"].endswith(".json"), state
 
-        info = _call(server, "structure_info")["info"]
-        assert info["atoms"] == 660
-        assert info["chains"] == [
-            {"chain": "A", "residues": 76, "first": 1, "last": 76}]
-        assert info["waters"] == 58
+        # Raw objects: session.model is the real cctbx model — a flex array's
+        # size comes back through the repr, the object stays alive kernel-side.
+        result = _python(
+            server, "n_atoms = session.model.get_sites_cart().size()")
+        # ...and persists: a name bound in one call is there for the next.
+        assert _python(server, "n_atoms")["result"] == "660", "n_atoms lost"
 
-        ss = _call(server, "secondary_structure")
-        assert ss["helices"] and all(r["chain"] == "A" for r in ss["helices"])
+        # stdout and structured errors behave like a real kernel's.
+        r = _python(server, "print('working')")
+        assert r["stdout"] == "working\n", r
+        r = _call(server, "python", code="1/0")
+        assert r["status"] == "error", r
+        assert r["error"]["ename"] == "ZeroDivisionError"
+        assert any("ZeroDivisionError" in l for l in r["error"]["traceback"])
 
-        # Selection is a selection: what select() reports, selection_state()
-        # and the scene agree on.
-        picked = _call(server, "select", expression="resseq 40:45")
-        assert picked["atoms"] > 0 and picked["residues"]
-        scene = _call(server, "selection_state")["selection"]
-        assert scene["model-1"]["atoms"] == picked["atoms"]
+        # The api guide is the agent's discovery surface.
+        r = _python(server, "str(api.find('color'))")
+        assert "matching 'color'" in r["result"], r
+        assert "session." in r["result"], r
 
-        gly = _call(server, "atoms", expression="resname GLY")
-        assert gly["matched"] > 0
-        assert {"i", "name", "xyz", "b", "occ"} <= set(gly["atoms"][0])
-        assert gly["centroid"] is not None
+        # Selection is a selection: exec'd, and the scene state agrees.
+        r = _python(server, "app.select_by_expression('resseq 40:45')")
+        picked = int(r["result"])
+        assert picked > 0, r
+        state = _call(server, "status")
+        assert state["selection"]["model-1"] == picked, state
 
-        table = _call(server, "atom_table")
-        assert table["n"] == 660 and len(table["x"]) == 660
-        assert "ATOM" in _call(server, "model_text")["text"]
+        # Representation through the same path, read back via exec too.
+        _python(server, "app.set_model_representation('model-1', 'cartoon')")
+        r = _python(server, "app._model_entry('model-1').get('reps')")
+        assert "cartoon" in r["result"], r
 
-        model = _call(server, "model_state", model="model-1")["model"]
-        assert model["atoms"] == 660
-        assert model["selected"] == picked["atoms"]
-
-        _call(server, "set_representation", rep="cartoon", model="model-1")
-        assert _call(server, "model_state",
-                   model="model-1")["model"]["rep"] == "cartoon"
-
-        # Hiding is refused on software WebGL (the app's `_can_hide` gate);
-        # the tool must then report the *unchanged* state, not the request.
-        hidden = _call(server, "set_object_visible", kind="model",
-                       ident="model-1", visible=False)
-        assert hidden["visible"] is (not app._can_hide), hidden
-        assert _call(server, "model_state",
-                   model="model-1")["model"]["visible"] is (not app._can_hide)
-        if app._can_hide:
-            _call(server, "set_object_visible", kind="model", ident="model-1",
-                  visible=True)
-
-        sphere = _call(server, "set_clip_sphere", mode="view", radius=20.0,
-                       model="model-1")["sphere"]
-        assert sphere["mode"] == "view"
-
-        distance = _call(server, "measure", kind="distance", atoms=[0, 9])
-        label = _call(server, "add_label", atom=0, text="N-term")
-        prims = _call(server, "primitives")["primitives"]
-        ids = {p["id"] for p in prims}
-        assert {distance["primitive"], label["primitive"]} <= ids
-        _call(server, "remove_primitive", primitive_id=label["primitive"])
-        assert len(_call(server, "primitives")["primitives"]) == 1
-        _call(server, "clear_primitives")
-        assert _call(server, "primitives")["primitives"] == []
-
-        marker = _call(server, "place_marker", position=[20.0, 20.0, 20.0])
-        assert marker["marker"] in {m["id"] for m in
-                                    _call(server, "status")["markers"]}
-        _call(server, "remove", kind="marker", ident=marker["marker"])
-        assert _call(server, "status")["markers"] == []
-
+        # Viewport-facing tools still take the round trip the fake page answers.
         pong = _call(server, "ping")
         assert pong["alive"] is True and pong["pending"] == 0
-
-        # Viewport-facing commands all take the round-trip answers the fake
-        # page provides.
-        assert _call(server, "mouse_selection")["indices"] == []
-        _call(server, "zoom_view", direction=-1)
-        _call(server, "step", step=1)
-        _call(server, "focus_residue", chain="A", resid="42")
-        _call(server, "reset_view")
-        _call(server, "set_camera",
-              state={"target": [0, 0, 0], "position": [0, 0, 50],
-                     "up": [0, 1, 0], "radius": 40.0, "fov": 30.0})
-        _call(server, "set_background", color="#101018")
-        _call(server, "set_active_model", model="model-1")
 
         image = _call(server, "screenshot")
         assert image[0].type == "image", image
@@ -266,22 +260,28 @@ def exercise_tools_drive_a_real_app():
             png = os.path.join(directory, "view.png")
             _call(server, "save_screenshot", path=png)
             assert os.path.getsize(png) > 0   # the file really landed
-            pdb = os.path.join(directory, "model.pdb")
-            _call(server, "write_object", kind="model", ident="model-1",
-                  path=pdb)
-            assert "ATOM" in open(pdb).read()
 
-        _call(server, "clear_selection")
-        assert _call(server, "selection_state")["selection"] == {}
-
-        # Errors surface as errors — the contract that replaced silent lies.
-        assert "no such model" in _expect_error(
-            server, "model_state", model="nope")
-        _expect_error(server, "atoms", expression="name CA", model="nope")
-        _expect_error(server, "remove", kind="model", ident="nope")
-        _expect_error(server, "remove", kind="bogus", ident="x")
-        _expect_error(server, "measure", kind="bogus", atoms=[0, 1])
-        _expect_error(server, "volume_state", volume="volume-1")
+        # And the kernel outside the tool is the same kernel — an attached
+        # Jupyter client sees the names exec set.
+        k = app._kernel
+        assert k is not None
+        client = k.client()
+        try:
+            mid = client.execute("n_atoms + 1")
+            seen = None
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                try:
+                    msg = client.get_iopub_msg(timeout=0.5)
+                except Exception:
+                    msg = None
+                if (msg and msg["parent_header"].get("msg_id") == mid
+                        and msg["msg_type"] == "execute_result"):
+                    seen = msg["content"]["data"]["text/plain"]
+                    break
+            assert seen == "661", "external client did not see the namespace"
+        finally:
+            client.stop_channels()
 
 
 def exercise_a_failed_background_job_is_reported():
@@ -306,32 +306,25 @@ def exercise_a_failed_background_job_is_reported():
             raise AssertionError("the failed job never reached job_errors")
 
 
-def exercise_validation_results_read_back():
-    """run_validation + validation_results are a pair: the agent can start the
-    job and read the same tables the Validation tab shows."""
+def exercise_exec_sees_validation_results():
+    """run_validation through exec lands results where exec can read them —
+    the same dict the Validation tab shows."""
     with shipped_defaults(), _mcp_app() as (app, server):
-        _call(server, "load", path=data_path("1ubq.pdb"))
-        assert _call(server, "validation_results")["results"] == {}
+        _python(server, "app.load_file(%r)" % data_path("1ubq.pdb"))
+        r = _python(server, "app.run_validation()")
+        assert r["status"] == "ok", r
 
-        _call(server, "run_validation")
         deadline = time.time() + 180
-        results = {}
         while time.time() < deadline:
             process_events()
-            results = _call(server, "validation_results")["results"]
-            if results:
+            r = _python(
+                server,
+                "bool(app._model_entry('model-1').get('validation'))")
+            if r["result"] == "True":
                 break
             time.sleep(0.5)
-        assert results, "run_validation produced no results in 180s"
-
-        key = sorted(results)[0]
-        row = results[key]
-        assert row["title"] and row["summary"]
-        assert isinstance(row["columns"], list) and isinstance(row["rows"], list)
-
-        marked = _call(server, "set_validation_markers", key=key, visible=True)
-        assert marked["results_cached"] is True
-        _call(server, "set_validation_markers", key=key, visible=False)
+        else:
+            raise AssertionError("run_validation produced no results in 180s")
 
 
 def run():

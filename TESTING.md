@@ -195,7 +195,7 @@ Converted, and the pytest originals removed — **49 files, 485 exercises**:
 | `regression/tst_bcif.py` | 5 | core |
 | `regression/tst_cctbx_io.py` | 24 | gui |
 | `regression/tst_concern.py` | 6 | core |
-| `regression/tst_console.py` | 5 | gui |
+| `regression/tst_console.py` | 8 | gui |
 | `regression/tst_data.py` | 10 | core |
 | `regression/tst_demos.py` | 7 | core |
 | `regression/tst_desktop_appearance.py` | 25 | gui |
@@ -218,11 +218,13 @@ Converted, and the pytest originals removed — **49 files, 485 exercises**:
 | `regression/tst_live_frames.py` | 7 | core |
 | `regression/tst_live_maps.py` | 6 | core |
 | `regression/tst_live_overlays.py` | 12 | core |
-| `regression/tst_live_selection.py` | 17 | core |
+| `regression/tst_live_selection.py` | 20 | core |
 | `regression/tst_live_volumes.py` | 9 | core |
 | `regression/tst_loader.py` | 9 | core |
 | `regression/tst_minimize.py` | 9 | core |
-| `regression/tst_mvs.py` | 19 | core |
+| `regression/tst_mcp_server.py` | 2 | core |
+| `regression/tst_mcp_tools.py` | 3 | gui |
+| `regression/tst_mvs.py` | 20 | core |
 | `regression/tst_palettes.py` | 7 | core |
 | `regression/tst_primitives.py` | 24 | core |
 | `regression/tst_probe.py` | 5 | core |

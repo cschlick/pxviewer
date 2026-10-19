@@ -30,7 +30,6 @@ import { ColorThemeCategory } from 'molstar/lib/mol-theme/color/categories';
 import { Coordinates, Frame, Time } from 'molstar/lib/mol-model/structure/coordinates';
 import { Script } from 'molstar/lib/mol-script/script';
 import { MolScriptBuilder as MS } from 'molstar/lib/mol-script/language/builder';
-import { transpiler as pymolTranspiler } from 'molstar/lib/mol-script/transpilers/pymol/parser';
 import { CustomInteractions, InteractionsShape } from 'molstar/lib/extensions/interactions/transforms';
 import { ShapeRepresentation3D } from 'molstar/lib/mol-plugin-state/transforms/representation';
 import { StructureFocusRepresentation } from 'molstar/lib/mol-plugin/behavior/dynamic/selection/structure-focus-representation';
@@ -1288,34 +1287,6 @@ export class LiveViewer {
         // not honor the requested orientation.
         const snapshot = camera.getInvariantFocus(t, radius, u, d);
         camera.setState(snapshot, 250);
-    }
-
-    /**
-     * Resolve a PyMOL selection against the current structure and show it. With
-     * `highlight` the matched atoms get the selection overlay; with `focus` the
-     * camera zooms to them. Returns the matched positional atom indices.
-     */
-    applySelection(expression: string, opts: { highlight: boolean; focus: boolean }): number[] {
-        const structure = this.currentStructure();
-        if (!structure) return [];
-        const expr = expression.trim();
-        if (expr === '') {
-            if (opts.highlight) this.clearSelection();
-            return [];
-        }
-        const parsed = pymolTranspiler(expr); // throws on invalid PyMOL syntax
-        const selection = Script.getStructureSelection(parsed, structure);
-        const loci = StructureSelection.toLociWithSourceUnits(selection);
-        const indices = collectElementIndices(loci);
-        if (opts.highlight) {
-            this.highlightIndices = indices;
-            this.highlightLoci = loci;
-            this.applyOwnSelection(indices.length ? loci : undefined);
-        }
-        if (opts.focus && indices.length) {
-            this.plugin.managers.camera.focusLoci(loci);
-        }
-        return indices;
     }
 
     /** Clear any active highlight. */
@@ -2632,13 +2603,6 @@ function lociFromElementIndices(structure: Structure, indices: number[]): Struct
     return StructureElement.Loci(structure, elements as any);
 }
 
-/** Positional atom rows (model element indices) covered by an element loci. */
-function collectElementIndices(loci: StructureElement.Loci): number[] {
-    const set = new Set<number>();
-    StructureElement.Loci.forEachLocation(loci, (loc) => { set.add(loc.element as unknown as number); });
-    return Array.from(set).sort((a, b) => a - b);
-}
-
 /** Decode a wire index-set: either explicit `{list}` or run-length `{runs}`. */
 function decodeIndexSet(enc: any): number[] {
     if (!enc) return [];
@@ -3677,7 +3641,7 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
     // queued until the viewer exists, then flushed in order.
     const VIEWER_MSG_TYPES = new Set([
         'interactions', 'clashes', 'highlight', 'focus', 'orient', 'representations',
-        'click-mode', 'tug-mode', 'primitive', 'select', 'dots', 'markup', 'map_box',
+        'click-mode', 'tug-mode', 'primitive', 'dots', 'markup', 'map_box',
         'localres', 'structure_visible', 'focus-surroundings',
         // Queued so a restored view's camera lands AFTER the build's own first
         // frame rather than being overwritten by it (saved views).
@@ -4010,17 +3974,6 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 } catch {
                     // ignore malformed primitive commands
                 }
-            } else if (msg.type === 'select' && viewer) {
-                // Resolve a PyMOL selection in the viewer and echo the matched
-                // atom indices back so Python knows what was selected.
-                let indices: number[] = [];
-                let error: string | undefined;
-                try {
-                    indices = viewer.applySelection(String(msg.expression ?? ''), { highlight: !!msg.highlight, focus: !!msg.focus });
-                } catch (e) {
-                    error = e instanceof Error ? e.message : String(e);
-                }
-                ws.send(JSON.stringify({ type: 'selection-result', reqId: msg.reqId, indices, error }));
             }
     };
 

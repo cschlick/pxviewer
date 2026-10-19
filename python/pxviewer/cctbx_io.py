@@ -414,7 +414,7 @@ class ModelData:
 
     The columns (:class:`AtomArrays`) are kept so we never re-derive them from flex
     on every access. When present, ``model`` is the authority for **identity and
-    selection**: `select("...")` goes through cctbx's own atom-selection machinery
+    selection**: `select_by(selection="...")` goes through cctbx's own atom-selection machinery
     rather than any reimplementation, and `diff()` catches the cached columns
     drifting from the model. cctbx calls are serialized under a lock, since the
     session may touch the model from its WebSocket thread.

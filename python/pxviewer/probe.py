@@ -86,8 +86,17 @@ def run_probe_dots(model: Any, *, data_manager: Any = None) -> List[dict]:
 
 
 # probe2 dot types: wc/cc wide+close contact, hb hydrogen bond, so small overlap,
-# bo bad overlap. MolProbity "clashes" are the bad overlaps (overlap > 0.4 A).
-_CLASH_TYPES = {"bo"}
+# bo bad overlap. MolProbity "clashes" are the bad overlaps — the dots _dot_rgb
+# paints hotpink (gap < -0.4 A, non-hb). probe2's "bo" letter is *not* the same
+# set: a site that trips it is surrounded by "so"/"cc" dots equally deep in the
+# pink band, so splitting on the letter leaves most of the pink in contacts and
+# the Clashes toggle looks dead. Split on the color instead.
+_BAD_CLASH_RGB = (0xFF, 0x66, 0xB4)
+
+
+def _is_clash(row: Any) -> bool:
+    """Whether a probe2 ``flat_results`` row is a bad-overlap (pink) dot."""
+    return _dot_rgb(row["type"], row["gap"]) == _BAD_CLASH_RGB
 
 
 def probe_dots(
@@ -100,7 +109,7 @@ def probe_dots(
     """
     dots = []
     for row in run_probe_dots(model, data_manager=data_manager):
-        if only_clashes and row["type"] not in _CLASH_TYPES:
+        if only_clashes and not _is_clash(row):
             continue
         dots.append((tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"])))
     return dots
@@ -109,6 +118,11 @@ def probe_dots(
 def split_dots(rows: Any):
     """Split probe2 ``flat_results`` into ``(contacts, clashes)`` drawable dots.
 
+    The two lists are disjoint — clash dots go *only* to ``clashes`` — so the
+    two overlays are independently toggleable: if ``contacts`` also carried the
+    bad-overlap dots, turning the clash overlay off would leave them drawn and
+    the toggle would look dead. Together they still draw the full surface.
+
     Separate from the probe run so a caller holding cached rows (see
     :class:`pxviewer.analysis.ModelAnalysis`) can draw both overlays without paying for probe
     again — it is by far the most expensive step in the validation stack.
@@ -116,15 +130,13 @@ def split_dots(rows: Any):
     contacts, clashes = [], []
     for row in rows:
         dot = (tuple(row["loc"]), tuple(row["spike"]), _dot_rgb(row["type"], row["gap"]))
-        contacts.append(dot)
-        if row["type"] in _CLASH_TYPES:
-            clashes.append(dot)
+        (clashes if _is_clash(row) else contacts).append(dot)
     return contacts, clashes
 
 
 def probe_dots_split(model: Any, *, data_manager: Any = None):
-    """Run probe2 once and return ``(contacts, clashes)`` — the full dot surface and
-    the bad-overlap (clash) subset — so both overlays come from a single run."""
+    """Run probe2 once and return ``(contacts, clashes)`` — the non-clash dot
+    surface and the bad-overlap dots — so both overlays come from a single run."""
     return split_dots(run_probe_dots(model, data_manager=data_manager))
 
 

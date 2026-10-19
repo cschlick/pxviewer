@@ -160,11 +160,14 @@ def exercise_coercion_accepts_a_mask():
     assert s._primitives[p.id]["groups"] == [[0], [1, 2, 3]]
 
 
-def exercise_coercion_resolves_a_cctbx_selection_string():
-    """A session built from sites is still model-backed, so strings resolve."""
+def exercise_coercion_rejects_prose():
+    """Selection strings resolve only via select_by(selection=...) — a bare
+    string on the viewing API must not look like a second selection grammar."""
     s = session()
-    p = s.add_distance("resseq 1", "resseq 2")       # one atom per residue
-    assert s._primitives[p.id]["groups"] == [[0], [1]]
+    with raises(TypeError):
+        s.add_distance("resseq 1", "resseq 2")
+    sel = s.select_by(selection="resseq 1 or resseq 2")
+    assert sel.indices == [0, 1]
 
 
 def exercise_coercion_rejects_a_bool():

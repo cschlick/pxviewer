@@ -1,20 +1,32 @@
-"""An embedded IPython console for the desktop app.
+"""An embedded Jupyter kernel for the desktop app.
 
 Rather than reflect the :class:`~pxviewer.live.LiveSession` API through a wall of
 argument widgets, we drop the real thing in front of the user: an in-process
-Jupyter kernel (so it shares the app's actual live objects) rendered by a
-``qtconsole`` widget. The active session is bound as ``session`` and the desktop
-app as ``app``, so the whole Python API — tab-completion, ``obj?`` help, history
-and all — is available live against whatever is loaded in the viewport.
+Jupyter kernel (so it shares the app's actual live objects). The kernel is a
+real ``IPKernelApp`` — it listens on the standard Jupyter wire protocol and
+writes a connection file, so *any* Jupyter frontend can attach: the Console tab
+is just a built-in qtconsole client; ``jupyter console --existing <file>`` or a
+notebook attaches the same way; and the MCP ``python`` tool executes against the
+very same namespace. One kernel, many clients — the namespace, not the widget,
+is the interface.
 
-This is an optional feature: it needs ``qtconsole`` and ``ipykernel`` (the
-``console`` extra). When they are absent the desktop shows an install hint
-instead of the console.
+Threading: the kernel lives on its own daemon thread, so execution happens off
+the Qt thread. ``LiveSession`` is thread-safe by design and is bound raw;
+``app`` is bound through :class:`GuiThreadProxy`, which marshals every call
+onto the Qt thread — the same context console code ran in before.
+
+This is an optional feature: it needs ``ipykernel`` (and ``qtconsole`` for the
+in-app widget) — the ``console`` extra. When absent the desktop shows an
+install hint and the MCP ``python`` tool reports the missing extra.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import sys
+import threading
+import time
 from typing import Any, Mapping, Optional
 
 # ipykernel imports debugpy, which prints a frozen-modules warning under a
@@ -44,6 +56,301 @@ def console_available() -> bool:
         return False
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+class GuiThreadProxy:
+    """A stand-in for a live object whose methods run on the Qt thread.
+
+    Kernel-side code evaluates off the GUI thread. ``LiveSession`` is
+    thread-safe by design, but ``DesktopApp`` methods can touch widgets —
+    so ``app`` in the console namespace is wrapped: every callable attribute
+    is queued onto the Qt thread through ``invoke`` and the caller blocks
+    for its result. Attributes that are themselves QObjects come back
+    wrapped too, so ``app.window.title()``-style chains stay marshalled.
+    """
+
+    def __init__(self, obj: Any, invoke) -> None:
+        object.__setattr__(self, "_px_obj", obj)
+        object.__setattr__(self, "_px_invoke", invoke)
+
+    def _px_wrap(self, value):
+        try:
+            from PySide6.QtCore import QObject
+
+            if isinstance(value, QObject):
+                return GuiThreadProxy(value, self._px_invoke)
+        except Exception:  # pragma: no cover - PySide6 always present here
+            pass
+        return value
+
+    def __getattr__(self, name: str):
+        attr = getattr(object.__getattribute__(self, "_px_obj"), name)
+        invoke = object.__getattribute__(self, "_px_invoke")
+        if callable(attr):
+            def marshalled(*args, **kwargs):
+                return invoke(lambda: attr(*args, **kwargs)).result(timeout=120)
+
+            marshalled.__name__ = name
+            marshalled.__doc__ = getattr(attr, "__doc__", None)
+            return marshalled
+        return self._px_wrap(attr)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        invoke = object.__getattribute__(self, "_px_invoke")
+        obj = object.__getattribute__(self, "_px_obj")
+        invoke(lambda: setattr(obj, name, value)).result(timeout=30)
+
+    def __dir__(self):
+        return dir(object.__getattribute__(self, "_px_obj"))
+
+    def __repr__(self) -> str:
+        return repr(object.__getattribute__(self, "_px_obj"))
+
+
+class AppKernel:
+    """The app's in-process Jupyter kernel — one namespace every client shares.
+
+    A real ``IPKernelApp`` on a daemon thread. Its connection file is the
+    attach point for external Jupyter frontends (``jupyter console
+    --existing``); the Console tab and the MCP ``python`` tool are just
+    other clients of the same kernel.
+
+    The whole lifecycle — ``initialize`` through ``start`` — runs on the
+    kernel thread, because ipykernel binds its streams to that thread's
+    IOLoop. ``push`` is the only mutation allowed from elsewhere.
+
+    ``IPKernelApp`` is a process singleton (its sockets cannot be initialized
+    twice), so a second ``AppKernel`` — a fresh ``DesktopApp`` in a test
+    process, say — *adopts* the running kernel and rebinds its namespace to
+    the new app rather than starting a second kernel.
+    """
+
+    def __init__(self, namespace: Optional[Mapping[str, Any]] = None):
+        self._ready = threading.Event()
+        self._exec_lock = threading.Lock()
+        self._exec_client = None
+        self._served = False
+        self._app = None
+        self._error = None
+        ns = dict(namespace or {})
+
+        from ipykernel.kernelapp import IPKernelApp
+
+        if IPKernelApp.initialized():
+            # The kernel is a process-lifetime resource: adopt it and rebind
+            # the namespace — app/session names must mean THIS app.
+            self._app = IPKernelApp.instance()
+            self._thread = None
+            if ns:
+                self._app.kernel.shell.push(ns)
+            self._ready.set()
+            return
+
+        def _run():
+            try:
+                app = IPKernelApp.instance()
+                # init_signal installs a SIGINT handler, which only works on
+                # the main thread — and is the app's job anyway, not the
+                # kernel's. Without this it logs a harmless-but-scary
+                # "signal only works in main thread" traceback on every start.
+                app.init_signal = lambda: None
+                # init_io wraps sys.stdout in an OutStream that echoes to the
+                # real stream — that we want (exec'd print() reaches clients
+                # AND the app's stdout). The fd-level capture on top of it
+                # (watchfd: dup2 + a reader thread) instead steals the app's
+                # own fd-1 writes, and when its reader dies, everything
+                # printed through the process stops appearing at all.
+                app.capture_fd_output = False
+                # IPKernelApp defaults to quiet, which hands OutStream no echo
+                # stream — so every print() in the process would stop reaching
+                # the real stdout once the kernel starts. The app is not a
+                # headless kernel; its prints still belong on its own stdout.
+                app.quiet = False
+                app.initialize([])
+                self._app = app
+                # initialize() replaces __main__ with the kernel's module;
+                # embed_kernel undoes the same swap so the app's module
+                # stays put.
+                shell = app.kernel.shell
+                main = getattr(shell, "_orig_sys_modules_main_mod", None)
+                if main is not None:
+                    name = getattr(shell, "_orig_sys_modules_main_name", "__main__")
+                    sys.modules[name] = main
+                if ns:
+                    shell.push(ns)
+                self._ready.set()
+                app.start()  # blocks on this thread's IOLoop
+            except BaseException as exc:  # surfaced to constructors callers
+                self._error = exc
+                self._ready.set()
+
+        self._thread = threading.Thread(
+            target=_run, name="pxviewer-kernel", daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout=30):
+            raise RuntimeError("timed out starting the IPython kernel")
+        if self._error is not None:
+            raise RuntimeError(f"IPython kernel failed to start: {self._error}")
+
+    @property
+    def connection_file(self) -> str:
+        """The Jupyter connection file external clients attach with."""
+        return self._app.abs_connection_file
+
+    @property
+    def kernel(self):
+        return self._app.kernel
+
+    def push(self, mapping: Mapping[str, Any]) -> None:
+        """Bind or rebind names in the kernel namespace (e.g. active session).
+
+        A direct dict update — atomic enough for rebinds, and synchronous, so a
+        ``session`` pushed by a model switch is already there when the next
+        exec dispatches.
+        """
+        if not mapping:
+            return
+        self._app.kernel.shell.push(dict(mapping))
+
+    def client(self):
+        """A new BlockingKernelClient attached to this kernel (caller owns it)."""
+        from jupyter_client import BlockingKernelClient
+
+        client = BlockingKernelClient()
+        client.load_connection_file(self.connection_file)
+        client.start_channels()
+        return client
+
+    def _exec(self):
+        """The shared client for execute(); created on first use."""
+        if self._exec_client is None:
+            self._exec_client = self.client()
+        return self._exec_client
+
+    def wait_ready(self, timeout: float = 30.0) -> bool:
+        """True once the kernel answers a kernel_info request."""
+        client = self._exec()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                msg_id = client.kernel_info()
+                inner = time.time() + 2.0
+                while time.time() < inner:
+                    msg = client.get_shell_msg(timeout=max(inner - time.time(), 0.1))
+                    if msg["parent_header"].get("msg_id") == msg_id:
+                        return True
+            except Exception:
+                time.sleep(0.1)
+        return False
+
+    def execute(self, code: str, timeout: float = 120.0) -> dict:
+        """Run ``code`` in the kernel namespace; return structured output.
+
+        ``result`` is the ``text/plain`` of the last expression; ``data`` is
+        the full mimebundle (so an IPython ``Image`` shows up as
+        ``image/png``). Errors come back structured, not raised — an exec
+        tool's caller needs the traceback, not the exception's loss.
+        """
+        with self._exec_lock:
+            client = self._exec()
+            if not self._served:
+                # First exec races the kernel's stream wiring — handshake
+                # before sending, or the request is silently dropped.
+                self._served = self.wait_ready(timeout=30.0)
+                if not self._served:
+                    return {"status": "error", "stdout": "", "stderr": "",
+                            "result": None, "data": {},
+                            "error": {"ename": "KernelNotReady",
+                                      "evalue": "kernel_info went unanswered "
+                                                "for 30s after start",
+                                      "traceback": []}}
+            msg_id = client.execute(code, allow_stdin=False)
+            out = {"status": "ok", "stdout": "", "stderr": "",
+                   "result": None, "data": {}, "error": None}
+            # The shell reply is authoritative for completion — it is a
+            # request/reply channel, so it always arrives. iopub is a SUB
+            # socket: a client attached moments ago can miss early messages
+            # (slow joiner), so "wait for idle" alone can hang on a finished
+            # cell. Collect output until reply *and* idle, with a short
+            # grace tail after the reply for output already in flight.
+            deadline = time.time() + timeout
+            got_reply = False
+            saw_idle = False
+            reply_at = None
+            while True:
+                now = time.time()
+                if now >= deadline:
+                    out["status"] = "timeout"
+                    out["error"] = {
+                        "ename": "Timeout",
+                        "evalue": f"execution exceeded {timeout}s — the kernel is still busy",
+                        "traceback": [],
+                    }
+                    return out
+                if got_reply and (saw_idle or (reply_at and now - reply_at > 0.5)):
+                    return out
+                try:
+                    msg = client.get_iopub_msg(timeout=0.2)
+                    if msg["parent_header"].get("msg_id") == msg_id:
+                        kind = msg["msg_type"]
+                        content = msg["content"]
+                        if (kind == "status"
+                                and content.get("execution_state") == "idle"):
+                            saw_idle = True
+                        elif kind == "stream":
+                            key = ("stderr" if content.get("name") == "stderr"
+                                   else "stdout")
+                            out[key] += content.get("text", "")
+                        elif kind in ("execute_result", "display_data"):
+                            out["data"] = content.get("data", {})
+                            if "text/plain" in out["data"]:
+                                out["result"] = out["data"]["text/plain"]
+                        elif kind == "error":
+                            out["status"] = "error"
+                            out["error"] = {
+                                "ename": content.get("ename"),
+                                "evalue": content.get("evalue"),
+                                "traceback": [_ANSI.sub("", l) for l in
+                                              content.get("traceback", [])],
+                            }
+                except Exception:
+                    pass
+                if not got_reply:
+                    try:
+                        reply = client.get_shell_msg(timeout=0.05)
+                        if reply["parent_header"].get("msg_id") == msg_id:
+                            got_reply = True
+                            reply_at = time.time()
+                            content = reply["content"]
+                            status = content.get("status")
+                            if status == "error" and out["error"] is None:
+                                out["status"] = "error"
+                                out["error"] = {
+                                    "ename": content.get("ename"),
+                                    "evalue": content.get("evalue"),
+                                    "traceback": [_ANSI.sub("", l) for l in
+                                                  content.get("traceback", [])],
+                                }
+                            elif status and status != "ok":
+                                out["status"] = status
+                    except Exception:
+                        pass
+
+    def shutdown(self) -> None:
+        """Detach our exec client. The kernel itself is a process-lifetime
+        resource — ``IPKernelApp`` is a singleton whose sockets cannot be
+        initialized twice, so killing it would strand every later AppKernel
+        (a second app in one test process). The daemon thread exits with the
+        process; this just drops our channel."""
+        if self._exec_client is not None:
+            try:
+                self._exec_client.stop_channels()
+            except Exception:  # pragma: no cover - teardown races
+                pass
+            self._exec_client = None
+
+
 def _make_widget():
     """A RichJupyterWidget that shows only our banner, not IPython's.
 
@@ -65,24 +372,26 @@ def _make_widget():
 
 
 class EmbeddedConsole:
-    """An in-process IPython kernel wired to a ``RichJupyterWidget``.
+    """The Console tab: a qtconsole widget attached to the app's ``AppKernel``.
 
-    The kernel runs in this very process, so anything pushed into its namespace
-    is the *same object* the app holds — evaluating ``session.highlight(...)`` in
-    the console drives the live viewport directly.
+    The widget is an ordinary Jupyter client — it connects to the kernel over
+    the same connection file an external ``jupyter console --existing`` would
+    use. Execution therefore happens on the kernel thread, not in the widget;
+    see :class:`AppKernel` for the threading contract.
+
+    ``shutdown`` only detaches this client — the kernel is the app's shared
+    resource (MCP and external frontends may still be attached), so kernel
+    teardown belongs to the app, not to the tab.
     """
 
-    def __init__(self, namespace: Optional[Mapping[str, Any]] = None, banner: Optional[str] = None):
-        from qtconsole.inprocess import QtInProcessKernelManager
+    def __init__(self, kernel: AppKernel, banner: Optional[str] = None):
+        from qtconsole.manager import QtKernelManager
 
-        self._manager = QtInProcessKernelManager()
-        self._manager.start_kernel(show_banner=False)
-        kernel = self._manager.kernel
-        kernel.gui = "qt"
-        if namespace:
-            kernel.shell.push(dict(namespace))
-
+        self._kernel = kernel
+        self._manager = QtKernelManager()
+        self._manager.load_connection_file(kernel.connection_file)
         self._client = self._manager.client()
+        self._client.load_connection_file(kernel.connection_file)
         self._client.start_channels()
 
         self.widget = _make_widget()
@@ -96,21 +405,12 @@ class EmbeddedConsole:
 
     def push(self, mapping: Mapping[str, Any]) -> None:
         """Bind (or rebind) names in the kernel namespace — e.g. the active session."""
-        if not mapping:
-            return
-        try:
-            self._manager.kernel.shell.push(dict(mapping))
-        except Exception:  # pragma: no cover - defensive
-            pass
+        self._kernel.push(mapping)
 
     def shutdown(self) -> None:
-        """Stop the kernel and its channels. Idempotent."""
+        """Detach this client. The kernel keeps serving other clients."""
         try:
             self._client.stop_channels()
-        except Exception:  # pragma: no cover - defensive
-            pass
-        try:
-            self._manager.shutdown_kernel()
         except Exception:  # pragma: no cover - defensive
             pass
 

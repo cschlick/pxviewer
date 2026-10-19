@@ -2821,44 +2821,22 @@ class ControlsWindow:
         """The all-atom contacts (probe2) results view — a validator sub-tab, so it sits
         beside the per-residue checks rather than in its own panel. The analysis itself
         is queued from the checks row above (it is one of the checkboxes); this page
-        just holds the two overlay toggles once a run has produced dots."""
-        from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
-
-        from .live import PROBE_CLASHES, PROBE_CONTACTS
+        is just the legend — the overlay toggles live on the tab itself so they are
+        reachable without opening a second tab."""
+        from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
         page = QWidget()
         ag = QVBoxLayout(page)
         hint = QLabel(
             "<b>Clashes &amp; contacts</b> — tick it in the checks above and press play: it "
-            "adds hydrogens (reduce2) as a new object, runs probe2, and these overlays light "
-            "up. There is no table here because probe's answer is the dots themselves: green "
-            "and blue are favorable contacts, and the red spikes are <b>overlaps</b>, drawn "
-            "where two atoms interpenetrate by more than 0.4 Å — the length of a spike is "
-            "that overlap.")
+            "adds hydrogens (reduce2) as a new object, runs probe2, and the overlay "
+            "toggles above light up. There is no table here because probe's answer is "
+            "the dots themselves: green and blue are favorable contacts, and the red "
+            "spikes are <b>overlaps</b>, drawn where two atoms interpenetrate by more "
+            "than 0.4 Å — the length of a spike is that overlap.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(placeholder-text);")
         ag.addWidget(hint)
-        self._contacts_toggle = self._make_icon_button(
-            "fold-horizontal", "Contacts", "Show/hide the full probe2 contact-dot surface",
-            checkable=True)
-        self._contacts_toggle.setEnabled(False)
-        self._contacts_toggle.toggled.connect(
-            lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
-        self._contacts_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
-        self._clashes_toggle = self._make_icon_button(
-            "triangle-alert", "Clashes", "Show/hide the bad-overlap (clash) spikes",
-            checkable=True)
-        self._clashes_toggle.setEnabled(False)
-        self._clashes_toggle.toggled.connect(
-            lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
-        self._clashes_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
-
-        # One row: the two result toggles.
-        prow = QHBoxLayout()
-        prow.addWidget(self._contacts_toggle)
-        prow.addWidget(self._clashes_toggle)
-        prow.addStretch(1)
-        ag.addLayout(prow)
         ag.addStretch(1)
         return page
 
@@ -2897,7 +2875,8 @@ class ControlsWindow:
             box.setToolTip(f"Queue the {spec.title} check for the next run")
             checks.addWidget(box, i // 2, i % 2)
             self._check_boxes.append((spec.key, box))
-        self._clashes_check = QCheckBox("Clashes && contacts (adds hydrogens — slower)")
+        self._clashes_check = QCheckBox(
+            "All-atom contacts && clashes (adds hydrogens — slower)")
         self._clashes_check.setToolTip(
             "Queue the all-atom contact analysis: add hydrogens with reduce2 as a new "
             "object (hiding the original), then run probe2 for MolProbity contacts and "
@@ -2915,9 +2894,31 @@ class ControlsWindow:
         layout.addLayout(checks)
 
         # Per-validator Markers checkboxes, rebuilt with the sub-tabs on every run. The probe
-        # overlay toggles are separate because they live on the always-present Clashes page and
-        # outlive a re-run; both are markup, so the "all" button drives them together.
+        # overlay toggles are separate because they outlive a re-run; both are markup, so the
+        # "all" button drives them together.
         self._marker_checks: list = []
+
+        # The two probe overlay toggles. They sit on the tab itself — not inside the
+        # Clashes sub-tab — because a user looking for "hide the dots" must not have to
+        # open a second tab; a buried toggle reads as "there is no way to hide this".
+        # Disabled until a contacts run produces dots (see _sync_probe_toggles).
+        from .live import PROBE_CLASHES, PROBE_CONTACTS
+
+        self._contacts_toggle = self._make_icon_button(
+            "fold-horizontal", "Contacts", "Show/hide the probe2 contact-dot surface",
+            checkable=True)
+        self._contacts_toggle.setEnabled(False)
+        self._contacts_toggle.toggled.connect(
+            lambda on: self._desktop.set_probe_channel(PROBE_CONTACTS, on))
+        self._contacts_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
+        self._clashes_toggle = self._make_icon_button(
+            "triangle-alert", "Clashes",
+            "Show/hide the bad-overlap (clash) dots and spikes",
+            checkable=True)
+        self._clashes_toggle.setEnabled(False)
+        self._clashes_toggle.toggled.connect(
+            lambda on: self._desktop.set_probe_channel(PROBE_CLASHES, on))
+        self._clashes_toggle.toggled.connect(lambda _on: self._sync_all_markup_button())
 
         run_row = QHBoxLayout()
         run_btn = self._make_icon_button(
@@ -2940,6 +2941,13 @@ class ControlsWindow:
         run_row.addWidget(self._all_markup_btn)
         layout.addLayout(run_row)
 
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(QLabel("Probe overlays:"))
+        overlay_row.addWidget(self._contacts_toggle)
+        overlay_row.addWidget(self._clashes_toggle)
+        overlay_row.addStretch(1)
+        layout.addLayout(overlay_row)
+
         # Shown when the atoms move after a run: the tables and markup still on screen
         # describe where the model *was*, so they can no longer be trusted. Hidden until
         # then, and cleared again by the next run. Driven by validation_stale_changed.
@@ -2953,10 +2961,11 @@ class ControlsWindow:
         layout.addWidget(self._stale_warning)
 
         # One results area: a tab per validator, (re)built as runs complete, then two
-        # always-present tabs at the end — Clashes & contacts (overlay toggles rather
-        # than a results table) and Hotspots (the aggregate over these same checks,
-        # demoted from a top-level tab: it is a *view* of validation, sharing its
-        # expensive analysis, and did not earn a place beside Scene and Tools).
+        # always-present tabs at the end — Clashes & contacts (a legend for the dot
+        # overlays, whose toggles sit in the row above) and Hotspots (the aggregate
+        # over these same checks, demoted from a top-level tab: it is a *view* of
+        # validation, sharing its expensive analysis, and did not earn a place
+        # beside Scene and Tools).
         self._validation_subtabs = QTabWidget()
         self._validation_subtabs.setDocumentMode(True)
         self._clashes_page = self._build_clashes_page()
@@ -2965,6 +2974,7 @@ class ControlsWindow:
         self._validation_subtabs.addTab(self._clashes_page, "Clashes")
         self._validation_subtabs.addTab(self._build_hotspots_tab(), "Hot")
         layout.addWidget(self._validation_subtabs, stretch=1)
+        self._sync_probe_toggles()      # reflect any dots a run already produced
         self._sync_all_markup_button()  # nothing drawn yet, so it starts disabled
         return tab
 
@@ -2999,6 +3009,33 @@ class ControlsWindow:
         button.setEnabled(bool(live))
         button.setText("Hide all markers" if any(t.isChecked() for t in live)
                        else "Show all markers")
+
+    def _sync_probe_toggles(self) -> None:
+        """Keep the probe overlay toggles honest about what is drawn.
+
+        Enabled while some model holds cached probe dots, checked only while a
+        session is actually drawing the channel. Without this a removed model (or
+        a cleared scene) leaves the toggles enabled and checked, commanding a
+        session that no longer exists — the toggle looks armed and does nothing."""
+        from .live import PROBE_CLASHES, PROBE_CONTACTS
+
+        shown = {PROBE_CONTACTS: False, PROBE_CLASHES: False}
+        available = False
+        for m in self._desktop._models:
+            if m.get("probe_dots"):
+                available = True
+                payloads = getattr(m["session"], "_probe_dots_payloads", {})
+                for ch in shown:
+                    shown[ch] = shown[ch] or ch in payloads
+        for name, ch in (("_contacts_toggle", PROBE_CONTACTS),
+                         ("_clashes_toggle", PROBE_CLASHES)):
+            toggle = getattr(self, name, None)
+            if toggle is None:
+                continue
+            toggle.blockSignals(True)
+            toggle.setEnabled(available)
+            toggle.setChecked(shown[ch])
+            toggle.blockSignals(False)
 
     def _build_validation_section(self, mid, result, draw_markers=True):
         """One validator's sub-tab: summary, a Markers checkbox (on by default), and a
@@ -4935,37 +4972,29 @@ class ControlsWindow:
             self._console_layout.addWidget(QLabel(console_mod.CONSOLE_MISSING_MESSAGE))
             return
         try:
-            import numpy as np
-
-            from .api_guide import ApiGuide
-            from .live import LiveSession
-
-            namespace = {
-                "app": self._desktop,
-                "session": self._desktop.active_model_session(),
-                "np": np,
-                "api": ApiGuide(LiveSession),
-                # Over the builtin, and taking nothing from it: bare help() is the
-                # console's guide, help(obj) is still Python's (see ConsoleHelp).
-                "help": console_mod.ConsoleHelp(),
-            }
+            kernel = self._desktop.ensure_kernel()
             self._console = console_mod.EmbeddedConsole(
-                namespace, banner=console_mod.default_banner()
+                kernel, banner=console_mod.default_banner()
             )
             self._console_layout.addWidget(self._console.widget)
         except Exception as exc:  # a broken console must not take the app down
             self._console_layout.addWidget(QLabel(f"Console failed to start:\n{exc}"))
 
     def _refresh_console_session(self) -> None:
-        """Keep the console's ``session`` bound to the active model."""
-        if self._console is not None:
-            self._console.push({"session": self._desktop.active_model_session()})
+        """Keep the kernel's ``session`` bound to the active model.
+
+        Pushes whether or not the Console tab was ever opened — the kernel is
+        the shared namespace for the console, MCP exec and attached Jupyter
+        clients alike.
+        """
+        self._desktop.kernel_push({"session": self._desktop.active_model_session()})
 
     def shutdown_console(self) -> None:
-        """Tear down the embedded kernel (called on app quit)."""
+        """Detach this client and stop the shared kernel (called on app quit)."""
         if self._console is not None:
             self._console.shutdown()
             self._console = None
+        self._desktop.shutdown_kernel()
 
     def _build_components_subtab(self):
         """The Components table: every residue group in the model, one row each.
@@ -6240,12 +6269,8 @@ class ControlsWindow:
             "Re-dock the controls" if floating else "Detach the controls to their own window")
 
     def _on_analysis_ready(self, mid) -> None:
-        """Analysis finished: enable and check both overlay toggles (both drawn)."""
-        for toggle in (self._contacts_toggle, self._clashes_toggle):
-            toggle.setEnabled(True)
-            toggle.blockSignals(True)
-            toggle.setChecked(True)
-            toggle.blockSignals(False)
+        """Analysis finished: the dots are drawn, so the toggles enable and check."""
+        self._sync_probe_toggles()  # reads the sessions' payloads: both just drew
         self._sync_all_markup_button()  # these are markup too, and now there is some
 
     def _on_scene_selection_changed(self, payload) -> None:
@@ -6808,6 +6833,7 @@ class ControlsWindow:
             self._select_expr.setText("")
             self._selection_label.setText(
                 self._desktop.selection_description(self._scene_selection))
+        self._sync_probe_toggles()  # the dots-owning model may have been removed
 
     def _on_tree_current_changed(self, current, _previous) -> None:
         if self._suppress_model_events or current is None:
@@ -7211,6 +7237,13 @@ class DesktopApp:
 
         self._stopped = False
         self._prev_sigint = None
+        # The shared Python kernel (console.AppKernel) — the one namespace the
+        # Console tab, the MCP ``python`` tool and any attached Jupyter client
+        # all evaluate in. Lazy: a session that never needs a console never
+        # pays for a kernel. ``_gui_invoker`` marshals callables onto the Qt
+        # thread so kernel-side code can drive widgets safely.
+        self._kernel = None
+        self._gui_invoker = self._make_gui_invoker()
         self._sigint_installed = False
         self._sigint_timer = None
         self._minimize_stop = threading.Event()  # set to halt a running minimization
@@ -9405,17 +9438,20 @@ class DesktopApp:
         self.bridge.analysis_ready.emit(hmid)
 
     def set_probe_channel(self, channel: int, visible: bool) -> None:
-        """Toggle a probe overlay (contacts/clashes) on the active model, redrawing
-        from the dots cached by the last analysis (no probe re-run)."""
-        entry = self._model_entry(self._active_model_id)
-        if entry is None:
-            return
-        session = entry["session"]
-        dots = (entry.get("probe_dots") or {}).get(channel)
-        if visible and dots:
-            session.show_probe_dots(dots, channel=channel)
-        else:
-            session.clear_probe_dots(channel=channel)
+        """Toggle a probe overlay (contacts/clashes), redrawing from the dots cached
+        by the last analysis (no probe re-run).
+
+        Applies to every model session, not just the active one's: the overlay
+        toggle must not go dead because the user activated a different object —
+        hiding clears the channel everywhere (a no-op where it was not drawn),
+        showing redraws whichever models hold cached dots for it."""
+        for entry in self._models:
+            dots = (entry.get("probe_dots") or {}).get(channel)
+            if visible:
+                if dots:
+                    entry["session"].show_probe_dots(dots, channel=channel)
+            else:
+                entry["session"].clear_probe_dots(channel=channel)
 
     def run_validation(self, keys=None, clashes: bool = False,
                        hotspots: bool = False) -> None:
@@ -12424,6 +12460,12 @@ class DesktopApp:
             self._dummy = None
         self._session = None
         self._session_key = None
+        try:
+            # Without a reload the page keeps painting the last scene forever —
+            # dots and all — and nothing the user presses can clear a dead frame.
+            self._reload_viewport()
+        except Exception:  # pragma: no cover - defensive (called during shutdown)
+            pass
 
     def _status(self, text: str) -> None:
         self.bridge.status_changed.emit(text)
@@ -12630,6 +12672,86 @@ class DesktopApp:
     def active_model_session(self):
         """The active model's LiveSession, or None (e.g. a volume scene)."""
         return self.session_for(self._active_model_id)
+
+    # -- the shared python kernel -----------------------------------------
+
+    @staticmethod
+    def _make_gui_invoker():
+        """A QObject whose signal runs a callable on the Qt thread.
+
+        Emitting ``run_job`` from any thread lands ``fn`` here via a queued
+        connection; the Future carries its result (or exception) back.
+        """
+        from PySide6.QtCore import QObject, Signal
+
+        class _Invoker(QObject):
+            run_job = Signal(object)
+
+            def __init__(self):
+                super().__init__()
+                self.run_job.connect(self._run)
+
+            def _run(self, job):
+                fn, fut = job
+                if fut.set_running_or_notify_cancel():
+                    try:
+                        fut.set_result(fn())
+                    except BaseException as exc:
+                        fut.set_exception(exc)
+
+        return _Invoker()
+
+    def invoke_on_gui(self, fn):
+        """Run ``fn`` on the Qt thread; returns a ``Future`` for its result."""
+        from concurrent.futures import Future
+
+        fut = Future()
+        self._gui_invoker.run_job.emit((fn, fut))
+        return fut
+
+    def ensure_kernel(self):
+        """Start (or return) the app's python kernel. Call on the Qt thread.
+
+        The kernel is the shared exec namespace — Console tab, MCP ``python``
+        tool and external Jupyter clients all attach to it. ``app`` is bound
+        through a GuiThreadProxy so calls marshalled back here stay on the
+        Qt thread; ``session`` (thread-safe) is bound raw.
+        """
+        if self._kernel is not None:
+            return self._kernel
+        from . import console as console_mod
+
+        if not console_mod.console_available():
+            return None
+        import numpy as np
+
+        from .api_guide import ApiGuide
+        from .live import LiveSession
+
+        namespace = {
+            "app": console_mod.GuiThreadProxy(self, self.invoke_on_gui),
+            "session": self.active_model_session(),
+            "np": np,
+            "api": ApiGuide(LiveSession),
+            # Over the builtin, and taking nothing from it: bare help() is the
+            # console's guide, help(obj) is still Python's (see ConsoleHelp).
+            "help": console_mod.ConsoleHelp(),
+        }
+        self._kernel = console_mod.AppKernel(namespace)
+        print("pxviewer python kernel — attach with:\n"
+              f"  jupyter console --existing {self._kernel.connection_file}",
+              flush=True)
+        return self._kernel
+
+    def kernel_push(self, mapping) -> None:
+        """Bind names in the kernel namespace, if a kernel has been started."""
+        if self._kernel is not None:
+            self._kernel.push(mapping)
+
+    def shutdown_kernel(self) -> None:
+        if self._kernel is not None:
+            self._kernel.shutdown()
+            self._kernel = None
 
     # -- loading ---------------------------------------------------------
 

@@ -20,34 +20,74 @@ def exercise_console_available():
 
 
 def exercise_the_embedded_console_shares_live_objects():
-    """The in-process kernel evaluates against the very objects we push in."""
-    from pxviewer.console import EmbeddedConsole
+    """The in-process kernel evaluates against the very objects we push in —
+    the eval round-trips over the real Jupyter wire now, but the namespace is
+    the same one."""
+    from pxviewer.console import AppKernel, EmbeddedConsole
 
     class FakeSession(object):
         marker = "live"
 
-    console = EmbeddedConsole({"session": FakeSession(), "answer": 21})
+    kernel = AppKernel({"session": FakeSession(), "answer": 21})
+    console = EmbeddedConsole(kernel)
     try:
-        shell = console._manager.kernel.shell
-        assert shell.user_ns["session"].marker == "live"   # the same object we pushed
-        assert shell.ev("answer * 2") == 42                 # a real shell, not a stub
-        console.push({"session": "rebound"})                # rebinding takes effect
-        assert shell.user_ns["session"] == "rebound"
+        r = kernel.execute("session.marker", timeout=15)
+        assert r["result"] == "'live'"          # the same object we pushed
+        r = kernel.execute("answer * 2", timeout=15)
+        assert r["result"] == "42"              # a real shell, not a stub
+        console.push({"session": "rebound"})    # rebinding takes effect
+        r = kernel.execute("session", timeout=15)
+        assert r["result"] == "'rebound'"
     finally:
         console.shutdown()
+        kernel.shutdown()
+
+
+def exercise_external_clients_attach_over_the_wire():
+    """The whole point of the wire kernel: ``jupyter console --existing`` (and
+    the MCP ``python`` tool) see the same namespace the tab shows — proven by
+    a bare client reading what it set."""
+    import os
+    import time
+
+    from pxviewer.console import AppKernel
+
+    kernel = AppKernel({"answer": 21})
+    try:
+        assert os.path.exists(kernel.connection_file)
+        client = kernel.client()
+        try:
+            msg_id = client.execute("answer + 1")
+            seen, deadline = None, time.time() + 30
+            while time.time() < deadline:
+                try:
+                    msg = client.get_iopub_msg(timeout=0.5)
+                except Exception:
+                    continue
+                if (msg["parent_header"].get("msg_id") == msg_id
+                        and msg["msg_type"] == "execute_result"):
+                    seen = msg["content"]["data"]["text/plain"]
+                    break
+            assert seen == "22", "external client saw %r" % seen
+        finally:
+            client.stop_channels()
+    finally:
+        kernel.shutdown()
 
 
 def exercise_the_console_suppresses_the_kernel_banner():
     """The widget squelches IPython's own banner so only our greeting shows."""
-    from pxviewer.console import EmbeddedConsole
+    from pxviewer.console import AppKernel, EmbeddedConsole
 
-    console = EmbeddedConsole()
+    kernel = AppKernel()
+    console = EmbeddedConsole(kernel)
     try:
         # The kernel-info reply sets this trait; our observer must blank it out.
         console.widget.kernel_banner = "Python 3.12 ... IPython 9 ... Tip: ..."
         assert console.widget.kernel_banner == ""
     finally:
         console.shutdown()
+        kernel.shutdown()
 
 
 def exercise_the_banner_and_the_guide_fit_the_pane():

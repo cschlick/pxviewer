@@ -100,9 +100,12 @@ def exercise_selection_columnar_accessors():
     assert not hasattr(sel, "atoms")              # columnar only -- no per-atom objects
 
 
-def exercise_coercion_accepts_a_selection_string():
-    """Anything that takes a Selection also takes a cctbx selection string."""
-    assert session()._as_selection("name CA").indices == [1, 3, 5, 7, 9, 11]
+def exercise_coercion_rejects_a_selection_string():
+    """A bare string on the viewing API has no grammar — prose resolves only via
+    select_by(selection=...) / select_by_expression, which name it explicitly."""
+    with raises(TypeError):
+        session()._as_selection("name CA")
+    assert session().select_by(selection="name CA").indices == [1, 3, 5, 7, 9, 11]
 
 
 def exercise_a_bad_selection_string_raises():
@@ -175,10 +178,17 @@ def exercise_repr_color_value_forces_uniform():
     assert spec["color"] == "uniform" and spec["colorValue"] == "red"
 
 
-def exercise_repr_subset_via_a_selection_string():
+def exercise_repr_subset_via_a_selection():
     s = session()
-    spec = s._representations[s.add_representation("spacefill", on="chain A")]
+    spec = s._representations[
+        s.add_representation("spacefill", on=s.select_by(selection="chain A"))]
     assert spec["on"] == {"runs": [[0, 5]]}      # chain A = contiguous indices 0-5
+
+
+def exercise_repr_subset_rejects_prose():
+    """on= takes a resolved Selection — a bare string is not a spec grammar."""
+    with raises(TypeError):
+        session().add_representation("spacefill", on="chain A")
 
 
 def run():

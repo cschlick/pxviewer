@@ -1,16 +1,22 @@
-"""An MCP server that drives a live pxviewer session.
+"""An MCP server that hands agents the app's own Python kernel.
+
+The semantic surface is one tool — ``python(code)`` — which executes in the
+app's embedded IPython kernel: the very namespace the Console tab shows
+(``session``, ``app``, ``api``, ``np``, ``help``). The objects, not the
+schema, are the API; the kernel is shared state, so names an agent assigns
+in one call are there for the next. The remaining tools are operational:
+``status`` for scene + kernel state, ``ping``/``reload_viewport`` for
+viewport health, ``screenshot``/``save_screenshot`` for seeing the frame.
 
 The server owns a real ``DesktopApp`` — the same windows a user opens — so an
-agent's figure work happens in the viewer the user is watching, and everything
-the desktop can do (models, maps, selections, camera, saved views) is
-available to tools verbatim.
+agent's figure work happens in the viewer the user is watching.
 
 Threading: Qt must live on the main thread (macOS requires it), so the MCP
-stdio loop runs on a daemon thread. Tool calls that touch widgets are
-marshalled onto the Qt thread through a queued signal; ``LiveSession`` calls
-(screenshot, camera, background) are already thread-safe — they block on the
-browser round trip while the Qt loop delivers the answer — and run directly
-on the MCP thread.
+loop runs on a daemon thread. Tool calls that touch widgets are marshalled
+onto the Qt thread through :meth:`DesktopApp.invoke_on_gui`; ``LiveSession``
+calls (screenshot, camera, background) are already thread-safe and run
+directly on the MCP thread; ``python`` code runs on the kernel's thread
+with ``app`` proxied back onto Qt.
 
 Run it as ``python -m pxviewer mcp`` and point a client at the stdio
 transport, e.g. in an MCP client config::
@@ -24,11 +30,9 @@ import asyncio
 import sys
 import threading
 import time
-from concurrent.futures import Future
 from pathlib import Path
 
 _app = None          # DesktopApp, main thread
-_invoker = None      # _Invoker, main thread
 
 MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
 
@@ -37,7 +41,8 @@ MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
 # fail are listed explicitly — several of them fail *silently* with zero atoms,
 # so the list must not overpromise.
 SELECTION_LANGUAGE = """\
-Selection strings are cctbx/Phenix selections (iotbx/mmtbx selection).
+Selection strings are cctbx/Phenix selections (iotbx/mmtbx selection), used
+via app.select_by_expression(expr) or session.model.selection(expr).
 
 Fields: chain <id>, resseq <n> or resseq <n>:<m> (colon ranges), resid <n>[<icode>],
 resname <3-letter code>, name <atom name>, element <symbol>, altloc <id>,
@@ -51,7 +56,7 @@ Logic: and or not, parentheses. Multiple names/values need 'or'
 
 Examples:
   chain A and resseq 5:14               first ten residues of chain A
-  resname LIG                           the ligand (check codes via structure_info)
+  resname LIG                           the ligand (check codes via the hierarchy)
   residues_within(6, resname HEM)       residues within 6 A of heme
   within(4, chain B)                    atoms within 4 A of chain B
   element ZN                            zinc ions
@@ -65,52 +70,71 @@ NOT supported (syntax error or silent no-match):
   value lists (resseq 5 7 9, name CA CB — use 'or'),
   wildcards (name 'C*'), xor, aniso, nucleic (use nucleotide).
 
-Translating prose: call structure_info() or secondary_structure() FIRST to map
-requests like "the first helix tip" or "the ligand" onto real chains/resseqs,
-then select(). select() focuses the camera on the match by default."""
+Translating prose: inspect the hierarchy first — session.model.get_hierarchy(),
+api.find('select') — to map requests like "the first helix tip" or "the
+ligand" onto real chains/resseqs, then select."""
 
 
-def _model_session(name):
-    """Resolve a model name (or active/first) to (id, LiveSession)."""
-    mid = _model_id(name)
-    entry = _app._model_entry(mid) if mid else None
-    session = entry.get("session") if entry else None
-    if session is None:
-        raise ValueError("no such model: %r" % name)
-    return mid, session
+# Verified against this build's cctbx the same way the selection grammar was:
+# every expression below was run. The recurring mistakes this exists to head
+# off: selection prose reaching the viewing API instead of the cctbx resolvers,
+# flex arrays mistaken for numpy, and set_sites_cart assumed to re-render on
+# its own.
+CCTBX_IDIOMS = """\
+The objects behind session/app are cctbx's own — knowing the data structures
+saves a discovery round-trip.
 
+session.model is an mmtbx.model.manager:
+  model.get_hierarchy()       iotbx hierarchy: models -> chains ->
+                              residue_groups -> atom_groups -> atoms
+                              (atom.name/.element/.occ/.b/.xyz/.i_seq)
+  model.get_sites_cart()      flex.vec3_double — (x,y,z) Angstrom per atom
+  model.crystal_symmetry()    unit cell + space group
+  model.get_xray_structure()  xray_structure with .scatterers()
+Atom identity is positional: hierarchy i_seq, the wire index session calls
+take, and the row index of every flex array are the SAME number.
 
-def _make_invoker():
-    from PySide6.QtCore import QObject, Signal
+ONE selection language — the cctbx/Phenix grammar above, always resolved
+Python-side; the wire only ever carries integer index sets:
+  model.selection(expr)              -> flex.bool of length n_atoms
+  app.select_by_expression(expr)     resolve + make it the scene selection
+  session.select_by(selection=expr)  -> Selection object (.indices, .mask, ...)
+  session.select(sel_or_indices)     viewing ops take a Selection, i_seq index
+                                     lists, or a length-N bool mask — never a
+                                     string; prose enters via select_by only
+  sel.iselection()                   flex.size_t of matching i_seqs
+Never invent an atom index — derive it from the hierarchy or a selection.
 
-    class _Invoker(QObject):
-        run_job = Signal(object)
+flex arrays are cctbx's arrays, not numpy:
+  v.as_numpy_array()    copy out (vec3_double -> (N,3) float64)
+  flex.vec3_double(arr) build from an (N,3) numpy array
+  flex.size_t(list)     build an index array from python ints
+  import: from scitbx.array_family import flex
 
-        def __init__(self):
-            super().__init__()
-            self.run_job.connect(self._run)
+Moving atoms does NOT move the view by itself:
+  arr = model.get_sites_cart().as_numpy_array()
+  arr[sel.iselection().as_numpy_array()] += (1.0, 0.0, 0.0)
+  model.set_sites_cart(flex.vec3_double(arr))
+  session.push(model.get_sites_cart())   # stream the new conformation
+  (pass changed=iselection to stream only the moved atoms)
 
-        def _run(self, job):
-            fn, fut = job
-            if fut.set_running_or_notify_cancel():
-                try:
-                    fut.set_result(fn())
-                except BaseException as exc:
-                    fut.set_exception(exc)
+One hop further:
+  app.model_mmm()              mmtbx.map_model_manager (model+map+ncs),
+                               or None until a map is paired
+  mmm.map_manager().map_data() flex.double 3D grid of density values
+  app.map_for_model()          the viewer's map data, or None
+  app.reflections_for_model()  the reflections the model was phased
+                               against — entry['data'].arrays is the list
+                               of cctbx miller_array objects — or None
 
-    return _Invoker()
-
-
-def _invoke(fn):
-    """Run ``fn`` on the Qt thread, return a Future for its result."""
-    fut = Future()
-    _invoker.run_job.emit((fn, fut))
-    return fut
+Long cctbx calls (minimize, real-space refine, map recompute) block the
+kernel thread — prefer app.run_background(fn, name=..., label=...) and
+watch app.job_state() / status rather than exec'ing them directly."""
 
 
 async def _qt(fn):
-    """awaitable _invoke for use inside async tool handlers."""
-    return await asyncio.wrap_future(_invoke(fn))
+    """Run ``fn`` on the Qt thread and await its result."""
+    return await asyncio.wrap_future(_app.invoke_on_gui(fn))
 
 
 def _session():
@@ -161,25 +185,6 @@ def _unready_reason() -> str:
     return "viewport never came up"
 
 
-def _model_id(name):
-    """Resolve a model by name (or the active/first model when name is None)."""
-    if name is None:
-        return _app._active_model_id or (_app._models[0]["id"] if _app._models else None)
-    for entry in _app._models:
-        if entry["id"] == name or entry.get("name") == name:
-            return entry["id"]
-    return None
-
-
-def _volume_id(name):
-    if name is None:
-        return _app._volumes[0]["id"] if _app._volumes else None
-    for entry in _app._volumes:
-        if entry["id"] == name or entry.get("name") == name:
-            return entry["id"]
-    return None
-
-
 def attach(app, port: int = MCP_PORT) -> "str | None":
     """Serve the MCP tool surface over HTTP for an already-running DesktopApp.
 
@@ -189,23 +194,30 @@ def attach(app, port: int = MCP_PORT) -> "str | None":
     pxviewer instance), the serve thread retries for a few minutes so the
     endpoint comes up when the holder exits.
     """
-    global _app, _invoker
+    global _app
     try:
         import mcp  # noqa: F401
     except ImportError:
         return None
 
     _app = app
-    _invoker = _make_invoker()
     server = _make_server()
     server.settings.host = "127.0.0.1"
     server.settings.port = port
+    # python(code) is arbitrary execution, so the endpoint must not be
+    # reachable from a drive-by webpage either: enforce DNS-rebinding checks
+    # (Host pinned to loopback) and refuse any request carrying an Origin
+    # header — real MCP clients don't send one, browsers always do.
+    server.settings.transport_security.enable_dns_rebinding_protection = True
+    server.settings.transport_security.allowed_hosts = [
+        "127.0.0.1:%d" % port, "localhost:%d" % port]
+    server.settings.transport_security.allowed_origins = []
 
     def serve():
         # A second instance loses the port race — keep retrying briefly so it
         # picks the endpoint up once the holder exits, rather than never
         # having MCP at all. Bounded so a permanently busy port doesn't spam.
-        import errno
+        import errno  # noqa: F401
         deadline = time.time() + 600
         noted_busy = False
         while True:
@@ -234,7 +246,7 @@ def attach(app, port: int = MCP_PORT) -> "str | None":
 
 def _start_app():
     """Build the desktop app the way run_desktop starts it; return the app."""
-    global _app, _invoker
+    global _app
     from PySide6.QtWidgets import QApplication
 
     from pxviewer import gpu as gpu_backend
@@ -254,7 +266,6 @@ def _start_app():
     app._controls.widget().show()
     app._main.resize(1400, 900)
     _app = app
-    _invoker = _make_invoker()
     return qt_app, app
 
 
@@ -265,40 +276,79 @@ def _make_server():
     from mcp.server.fastmcp import FastMCP, Image
 
     mcp = FastMCP("pxviewer", instructions=(
-        "pxviewer is a macromolecular viewer; these tools drive a real, "
-        "visible instance the user is watching — everything on screen is what "
-        "the user sees, and selections you make are the app's selections.\n\n"
-        "Getting data in: load(path) for local PDB/mmCIF/maps, "
-        "fetch(pdb_id|emdb_number, entities) for downloads, load_view(path) "
-        "for saved .pxview.json scenes.\n\n"
-        "Grounding prose in the structure: structure_info() (chains, residue "
-        "ranges, hetero/waters), secondary_structure() (helix/strand ranges — "
-        "'the first helix' = helices[0]), atoms(expr) (per-atom xyz/b/occ for "
-        "a selection without applying it), atom_table() (the whole model), "
-        "model_state()/volume_state()/reflections()/selection_state() for "
-        "what is set right now, map_data()/reflection_data() for raw grids.\n\n"
-        "Figure workflow: select()/set_representation()/color_by()/"
-        "set_volume() frame the subject; set_clip_sphere()/set_clip_slab() "
-        "isolate it; measure()/add_label() annotate; screenshot() inspects "
-        "the frame; save_view()/save_screenshot() keep the result. "
-        "focus_residue()/step()/zoom_view()/set_camera()/reset_view() move "
-        "the camera. Validation: run_validation() runs the checks, "
-        "validation_results() reads back the outlier tables.\n\n"
-        "Diagnostics and recovery: ping() answers whether the page is alive "
-        "and, if it is merely busy, what is holding its apply chain; "
-        "reload_viewport() rebuilds the page from scratch (Python-side "
-        "state survives). If a call fails with 'viewport never came up', "
-        "call ping() — a live-but-busy page resolves on its own, a dead one "
-        "needs reload_viewport().\n\n"
-        + SELECTION_LANGUAGE))
+        "pxviewer is a macromolecular viewer; you are driving a real, visible "
+        "instance the user is watching — everything on screen is what the "
+        "user sees, and selections you make are the app's selections.\n\n"
+        "The surface is a live kernel, not a schema: python(code) executes "
+        "in the app's own IPython kernel — the same namespace the Console "
+        "tab shows — so the objects are the API:\n\n"
+        "  session  the active model's LiveSession: selections, "
+        "representations, camera, measurements, primitives. "
+        "session.model is the mmtbx model — get_sites_cart() returns a "
+        "flex.vec3_double, get_hierarchy() the full hierarchy.\n"
+        "  app      the DesktopApp, proxied so calls run on the Qt thread: "
+        "app.load_file(path), app.load_files(paths), "
+        "app.fetch_and_load(pdb_id='1ubq', entities=['model','map']), "
+        "app.select_by_expression(expr), app.job_state().\n"
+        "  api      a categorized map of the API — api.find('color') "
+        "locates verbs; api itself lists them.\n"
+        "  np       numpy.  help — bare help() prints the console guide; "
+        "help(obj) is Python's own help.\n\n"
+        "Names you assign persist between calls — stash intermediate "
+        "objects in the namespace rather than re-deriving them. Results "
+        "come back as {stdout, stderr, result, data, error}: result is the "
+        "repr of the last expression, data is its full mimebundle (an "
+        "IPython Image lands as image/png), error carries the traceback.\n\n"
+        "Discovery: status() first for loaded objects and running jobs; "
+        "then api.find(...), dir(session), help(session.method) to map the "
+        "verbs. cctbx objects (session.model, app.model_mmm(), "
+        "app.map_for_model(), app.reflections_for_model()) are the real "
+        "library objects — the whole cctbx API is available.\n\n"
+        "Long work: exec blocks the kernel — give minimize/validation "
+        "calls room with the timeout arg, or kick them off via "
+        "app.run_background and watch job_state().\n\n"
+        "Diagnostics and recovery: ping() answers whether the Mol* page is "
+        "alive and, if merely busy, what is holding its apply chain; "
+        "screenshot() returns the frame so you can see the scene; "
+        "save_screenshot(path) writes a PNG; reload_viewport() rebuilds a "
+        "dead page (Python-side state survives).\n\n"
+        + SELECTION_LANGUAGE + "\n\n" + CCTBX_IDIOMS))
+
+    @mcp.tool()
+    async def python(code: str, timeout: float = 120.0) -> dict:
+        """Execute ``code`` in the app's own IPython kernel — the same
+        namespace the Console tab shows. The objects are the API:
+
+        - ``session``: the active model's LiveSession (selection,
+          representations, camera, measurements); re-binds on model switch.
+        - ``app``: the DesktopApp through a proxy whose calls run on the Qt
+          thread — load_file/load_files/fetch_and_load/select_by_expression/
+          run_background/job_state, everything the panels can do.
+        - ``api``: categorized map of the API (api.find("color")).
+        - ``np``: numpy.  ``help``: the console guide (bare) or help(obj).
+
+        Variables persist between calls — the kernel is shared state.
+        Returns {status, stdout, stderr, result, data, error}: ``result``
+        is the repr of the last expression; ``data`` is its mimebundle (an
+        IPython Image shows up as image/png); ``error`` carries ename/
+        evalue/traceback, or a Timeout entry if ``timeout`` expired (the
+        kernel keeps running the code — call again with a longer timeout).
+        """
+        kernel = await _qt(_app.ensure_kernel)
+        if kernel is None:
+            raise RuntimeError(
+                "the 'console' extra (ipykernel) is not installed — "
+                "pip install 'pxviewer[console]'")
+        return await asyncio.to_thread(kernel.execute, code, float(timeout))
 
     @mcp.tool()
     async def status() -> dict:
-        """Scene state: loaded objects, selections, camera, markers, plus
-        `busy`/`job_errors` — running and recently-failed background jobs
-        (fetch, validation, minimize). Check `job_errors` when a tool's
-        effect never appears. `camera`/`background` are null until a viewer
-        session exists; the scene lists answer regardless."""
+        """Scene state: loaded objects, selections, camera, markers, the
+        kernel's connection file, plus `busy`/`job_errors` — running and
+        recently-failed background jobs (fetch, validation, minimize). Check
+        `job_errors` when an exec's effect never appears. `camera`/
+        `background` are null until a viewer session exists; the scene lists
+        answer regardless."""
         def work():
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
@@ -319,6 +369,9 @@ def _make_server():
         jobs = _app.job_state()
         state["busy"] = jobs["busy"]
         state["job_errors"] = jobs["errors"]
+        kernel = _app._kernel
+        state["kernel"] = ({"connection_file": kernel.connection_file}
+                           if kernel is not None else None)
         session = _app._control_session()
         state["camera"] = session.camera_state() if session else None
         state["background"] = session.background_color() if session else None
@@ -332,7 +385,7 @@ def _make_server():
         page answers immediately with `pending` (messages queued behind
         scene work) and `busy`/`busyMs` (the state-tree update currently
         holding the chain, and for how long). A stalled chain makes every
-        other tool look dead — this tells "dead" from "busy", and names the
+        other call look dead — this tells "dead" from "busy", and names the
         culprit. `lastStall` is the most recent stall report the page sent."""
         session = _app._control_session()
         if session is None:
@@ -353,1049 +406,11 @@ def _make_server():
 
         Python-side state (models, selections, representations, clips,
         primitives) survives; the page rebuilds from it on reconnect. Use
-        when ping() reports the page is dead, or when tools fail with
+        when ping() reports the page is dead, or when calls fail with
         'viewport never came up' and ping does not answer."""
         await _qt(lambda: _app._reload_viewport())
         _wait_ready(timeout=60)
         return {"reloaded": True, "camera": _session().camera_state()}
-
-    @mcp.tool()
-    async def place_marker(position: list) -> dict:
-        """Drop a ligand marker at an absolute coordinate (Å).
-
-        Markers are the ligand-fitting targets: place one, then call
-        fit_ligand() on it. The position can come from atoms()/atom_table()
-        (e.g. a pocket centroid) — no mouse needed."""
-        def work():
-            before = len(_app._markers)
-            _app._on_marker([float(c) for c in position], None)
-            entry = _app._markers[-1] if len(_app._markers) > before else None
-            return entry
-        marker = await _qt(work)
-        if marker is None:
-            raise RuntimeError("marker was not placed")
-        return {"marker": marker["id"], "position": marker["position"]}
-
-    @mcp.tool()
-    async def fit_ligand(marker: str, code: str, fit: bool = True,
-                         trials: int = 20) -> dict:
-        """Fit a monomer-library ligand (three-letter code, e.g. 'GOL') at a
-        placed marker. Runs in the background; with a paired map the ligand
-        is settled into density. Waits for the resulting model to appear."""
-        def work():
-            before = {e["id"] for e in _app._models}
-            _app.fit_ligand_at_marker(marker, code, fit=fit, trials=trials)
-            return before
-        before = await _qt(work)
-        deadline = time.time() + 120
-        while time.time() < deadline:
-            new = [e["id"] for e in _app._models if e["id"] not in before]
-            if new:
-                _wait_ready(timeout=30)
-                return {"model": new[0], "code": code}
-            await asyncio.sleep(0.5)
-        raise RuntimeError("ligand fit did not produce a model within 120s")
-
-    @mcp.tool()
-    async def load(path: str) -> dict:
-        """Load a structure (PDB/mmCIF) or map (MRC/CCP4) file into the scene."""
-        def work():
-            return _app.load_file(str(Path(path).expanduser()))
-        result = await _qt(work)
-        _wait_ready()
-        return {"loaded": result}
-
-    @mcp.tool()
-    async def load_view(path: str) -> dict:
-        """Restore a saved .pxview.json — objects, representations, camera."""
-        from pxviewer import viewstate
-        await _qt(lambda: viewstate.load_view(
-            _app, str(Path(path).expanduser())))
-        _wait_ready()
-        return {"loaded_view": path}
-
-    @mcp.tool()
-    async def save_view(path: str, bundle_data: bool = True) -> dict:
-        """Save the current scene as a .pxview.json (with bundled data by
-        default, so the view reproduces anywhere)."""
-        from pxviewer import viewstate
-        doc = await _qt(lambda: viewstate.save_view(
-            _app, str(Path(path).expanduser()), bundle_data=bundle_data))
-        return {"saved": path, "objects": len(doc.get("objects", []))}
-
-    @mcp.tool()
-    async def structure_info(model: str = None) -> dict:
-        """Structural inventory of a model: chains with their residue ranges,
-        polymer residue counts, water count, and non-polymer (ligand/ion)
-        residues. Call this to ground prose requests like 'the ligand' or
-        'the C-terminus of chain B' into concrete chains and resseqs."""
-        def work():
-            mid, session = _model_session(model)
-            model_obj = getattr(session, "model", None)
-            if model_obj is None:
-                return {"model": mid, "atoms": session._data.n_atoms,
-                        "detail": "no coordinate model — chains unavailable"}
-            from iotbx.pdb import common_residue_names_get_class as get_class
-            polymer = {"common_amino_acid", "modified_amino_acid",
-                       "common_rna_dna", "modified_rna_dna"}
-            chains = {}
-            waters = 0
-            hetero = []
-            for chain in model_obj.get_hierarchy().chains():
-                cid = chain.id.strip()
-                info = chains.setdefault(cid, {"residues": 0, "seqs": []})
-                for rg in chain.residue_groups():
-                    resname = rg.atom_groups()[0].resname.strip()
-                    seq = rg.resseq_as_int()
-                    kind = get_class(resname)
-                    if kind in polymer:
-                        info["residues"] += 1
-                        info["seqs"].append(seq)
-                    elif kind == "common_water":
-                        waters += 1
-                    else:
-                        hetero.append({"chain": cid, "resname": resname,
-                                       "resseq": seq})
-            chain_rows = [
-                {"chain": cid, "residues": info["residues"],
-                 "first": min(info["seqs"]) if info["seqs"] else None,
-                 "last": max(info["seqs"]) if info["seqs"] else None}
-                for cid, info in chains.items()]
-            return {"model": mid, "atoms": session._data.n_atoms,
-                    "chains": chain_rows, "waters": waters, "hetero": hetero}
-        return {"info": await _qt(work)}
-
-    @mcp.tool()
-    async def secondary_structure(model: str = None) -> dict:
-        """Helix and strand segments per chain, in file order, as
-        {chain, start, end} resseq ranges — the grounding for 'the first
-        alpha helix' (helices[0]; its N-terminal tip is 'start') or 'the
-        sheet before the active site'. Empty when the model carries no
-        secondary-structure annotation."""
-        def work():
-            mid, session = _model_session(model)
-            helices = []
-            strands = []
-            for chain, beg, end, kind in session._data.secondary_structure:
-                row = {"chain": chain, "start": beg, "end": end}
-                (helices if kind == "helix" else strands).append(row)
-            return {"model": mid, "helices": helices, "strands": strands}
-        return await _qt(work)
-
-    @mcp.tool()
-    async def select(expression: str, focus: bool = True) -> dict:
-        """Apply a cctbx/Phenix selection string (see the server instructions
-        for the grammar) and, by default, aim the camera at the match.
-        Returns the atom count plus the matched residues so you can verify
-        the selection caught what the prose intended."""
-        def work():
-            controls = _app._controls
-            controls._select_expr.setText(expression)
-            try:
-                n = _app.select_by_expression(expression, focus=focus)
-            except Exception as exc:
-                from pxviewer.desktop import _accent
-                controls._selection_label.setText(
-                    f"<span style='color:{_accent(_app._main, 'error')}'>"
-                    f"{exc}</span>")
-                raise
-            controls._select_expr_model = (
-                _app._active_model_id if expression.strip() else None)
-            controls._selection_label.setText(
-                "selection cleared" if not expression.strip()
-                else f"{n} atom(s) selected")
-            residues = []
-            seen = set()
-            mid = _app._active_model_id
-            entry = _app._model_entry(mid) if mid else None
-            session = entry.get("session") if entry else None
-            if session is not None and mid in _app._scene_selection:
-                arrays = session._data.arrays
-                for i in _app._scene_selection[mid]:
-                    key = (arrays.chain[i], int(arrays.resseq[i]),
-                           arrays.resname[i])
-                    if key not in seen:
-                        seen.add(key)
-                        residues.append(
-                            f"{key[0]}/{key[2]}{key[1]}" if key[0]
-                            else f"{key[2]}{key[1]}")
-            return n, residues
-        n, residues = await _qt(work)
-        return {"atoms": n, "residues": residues[:40],
-                "truncated": len(residues) > 40, "focus": focus}
-
-    # -- python-side introspection -----------------------------------------
-    # The viewport wire shows a subset of the app's state; these read the
-    # model entries and cctbx data directly.
-
-    @mcp.tool()
-    async def selection_state() -> dict:
-        """The current scene selection — per model, the selected atom count
-        and residue labels. This is the same state the GUI tables and
-        clip-sphere see: a selection is a selection."""
-        def work():
-            out = {}
-            for mid, indices in _app._scene_selection.items():
-                entry = _app._model_entry(mid)
-                session = entry.get("session") if entry else None
-                residues, seen = [], set()
-                if session is not None:
-                    arrays = session._data.arrays
-                    for i in indices:
-                        key = (arrays.chain[i], int(arrays.resseq[i]),
-                               arrays.resname[i])
-                        if key not in seen:
-                            seen.add(key)
-                            residues.append(
-                                f"{key[0]}/{key[2]}{key[1]}" if key[0]
-                                else f"{key[2]}{key[1]}")
-                out[mid] = {"atoms": len(indices),
-                            "residues": residues[:40],
-                            "truncated": len(residues) > 40,
-                            "name": entry.get("name") if entry else None}
-            return out
-        return {"selection": await _qt(work)}
-
-    @mcp.tool()
-    async def atoms(expression: str, model: str = None) -> dict:
-        """Per-atom records for a selection without applying it — for
-        questions the grammar can't ask alone ('which tyrosine is closest to
-        residue 40': select resname TYR here and compare xyz against the
-        reference's). Fields: i (positional index), name, chain, resseq,
-        resname, element, xyz, b, occ. Capped at 2000 atoms; 'centroid' is
-        always over the full match."""
-        def work():
-            mid, session = _model_session(model)
-            data = session._data
-            indices = data.selection_indices(expression)
-            a = data.arrays
-            cap = 2000
-            atoms = []
-            for i in indices[:cap]:
-                i = int(i)
-                atoms.append({
-                    "i": i, "name": a.name[i], "chain": a.chain[i],
-                    "resseq": int(a.resseq[i]), "resname": a.resname[i],
-                    "element": a.element[i],
-                    "xyz": [round(float(a.x[i]), 3), round(float(a.y[i]), 3),
-                            round(float(a.z[i]), 3)],
-                    "b": None if a.b is None else round(float(a.b[i]), 2),
-                    "occ": None if a.occ is None else round(float(a.occ[i]), 3)})
-            centroid = None
-            if len(indices):
-                import numpy as np
-                centroid = np.stack([a.x, a.y, a.z],
-                                    axis=1)[list(indices)].mean(axis=0)
-                centroid = [round(float(v), 3) for v in centroid]
-            return {"model": mid, "atoms": atoms, "matched": len(indices),
-                    "truncated": len(indices) > cap, "centroid": centroid}
-        return await _qt(work)
-
-    @mcp.tool()
-    async def model_state(model: str) -> dict:
-        """Full Python-side state of one model: appearance (clip, sphere,
-        rep, color), structure-type layers, hidden-atom count, conformer,
-        attribute-coloring domain, restraint-edit count, and whether the
-        geometry restraints have been processed (the objects-tree checkbox)."""
-        def work():
-            mid = _model_id(model)
-            entry = _app._model_entry(mid) if mid else None
-            if entry is None:
-                raise ValueError("no such model: %r" % model)
-            from pxviewer.desktop import _restraints_built
-            session = entry["session"]
-            attribute = entry.get("attribute")
-            return {
-                "id": mid, "name": entry.get("name"),
-                "atoms": session._data.n_atoms if session else None,
-                "rep": entry.get("rep"), "color": entry.get("color"),
-                "visible": entry.get("visible", True),
-                "types": _app.model_structure_types(mid),
-                "hidden_atoms": len(entry.get("hidden_atoms") or ()),
-                "conformer": entry.get("conformer"),
-                "conformers": entry.get("conformers") or [],
-                "value_domain": attribute.get("domain") if attribute else None,
-                "edits": len(_app.model_edits(mid)),
-                "restraints_built": _restraints_built(entry),
-                "selected": len(_app._scene_selection.get(mid, ())),
-                **_app.model_appearance(mid),
-            }
-        return {"model": await _qt(work)}
-
-    @mcp.tool()
-    async def volume_state(volume: str) -> dict:
-        """Full Python-side state of one volume: style/color/iso/opacity,
-        clip, sphere, mask radius, negative contour, source and pairing."""
-        def work():
-            vid = _volume_id(volume)
-            entry = _app._volume_entry(vid) if vid else None
-            if entry is None:
-                raise ValueError("no such volume: %r" % volume)
-            state = _app.volume_appearance(vid)
-            state.update({"id": vid, "name": entry.get("name"),
-                          "source": entry.get("source")})
-            return state
-        return {"volume": await _qt(work)}
-
-    @mcp.tool()
-    async def reflections() -> dict:
-        """The loaded reflection files — ids and names for make_maps."""
-        def work():
-            return [{"id": r["id"], "name": r.get("name"),
-                     "group": r.get("group")} for r in _app._reflections]
-        return {"reflections": await _qt(work)}
-
-    @mcp.tool()
-    async def primitives() -> dict:
-        """The measurement/label primitives drawn on the control session —
-        ids for remove_primitive."""
-        session = _session()
-        out = []
-        for pid, message in session._primitives.items():
-            out.append({"id": pid, "kind": message.get("kind")})
-        return {"primitives": out}
-
-    @mcp.tool()
-    async def atom_table(model: str = None) -> dict:
-        """The model's full atom table as columnar arrays — the raw data behind
-        the viewport: name, resname, chain, resseq, element, altloc, x, y, z,
-        b, occ. Row order is the positional (i_seq) index everything else uses.
-        For a selection subset use atoms(expression)."""
-        def work():
-            mid, session = _model_session(model)
-            a = session._data.arrays
-            out = {"model": mid}
-            for key in ("name", "resname", "chain", "resseq", "element",
-                        "altloc", "x", "y", "z", "b", "occ"):
-                col = getattr(a, key, None)
-                out[key] = (col.tolist() if hasattr(col, "tolist")
-                            else (list(col) if col is not None else None))
-            out["n"] = session._data.n_atoms
-            return out
-        return await _qt(work)
-
-    @mcp.tool()
-    async def model_text(model: str = None, format: str = "pdb") -> dict:
-        """The model's coordinates as text — 'pdb' or 'mmcif' — exactly what
-        write_object would put on disk."""
-        def work():
-            mid, session = _model_session(model)
-            model_obj = getattr(session, "model", None)
-            if model_obj is None:
-                raise ValueError("the object has no cctbx model")
-            hierarchy = model_obj.get_hierarchy()
-            if format == "pdb":
-                text = hierarchy.as_pdb_string()
-            elif format == "mmcif":
-                try:
-                    text = hierarchy.as_mmcif_string()
-                except AttributeError:
-                    raise ValueError("this cctbx has no as_mmcif_string — "
-                                     "use format='pdb'")
-            else:
-                raise ValueError("format must be 'pdb' or 'mmcif'")
-            return {"model": mid, "format": format, "text": text}
-        return await _qt(work)
-
-    @mcp.tool()
-    async def map_data(volume: str, voxels: bool = False,
-                       decimate: int = 1) -> dict:
-        """A map's grid — metadata and statistics always; the voxel values
-        too with voxels=True (flattened, row-major over grid, refused above
-        ~2M voxels: raise decimate to subsample on-lattice, or write_object
-        the map file instead)."""
-        def work():
-            vid = _volume_id(volume)
-            entry = _app._volume_entry(vid) if vid else None
-            if entry is None:
-                raise ValueError("no such volume: %r" % volume)
-            data = entry["data"]
-            if decimate != 1:
-                data = data.decimated(decimate)
-            out = {"volume": vid, "name": entry.get("name"),
-                   "grid": list(data.grid), "origin": list(data.origin),
-                   "pixel_sizes": list(data.pixel_sizes),
-                   "unit_cell": list(data.unit_cell),
-                   "unit_cell_grid": list(data.unit_cell_grid),
-                   "space_group": data.space_group,
-                   "decimated": decimate,
-                   "stats": data.stats()}
-            if voxels:
-                arr = data.array
-                if arr.size > 2_000_000:
-                    raise ValueError(
-                        f"{arr.size} voxels — use decimate>1 or write_object")
-                out["voxels"] = arr.reshape(-1).tolist()
-            return out
-        return await _qt(work)
-
-    @mcp.tool()
-    async def reflection_data(rid: str) -> dict:
-        """A reflection file's arrays as columns — each array's label, hkl
-        indices and values (real/imag split for map coefficients; sigmas
-        included when the file carries them)."""
-        def work():
-            import numpy as np
-            entry = _app._reflection_entry(
-                next((r["id"] for r in _app._reflections
-                      if rid in (r["id"], r.get("name"))), rid))
-            if entry is None:
-                raise ValueError("no such reflections: %r" % rid)
-            data = entry["data"]
-            out = {"id": entry["id"], "name": entry.get("name"),
-                   "path": data.path, "labels": data.labels,
-                   "map_coefficients": data.map_coefficient_labels,
-                   "arrays": []}
-            for arr in data.arrays:
-                try:
-                    indices = arr.indices().as_vec3_double().as_numpy_array()
-                    values = arr.data().as_numpy_array()
-                except Exception:
-                    continue
-                rec = {"label": (arr.info().label_string()
-                                 if arr.info() else "?"),
-                       "n": len(values),
-                       "indices": [[int(h), int(k), int(l)]
-                                   for h, k, l in indices]}
-                if values.dtype == np.complex128:
-                    rec["real"] = values.real.tolist()
-                    rec["imag"] = values.imag.tolist()
-                else:
-                    rec["values"] = values.tolist()
-                    try:
-                        sig = arr.sigmas()
-                        if sig is not None:
-                            rec["sigmas"] = sig.as_numpy_array().tolist()
-                    except Exception:
-                        pass
-                out["arrays"].append(rec)
-            return out
-        return await _qt(work)
-
-    @mcp.tool()
-    async def clear_selection() -> dict:
-        """Clear the standing selection."""
-        await _qt(lambda: _app.clear_selection())
-        return {"selected": {}}
-
-    @mcp.tool()
-    async def set_representation(rep: str, model: str = None,
-                                 color: str = None) -> dict:
-        """Set a model's representation ('cartoon', 'ball-and-stick',
-        'spacefill', …) and optionally its color theme."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_model_representation(mid, rep)
-            if color is not None:
-                _app.set_model_color(mid, color)
-            return mid
-        return {"model": await _qt(work), "rep": rep, "color": color}
-
-    @mcp.tool()
-    async def set_volume(name: str = None, iso: float = None,
-                         opacity: float = None, color: str = None,
-                         visible: bool = None,
-                         style: str = None, mask_radius: float = None,
-                         position: list = None,
-                         negative_iso: float = None,
-                         negative_color: str = None,
-                         negative_style: str = None,
-                         negative_opacity: float = None,
-                         negative_visible: bool = None) -> dict:
-        """Adjust a map: iso level (sigma), opacity, color (hex), visibility.
-        style is 'isosurface'|'mesh'|'dots'; mask_radius (A) restricts display
-        to within that of the paired model's atoms; position translates the map
-        by [dx, dy, dz] A. negative_iso enables a second (negative) contour with
-        its own color/style/opacity/visible."""
-        def work():
-            vid = _volume_id(name)
-            if vid is None:
-                raise ValueError("no such volume: %r" % name)
-            if iso is not None:
-                _app.set_volume_iso(vid, iso)
-            if opacity is not None:
-                _app.set_volume_opacity(vid, opacity)
-            if color is not None:
-                _app.set_volume_color(vid, color)
-            if visible is not None:
-                _app.set_volume_visible(vid, visible)
-            if style is not None:
-                _app.set_volume_style(vid, style)
-            if mask_radius is not None:
-                _app.set_volume_mask(vid, mask_radius)
-            if position is not None:
-                _app.set_volume_position(vid, list(map(float, position)))
-            if negative_iso is not None:
-                _app.set_volume_negative_iso(vid, negative_iso)
-            if negative_color is not None:
-                _app.set_volume_negative_color(vid, negative_color)
-            if negative_style is not None:
-                _app.set_volume_negative_style(vid, negative_style)
-            if negative_opacity is not None:
-                _app.set_volume_negative_opacity(vid, negative_opacity)
-            if negative_visible is not None:
-                _app.set_volume_negative_visible(vid, negative_visible)
-            return vid
-        return {"volume": await _qt(work)}
-
-    @mcp.tool()
-    async def set_clip_slab(front: float, back: float, model: str = None,
-                            volume: str = None) -> dict:
-        """Clip an object to a front/rear slab — offsets in angstroms along the
-        view direction (front near the camera). Give model or volume."""
-        def work():
-            if volume is not None:
-                vid = _volume_id(volume)
-                if vid is None:
-                    raise ValueError("no such volume: %r" % volume)
-                _app.set_volume_clip(vid, front, back)
-            else:
-                mid = _model_id(model)
-                if mid is None:
-                    raise ValueError("no such model: %r" % model)
-                _app.set_model_clip(mid, front, back)
-        await _qt(work)
-        return {"clip": [front, back]}
-
-    @mcp.tool()
-    async def set_clip_sphere(mode: str, radius: float = None,
-                              model: str = None, volume: str = None) -> dict:
-        """Clip-sphere policy for an object: 'selection' (sphere re-fits to each
-        selection — armed even while dormant; models only), 'view' (sphere
-        follows the camera target, Coot-style), 'point' (frozen at the current
-        center), 'off'. radius is in angstroms; a selection-mode radius is
-        fitted, so pass one only for view/point. Give model or volume."""
-        def work():
-            if volume is not None:
-                vid = _volume_id(volume)
-                if vid is None:
-                    raise ValueError("no such volume: %r" % volume)
-                _app.set_volume_sphere(vid, mode, radius)
-                return _app.volume_sphere_state(vid)
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_model_sphere(mid, mode, radius)
-            return _app.model_sphere_state(mid)
-        return {"sphere": await _qt(work)}
-
-    # -- objects ---------------------------------------------------------
-
-    @mcp.tool()
-    async def fetch(pdb_id: str = None, emdb_number: int = None,
-                    entities: list = None, work_dir: str = None) -> dict:
-        """Fetch an entry from the PDB/EMDB archives and load it. entities is a
-        subset of ['model', 'reflections', 'map'] (default: model + map for an
-        emdb_number, model for a pdb_id). Waits for the objects to arrive."""
-        def work():
-            ents = entities or (["model", "map"] if emdb_number is not None
-                                and pdb_id is None else ["model"])
-            before = ({e["id"] for e in _app._models},
-                      {e["id"] for e in _app._volumes},
-                      {r["id"] for r in _app._reflections})
-            _app.fetch_and_load(pdb_id=pdb_id, emdb_number=emdb_number,
-                                entities=ents,
-                                work_dir=str(Path(work_dir).expanduser())
-                                if work_dir else None)
-            return before, ents
-        before, ents = await _qt(work)
-        started = time.time()
-        deadline = started + 120
-        while time.time() < deadline:
-            def poll():
-                jobs = _app.job_state()
-                fresh = [e for e in jobs["errors"]
-                         if e["when"] >= started
-                         and e["name"] == "pxviewer-fetch"]
-                return (jobs["busy"], fresh,
-                        {e["id"] for e in _app._models} - before[0],
-                        {e["id"] for e in _app._volumes} - before[1],
-                        {r["id"] for r in _app._reflections} - before[2])
-            busy, errors, new_m, new_v, new_r = await _qt(poll)
-            if errors:
-                raise RuntimeError(errors[-1]["error"])
-            if (new_m or new_v or new_r) and not any(
-                    "Fetching" in b for b in busy):
-                break
-            await asyncio.sleep(0.5)
-        else:
-            raise TimeoutError(
-                "fetch produced no objects after 120s and no error was "
-                "recorded — check status() job_errors")
-        _wait_ready(timeout=60)
-        return {"loaded": {"models": sorted(new_m), "volumes": sorted(new_v),
-                           "reflections": sorted(new_r)},
-                "requested": ents, "pdb_id": pdb_id,
-                "emdb_number": emdb_number}
-
-    @mcp.tool()
-    async def remove(kind: str, ident: str) -> dict:
-        """Remove an object: kind is 'model', 'volume', 'reflections' or
-        'marker'; ident is its id or name."""
-        def work():
-            if kind == "model":
-                mid = _model_id(ident)
-                if mid is None:
-                    raise ValueError("no such model: %r" % ident)
-                _app.remove_model(mid)
-            elif kind == "volume":
-                vid = _volume_id(ident)
-                if vid is None:
-                    raise ValueError("no such volume: %r" % ident)
-                _app.remove_volume(vid)
-            elif kind == "reflections":
-                rids = {r["id"] for r in _app._reflections} | {
-                    r.get("name") for r in _app._reflections}
-                if ident not in rids:
-                    raise ValueError("no such reflections: %r" % ident)
-                rid = next(r["id"] for r in _app._reflections
-                           if ident in (r["id"], r.get("name")))
-                _app.remove_reflections(rid)
-            elif kind == "marker":
-                _app.remove_marker(ident)
-            else:
-                raise ValueError("kind must be model|volume|reflections|marker")
-            return ident
-        return {"removed": await _qt(work), "kind": kind}
-
-    @mcp.tool()
-    async def set_active_model(model: str) -> dict:
-        """Make a model the active one — the object the selection box, atoms
-        table and geometry act on."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_active_model(mid)
-            return mid
-        return {"active_model": await _qt(work)}
-
-    @mcp.tool()
-    async def set_object_visible(kind: str, ident: str, visible: bool) -> dict:
-        """Show or hide an object — the eye icon. kind is 'model' or 'volume'.
-        Reports the resulting visibility: the app may refuse to hide on
-        software rendering, in which case `visible` comes back unchanged."""
-        def work():
-            if kind == "model":
-                mid = _model_id(ident)
-                if mid is None:
-                    raise ValueError("no such model: %r" % ident)
-                _app.set_model_visible(mid, visible)
-                entry = _app._model_entry(mid)
-            elif kind == "volume":
-                vid = _volume_id(ident)
-                if vid is None:
-                    raise ValueError("no such volume: %r" % ident)
-                _app.set_volume_visible(vid, visible)
-                entry = _app._volume_entry(vid)
-            else:
-                raise ValueError("kind must be model or volume")
-            return entry.get("visible", True)
-        return {"visible": await _qt(work), "kind": kind, "id": ident}
-
-    @mcp.tool()
-    async def write_object(kind: str, ident: str, path: str) -> dict:
-        """Write an object's data — the Save menu's 'Write object…': a model's
-        coordinates (PDB/mmCIF), a volume's map, a reflection file."""
-        def work():
-            _app.write_object(kind, ident, str(Path(path).expanduser()))
-        await _qt(work)
-        return {"written": path, "kind": kind, "id": ident}
-
-    @mcp.tool()
-    async def make_maps(reflections: str, model: str) -> dict:
-        """Compute density maps from a reflection file and a model (model
-        phases), paired so masking and map-fitting work. Waits for the maps."""
-        def work():
-            mid = _model_id(model)
-            rid = next((r["id"] for r in _app._reflections
-                        if reflections in (r["id"], r.get("name"))), None)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            if rid is None:
-                raise ValueError("no such reflections: %r" % reflections)
-            before = len(_app._volumes)
-            _app.make_maps(rid, mid)
-            return before
-        before = await _qt(work)
-        deadline = time.time() + 180
-        while time.time() < deadline:
-            if await _qt(lambda: len(_app._volumes)) != before:
-                break
-            await asyncio.sleep(0.5)
-        _wait_ready(timeout=60)
-        return {"ok": True}
-
-    @mcp.tool()
-    async def pair_model_with_map(model: str, volume: str) -> dict:
-        """Pair a model with a map into one cctbx manager — required before
-        minimizing into density or masking by model."""
-        def work():
-            mid = _model_id(model)
-            vid = _volume_id(volume)
-            if mid is None or vid is None:
-                raise ValueError("bad model or volume id")
-            return _app.pair_model_with_map(mid, vid)
-        return {"paired": await _qt(work)}
-
-    @mcp.tool()
-    async def generate_ligand_restraints(model: str = None) -> dict:
-        """Build monomer dictionaries (rdkit) for the model's unknown ligands —
-        the answer when restraints fail on an unrecognized residue. Returns
-        {code: smiles} so the perceived chemistry can be checked."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            return _app.generate_ligand_restraints(mid)
-        return {"generated": await _qt(work)}
-
-    # -- appearance --------------------------------------------------------
-
-    @mcp.tool()
-    async def set_type_hidden(model: str, label: str, hidden: bool) -> dict:
-        """Show/hide one structure-type layer of a model (e.g. 'cartoon',
-        'ball-and-stick') — the per-type eye in the model's Show menu."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_model_type_hidden(mid, label, hidden)
-        await _qt(work)
-        return {"model": model, "type": label, "hidden": hidden}
-
-    @mcp.tool()
-    async def set_conformer(model: str, conformer: str = None) -> dict:
-        """Switch a multi-conformer (ensemble/NMR) model's shown conformer;
-        None returns to 'all'."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_model_conformer(mid, conformer)
-        await _qt(work)
-        return {"model": model, "conformer": conformer}
-
-    @mcp.tool()
-    async def color_by(model: str = None, kind: str = None,
-                       domain: list = None) -> dict:
-        """Color a model by a quantity: 'bfactor', 'occupancy' (per-atom value
-        ramps with a settable domain), 'qscore', 'mapcc' (needs a paired map),
-        'hotspots' (validation severity cloud coloring). kind=None resets."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            if kind in ("bfactor", "occupancy", None):
-                _app.color_model_by_property(mid, kind)
-                if domain is not None:
-                    _app.set_model_value_domain(mid, domain[0], domain[1])
-            elif kind == "qscore":
-                _app.color_model_by_qscore(mid)
-            elif kind == "mapcc":
-                _app.color_model_by_mapcc(mid)
-            elif kind == "hotspots":
-                _app.color_model_by_hotspots(mid)
-            else:
-                raise ValueError("kind must be bfactor|occupancy|qscore|mapcc|"
-                                 "hotspots (or omit for none)")
-            return mid
-        return {"model": await _qt(work), "colored_by": kind}
-
-    @mcp.tool()
-    async def set_selected_hidden(hide: bool) -> dict:
-        """Hide (or un-hide) the currently selected atoms — partial
-        representation, same as the Selection pane buttons."""
-        await _qt(lambda: _app.hide_selected() if hide else _app.show_selected())
-        return {"hidden": hide}
-
-    @mcp.tool()
-    async def set_computed_interactions(visible: bool) -> dict:
-        """Show/hide Mol*'s geometry-inferred non-covalent interaction overlay."""
-        _session().set_computed_interactions(visible)
-        return {"computed_interactions": visible}
-
-    @mcp.tool()
-    async def set_model_interactions(model: str, visible: bool) -> dict:
-        """Toggle a single model's computed-interaction overlay (its row's
-        'interactions' switch)."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.set_model_interactions(mid, visible)
-        await _qt(work)
-        return {"model": model, "interactions": visible}
-
-    @mcp.tool()
-    async def set_interactions(pairs: list) -> dict:
-        """Draw explicit typed atom pairs as interaction notation —
-        [{'a': i, 'b': j, 'kind': 'hydrogen-bond'}, …]. Kinds: hydrogen-bond,
-        weak-hydrogen-bond, ionic, hydrophobic, pi-stacking, cation-pi,
-        halogen-bond, metal-coordination, water-bridge, covalent; an empty
-        list clears."""
-        drawn = _session().set_interactions(pairs)
-        return {"interactions": len(drawn)}
-
-    @mcp.tool()
-    async def set_clashes(pairs: list) -> dict:
-        """Draw red clash markers between atom-index pairs [[i, j], …];
-        an empty list clears."""
-        drawn = _session().set_clashes(pairs)
-        return {"clashes": len(drawn)}
-
-    @mcp.tool()
-    async def set_focus_surroundings(enabled: bool) -> dict:
-        """Show/hide Mol*'s click-focus ball-and-stick neighborhood layer."""
-        _session().set_focus_surroundings(enabled)
-        return {"focus_surroundings": enabled}
-
-    @mcp.tool()
-    async def set_localres(volume: str, on: bool = None,
-                           downsample: int = None, domain: list = None) -> dict:
-        """Color a full map by its pinned local-resolution map: 'on' toggles
-        the coloring, 'downsample' coarsens the value grid, 'domain' [lo, hi]
-        sets the color scale's range in A."""
-        def work():
-            vid = _volume_id(volume)
-            if vid is None:
-                raise ValueError("no such volume: %r" % volume)
-            if on is not None:
-                _app.set_color_by_resolution(vid, on)
-            if downsample is not None:
-                _app.set_localres_downsample(vid, downsample)
-            if domain is not None:
-                _app.set_localres_domain(vid, domain[0], domain[1])
-        await _qt(work)
-        return {"volume": volume, "localres": True}
-
-    # -- camera / navigation ----------------------------------------------
-
-    @mcp.tool()
-    async def zoom_view(direction: int = -1) -> dict:
-        """Step the camera in (direction < 0) or out (> 0), target and
-        orientation kept."""
-        await _qt(lambda: _app.zoom_view(direction))
-        return {"zoomed": direction}
-
-    @mcp.tool()
-    async def focus_residue(chain: str, resid: str) -> dict:
-        """Select + focus one residue by chain id and resid (MolProbity's
-        resseq+icode string, e.g. '42' or '42A') on the active model — the same
-        pipeline as a table row."""
-        def work():
-            return _app.focus_residue(chain, resid)
-        expr = await _qt(work)
-        return {"expression": expr}
-
-    @mcp.tool()
-    async def step(step: int = 1) -> dict:
-        """Move the focused residue one position along its chain — the
-        space-bar walk; each step is a selection."""
-        await _qt(lambda: _app.advance_residue(step))
-        return {"stepped": step}
-
-    @mcp.tool()
-    async def mouse_selection() -> dict:
-        """The atoms the user has picked in the viewport (positional indices)."""
-        sel = _session().mouse_selection
-        return {"indices": list(sel.indices)}
-
-    @mcp.tool()
-    async def wait_for_selection(timeout: float = 60.0) -> dict:
-        """Block until the user next changes the viewport selection (pick
-        mode must be on); returns the picked atom indices."""
-        session = _session()
-        session.enable_mouse_selection()
-        sel = session.wait_for_selection(timeout=timeout)
-        return {"indices": list(sel.indices) if sel is not None else None}
-
-    # -- markup ------------------------------------------------------------
-
-    @mcp.tool()
-    async def measure(kind: str, atoms: list = None) -> dict:
-        """Draw a measurement: kind is 'distance', 'angle' or 'dihedral'.
-        With atoms=None it measures the current selection (which must hold
-        exactly 2/3/4 atoms); with an explicit atom-index list it adds the
-        notation directly."""
-        if atoms is not None:
-            session = _session()
-            if kind == "distance":
-                p = session.add_distance(*atoms[:2])
-            elif kind == "angle":
-                p = session.add_angle(*atoms[:3])
-            elif kind == "dihedral":
-                p = session.add_dihedral(*atoms[:4])
-            else:
-                raise ValueError("kind must be distance|angle|dihedral")
-            return {"primitive": p.id}
-        result = await _qt(lambda: _app.measure_selection(kind))
-        return {"result": result}
-
-    @mcp.tool()
-    async def add_label(atom: int, text: str) -> dict:
-        """Annotate an atom with a text label that tracks it."""
-        p = _session().add_label(atom, text)
-        return {"primitive": p.id}
-
-    @mcp.tool()
-    async def remove_primitive(primitive_id: str) -> dict:
-        """Remove one measurement/label primitive by id."""
-        _session().remove_primitive(primitive_id)
-        return {"removed": primitive_id}
-
-    @mcp.tool()
-    async def clear_primitives() -> dict:
-        """Remove every measurement/label primitive."""
-        _session().clear_primitives()
-        return {"cleared": True}
-
-    # -- analysis / editing --------------------------------------------------
-
-    @mcp.tool()
-    async def run_validation(clashes: bool = False,
-                             hotspots: bool = False,
-                             keys: list = None) -> dict:
-        """Run the MolProbity validations on the active model as a background
-        job — results land in the Validation tab as each check finishes.
-        clashes=True adds the reduce2+probe2 all-atom contact analysis (the
-        heavy one); hotspots=True adds the severity aggregate."""
-        await _qt(lambda: _app.run_validation(keys=keys, clashes=clashes,
-                                              hotspots=hotspots))
-        return {"started": True,
-                "note": "running in the background; results land in the "
-                        "Validation tab — read them back with "
-                        "validation_results()"}
-
-    @mcp.tool()
-    async def validation_results(model: str = None, markup: bool = False) -> dict:
-        """Read back what run_validation() computed for a model, from the
-        cached results — the same tables the Validation tab shows. Per
-        validator: `key`, `title`, `summary` (one line: counts/percentages),
-        `columns`+`rows` (the outlier table), `notes` (what the numbers and
-        thresholds mean). `stale` flags results older than the current
-        coordinates. `markup=True` also returns each check's 3-D primitives."""
-        def work():
-            mid, session = _model_session(model)
-            entry = _app._model_entry(mid)
-            if entry is None:
-                return {"model": mid, "results": {}, "stale": False}
-            cached = entry.get("validation") or {}
-            fingerprint = entry.get("validated_fingerprint")
-            model_obj = getattr(session, "model", None)
-            stale = bool(fingerprint is not None and model_obj is not None
-                         and _app._sites_fingerprint(model_obj) != fingerprint)
-            out = {}
-            for key, r in cached.items():
-                row = {"title": r.title, "summary": r.summary,
-                       "columns": r.columns, "rows": r.rows,
-                       "notes": r.notes}
-                if markup:
-                    row["markup"] = r.markup
-                out[key] = row
-            return {"model": mid, "results": out, "stale": stale}
-        return await _qt(work)
-
-    @mcp.tool()
-    async def set_validation_markers(key: str, visible: bool = True) -> dict:
-        """Toggle one validator's 3-D markup in the viewport — the spikes/
-        dots drawn on outlier residues (e.g. 'ramachandran', 'rotamers',
-        'cbetadev'; validator keys are listed by validation_results()).
-        Requires results cached by a prior run_validation() — markup is
-        redrawn from cache, not recomputed."""
-        def work():
-            _app.set_validation_markers(key, bool(visible))
-            entry = _app._model_entry(_app._active_model_id)
-            cached = (entry.get("validation") or {}) if entry is not None else {}
-            return key in cached
-        available = await _qt(work)
-        return {"key": key, "visible": bool(visible), "results_cached": available}
-
-    @mcp.tool()
-    async def minimize(use_map: bool = False, wait: float = 120.0) -> dict:
-        """Minimize the active model onto its geometry restraints (or into a
-        paired map with use_map=True). The run is continuous — it holds at the
-        minimum — so this waits for the hold then stops it, leaving the model
-        minimized."""
-        def work():
-            _app.minimize_model(use_map=use_map)
-        await _qt(work)
-        got = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: _app._minimize_idle.wait(wait))
-        await _qt(lambda: _app.stop_minimization())
-        return {"minimized": True, "reached_minimum": bool(got)}
-
-    @mcp.tool()
-    async def set_attribute(name: str, values: list) -> dict:
-        """Register a named per-atom scalar attribute on the control session —
-        length must equal the atom count; color with it via color paths."""
-        _session().set_attribute(name, values)
-        return {"attribute": name, "n": len(values)}
-
-    @mcp.tool()
-    async def list_edits(model: str = None) -> dict:
-        """The custom restraint edits (bonds/angles/…) carried on a model."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            return _app.model_edits(mid)
-        return {"edits": await _qt(work)}
-
-    @mcp.tool()
-    async def add_edit(kind: str, sigma: float = None) -> dict:
-        """Author a bond/angle/dihedral restraint from the active model's
-        selected atoms (needs exactly 2/3/4 selected), taking the current
-        geometry as the target."""
-        def work():
-            return _app.add_edit_from_selection(
-                _app._active_model_id, kind, sigma=sigma)
-        return {"edit": await _qt(work)}
-
-    @mcp.tool()
-    async def remove_edit(model: str, index: int) -> dict:
-        """Drop the edit at index (see list_edits) and rebuild restraints."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.remove_edit(mid, index)
-        await _qt(work)
-        return {"removed": index}
-
-    @mcp.tool()
-    async def clear_edits(model: str) -> dict:
-        """Drop every custom edit on a model and rebuild its restraints."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.clear_edits(mid)
-        await _qt(work)
-        return {"cleared": True}
-
-    @mcp.tool()
-    async def load_edits(model: str, path: str) -> dict:
-        """Load custom restraint edits from a PHIL file onto a model."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            return _app.load_edits(mid, str(Path(path).expanduser()))
-        return {"loaded": await _qt(work)}
-
-    @mcp.tool()
-    async def save_edits(model: str, path: str) -> dict:
-        """Save a model's custom restraint edits to a PHIL file."""
-        def work():
-            mid = _model_id(model)
-            if mid is None:
-                raise ValueError("no such model: %r" % model)
-            _app.save_edits(mid, str(Path(path).expanduser()))
-        await _qt(work)
-        return {"saved": path}
 
     @mcp.tool()
     async def save_screenshot(path: str) -> dict:
@@ -1413,24 +428,6 @@ def _make_server():
         out = Path(path).expanduser()
         out.write_bytes(png)
         return {"saved": str(out), "bytes": out.stat().st_size}
-
-    @mcp.tool()
-    async def set_background(color: str) -> dict:
-        """Set the viewport background (hex color, e.g. '#101018')."""
-        _session().set_background(color)
-        return {"background": color}
-
-    @mcp.tool()
-    async def reset_view() -> dict:
-        """Reframe the camera on the whole scene."""
-        _session().reset_view()
-        return {"ok": True}
-
-    @mcp.tool()
-    async def set_camera(state: dict) -> dict:
-        """Set the camera from a state dict as returned by camera_state."""
-        _session().set_camera(state)
-        return {"ok": True}
 
     @mcp.tool()
     async def screenshot() -> Image:

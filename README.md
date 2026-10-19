@@ -330,9 +330,12 @@ session.clear_selection()              # remove the highlight
 ```
 
 `highlight`/`focus`/`select` accept a `Selection` or anything coercible — an
-index, a list of indices, or a boolean mask. Resolution is entirely on the Python
-side, so these are **synchronous and viewer-independent** (no round-trip); the
-wire carries only indices, run-length-encoded for large contiguous selections.
+index, a list of indices, or a boolean mask. Selection strings are *not* coerced
+here: prose resolves only via `select_by(selection=...)` /
+`app.select_by_expression(...)`, cctbx's own grammar, so the wire and the viewing
+API carry only index sets — never a second query language. Resolution is
+synchronous and viewer-independent (no round-trip); highlights are
+run-length-encoded on the wire and replayed to viewers that connect later.
 Highlights re-map onto each streamed frame in O(selected), and are replayed to
 viewers that connect later.
 
@@ -344,8 +347,8 @@ positional wire index:
 ```python
 sel = session.select_by(selection="chain A and resseq 1:20 and name CA")
 sel = session.select_by(selection="element N or (chain B within 5 of resname LIG)")
-session.highlight("chain A")            # a string is coerced like any spec
-session.add_representation("cartoon", on="chain A and helix")
+session.highlight(session.select_by(selection="chain A"))
+session.add_representation("cartoon", on=session.select_by(selection="chain A and helix"))
 ```
 
 Selection strings need a model, so they're available on sessions from
@@ -670,7 +673,7 @@ help, and history:
 ```python
 api                                # every command, grouped by topic, one-liners
 api.find("color")                  # filter to matching commands
-session.select("chain A")          # `session` is the active model's LiveSession
+app.select_by_expression("chain A") # resolve + select; `session` is the LiveSession
 session.color_by("bfactor")
 app.load_file("/path/to/other.cif") # `app` is the DesktopApp
 ```
@@ -682,6 +685,17 @@ rest). It needs the optional console extra:
 ```bash
 pip install 'pxviewer[console]'     # qtconsole + ipykernel
 ```
+
+The kernel is a real Jupyter kernel — the Console tab is just its built-in
+frontend. It writes a standard connection file (printed to stdout when the
+kernel starts), so any Jupyter client can attach to the same namespace:
+
+```bash
+jupyter console --existing /path/to/kernel-NNNN.json   # or a notebook
+```
+
+Code run through an attached frontend executes in the pxviewer process against
+the same live objects — names assigned in one client are visible in the others.
 
 ## Live wire protocol (`pxviewer-live/1`)
 

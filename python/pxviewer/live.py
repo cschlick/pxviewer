@@ -530,10 +530,8 @@ class LiveSession:
         self._id_to_index = {int(v): i for i, v in enumerate(self._data.arrays.id)}
         # Active highlight (positional indices), replayed to clients that connect later.
         self._last_highlight_indices: List[int] = []
-        # Active highlight (PyMOL expression), replayed to clients that connect later.
-        self._last_highlight_expression: Optional[str] = None
-        # PyMOL selections are evaluated in the browser and echoed back; each
-        # request waits on an Event keyed by a monotonic id.
+        # Round-trip requests to the page (screenshot, camera, ping, background);
+        # each waits on an Event keyed by a monotonic id.
         self._pending: dict = {}
         self._pending_lock = threading.Lock()
         # Control messages armed while there is no client to send them to yet.
@@ -878,7 +876,8 @@ class LiveSession:
         """Draw a probe2 dot overlay: ``dots`` is ``[(loc, spike, rgb), …]``.
 
         ``channel`` selects an independently toggleable overlay (:data:`PROBE_CONTACTS`
-        for the full surface, :data:`PROBE_CLASHES` for a clash-only overlay). Sent as
+        for the non-clash contact surface, :data:`PROBE_CLASHES` for the bad-overlap
+        dots — the two are disjoint). Sent as
         one binary payload (positions + spike tips + colors) and drawn as a Mol*
         point cloud plus clash spikes. Thread-safe; replayed to late viewers. Returns
         the number of dots. Pass an empty list (or :meth:`clear_probe_dots`) to remove
@@ -1529,23 +1528,20 @@ class LiveSession:
 
     def select(
         self,
-        atoms_or_expression: Any,
+        atoms: Any,
         *,
         highlight: bool = True,
         focus: bool = True,
-        timeout: float = 5.0,
-    ) -> Optional[Selection]:
+    ) -> Selection:
         """Show a set of atoms in the viewer: highlight and/or focus.
 
-        If ``atoms_or_expression`` is a string, it is treated as a PyMOL selection
-        expression, evaluated by the browser, and the matched atoms are returned.
-        Otherwise it is coerced to a :class:`Selection` — an atom index, an
-        iterable of indices, or a boolean mask of length N. In the latter case
-        resolution is entirely Python-side and the selection is returned.
+        ``atoms`` is a :class:`Selection` or anything coercible to one — an atom
+        index, an iterable of indices, or a boolean mask of length N. Selection
+        prose is resolved first via :meth:`select_by` (``selection=...``) or
+        ``app.select_by_expression(...)`` — cctbx's grammar, in this process;
+        only integer index sets ever reach the viewer.
         """
-        if isinstance(atoms_or_expression, str):
-            return self._selection_request(atoms_or_expression, highlight=highlight, focus=focus, timeout=timeout)
-        sel = self._as_selection(atoms_or_expression)
+        sel = self._as_selection(atoms)
         if highlight:
             self.highlight(sel)
         if focus:
@@ -1688,8 +1684,8 @@ class LiveSession:
         uniform color. ``carbon_color`` tints only the carbons (an SVG name / hex) while
         the other elements keep their standard colors — the "element theme, but carbon is
         this color" look — and implies the ``element-symbol`` theme. ``on`` restricts it to
-        a subset (a :class:`Selection`, an MVS ``ComponentExpression``, or anything
-        coercible); omit for the whole structure. ``opacity`` sets transparency and
+        a subset (a :class:`Selection` or anything coercible — indices or a mask;
+        resolve prose via :meth:`select_by` first); omit for the whole structure. ``opacity`` sets transparency and
         ``params`` passes type-specific options. Returns the id; representations track
         streamed coordinates.
         """
@@ -1937,46 +1933,12 @@ class LiveSession:
     def clear_selection(self) -> None:
         """Clear any highlighted selection in the viewer. Thread-safe."""
         self._last_highlight_indices = []
-        self._last_highlight_expression = None
         self._send_control({"type": "highlight", "atoms": _encode_index_set([])})
-        self._send_control(
-            {"type": "select", "reqId": -1, "expression": "", "highlight": True, "focus": False}
-        )
 
     def _next_req(self) -> int:
         with self._pending_lock:
             self._req_counter += 1
             return self._req_counter
-
-    def _selection_request(
-        self, expression: str, *, highlight: bool, focus: bool, timeout: float
-    ) -> Optional[Selection]:
-        """Send a PyMOL expression to the viewer and wait for the matched indices."""
-        req_id = self._next_req()
-        slot: dict = {"event": threading.Event(), "indices": None, "error": None}
-        with self._pending_lock:
-            self._pending[req_id] = slot
-        if highlight:
-            self._last_highlight_expression = expression
-        self._send_control(
-            {
-                "type": "select",
-                "reqId": req_id,
-                "expression": expression,
-                "highlight": highlight,
-                "focus": focus,
-            }
-        )
-        answered = slot["event"].wait(timeout)
-        with self._pending_lock:
-            self._pending.pop(req_id, None)
-        if not answered:
-            return None
-        if slot["error"]:
-            raise ValueError(f"invalid selection {expression!r}: {slot['error']}")
-        raw = slot["indices"] or []
-        indices = [i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms]
-        return self._make_selection(indices)
 
     # -- click interaction (scene -> python) -----------------------------
 
@@ -2098,11 +2060,20 @@ class LiveSession:
         self._send_control({"type": "representations", "reprs": list(self._representations.values())})
 
     def _as_selection(self, spec: Any) -> Selection:
-        """Coerce a Selection / index / indices / mask / cctbx string to a Selection."""
+        """Coerce a Selection / index / indices / mask to a Selection.
+
+        Selection strings are deliberately not accepted here: prose is resolved
+        only at ``select_by(selection=...)`` / ``app.select_by_expression(...)``,
+        so the grammar on the viewing API is unambiguously cctbx's and only
+        integer index sets ever reach the wire.
+        """
         if isinstance(spec, Selection):
             return spec
         if isinstance(spec, str):
-            return self.select_by(selection=spec)
+            raise TypeError(
+                "selection prose goes through select_by(selection=...) — "
+                "specs here are a Selection, indices, or a mask"
+            )
         if isinstance(spec, bool):  # bool is an int subclass; reject to avoid surprises
             raise TypeError("bool is not a valid atom specifier")
         if isinstance(spec, (int, np.integer)):
@@ -2276,20 +2247,6 @@ class LiveSession:
                 await self._locked_send(
                     websocket,
                     json.dumps({"type": "highlight", "atoms": _encode_index_set(self._last_highlight_indices)}),
-                )
-            if self._last_highlight_expression is not None:
-                # Bring a late-joining viewer up to the current PyMOL highlight.
-                await self._locked_send(
-                    websocket,
-                    json.dumps(
-                        {
-                            "type": "select",
-                            "reqId": -1,
-                            "expression": self._last_highlight_expression,
-                            "highlight": True,
-                            "focus": False,
-                        }
-                    ),
                 )
             for message in list(self._primitives.values()):
                 # Bring a late-joining viewer up to the active drawing primitives.
@@ -2510,15 +2467,6 @@ class LiveSession:
                 slot = self._pending.get(req_id)
             if slot is not None:
                 slot["uri"] = event.get("dataUri")
-                slot["error"] = event.get("error")
-                slot["event"].set()
-        elif etype == "selection-result":
-            req_id = event.get("reqId")
-            with self._pending_lock:
-                slot = self._pending.get(req_id)
-            if slot is not None:
-                # First responder wins (harmless with multiple viewers connected).
-                slot["indices"] = event.get("indices")
                 slot["error"] = event.get("error")
                 slot["event"].set()
         elif etype == "background-result":

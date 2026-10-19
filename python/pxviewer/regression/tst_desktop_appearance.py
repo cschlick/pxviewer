@@ -1022,7 +1022,7 @@ def exercise_the_object_list_fits_its_contents():
 def exercise_scene_actions_are_icon_buttons():
     with desktop() as app:
         controls = app._controls
-        tips = ("Open a structure", "Guided tutorials", "Save the focused",
+        tips = ("Open a structure", "Guided tutorials", "Write the focused",
                 "Pair an unpaired", "Remove the highlighted",
                 "Reset the view", "Save a picture",
                 "Zoom in one step", "Zoom out one step")

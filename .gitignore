@@ -39,3 +39,4 @@ python/pxviewer/frontend/
 debug/
 paper/*.pdf
 .devin/mcp_config.local.json
+paper/fig_validation/

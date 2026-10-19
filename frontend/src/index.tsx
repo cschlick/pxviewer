@@ -46,8 +46,12 @@ function App() {
             // to add. Not in the minimal default spec we start from.
             s.behaviors.push(PluginSpec.Behavior(Interactions));
             // No XYZ axes indicator — off from the start (in the default props, so it never
-            // flashes on a fresh page), and there is no toggle for it.
-            s.canvas3d = { ...(s.canvas3d || {}), camera: { helper: { axes: { name: 'off', params: {} } } } } as any;
+            // flashes on a fresh page), and there is no toggle for it. Mol*'s own
+            // background is a warm off-white (#fcfbf9); pure white reads better in
+            // screenshots and saved figures.
+            s.canvas3d = { ...(s.canvas3d || {}),
+                camera: { helper: { axes: { name: 'off', params: {} } } },
+                renderer: { backgroundColor: 0xffffff } } as any;
             return s;
         },
     });
