@@ -17,9 +17,38 @@ construction if the package or browser is missing, so callers can degrade to
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
+
+
+def _browser_env() -> dict:
+    """Environment for the Chromium process.
+
+    conda-forge provides the shared libraries the browser needs (nspr, nss,
+    atk, cups, … — install.sh fetches whatever ldd reports missing), but
+    conda never puts the env's lib dir on the loader path: packages find
+    their own deps by rpath. An external binary has none, so it needs
+    LD_LIBRARY_PATH pointed at $CONDA_PREFIX/lib and the CDT sysroot dirs.
+    """
+    env = dict(os.environ)
+    prefix = os.environ.get("CONDA_PREFIX")
+    if not prefix:
+        return env
+    import glob
+    libdirs = [os.path.join(prefix, "lib")]
+    libdirs += glob.glob(
+        os.path.join(prefix, "*-conda-linux-gnu/sysroot/lib*"))
+    libdirs += glob.glob(
+        os.path.join(prefix, "*-conda-linux-gnu/sysroot/usr/lib*"))
+    libdirs = [d for d in libdirs if os.path.isdir(d)]
+    existing = env.get("LD_LIBRARY_PATH")
+    if existing:
+        libdirs.append(existing)
+    if libdirs:
+        env["LD_LIBRARY_PATH"] = ":".join(libdirs)
+    return env
 
 
 def try_browser_viewport(**kwargs):
@@ -94,7 +123,8 @@ class BrowserViewport:
             pw = sync_playwright().start()
             # Headless WebGL comes from SwANGLE (software ANGLE); the flags
             # keep it enabled where Chromium's blocklist would say no.
-            browser = pw.chromium.launch(headless=True, args=[
+            browser = pw.chromium.launch(headless=True, env=_browser_env(),
+                                         args=[
                 "--enable-unsafe-swiftshader",
                 "--ignore-gpu-blocklist",
                 "--use-gl=angle",

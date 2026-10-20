@@ -199,6 +199,58 @@ conda activate pxviewer
 if [[ "$uname_s" == "Linux" ]]; then
   python -m playwright install chromium --only-shell \
     || echo "warning: chromium headless shell did not install — headless mode will have no viewport (load/select still work)" >&2
+
+  # The shell is a foreign binary — no rpath into the env — so the shared
+  # libraries playwright expects from the OS (libnspr4, libnss3, …) must come
+  # from conda and be found via LD_LIBRARY_PATH (pxviewer.browser sets it at
+  # launch). Ask ldd what is actually missing and conda-install the matching
+  # packages rather than guessing a list a distro update can shift.
+  shell_bin=$(find "$(python -c 'import os; print(os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.expanduser("~/.cache/ms-playwright"))')" \
+                  -name "chrome-headless-shell" -type f 2>/dev/null | head -1)
+  if [[ -n "$shell_bin" ]]; then
+    declare -A conda_for_lib=(
+      [libnspr4.so]=nspr [libplc4.so]=nspr [libplds4.so]=nspr
+      [libnss3.so]=nss [libnssutil3.so]=nss [libsmime3.so]=nss
+      [libatk-1.0.so.0]=atk-1.0 [libatk-bridge-2.0.so.0]=at-spi2-atk
+      [libatspi.so.0]=at-spi2-core
+      [libcairo.so.2]=cairo [libpango-1.0.so.0]=pango
+      [libpangocairo-1.0.so.0]=pango [libpangoft2-1.0.so.0]=pango
+      [libcups.so.2]=cups [libdbus-1.so.3]=dbus [libdrm.so.2]=libdrm
+      [libgbm.so.1]=libgbm
+      [libglib-2.0.so.0]=glib [libgobject-2.0.so.0]=glib [libgio-2.0.so.0]=glib
+      [libwayland-client.so.0]=wayland
+      [libX11.so.6]=xorg-libx11 [libX11-xcb.so.1]=xorg-libx11
+      [libxcb.so.1]=xorg-libxcb
+      [libXcomposite.so.1]=xorg-libxcomposite [libXdamage.so.1]=xorg-libxdamage
+      [libXext.so.6]=xorg-libxext [libXfixes.so.3]=xorg-libxfixes
+      [libxkbcommon.so.0]=libxkbcommon [libXrandr.so.2]=xorg-libxrandr
+      [libXrender.so.1]=xorg-libxrender [libXi.so.6]=xorg-libxi
+      [libXtst.so.6]=xorg-libxtst [libXcursor.so.1]=xorg-libxcursor
+      [libasound.so.2]=alsa-lib [libexpat.so.1]=expat
+      [libfontconfig.so.1]=fontconfig [libfreetype.so.6]=freetype
+    )
+    missing=$(ldd "$shell_bin" 2>/dev/null | awk '/not found/ {print $1}' | sort -u)
+    pkgs=()
+    unmapped=()
+    while read -r so; do
+      [[ -z "$so" ]] && continue
+      base="${so%%.*}"          # libnspr4.so -> libnspr4 (versions like .so.0 too)
+      pkg="${conda_for_lib[$so]:-${conda_for_lib[$base]:-}}"
+      if [[ -n "$pkg" ]]; then pkgs+=("$pkg"); else unmapped+=("$so"); fi
+    done <<< "$missing"
+    if [[ ${#pkgs[@]} -gt 0 ]]; then
+      # shellcheck disable=SC2068 # word-splitting is the point: one arg per package
+      mapfile -t pkgs < <(printf '%s\n' ${pkgs[@]} | sort -u)
+      conda install -y -n pxviewer -c conda-forge ${pkgs[@]} \
+        || echo "warning: browser shared libs did not install — headless screenshots may fail" >&2
+    fi
+    if [[ ${#unmapped[@]} -gt 0 ]]; then
+      echo "warning: no conda mapping for missing libs: ${unmapped[*]} — add them to install.sh" >&2
+    fi
+    # Verify: anything still unresolved is a real failure the user should see.
+    still=$(ldd "$shell_bin" 2>/dev/null | awk '/not found/ {print $1}' | sort -u | tr '\n' ' ')
+    [[ -z "$still" ]] || echo "warning: chromium still missing: $still" >&2
+  fi
 fi
 
 # --- pxviewer ----------------------------------------------------------------
