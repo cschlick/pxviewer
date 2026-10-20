@@ -16,7 +16,10 @@ A primitive is a dict: always ``kind``, ``name`` (the kinemage list's name, so c
 can pick lists out) and ``color`` ([r,g,b]); geometry per kind: ``vectors``->
 ``segments`` [[p,p],..], ``dots``->``points`` [p,..], ``balls``->``balls``
 [[p,radius],..], ``triangles``->``triangles`` [[p,p,p],..]. A list with per-point
-colors yields one primitive per color.
+colors yields one primitive per color. Two list-level display flags are
+carried through when the header sets them: ``alpha`` (a 0..1 opacity,
+e.g. CaBLAM's wheels) and ``off`` (a list hidden by default, e.g.
+CaBLAM's disfavored fan).
 """
 
 from __future__ import annotations
@@ -47,8 +50,10 @@ _LIST_KINDS = {
 }
 
 _COLOR_RE = re.compile(r"color=\s*(\w+)")
+_ALPHA_RE = re.compile(r"alpha=\s*([\d.]+)")  # a list-level opacity, e.g. CaBLAM's wheels
 _NAME_RE = re.compile(r"^@\w+list\s*\{([^}]*)\}")  # the list's name: @vectorlist {name} …
 _WIDTH_RE = re.compile(r"width=\s*(\d+)")  # a vectorlist's line width, when it sets one
+_OFF_RE = re.compile(r"\boff\b")  # a list hidden by default, e.g. CaBLAM's disfavored fan
 _POINT_RE = re.compile(r"\{[^}]*\}([^{]*)")  # capture the text after each {label}
 
 
@@ -136,8 +141,18 @@ def parse_kinemage(text: str) -> List[dict]:
     kind = None
     name = ""
     width: Optional[int] = None
+    alpha: Optional[float] = None
+    off = False
     color = _DEFAULT_COLOR
     points: List[tuple] = []
+
+    def decorate(prim: dict):
+        """Attach the list-level display flags a renderer should honor."""
+        if alpha is not None:
+            prim["alpha"] = alpha
+        if off:
+            prim["off"] = True
+        return prim
 
     def flush():
         """Emit one primitive per distinct color in the list just parsed."""
@@ -149,23 +164,23 @@ def parse_kinemage(text: str) -> List[dict]:
             for _f, xyz, _r, c in resolved:
                 by.setdefault(c, []).append(list(xyz))
             for c, pts in by.items():
-                prims.append({"kind": "dots", "name": name, "color": list(c), "points": pts})
+                prims.append(decorate({"kind": "dots", "name": name, "color": list(c), "points": pts}))
         elif kind == "balls":
             by = {}
             for _f, xyz, r, c in resolved:
                 by.setdefault(c, []).append([list(xyz), r if r is not None else _DEFAULT_BALL_RADIUS])
             for c, balls in by.items():
-                prims.append({"kind": "balls", "name": name, "color": list(c), "balls": balls})
+                prims.append(decorate({"kind": "balls", "name": name, "color": list(c), "balls": balls}))
         elif kind == "vectors":
             for c, segs in _segments(resolved).items():
                 # width is the kinemage line width when the list gives one, else None
                 # ("unspecified") — it is screen-space, so how to draw it is the
                 # renderer's call.
-                prims.append({"kind": "vectors", "name": name, "color": list(c),
-                              "width": width, "segments": segs})
+                prims.append(decorate({"kind": "vectors", "name": name, "color": list(c),
+                                       "width": width, "segments": segs}))
         elif kind == "triangles":
             for c, tris in _triangles(resolved).items():
-                prims.append({"kind": "triangles", "name": name, "color": list(c), "triangles": tris})
+                prims.append(decorate({"kind": "triangles", "name": name, "color": list(c), "triangles": tris}))
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -183,6 +198,9 @@ def parse_kinemage(text: str) -> List[dict]:
                 name = m.group(1) if m else ""
                 m = _WIDTH_RE.search(line)
                 width = int(m.group(1)) if m else None
+                m = _ALPHA_RE.search(line)
+                alpha = float(m.group(1)) if m else None
+                off = bool(_OFF_RE.search(line))
             else:  # @subgroup / @group / @master etc. end the current list
                 flush()
                 kind = None

@@ -474,6 +474,8 @@ function isHairline(prim: MarkupPrimitive): boolean {
 interface MarkupPrimitive {
     kind: string;
     width?: number | null;
+    alpha?: number | null;     // list-level kinemage opacity (e.g. CaBLAM's wheels)
+    off?: boolean;             // a kinemage list hidden by default — never drawn
     color: [number, number, number];
     segments?: number[][][];   // vectors: [[a,b], ...]
     points?: number[][];       // dots
@@ -544,15 +546,20 @@ const MarkupLines = PluginStateTransform.BuiltIn({
     display: { name: 'Validation Markup Lines' },
     from: SO.Root,
     to: SO.Shape.Provider,
-    params: { primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }) },
+    params: {
+        primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }),
+        alpha: PD.Numeric(1, { min: 0, max: 1 }, { isHidden: true }),
+    },
 })({
     apply({ params }) {
-        const p = params as { primitives: MarkupPrimitive[] };
+        const p = params as { primitives: MarkupPrimitive[]; alpha: number };
         return new SO.Shape.Provider({
             label: 'Validation Markup Lines',
             data: p,
             // Constant screen-space width, so the kinemage width reads as pixels.
-            params: PD.withDefaults(Lines.Params, { lineSizeAttenuation: false, sizeFactor: 1 }),
+            params: PD.withDefaults(Lines.Params, {
+                lineSizeAttenuation: false, sizeFactor: 1, alpha: p.alpha,
+            }),
             getShape: (_ctx, data) => buildMarkupLines(data.primitives),
             geometryUtils: Lines.Utils,
         }, { label: 'Validation Markup Lines' });
@@ -565,14 +572,17 @@ const MarkupMesh = PluginStateTransform.BuiltIn({
     display: { name: 'Validation Markup' },
     from: SO.Root,
     to: SO.Shape.Provider,
-    params: { primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }) },
+    params: {
+        primitives: PD.Value<MarkupPrimitive[]>([], { isHidden: true }),
+        alpha: PD.Numeric(1, { min: 0, max: 1 }, { isHidden: true }),
+    },
 })({
     apply({ params }) {
-        const p = params as { primitives: MarkupPrimitive[] };
+        const p = params as { primitives: MarkupPrimitive[]; alpha: number };
         return new SO.Shape.Provider({
             label: 'Validation Markup',
             data: p,
-            params: PD.withDefaults(Mesh.Params, {}),
+            params: PD.withDefaults(Mesh.Params, { alpha: p.alpha }),
             getShape: (_ctx, data) => buildMarkupMesh(data.primitives),
             geometryUtils: Mesh.Utils,
         }, { label: 'Validation Markup' });
@@ -1990,19 +2000,34 @@ export class LiveViewer {
      */
     async setMarkup(channel: number, primitives: MarkupPrimitive[]) {
         await this.clearMarkup(channel);
-        if (!primitives || primitives.length === 0) return;
+        // `off` marks a kinemage list that is hidden by default (e.g. CaBLAM's
+        // disfavored fan) — it stays in the payload but is never drawn.
+        const visible = (primitives ?? []).filter((p) => !p.off);
+        if (!visible.length) return;
         // Split by how each primitive is drawn, and only build a geometry that has
         // something in it — an empty Mesh/Lines throws ("empty textures are not allowed").
-        const solid = primitives.filter((p) => !isHairline(p));
-        const hairlines = primitives.filter(isHairline);
+        // A shape's alpha is uniform, so kinemage alpha needs one node per value —
+        // in practice opaque vs. the wheels' 0.75.
+        const byAlpha = (ps: MarkupPrimitive[]) => {
+            const groups = new Map<number, MarkupPrimitive[]>();
+            for (const p of ps) {
+                const a = p.alpha ?? 1;
+                let g = groups.get(a);
+                if (!g) { g = []; groups.set(a, g); }
+                g.push(p);
+            }
+            return groups;
+        };
+        const solids = byAlpha(visible.filter((p) => !isHairline(p)));
+        const hairlines = byAlpha(visible.filter(isHairline));
         const nodes: StateObjectSelector[] = [];
         const build = this.plugin.state.data.build();
-        if (solid.length) {
-            nodes.push(build.toRoot().apply(MarkupMesh, { primitives: solid })
+        for (const [alpha, group] of solids) {
+            nodes.push(build.toRoot().apply(MarkupMesh, { primitives: group, alpha })
                 .apply(ShapeRepresentation3D).selector);
         }
-        if (hairlines.length) {
-            nodes.push(build.toRoot().apply(MarkupLines, { primitives: hairlines })
+        for (const [alpha, group] of hairlines) {
+            nodes.push(build.toRoot().apply(MarkupLines, { primitives: group, alpha })
                 .apply(ShapeRepresentation3D).selector);
         }
         if (!nodes.length) return;
