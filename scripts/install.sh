@@ -191,13 +191,14 @@ else
 fi
 conda activate pxviewer
 
-# Xvfb is how a display-less Linux box gets a viewport — pxviewer spawns it
-# automatically when DISPLAY is unset (see pxviewer.gpu.ensure_display). The
-# conda-forge CDT build installs with no sudo; its name carries the arch.
+# Headless rendering: on a display-less box pxviewer hosts the Mol* page in
+# Chromium itself — no Qt, no X11/Xvfb (the GUI-agnostic core path; see
+# pxviewer.appcore/pxviewer.browser). playwright (in environment.yml) is the
+# driver; this fetches the browser binary, which is not a package. The
+# headless shell alone is enough — it renders WebGL via SwANGLE.
 if [[ "$uname_s" == "Linux" ]]; then
-  conda install -y -n pxviewer -c conda-forge \
-    "xorg-x11-server-xvfb-cos7-$(uname -m)" \
-    || echo "warning: Xvfb did not install — headless rendering needs it" >&2
+  python -m playwright install chromium --only-shell \
+    || echo "warning: chromium headless shell did not install — headless mode will have no viewport (load/select still work)" >&2
 fi
 
 # --- pxviewer ----------------------------------------------------------------

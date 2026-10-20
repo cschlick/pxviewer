@@ -8,12 +8,14 @@ in one call are there for the next. The remaining tools are operational:
 ``status`` for scene + kernel state, ``ping``/``reload_viewport`` for
 viewport health, ``screenshot``/``save_screenshot`` for seeing the frame.
 
-The server owns a real ``DesktopApp`` — the same windows a user opens — so an
-agent's figure work happens in the viewer the user is watching.
+The server owns a real app — the ``DesktopApp`` with its windows when a
+display exists, or the GUI-agnostic ``AppCore`` (headless Chromium hosting the
+Mol* page) when it does not — so an agent's figure work happens in the same
+viewer code the user sees.
 
 Threading: Qt must live on the main thread (macOS requires it), so the MCP
 loop runs on a daemon thread. Tool calls that touch widgets are marshalled
-onto the Qt thread through :meth:`DesktopApp.invoke_on_gui`; ``LiveSession``
+onto the app thread through :meth:`AppCore.invoke_on_gui`; ``LiveSession``
 calls (screenshot, camera, background) are already thread-safe and run
 directly on the MCP thread; ``python`` code runs on the kernel's thread
 with ``app`` proxied back onto Qt.
@@ -27,12 +29,13 @@ transport, e.g. in an MCP client config::
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import threading
 import time
 from pathlib import Path
 
-_app = None          # DesktopApp, main thread
+_app = None          # AppCore (desktop or headless), main thread
 
 MCP_PORT = 8753      # fixed so MCP client configs can name a stable URL
 
@@ -147,22 +150,58 @@ def _session():
 def _wait_ready(timeout: float = 60.0) -> None:
     """Block until the Mol* page answers a screenshot — the signal it is live.
 
-    Requests sent before the viewer's handler exists are dropped, so this is
-    short repeated tries rather than one long wait (the wait_viewer pattern).
-    On timeout a chain-bypassing ping says whether the page is dead or just
-    stuck behind one slow state-tree update.
+    Wait for the session, then ask once with the whole remaining budget: the
+    first frame under software WebGL compiles shaders and can take tens of
+    seconds. Retrying would only stack more screenshot renders on the same
+    serial apply chain — each abandoned call still runs to completion in the
+    page, holding every later request. On timeout a chain-bypassing ping says
+    whether the page is dead or just stuck behind one slow state-tree update.
     """
     deadline = time.time() + timeout
+    session = None
     while time.time() < deadline:
         session = _app._control_session()
-        if session is not None:
-            try:
-                if session.screenshot(timeout=5):
-                    return
-            except Exception:
-                pass
+        # A session with no client connected yet is a page still navigating —
+        # keep polling; screenshotting now would burn the budget pre-connect.
+        if session is not None and session.client_count >= 1:
+            break
         time.sleep(0.5)
+    if session is not None and session.client_count >= 1:
+        try:
+            if session.screenshot(timeout=max(1.0, deadline - time.time())):
+                return
+        except Exception:
+            pass
     raise RuntimeError(_unready_reason())
+
+
+def _blank_frame(png: bytes) -> bool:
+    """A uniform-color frame is the page's "nothing drawn yet" — retryable.
+
+    The ws chain serializes message application, but the Mol* representation
+    build for a fresh structure is async in-page and not part of it: a shot can
+    answer after every queued message and still catch the pre-draw canvas. An
+    all-one-color picture is that blank — a rendered scene is never uniform.
+    """
+    try:
+        import io
+        from PIL import Image, ImageStat
+        small = Image.open(io.BytesIO(png)).convert("L").resize((64, 48))
+        return ImageStat.Stat(small).stddev[0] < 0.5
+    except Exception:
+        return False  # cannot judge — do not claim blankness
+
+
+def _shot_frame(session, *, timeout: float, retries: int = 6,
+                settle: float = 1.5) -> "bytes | None":
+    """One screenshot, retried while it comes back a blank canvas."""
+    png = None
+    for _ in range(max(1, retries)):
+        png = session.screenshot(timeout=timeout)
+        if not png or not _blank_frame(png):
+            return png
+        time.sleep(settle)
+    return png
 
 
 def _unready_reason() -> str:
@@ -186,9 +225,9 @@ def _unready_reason() -> str:
 
 
 def attach(app, port: int = MCP_PORT) -> "str | None":
-    """Serve the MCP tool surface over HTTP for an already-running DesktopApp.
+    """Serve the MCP tool surface over HTTP for an already-running app.
 
-    Called on the Qt thread during ``DesktopApp.start`` so the invoker's
+    Called on the app thread during ``AppCore.start`` so the invoker's
     signals land on the right loop. Returns the URL clients point at, or None
     if the ``mcp`` package is absent. If the port is already held (a second
     pxviewer instance), the serve thread retries for a few minutes so the
@@ -245,33 +284,60 @@ def attach(app, port: int = MCP_PORT) -> "str | None":
 
 
 def _start_app():
-    """Build the desktop app the way run_desktop starts it; return the app."""
+    """Build the app and return it.
+
+    With a display this is the real ``DesktopApp`` — an
+    agent's figure work happens in the window the user is watching. With no
+    display — or ``PXVIEWER_HEADLESS=1`` — it is the GUI-agnostic ``AppCore``:
+    every semantic operation (load, fetch, select, validate, kernel, MCP)
+    runs, and the Mol* page is hosted by a headless Chromium when playwright
+    is installed (screenshots work; without it, everything but pixels does).
+    """
     global _app
-    from PySide6.QtWidgets import QApplication
+    import os
 
     from pxviewer import gpu as gpu_backend
 
-    # Headless first: a display-less box gets a spawned Xvfb before Qt starts —
-    # an exec-restart mid-handshake would kill this stdio server, so the
-    # software-GL and sandbox defaults ensure_display sets must land before
-    # configure() picks a mode.
-    gpu_backend.ensure_display()
-    gpu_mode = gpu_backend.configure(None)
-    from pxviewer.desktop import _set_macos_process_name
-    _set_macos_process_name()
-    qt_app = QApplication(["pxviewer"])
-    qt_app.setApplicationName("pxviewer")
+    # A *real* display gets the desktop (the agent's work is watchable); no
+    # display gets the GUI-agnostic core — nobody watches a spawned Xvfb, so
+    # don't spin one up: skip QtWidgets entirely and host the Mol* page in
+    # headless Chromium. PXVIEWER_HEADLESS forces the core path.
+    headless_env = os.environ.get("PXVIEWER_HEADLESS", "").lower() in (
+        "1", "true", "yes")
+    # DISPLAY/WAYLAND_DISPLAY are X11/Wayland notions — macOS and Windows
+    # always have a windowing system.
+    have_display = sys.platform in ("darwin", "win32") or bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if have_display and not headless_env:
+        gpu_mode = gpu_backend.configure(None)
+        from PySide6.QtWidgets import QApplication
 
-    from pxviewer.desktop import DesktopApp
+        from pxviewer.desktop import _set_macos_process_name
 
-    can_hide = gpu_mode == "hardware"
-    app = DesktopApp(port=0, can_hide=can_hide)
-    app._webapp.start()
-    app._main.show()
-    app._controls.widget().show()
-    app._main.resize(1400, 900)
+        _set_macos_process_name()
+        qt_app = QApplication(["pxviewer"])
+        qt_app.setApplicationName("pxviewer")
+
+        from pxviewer.desktop import DesktopApp
+
+        app = DesktopApp(port=0, can_hide=(gpu_mode == "hardware"))
+        app._webapp.start()
+        app._main.show()
+        app._controls.widget().show()
+        app._main.resize(1400, 900)
+        app._reload_viewport()  # load the Mol* page into the QtWebEngine view
+    else:
+        from pxviewer.appcore import AppCore
+        from pxviewer.browser import try_browser_viewport
+
+        viewport = try_browser_viewport()
+        if viewport is not None:
+            print("pxviewer: headless viewport via Chromium", flush=True)
+        app = AppCore(port=0, viewport=viewport)
+        app._webapp.start()
+        app._reload_viewport()  # navigates the browser host, if one attached
     _app = app
-    return qt_app, app
+    return app._app, app
 
 
 def _make_server():
@@ -291,8 +357,8 @@ def _make_server():
         "representations, camera, measurements, primitives. "
         "session.model is the mmtbx model — get_sites_cart() returns a "
         "flex.vec3_double, get_hierarchy() the full hierarchy.\n"
-        "  app      the DesktopApp, proxied so calls run on the Qt thread: "
-        "app.load_file(path), app.load_files(paths), "
+        "  app      the AppCore (desktop or headless), proxied so calls run "
+        "on the app thread: app.load_file(path), app.load_files(paths), "
         "app.fetch_and_load(pdb_id='1ubq', entities=['model','map']), "
         "app.select_by_expression(expr), app.job_state().\n"
         "  api      a categorized map of the API — api.find('color') "
@@ -326,7 +392,7 @@ def _make_server():
 
         - ``session``: the active model's LiveSession (selection,
           representations, camera, measurements); re-binds on model switch.
-        - ``app``: the DesktopApp through a proxy whose calls run on the Qt
+        - ``app``: the AppCore through a proxy whose calls run on the app
           thread — load_file/load_files/fetch_and_load/select_by_expression/
           run_background/job_state, everything the panels can do.
         - ``api``: categorized map of the API (api.find("color")).
@@ -425,7 +491,7 @@ def _make_server():
         requested — never a pre-update frame, and 'saved' is never claimed
         for a write that did not happen."""
         session = _session()
-        png = session.screenshot(timeout=60)
+        png = _shot_frame(session, timeout=60)
         if not png:
             raise RuntimeError(
                 "the viewport did not answer — check ping() for a stuck "
@@ -439,8 +505,8 @@ def _make_server():
         """Capture the current Mol* viewport frame and return it as an image.
         Call this after making changes to *see* the scene — it is the way to
         check that a figure looks right before saving the view."""
-        _wait_ready(timeout=15)
-        png = _session().screenshot(timeout=30)
+        _wait_ready(timeout=45)  # first SwiftShader frame can take tens of seconds
+        png = _shot_frame(_session(), timeout=60)
         if not png:
             raise RuntimeError("screenshot came back empty")
         return Image(data=png, format="png")
@@ -458,21 +524,42 @@ def run() -> int:
               file=sys.stderr)
         return 1
 
+    # stdout is the JSON-RPC channel in stdio mode — nothing else may write
+    # there. Park the real channel on a saved fd for the protocol writer, then
+    # point fd 1 at stderr so prints (kernel banner, Qt warnings) stay visible
+    # but can never corrupt the stream. Done before app start so startup
+    # chatter is covered too.
+    import anyio
+    from mcp.server.stdio import stdio_server
+    out_fd = os.dup(sys.stdout.fileno())
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+
     qt_app, app = _start_app()
     server = _make_server()
 
+    async def serve_stdio():
+        async with stdio_server(stdout=anyio.wrap_file(os.fdopen(out_fd, "w"))) \
+                as (read_stream, write_stream):
+            await server._mcp_server.run(
+                read_stream, write_stream,
+                server._mcp_server.create_initialization_options())
+
     def serve():
         try:
-            server.run()
+            anyio.run(serve_stdio)
         except Exception as exc:  # noqa: BLE001 — nothing else reports it
             print("mcp server stopped: %r" % exc, file=sys.stderr)
+        finally:
+            # stdin EOF (the client left) ends the protocol loop — without
+            # this the Qt loop would run forever, orphaned.
+            app.invoke_on_gui(app._app.quit)
 
     threading.Thread(target=serve, name="pxviewer-mcp", daemon=True).start()
 
     # A client may take a moment to send its first tool call; the viewport
     # page connects as soon as the window is up, which also warms the session
     # so the first screenshot does not race the page load.
-    return qt_app.exec()
+    return app._app.exec()
 
 
 if __name__ == "__main__":

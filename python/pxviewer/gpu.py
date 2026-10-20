@@ -294,8 +294,12 @@ def ensure_display(
             break
         time.sleep(0.05)
     if not sock.exists():
-        proc.kill()
-        log(f"pxviewer: Xvfb on :{n} did not come up in {ready_timeout:.0f}s")
+        rc = proc.poll()
+        if rc is None:
+            proc.kill()
+        why = f"exited with code {rc}" if rc is not None else \
+            f"did not create its socket within {ready_timeout:.0f}s"
+        log(f"pxviewer: Xvfb on :{n} failed — {why}")
         return False
 
     atexit.register(lambda p=proc: p.poll() is None and p.terminate())
@@ -329,8 +333,9 @@ def _find_xvfb() -> Optional[str]:
 
 
 def _spawn(argv: list):
-    return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL)
+    # Xvfb is silent when healthy; its errors go to stderr — inherit it so a
+    # failed spawn reports the real reason instead of dying quietly.
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL)
 
 
 # -- internals ---------------------------------------------------------------

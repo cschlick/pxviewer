@@ -38,6 +38,7 @@ import sys
 #: which is a small pure-Python dependency rather than a GUI stack, and they skip
 #: themselves cleanly when it is absent.
 core_tests = [
+    "$D/regression/tst_appcore.py",
     "$D/regression/tst_bcif.py",
     "$D/regression/tst_palettes.py",
     "$D/regression/tst_gpu.py",

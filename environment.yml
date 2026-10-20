@@ -86,3 +86,8 @@ dependencies:
       # live session). PyPI-only; pinned under 2.0, where the FastMCP API was
       # renamed. Optional at runtime — only imported by the mcp subcommand.
       - mcp>=1.10,<2
+      # playwright: hosts the Mol* page in headless Chromium when there is no
+      # display — the GUI-agnostic core's viewport (see pxviewer.browser).
+      # The browser itself is not a pip package; install.sh runs
+      # `playwright install chromium --only-shell` to fetch it.
+      - playwright>=1.49
