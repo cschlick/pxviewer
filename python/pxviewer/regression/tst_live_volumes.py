@@ -284,8 +284,9 @@ def exercise_a_level_change_is_one_float_not_a_regrid():
                 assert message[16:] == b"GRIDDATA" * 4, "patching the level disturbed the grids"
 
                 # ...and a live change reaches a connected client as one small message.
+                # (The pre-connect 0.62 flushes from the outbox first — narrow on 0.7.)
                 live.set_localres_iso(0.7)
-                assert await next_text(ws, "localres") == {
+                assert await next_text(ws, "localres", value=0.7) == {
                     "type": "localres", "action": "level", "value": 0.7}
 
         run_client(scenario)
@@ -307,8 +308,12 @@ def exercise_a_domain_change_patches_the_replay_and_broadcasts():
                 assert (round(lo, 2), round(hi, 2)) == (4.2, 7.0), (lo, hi)
                 assert message[16:] == b"G" * 8, "the domain patch disturbed the grids"
 
+                # The pre-connect domain command rides the outbox flush — the
+                # reconnect gap queues rather than drops. Narrow on the new
+                # value so the flushed 4.2/7.0 message is skipped, not confused
+                # for the live change this line is about.
                 live.set_localres_domain(5.0, 9.0)
-                assert await next_text(ws, "localres") == {
+                assert await next_text(ws, "localres", lo=5.0) == {
                     "type": "localres", "action": "domain", "lo": 5.0, "hi": 9.0}
 
         run_client(scenario)
@@ -337,7 +342,9 @@ def exercise_the_downsample_factor_arrives_before_the_grids():
                 assert message[16:] == b"G" * 8
 
                 live.set_localres_downsample(2)          # a live change broadcasts too
-                assert await next_text(ws, "localres") == {
+                # Narrow on the new value: the pre-connect downsample(4) also
+                # flushes from the reconnect outbox, and it arrives first.
+                assert await next_text(ws, "localres", value=2) == {
                     "type": "localres", "action": "downsample", "value": 2}
 
         run_client(scenario)
@@ -399,18 +406,30 @@ def exercise_stop_cancels_sends_parked_on_a_dead_socket():
 
 
 def exercise_an_open_clip_is_not_replayed():
-    """Restoring a clip that clips nothing is shader cost for no effect."""
+    """Restoring a clip that clips nothing is shader cost for no effect.
+
+    The stored-clip replay only carries closed clips. The reconnect-gap outbox
+    does flush the close-then-open history — which is fine as long as the wire
+    ends open, so that ordering is what this asserts.
+    """
     with session() as live:
         live.set_clip(0.2, 0.8, ref="vol10")
         live.set_clip(0.0, 1.0, ref="vol10")                   # opened again
 
         async def scenario():
             async with client(live) as ws:
-                try:
-                    message = await asyncio.wait_for(ws.recv(), timeout=0.5)
-                except asyncio.TimeoutError:
-                    return                                     # nothing replayed: correct
-                raise AssertionError("an open clip was replayed: %r" % (message,))
+                clips = []
+                while True:
+                    try:
+                        message = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        break
+                    if isinstance(message, str):
+                        event = json.loads(message)
+                        if event.get("type") == "clip" and event.get("ref") == "vol10":
+                            clips.append(event)
+                assert not clips or (
+                    clips[-1]["front"] == 0.0 and clips[-1]["back"] == 1.0), clips
 
         run_client(scenario)
 
@@ -486,6 +505,44 @@ def exercise_a_screenshot_returns_none_when_nobody_answers():
     """No viewer connected means no picture, rather than hanging forever."""
     with session() as live:
         assert live.screenshot(timeout=0.3) is None
+
+
+def exercise_commands_sent_in_the_reconnect_gap_are_flushed_on_connect():
+    """A reload disconnects the page and attaches a fresh client; commands issued
+    in between used to drop silently -- the server thought they were sent while
+    the page kept its old draw. They queue and flush to the next client now."""
+    with session() as live:
+        live.set_volume_iso("vol2", 3.5)
+        live.set_volume_opacity("vol1", 0.5)   # not stored state: outbox only
+
+        async def scenario():
+            async with client(live) as ws:
+                assert await next_text(ws, "volume_iso", ref="vol2") == {
+                    "type": "volume_iso", "ref": "vol2", "value": 3.5}
+                assert await next_text(ws, "volume_opacity", ref="vol1") == {
+                    "type": "volume_opacity", "ref": "vol1", "opacity": 0.5}
+
+        run_client(scenario)
+
+
+def exercise_requests_sent_in_the_gap_are_not_replayed():
+    """A ping/screenshot carries a reqId and a waiter that times out; flushing it
+    on reconnect would re-run the request for an answer nobody is collecting."""
+    with session() as live:
+        live._send_control({"type": "ping", "reqId": 77777})
+        live.set_volume_opacity("vol1", 0.5)   # queued right after; the marker
+
+        async def scenario():
+            async with client(live) as ws:
+                seen = []
+                while True:
+                    event = await next_text(ws)
+                    seen.append(event.get("type"))
+                    if event.get("type") == "volume_opacity":
+                        break
+                assert "ping" not in seen, seen
+
+        run_client(scenario)
 
 
 def run():

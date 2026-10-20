@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import collections
 import dataclasses
 import json
 import math
@@ -501,6 +502,16 @@ class LiveSession:
         # visibility map is (a viewport reload is a new client).
         self._volume_negative_iso: Dict[str, float] = {}
         self._volume_negative_hidden: Dict[str, bool] = {}
+        # In-place contour level / draw style per volume ref, replayed to late
+        # clients like the visibility map is — a reload connects a new client.
+        self._volume_iso: Dict[str, float] = {}
+        self._volume_style: Dict[str, str] = {}
+        # Control text broadcast while no client was attached — the navigation
+        # gap of a viewport reload, or a dead renderer before reconnect. Flushed
+        # to the next client after the stored-state replay, so newer intent
+        # lands on top of it. Bounded: a session that never gains a viewer keeps
+        # only its newest few hundred commands.
+        self._outbox: "collections.deque" = collections.deque(maxlen=512)
         # The localres display-resolution factor, replayed to late clients *before* the
         # payload so the first build already uses it (control messages are applied ahead
         # of the queued binary payload on the client).
@@ -1241,6 +1252,7 @@ class LiveSession:
         ``style`` is ``'surface'`` or ``'mesh'`` (``'wireframe'`` is a legacy alias for
         ``'mesh'``). Thread-safe: may be called from any thread.
         """
+        self._volume_style[str(ref)] = str(style)
         message = json.dumps({"type": "volume_style", "ref": str(ref), "style": str(style)})
         loop = self._loop
         if loop is not None:
@@ -1253,6 +1265,7 @@ class LiveSession:
         viewer never has to know a map's absolute scale to contour it sensibly.
         Thread-safe: may be called from any thread.
         """
+        self._volume_iso[str(ref)] = float(value)
         message = json.dumps({"type": "volume_iso", "ref": str(ref), "value": float(value)})
         loop = self._loop
         if loop is not None:
@@ -2010,7 +2023,11 @@ class LiveSession:
         """Broadcast a JSON control message to all clients (thread-safe)."""
         loop = self._loop
         if loop is not None:
-            loop.call_soon_threadsafe(self._broadcast_text, json.dumps(message))
+            # reqId messages are request/response: only a live page can answer,
+            # and the waiter is already gone by the time a reconnect could.
+            loop.call_soon_threadsafe(
+                self._broadcast_text, json.dumps(message),
+                "reqId" not in message)
 
     def _next_primitive_id(self, kind: str) -> str:
         with self._lock:
@@ -2283,6 +2300,12 @@ class LiveSession:
             for ref, level in list(self._volume_negative_iso.items()):
                 await self._locked_send(websocket, json.dumps(
                     {"type": "volume_negative_iso", "ref": ref, "value": level}))
+            for ref, level in list(self._volume_iso.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_iso", "ref": ref, "value": level}))
+            for ref, style in list(self._volume_style.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_style", "ref": ref, "style": style}))
             for ref, hidden in list(self._volume_negative_hidden.items()):
                 if hidden:
                     await self._locked_send(websocket, json.dumps(
@@ -2327,6 +2350,11 @@ class LiveSession:
             if self._focus_surroundings:
                 await self._locked_send(websocket, json.dumps(
                     {"type": "focus-surroundings", "enabled": True}))
+            # Commands broadcast while nobody was attached land last: they are
+            # newer intent than the stored-state replay above.
+            for message in self._outbox:
+                await self._locked_send(websocket, message)
+            self._outbox.clear()
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -2483,7 +2511,14 @@ class LiveSession:
             # Fire-and-forget: scheduling the coroutine keeps push() non-blocking.
             asyncio.ensure_future(self._safe_send(websocket, payload))
 
-    def _broadcast_text(self, message: str) -> None:
+    def _broadcast_text(self, message: str, queue_if_idle: bool = True) -> None:
+        if not self._clients:
+            # No page attached right now: the navigation gap of a viewport
+            # reload, or a dead renderer before reconnect. Queue for the next
+            # client instead of dropping the command silently.
+            if queue_if_idle:
+                self._outbox.append(message)
+            return
         for websocket in list(self._clients):
             asyncio.ensure_future(self._safe_send_text(websocket, message))
 
