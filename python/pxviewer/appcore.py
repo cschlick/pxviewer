@@ -1590,6 +1590,7 @@ class AppCore:
         if entry["interactions"]:
             session.set_computed_interactions(True)
         self._active_model_id = mid
+        self._rebind_kernel_session()
         # Register this model's pick handler once (tagged with its id); the click
         # mode is what actually turns picking on/off. Registering here means a
         # selection can be built in any loaded model, not just the active one.
@@ -4928,6 +4929,7 @@ class AppCore:
         if entry is None or self._active_model_id == mid:
             return
         self._active_model_id = mid
+        self._rebind_kernel_session()
         self._wire_active(entry["session"])  # no viewport reload: visibility is unchanged
         self._refresh_validation_staleness()  # the warning tracks the now-active model
         self._emit_loaded_changed()
@@ -4981,6 +4983,7 @@ class AppCore:
             self._active_model_id = self._models[-1]["id"] if self._models else None
             active = self._model_entry(self._active_model_id) if self._active_model_id else None
             self._wire_active(active["session"] if active else None)
+            self._rebind_kernel_session()
         self._prune_group(entry["group"])
         self._reload_viewport()
         self._emit_loaded_changed()
@@ -5797,6 +5800,7 @@ class AppCore:
         self._reflections.clear()
         self._groups.clear()
         self._active_model_id = None
+        self._rebind_kernel_session()
         with self._scene_lock:
             self._scene_selection.clear()
         if self._dummy is not None:
@@ -6114,6 +6118,17 @@ class AppCore:
         """Bind names in the kernel namespace, if a kernel has been started."""
         if self._kernel is not None:
             self._kernel.push(mapping)
+
+
+    def _rebind_kernel_session(self) -> None:
+        """Keep the kernel's ``session`` name tracking the active model.
+
+        The namespace binds ``session`` once at kernel start — usually to None
+        before anything is loaded — so every change of ``_active_model_id``
+        re-pushes it. Console, MCP ``python(code)`` and attached Jupyter
+        clients share the one namespace and must all see the live session.
+        """
+        self.kernel_push({"session": self.active_model_session()})
 
 
     def shutdown_kernel(self) -> None:
