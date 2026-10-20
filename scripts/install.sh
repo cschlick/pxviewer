@@ -191,6 +191,15 @@ else
 fi
 conda activate pxviewer
 
+# Xvfb is how a display-less Linux box gets a viewport — pxviewer spawns it
+# automatically when DISPLAY is unset (see pxviewer.gpu.ensure_display). The
+# conda-forge CDT build installs with no sudo; its name carries the arch.
+if [[ "$uname_s" == "Linux" ]]; then
+  conda install -y -n pxviewer -c conda-forge \
+    "xorg-x11-server-xvfb-cos7-$(uname -m)" \
+    || echo "warning: Xvfb did not install — headless rendering needs it" >&2
+fi
+
 # --- pxviewer ----------------------------------------------------------------
 # --no-deps keeps pip from pulling PyPI wheels over conda-managed packages —
 # most damagingly numpy, which cctbx is compiled against.

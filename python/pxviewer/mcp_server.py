@@ -251,6 +251,11 @@ def _start_app():
 
     from pxviewer import gpu as gpu_backend
 
+    # Headless first: a display-less box gets a spawned Xvfb before Qt starts —
+    # an exec-restart mid-handshake would kill this stdio server, so the
+    # software-GL and sandbox defaults ensure_display sets must land before
+    # configure() picks a mode.
+    gpu_backend.ensure_display()
     gpu_mode = gpu_backend.configure(None)
     from pxviewer.desktop import _set_macos_process_name
     _set_macos_process_name()

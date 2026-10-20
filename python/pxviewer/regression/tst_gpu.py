@@ -25,7 +25,8 @@ from pxviewer.regression.tst_utils import tmp_dir
 #: the module decides from the environment, so a stale variable is a wrong answer.
 GPU_ENV = ("QTWEBENGINE_CHROMIUM_FLAGS", "QTWEBENGINE_DISABLE_SANDBOX",
            "PXVIEWER_GPU", "_PXVIEWER_GL_RETRIED", "_PXVIEWER_SANDBOX_RETRIED",
-           "XDG_CACHE_HOME")
+           "XDG_CACHE_HOME", "DISPLAY", "WAYLAND_DISPLAY", "QT_QPA_PLATFORM",
+           "LIBGL_ALWAYS_SOFTWARE", "CONDA_PREFIX")
 
 
 def quiet(*args):
@@ -366,6 +367,111 @@ def exercise_sandbox_verdict_survives_a_later_gpu_verdict():
         gpu.configure("auto", log=quiet)
         assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
         assert flags() == gpu.KEEP_AWAKE_FLAGS     # hardware verdict trusted too
+
+
+# -- display provisioning -----------------------------------------------------
+
+class _FakeProc(object):
+    """A Popen stand-in: alive until killed, so readiness polling can proceed."""
+    def poll(self):
+        return None
+
+    def kill(self):
+        pass
+
+    def terminate(self):
+        pass
+
+
+def _spawn_that_claims_ready(calls):
+    """A spawn that immediately 'creates' the X socket the wait loop looks for."""
+    def spawn(argv):
+        n = argv[1].lstrip(":")
+        d = "/tmp/.X11-unix"
+        if not os.path.isdir(d):
+            os.mkdir(d)
+        sock = os.path.join(d, "X%s" % n)
+        open(sock, "w").close()
+        calls.append((argv, sock))
+        return _FakeProc()
+    return spawn
+
+
+def _linux_platform():
+    """Pretend to be Linux: sys.platform is just a string, and assigning it is
+    narrower than teaching ensure_display a parameter for one word."""
+    saved = sys.platform
+    sys.platform = "linux"
+    return saved
+
+
+def exercise_ensure_display_needs_nothing_when_a_display_exists():
+    """DISPLAY/WAYLAND_DISPLAY set means a display exists — nothing to do."""
+    with clean_environment():
+        os.environ["DISPLAY"] = ":0"
+        assert gpu.ensure_display(log=quiet) is True
+
+
+def exercise_ensure_display_respects_an_explicit_platform():
+    """A set QT_QPA_PLATFORM is the caller driving — even offscreen."""
+    with clean_environment():
+        os.environ["QT_QPA_PLATFORM"] = "offscreen"
+        assert gpu.ensure_display(log=quiet) is True
+
+
+def exercise_ensure_display_fails_loudly_without_xvfb():
+    """Headless with no Xvfb to spawn: False, and the log says how to get one."""
+    with clean_environment():
+        saved = _linux_platform()
+        try:
+            msgs = []
+            assert gpu.ensure_display(log=msgs.append, find_xvfb=lambda: None) is False
+            assert any("xvfb" in m.lower() for m in msgs)
+            assert "DISPLAY" not in os.environ
+        finally:
+            sys.platform = saved
+
+
+def exercise_ensure_display_spawns_xvfb_when_headless():
+    """No display + Xvfb present: spawn it, point DISPLAY at it, and pin the
+    software-WebGL/sandbox defaults so configure() never exec-restarts — which
+    would kill a stdio MCP handshake mid-flight."""
+    with clean_environment():
+        saved = _linux_platform()
+        calls = []
+        try:
+            assert gpu.ensure_display(
+                log=quiet, find_xvfb=lambda: "/sbin/Xvfb",
+                spawn=_spawn_that_claims_ready(calls)) is True
+            display = os.environ["DISPLAY"]
+            assert display.startswith(":")
+            assert calls and calls[0][0][1] == display
+            assert os.environ["PXVIEWER_GPU"] == "software"
+            assert os.environ["LIBGL_ALWAYS_SOFTWARE"] == "1"
+            assert os.environ["QTWEBENGINE_DISABLE_SANDBOX"] == "1"
+            # the next call sees the display it just made — a no-op
+            assert gpu.ensure_display(log=quiet, find_xvfb=lambda: None) is True
+        finally:
+            sys.platform = saved
+            for _argv, sock in calls:
+                os.unlink(sock)
+
+
+def exercise_ensure_display_env_defaults_do_not_clobber_user_choice():
+    """setdefault, not assignment: an explicit environment always wins."""
+    with clean_environment():
+        saved = _linux_platform()
+        calls = []
+        try:
+            os.environ["PXVIEWER_GPU"] = "hardware"
+            assert gpu.ensure_display(
+                log=quiet, find_xvfb=lambda: "/sbin/Xvfb",
+                spawn=_spawn_that_claims_ready(calls)) is True
+            assert os.environ["PXVIEWER_GPU"] == "hardware"
+        finally:
+            sys.platform = saved
+            for _argv, sock in calls:
+                os.unlink(sock)
 
 
 def run():

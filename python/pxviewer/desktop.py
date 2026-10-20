@@ -14312,8 +14312,13 @@ def run_desktop(host: str = "127.0.0.1", port: int = 5173,
     """Start the desktop app with viewport and controls windows."""
     from . import gpu as gpu_backend
 
-    # Before any QtWebEngine/QApplication exists: choose the GL backend. On a machine
-    # whose GPU cannot provide WebGL (common on VMs) this arms a one-time restart into
+    # Before any Qt/QApplication exists: a headless Linux box gets a spawned Xvfb
+    # (and software-WebGL defaults) so the same command works with and without a
+    # display. See pxviewer.gpu.
+    gpu_backend.ensure_display()
+
+    # Before any QtWebEngine exists: choose the GL backend. On a machine whose GPU
+    # cannot provide WebGL (common on VMs) this arms a one-time restart into
     # software rendering rather than leaving the viewport blank. See pxviewer.gpu.
     mode = gpu_backend.configure(gpu)
     _check_qt()

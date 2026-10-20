@@ -29,6 +29,7 @@ after. A hand-set ``QTWEBENGINE_CHROMIUM_FLAGS`` is always left alone.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
@@ -36,13 +37,15 @@ import platform
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 __all__ = [
     "SOFTWARE_FLAGS", "KEEP_AWAKE_FLAGS", "configure", "autofix_enabled",
     "on_webgl_missing", "mark_hardware_ok", "webgl_probe_js",
     "sandbox_autofix_enabled", "mark_sandbox_ok", "on_renderer_unavailable",
+    "ensure_display",
 ]
 
 #: Chromium flags that route WebGL to the bundled SwiftShader (pure CPU), bypassing the
@@ -229,6 +232,105 @@ def on_renderer_unavailable(
     os.environ[_SANDBOX_RETRY_ENV] = "1"
     _disable_sandbox()
     (restart or _restart)(sys.executable, _relaunch_argv())
+
+
+# -- display provisioning ------------------------------------------------------
+
+_XVFB_SCREEN = ("-screen", "0", "1600x1200x24")
+
+
+def ensure_display(
+    *,
+    log: Callable[[str], None] = print,
+    find_xvfb: Optional[Callable[[], Optional[str]]] = None,
+    spawn: Optional[Callable[[list], Any]] = None,
+    ready_timeout: float = 5.0,
+) -> bool:
+    """Provide a display when the platform needs one and none exists: spawn Xvfb
+    on the first free display number and point ``DISPLAY`` at it, so
+    ``python -m pxviewer mcp``/``desktop`` just work on a headless Linux box.
+
+    Returns True when a display is available afterwards (native windowing, an
+    existing ``DISPLAY``/``WAYLAND_DISPLAY``, an explicit ``QT_QPA_PLATFORM``
+    choice, or a spawned Xvfb that came up), False when headless and no Xvfb
+    could be found — the caller proceeds so Qt's own error also shows.
+
+    A headless spawn also defaults the process to software WebGL
+    (``PXVIEWER_GPU``, ``LIBGL_ALWAYS_SOFTWARE``) and off the Chromium sandbox
+    (``QTWEBENGINE_DISABLE_SANDBOX``, which cannot spawn renderers inside
+    containers — the app never relied on that isolation; it serves only its own
+    loopback content). Every default is a setdefault: an explicit environment
+    always wins.
+    """
+    if sys.platform in ("darwin", "win32"):
+        return True
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return True
+    if os.environ.get("QT_QPA_PLATFORM"):  # an explicit platform choice wins
+        return True
+
+    xvfb = (find_xvfb or _find_xvfb)()
+    if xvfb is None:
+        log("pxviewer: no display (DISPLAY unset) and no Xvfb found — this run "
+            "cannot show or render a viewport.")
+        log("          install it:  sudo apt install xvfb")
+        log("          or conda:    conda install -n pxviewer -c conda-forge "
+            "xorg-x11-server-xvfb-cos7-x86_64")
+        return False
+
+    for n in range(99, 200):
+        if not Path(f"/tmp/.X{n}-lock").exists() \
+                and not Path(f"/tmp/.X11-unix/X{n}").exists():
+            break
+    else:
+        log("pxviewer: no free X display number in :99–:199")
+        return False
+
+    proc = (spawn or _spawn)([xvfb, f":{n}", "-nolisten", "tcp", *_XVFB_SCREEN])
+    sock = Path(f"/tmp/.X11-unix/X{n}")
+    deadline = time.time() + ready_timeout
+    while time.time() < deadline and proc.poll() is None:
+        if sock.exists():
+            break
+        time.sleep(0.05)
+    if not sock.exists():
+        proc.kill()
+        log(f"pxviewer: Xvfb on :{n} did not come up in {ready_timeout:.0f}s")
+        return False
+
+    atexit.register(lambda p=proc: p.poll() is None and p.terminate())
+
+    os.environ["DISPLAY"] = f":{n}"
+    os.environ.setdefault("PXVIEWER_GPU", "software")
+    os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+    os.environ.setdefault(_SANDBOX_ENV, "1")
+    log(f"pxviewer: headless — spawned Xvfb on :{n} (software WebGL, "
+        "Chromium sandbox off).")
+    return True
+
+
+def _find_xvfb() -> Optional[str]:
+    """The Xvfb binary: on PATH, or inside the active conda env (the CDT package
+    lands under the env's sysroot rather than ``bin/``)."""
+    import glob
+    import shutil
+
+    found = shutil.which("Xvfb")
+    if found:
+        return found
+    prefix = os.environ.get("CONDA_PREFIX")
+    if not prefix:
+        return None
+    for pat in ("bin/Xvfb", "*/sysroot/*/bin/Xvfb", "*/sysroot/usr/bin/Xvfb"):
+        for hit in sorted(glob.glob(os.path.join(prefix, pat))):
+            if os.access(hit, os.X_OK):
+                return hit
+    return None
+
+
+def _spawn(argv: list):
+    return subprocess.Popen(argv, stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL)
 
 
 # -- internals ---------------------------------------------------------------
