@@ -87,6 +87,62 @@ def exercise_load_select_describe_without_a_viewer():
         app.stop()
 
 
+def exercise_oversized_maps_open_decimated():
+    """A grid too heavy for marching cubes opens already decimated — the
+    quality knob's automatic position — and ``set_volume_downsample`` moves
+    it by hand. A rewritten display map must regenerate the decimation:
+    drawing a stale pre-mask decimated copy is exactly the divergence the
+    cache invalidation exists to prevent."""
+    if not have("iotbx.map_manager"):
+        return  # no cctbx: nothing to decimate anyway
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app._DOWNSAMPLE_VOXEL_CAP = 10_000          # a 24^3 grid counts as huge
+        data = VolumeData.from_numpy(np.zeros((24, 24, 24), dtype=np.float32),
+                                     name="big")
+        vid = app._add_volume(data, "big")
+        entry = app._volume_entry(vid)
+        assert entry["localres_downsample"] == 2, entry.get("localres_downsample")
+        vols = app._webapp.volume_dir / "vols"
+        dec = vols / f"{vid}.d2.map"
+        assert dec.is_file(), "no decimated display copy written"
+        scene = (app._webapp.volume_dir
+                 / app._write_volume_scene().lstrip("/")).read_text()
+        assert f"{vid}.d2.map" in scene, "the scene still draws the full grid"
+
+        small = VolumeData.from_numpy(np.zeros((10, 10, 10), dtype=np.float32),
+                                      name="small")
+        vid2 = app._add_volume(small, "small")
+        assert int(app._volume_entry(vid2).get("localres_downsample") or 1) == 1
+
+        # The display map rewritten (mask, frame shift): the coarse copy must be
+        # re-derived, not left drawing the pre-rewrite density.
+        data2 = VolumeData.from_numpy(np.ones((24, 24, 24), dtype=np.float32),
+                                      name="big")
+        app._write_display_map(vid, data2)
+        coarse = VolumeData.from_map_file(str(dec))
+        assert float(coarse.array.mean()) > 0.9, "decimated copy kept stale density"
+
+        # The knob moves by hand, under the canonical name.
+        app.set_volume_downsample(vid, 3)
+        assert (vols / f"{vid}.d3.map").is_file()
+        scene = (app._webapp.volume_dir
+                 / app._write_volume_scene().lstrip("/")).read_text()
+        assert f"{vid}.d3.map" in scene
+        app.set_volume_downsample(vid, 1)
+        scene = (app._webapp.volume_dir
+                 / app._write_volume_scene().lstrip("/")).read_text()
+        assert ".d3.map" not in scene and f"{vid}.map" in scene
+    finally:
+        app.stop()
+
+
 def exercise_invoke_on_gui_marshals_onto_the_app_thread():
     """The dispatcher the kernel/MCP marshal through is the same one the
     desktop uses — it must deliver a callable on this thread and return it."""

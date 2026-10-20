@@ -3824,7 +3824,7 @@ class ControlsWindow:
             # Plain maps default to Full; the localres wizard defaults its map to 4x.
             def _set_localres_ds(v, it=it):
                 it["localres_downsample"] = v
-                self._safe(lambda: self._desktop.set_localres_downsample(vid, v))
+                self._safe(lambda: self._desktop.set_volume_downsample(vid, v))
 
             add_combo("Downsample",
                       [("Full", 1), ("2×", 2), ("4×", 4), ("8×", 8)],

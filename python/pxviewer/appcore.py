@@ -5004,6 +5004,14 @@ class AppCore:
         vols_dir = self._webapp.volume_dir / "vols"
         vols_dir.mkdir(parents=True, exist_ok=True)
         data.write_map(str(vols_dir / f"{vid}.map"), working_frame=True)
+        entry = self._volume_entry(vid)
+        if entry is not None and entry.pop("downsample_urls", None):
+            # The file the decimated copies were derived from just changed (a
+            # mask, a frame shift) — regenerate the active one or the coarse
+            # map keeps drawing the pre-rewrite density.
+            factor = int(entry.get("localres_downsample") or 1)
+            if factor > 1:
+                self._downsample_url(entry, factor)
 
 
     def _display_map_data(self, entry):
@@ -5099,6 +5107,14 @@ class AppCore:
             "negative_iso": None, "negative_visible": True,
             "negative_opacity": 1.0, "negative_style": style,
         })
+        entry = self._volumes[-1]
+        auto = self._auto_downsample_factor(data)
+        if auto > 1:
+            entry["localres_downsample"] = auto
+            self._downsample_url(entry, auto)
+            self._status(
+                f"{name}: large grid — drawing a {auto}x-downsampled copy "
+                f"(Downsample: Full restores)")
         self._reload_viewport()  # re-asserts the clip; no session exists to tell yet
         self._emit_loaded_changed()
         return vid
@@ -5488,15 +5504,50 @@ class AppCore:
         return float(st["mean"] + float(entry["iso"]) * st["std"])
 
 
-    def set_localres_downsample(self, full_vid: str, factor: int) -> None:
+    def _downsample_url(self, entry: dict, factor: int) -> str:
+        """The decimated display copy's URL, writing the file on first use.
+
+        The source is the display map (already in the working frame), so the
+        coarse map lands exactly where the full one draws."""
+        urls = entry.setdefault("downsample_urls", {})
+        if factor not in urls:
+            from .volume_io import VolumeData
+
+            vols_dir = self._webapp.volume_dir / "vols"
+            shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
+            name = f"{entry['id']}.d{factor}.map"
+            shown.decimated(factor).write_map(str(vols_dir / name))
+            urls[factor] = f"{self._webapp.url}vols/{name}"
+        return urls[factor]
+
+    #: Voxel count above which a map opens decimated. Marching cubes cost scales
+    #: with the grid — a 400^3 map builds ~64x the wire of a 160^3 one — and a
+    #: cryo-EM-sized full-res mesh is what kills the renderer process, so an
+    #: oversized map opens at the factor that lands it under the cap rather than
+    #: dying first and being rescued after. The cap is sized for software GL,
+    #: where the margin is thinnest. Display-only: ``entry["data"]`` keeps
+    #: the full grid, and Downsample: Full restores it.
+    _DOWNSAMPLE_VOXEL_CAP = 2 ** 23
+
+    def _auto_downsample_factor(self, data) -> int:
+        """The factor that brings ``data``'s grid under the voxel cap (1 = fine)."""
+        voxels = 1
+        for n in data.grid:
+            voxels *= int(n)
+        if voxels <= self._DOWNSAMPLE_VOXEL_CAP:
+            return 1
+        return max(1, math.ceil((voxels / self._DOWNSAMPLE_VOXEL_CAP) ** (1 / 3)))
+
+    def set_volume_downsample(self, vid: str, factor: int) -> None:
         """Set a map's display downsampling: draw every nth voxel (1 = full grid).
 
-        Generic, not a localres setting (the key name is the wire protocol's history):
-        the plain isosurface redraws from an exactly on-lattice decimated copy served
-        beside the full map, and the color-by-resolution surface rebuilds client-side
-        from the grids the browser already holds. One dropdown, both surfaces.
+        The plain isosurface redraws from an exactly on-lattice decimated copy
+        served beside the full map, and the color-by-resolution surface rebuilds
+        client-side from the grids the browser already holds. One knob, both
+        surfaces — it is the quality control for maps whose full-res mesh the
+        renderer cannot carry.
         """
-        entry = self._volume_entry(full_vid)
+        entry = self._volume_entry(vid)
         if entry is None:
             return
         factor = max(1, int(factor))
@@ -5505,22 +5556,17 @@ class AppCore:
         if session is not None:
             session.set_localres_downsample(factor)   # the colored surface's path
         if factor > 1:
-            urls = entry.setdefault("downsample_urls", {})
-            if factor not in urls:
-                from .volume_io import VolumeData
-
-                vols_dir = self._webapp.volume_dir / "vols"
-                # Decimate the display copy (already in the working frame), so the
-                # coarse map lands exactly where the full one draws.
-                shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
-                name = f"{entry['id']}.d{factor}.map"
-                shown.decimated(factor).write_map(str(vols_dir / name))
-                urls[factor] = f"{self._webapp.url}vols/{name}"
+            self._downsample_url(entry, factor)
         if not entry.get("color_by_resolution"):
             # The plain surface is what is on screen: swap the scene to the coarser
             # (or full) file. Parked-plain maps pick the right file up on any reload.
             self._reload_viewport()
         self._emit_loaded_changed()  # the pane shows the current factor
+
+    def set_localres_downsample(self, full_vid: str, factor: int) -> None:
+        """Deprecated name for :meth:`set_volume_downsample` — the key is the wire
+        protocol's history; the setting is generic to any map."""
+        self.set_volume_downsample(full_vid, factor)
 
 
     #: The one busy label spanning "payload streamed" to "the viewport has drawn it".
