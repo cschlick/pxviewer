@@ -6894,7 +6894,7 @@ class DesktopApp(AppCore):
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 5173,
-                 can_hide: bool = False):
+                 can_hide: bool = False, mcp_port: "int | None" = None):
         _check_qt()
 
         from PySide6.QtWidgets import QApplication
@@ -6931,7 +6931,8 @@ class DesktopApp(AppCore):
         # empty screen for that long looks like a launch that failed.
         self._splash = _show_splash()
 
-        super().__init__(host=host, port=port, can_hide=can_hide)
+        super().__init__(host=host, port=port, can_hide=can_hide,
+                         mcp_port=mcp_port)
 
         self._viewport = ViewportWindow()
         self._controls = ControlsWindow(self)
@@ -7140,7 +7141,8 @@ class DesktopApp(AppCore):
 
 
 def run_desktop(host: str = "127.0.0.1", port: int = 5173,
-                gpu: Optional[str] = None) -> int:
+                gpu: Optional[str] = None,
+                mcp_port: "int | None" = None) -> int:
     """Start the desktop app with viewport and controls windows.
 
     With no display — or ``PXVIEWER_HEADLESS=1`` — there is no desktop to
@@ -7158,7 +7160,7 @@ def run_desktop(host: str = "127.0.0.1", port: int = 5173,
         os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
     if headless_env or not have_display:
         from .appcore import run_core
-        return run_core(host=host, port=port)
+        return run_core(host=host, port=port, mcp_port=mcp_port)
 
     # Before any QtWebEngine exists: choose the GL backend. On a machine whose GPU
     # cannot provide WebGL (common on VMs) this arms a one-time restart into
@@ -7170,7 +7172,8 @@ def run_desktop(host: str = "127.0.0.1", port: int = 5173,
     # software renderer (SwiftShader) segfaults on. Software and user-custom flags fall
     # back to the reload-based hide, which is slower to the eye but never disposes
     # anything mid-frame. See DesktopApp.__init__.
-    desktop = DesktopApp(host=host, port=port, can_hide=(mode == "hardware"))
+    desktop = DesktopApp(host=host, port=port, can_hide=(mode == "hardware"),
+                         mcp_port=mcp_port)
     try:
         return desktop.start()
     finally:

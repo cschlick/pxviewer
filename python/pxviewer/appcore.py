@@ -352,7 +352,8 @@ class AppCore:
     """
 
     def __init__(self, host: str = "127.0.0.1", port: int = 5173,
-                 can_hide: bool = False, viewport=None):
+                 can_hide: bool = False, viewport=None,
+                 mcp_port: "int | None" = None):
         # QCoreApplication, not QApplication: the core only needs the QObject
         # machinery — bridge signals and the GUI-thread invoker marshal work
         # onto the app thread through it — which needs no display. A GUI
@@ -367,6 +368,10 @@ class AppCore:
 
         self._host = host
         self._port = port
+        # The HTTP MCP endpoint agents attach to (None -> MCP_PORT or
+        # PXVIEWER_MCP_PORT). The webapp port above is the viewer's own
+        # statics/ws server — unrelated.
+        self._mcp_port = mcp_port
         # Whether objects can be hidden at all. Hiding recomposes the scene without the
         # hidden object and reloads the page — a clean context teardown that never disposes
         # anything mid-frame. A software renderer (SwiftShader) segfaults even on that, so
@@ -611,7 +616,9 @@ class AppCore:
         import os as _os
         if _os.environ.get("PXVIEWER_MCP", "1") not in ("0", "false", "no"):
             from . import mcp_server
-            mcp_server.attach(self)
+            port = self._mcp_port or int(
+                _os.environ.get("PXVIEWER_MCP_PORT") or mcp_server.MCP_PORT)
+            mcp_server.attach(self, port=port)
 
     # -- hooks a GUI overrides ------------------------------------------------
 
@@ -7725,7 +7732,8 @@ class AppCore:
         return cached
 
 
-def run_core(host: str = "127.0.0.1", port: int = 5173) -> int:
+def run_core(host: str = "127.0.0.1", port: int = 5173,
+             mcp_port: "int | None" = None) -> int:
     """Run the GUI-agnostic core: webapp + MCP + a headless browser if present.
 
     The headless story for ``python -m pxviewer`` — the same AppCore the
@@ -7735,7 +7743,8 @@ def run_core(host: str = "127.0.0.1", port: int = 5173) -> int:
     """
     from .browser import try_browser_viewport
 
-    app = AppCore(host=host, port=port, viewport=try_browser_viewport())
+    app = AppCore(host=host, port=port, viewport=try_browser_viewport(),
+                  mcp_port=mcp_port)
     try:
         return app.start()
     finally:

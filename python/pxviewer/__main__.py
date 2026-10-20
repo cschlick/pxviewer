@@ -114,6 +114,10 @@ def main() -> None:
     desktop.add_argument("--host", default="127.0.0.1", help="Host to bind")
     desktop.add_argument("--port", type=int, default=5173, help="Port for the embedded webapp server")
     desktop.add_argument(
+        "--mcp-port", type=int, default=None,
+        help="Port for the MCP HTTP endpoint agents attach to "
+             "(default 8753, PXVIEWER_MCP_PORT overrides; PXVIEWER_MCP=0 disables)")
+    desktop.add_argument(
         "--gpu", choices=["auto", "hardware", "software"], default=None,
         help="WebGL backend: auto (detect, fall back to software), hardware (force GPU, "
              "show raw errors), software (force SwiftShader). Default auto; also "
@@ -253,7 +257,8 @@ def main() -> None:
 
     elif args.command == "desktop":
         from .desktop import run_desktop
-        sys.exit(run_desktop(host=args.host, port=args.port, gpu=args.gpu))
+        sys.exit(run_desktop(host=args.host, port=args.port, gpu=args.gpu,
+                             mcp_port=args.mcp_port))
 
     elif args.command == "mcp":
         from .mcp_server import run as run_mcp
