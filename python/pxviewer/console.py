@@ -439,7 +439,9 @@ BANNER_MAX_COLUMNS = 38
 #: pane's width breaks twice and reads like a ransom note.
 CONSOLE_NAMES = [
     ("session", "The active model as the viewer sees it: selection, color, "
-                "representations, measurements. Re-binds when you switch models."),
+                "representations, measurements. Re-binds when you switch "
+                "models. Reps layer: set_representation replaces, "
+                "add_representation(on=selection) stacks a subset on top."),
     ("app", "The desktop: every object loaded, and every action the panels take — "
             "loading, validation, minimization, maps."),
     ("api", "A categorized map of everything session can do. Type api, or "

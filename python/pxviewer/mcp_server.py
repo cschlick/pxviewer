@@ -398,6 +398,13 @@ def _make_server():
         - ``api``: categorized map of the API (api.find("color")).
         - ``np``: numpy.  ``help``: the console guide (bare) or help(obj).
 
+        Scenes compose — representations are a stack, not a mode:
+        ``session.set_representation("cartoon")`` replaces the whole stack;
+        ``session.add_representation("ball_and_stick", on=sel)`` layers a
+        subset on top, where ``sel`` is anything ``session.select_by(...)``
+        returns (e.g. ``session.select_by(selection="resseq 70:76")``).
+        ``session.color_by(...)`` resets to one rep — re-add layers after it.
+
         Variables persist between calls — the kernel is shared state.
         Returns {status, stdout, stderr, result, data, error}: ``result``
         is the repr of the last expression; ``data`` is its mimebundle (an
