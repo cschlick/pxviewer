@@ -307,15 +307,23 @@ bridge. Representation state (type, coloring, opacity, scope) is specified in
 Python via MolViewSpec and replayed to viewers that connect later.
 
 \textbf{The desktop app} embeds the same frontend in QtWebEngine
-(PySide6) beside a native controls window. Pyside is a natural fit for the Python-dominant cctbx ecosystem. 
+(PySide6) beside a native controls window. Pyside is a natural fit for the Python-dominant cctbx ecosystem.
 Users who prefer it can instead
-point any browser at a session served by \texttt{pxviewer serve}. 
+point any browser at a session served by \texttt{pxviewer serve}.
 The protocol is identical either way, and anticipates future development where the controls window could be implemented in an alternative to PySide6/Qt.
+The separation is concrete rather than aspirational: all application state
+and operations live in a GUI-agnostic \texttt{AppCore} that imports no widget
+toolkit, and the desktop is an adapter over it --- \texttt{DesktopApp}
+subclasses it to attach the windows. The same object runs with no display at
+all, hosting the Mol* page in headless Chromium instead of QtWebEngine, which
+is how agent-driven figure generation works on a machine with no GUI
+(Sec.~\ref{sec:mcp}).
 Enforcing a separation between the GUI widgets and the molecular view makes continued development as easy as possible.
 
 The four components aim to map onto a model--view--controller pattern, with the
 controller role split across two surfaces. The \emph{model} is the Python
-session state: the \texttt{mmtbx.model.manager}, the current selection,
+session state owned by \texttt{AppCore}: the \texttt{mmtbx.model.manager}, the
+current selection,
 representation specifications, clipping and camera intent, etc. A single
 authoritative store of everything the interface displays. The \emph{view} is
 the Mol* frontend, which holds no  \pxviewer{} state of its own. It
@@ -599,7 +607,12 @@ can drive the \emph{visible} viewer rather than a headless approximation of
 it. The server attaches to a running application over HTTP for interactive
 sessions, or spawns its own instance over stdio; in both cases the user
 watches the same window the agent is manipulating, which makes an automated
-figure-construction sequence inspectable and interruptible.
+figure-construction sequence inspectable and interruptible. Where no display
+exists at all, the spawned instance is the GUI-agnostic core: the Mol* page
+runs in headless Chromium, so frames, screenshots and saved views are the
+same rendered output the desktop would produce --- \texttt{python -m
+pxviewer mcp} works unchanged on a figure-generation box, with no X11 or Qt
+widgets involved.
 
 Rather than mirror the API through a schema of wrapped verbs, the server
 hands the agent the application's own Python kernel: one tool,

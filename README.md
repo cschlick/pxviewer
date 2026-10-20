@@ -708,9 +708,9 @@ structures, run validation, compose figures and inspect the result live.
 
 Two ways to connect:
 
-**Give the agent its own viewer** — `python -m pxviewer mcp` spawns a
-`DesktopApp` the server owns, over stdio (real windows open; you can watch the
-agent work):
+**Give the agent its own viewer** — `python -m pxviewer mcp` spawns the app
+the server owns, over stdio (real windows open where a display exists; you can
+watch the agent work):
 
 ```json
 {"mcpServers": {"pxviewer": {
@@ -731,30 +731,27 @@ For Devin this goes in `.devin/mcp_config.local.json`; for Claude Code,
 JSON in `.mcp.json`). Both endpoints listen on loopback only and refuse
 requests carrying a browser `Origin` header.
 
-**Headless machines** (a figure-generation box with no display): nothing
-extra to configure — the same commands work. When `DISPLAY` is unset on
-Linux, pxviewer spawns its own Xvfb and defaults to software WebGL
-(SwiftShader) and a sandbox-free Chromium, so
+**Headless machines** (a figure-generation box with no display): the same
+commands work, with no X11 at all. pxviewer's semantics live in a GUI-agnostic
+`AppCore` — the desktop's widgets are an adapter on top of it — and the Mol*
+page that does the rendering is just a web page: headless it is hosted by
+Chromium via playwright instead of QtWebEngine. So on a box with no display,
 
 ```bash
 python -m pxviewer mcp        # stdio — the agent's own invisible viewer
-python -m pxviewer desktop    # HTTP attach at http://127.0.0.1:8753/mcp
+python -m pxviewer desktop    # headless core; HTTP attach at http://127.0.0.1:8753/mcp
 ```
 
-both render normally, without a window ever appearing. The installer already
-puts Xvfb in the `pxviewer` env on Linux (conda-forge's CDT build, no sudo);
-if it is missing, pxviewer prints the one-line install and refuses quietly
-rather than hanging.
+run the core directly: load/fetch/select/validate/kernel all work, and
+screenshots come back as real rendered frames (headless Chromium does WebGL
+in software via SwANGLE). `PXVIEWER_HEADLESS=1` forces this path even with a
+display — useful for a dedicated figure box. The installer puts playwright and
+its `chromium --only-shell` browser in the env on Linux; without it the core
+still runs — every tool except screenshots — and says how to add it.
 
-Why this rather than `QT_QPA_PLATFORM=offscreen` or `xvfb-run`: the offscreen
-platform cannot give Chromium a WebGL context (its GL init aborts under
-offscreen), and the auto WebGL probe in `pxviewer.gpu` `exec`-restarts the
-process when hardware fails — harmless on a desktop, fatal to a stdio MCP
-handshake. Auto-Xvfb pre-empts both: software GL is chosen up front and the
-Chromium sandbox is disabled (containers cannot spawn it; the app never
-relied on that isolation — it only serves its own loopback content). Every
-default is overridable — `DISPLAY`, `PXVIEWER_GPU`,
-`QTWEBENGINE_DISABLE_SANDBOX`, `QT_QPA_PLATFORM` are honored when set.
+If Xvfb *is* present, a display-less `desktop`/`mcp` still prefers the
+full `DesktopApp` under it (real widgets a VNC/forwarded session can show);
+`PXVIEWER_HEADLESS=1` opts out.
 
 ## Live wire protocol (`pxviewer-live/1`)
 
