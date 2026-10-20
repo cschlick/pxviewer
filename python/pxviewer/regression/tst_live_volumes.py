@@ -59,6 +59,17 @@ def exercise_volume_appearance_commands_reach_the_client():
                 assert await next_text(ws, "volume_iso") == {
                     "type": "volume_iso", "ref": "vol5", "value": 2.5}
 
+                # A boxed grid contours absolutely, and spells the negative out.
+                live.set_volume_iso("vol5", -1.4, kind="absolute",
+                                    negative_value=-4.1)
+                assert await next_text(ws, "volume_iso") == {
+                    "type": "volume_iso", "ref": "vol5", "value": -1.4,
+                    "kind": "absolute", "negative_value": -4.1}
+                live.set_volume_negative_iso("vol5", -4.1, kind="absolute")
+                assert await next_text(ws, "volume_negative_iso") == {
+                    "type": "volume_negative_iso", "ref": "vol5",
+                    "value": -4.1, "kind": "absolute"}
+
                 live.set_volume_position("vol4", (1.0, 2.0, 3.0))
                 assert await next_text(ws, "volume_position") == {
                     "type": "volume_position", "ref": "vol4",

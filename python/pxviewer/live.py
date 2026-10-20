@@ -1221,17 +1221,25 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def set_volume_negative_iso(self, ref: str, value: Optional[float]) -> None:
+    def set_volume_negative_iso(self, ref: str, value: Optional[float],
+                                *, kind: str = "relative") -> None:
         """Give a difference map's negative contour its own level (a magnitude in sigma),
         or ``None`` to put it back to mirroring the positive one.
 
+        ``kind="absolute"`` sends the contour's density value itself — a boxed grid
+        cannot take a sigma, and its negative level is ``mean - n*sigma``, not the
+        negated positive one.
+
         Recorded and replayed to late clients. Thread-safe."""
+        msg: dict = {"type": "volume_negative_iso", "ref": str(ref),
+                     "value": None if value is None else float(value)}
+        if kind != "relative":
+            msg["kind"] = str(kind)
         if value is None:
             self._volume_negative_iso.pop(str(ref), None)
         else:
-            self._volume_negative_iso[str(ref)] = float(value)
-        message = json.dumps({"type": "volume_negative_iso", "ref": str(ref),
-                              "value": None if value is None else float(value)})
+            self._volume_negative_iso[str(ref)] = msg
+        message = json.dumps(msg)
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -1258,15 +1266,25 @@ class LiveSession:
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
-    def set_volume_iso(self, ref: str, value: float) -> None:
+    def set_volume_iso(self, ref: str, value: float, *, kind: str = "relative",
+                       negative_value: Optional[float] = None) -> None:
         """Broadcast a command to set a volume's contour level, in sigma.
 
         The level is relative (sigma), so it means the same thing for any map — the
         viewer never has to know a map's absolute scale to contour it sensibly.
+        ``kind="absolute"`` sends an already-computed density value — how a boxed
+        (carved) grid is contoured honestly, since the box's own sigma is not the
+        map's; ``negative_value`` then carries the negative contour's absolute
+        level explicitly, because ``-absolute`` is not ``mean - n*sigma``.
         Thread-safe: may be called from any thread.
         """
-        self._volume_iso[str(ref)] = float(value)
-        message = json.dumps({"type": "volume_iso", "ref": str(ref), "value": float(value)})
+        msg: dict = {"type": "volume_iso", "ref": str(ref), "value": float(value)}
+        if kind != "relative":
+            msg["kind"] = str(kind)
+        if negative_value is not None:
+            msg["negative_value"] = float(negative_value)
+        self._volume_iso[str(ref)] = msg
+        message = json.dumps(msg)
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
@@ -2298,11 +2316,19 @@ class LiveSession:
             # A detached negative level is composed into the scene, but the viewer keeps
             # its own copy to serve wheel-driven level changes -- so it has to be told.
             for ref, level in list(self._volume_negative_iso.items()):
-                await self._locked_send(websocket, json.dumps(
-                    {"type": "volume_negative_iso", "ref": ref, "value": level}))
+                msg = {"type": "volume_negative_iso", "ref": ref}
+                if isinstance(level, dict):
+                    msg.update(level)
+                else:
+                    msg["value"] = level
+                await self._locked_send(websocket, json.dumps(msg))
             for ref, level in list(self._volume_iso.items()):
-                await self._locked_send(websocket, json.dumps(
-                    {"type": "volume_iso", "ref": ref, "value": level}))
+                msg = {"type": "volume_iso", "ref": ref}
+                if isinstance(level, dict):
+                    msg.update(level)
+                else:
+                    msg["value"] = level
+                await self._locked_send(websocket, json.dumps(msg))
             for ref, style in list(self._volume_style.items()):
                 await self._locked_send(websocket, json.dumps(
                     {"type": "volume_style", "ref": ref, "style": style}))

@@ -87,6 +87,11 @@ def exercise_load_select_describe_without_a_viewer():
         app.stop()
 
 
+def _scene_text(app):
+    return (app._webapp.volume_dir
+            / app._write_volume_scene().lstrip("/")).read_text()
+
+
 def exercise_oversized_maps_open_decimated():
     """A grid too heavy for marching cubes opens already decimated — the
     quality knob's automatic position — and ``set_volume_downsample`` moves
@@ -112,9 +117,8 @@ def exercise_oversized_maps_open_decimated():
         vols = app._webapp.volume_dir / "vols"
         dec = vols / f"{vid}.d2.map"
         assert dec.is_file(), "no decimated display copy written"
-        scene = (app._webapp.volume_dir
-                 / app._write_volume_scene().lstrip("/")).read_text()
-        assert f"{vid}.d2.map" in scene, "the scene still draws the full grid"
+        assert f"{vid}.d2.map" in _scene_text(app), \
+            "the scene still draws the full grid"
 
         small = VolumeData.from_numpy(np.zeros((10, 10, 10), dtype=np.float32),
                                       name="small")
@@ -132,13 +136,79 @@ def exercise_oversized_maps_open_decimated():
         # The knob moves by hand, under the canonical name.
         app.set_volume_downsample(vid, 3)
         assert (vols / f"{vid}.d3.map").is_file()
-        scene = (app._webapp.volume_dir
-                 / app._write_volume_scene().lstrip("/")).read_text()
-        assert f"{vid}.d3.map" in scene
+        assert f"{vid}.d3.map" in _scene_text(app)
         app.set_volume_downsample(vid, 1)
-        scene = (app._webapp.volume_dir
-                 / app._write_volume_scene().lstrip("/")).read_text()
+        scene = _scene_text(app)
         assert ".d3.map" not in scene and f"{vid}.map" in scene
+    finally:
+        app.stop()
+
+
+def exercise_volume_box_carves_the_grid_and_keeps_sigma_honest():
+    """``set_volume_box`` is clip-before-extraction: the scene draws the carved
+    grid (marching cubes never sees the outside), and because the box's own
+    sigma is not the map's, the level is handed over as the absolute value the
+    sigma means on the full map. Clearing returns the full grid."""
+    if not have("iotbx.map_manager"):
+        return
+    import json
+
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        grid = np.arange(24 ** 3, dtype=np.float32).reshape(24, 24, 24)
+        vid = app._add_volume(VolumeData.from_numpy(grid, name="big"), "big")
+        app.set_volume_iso(vid, 2.0)
+        vols = app._webapp.volume_dir / "vols"
+
+        app.set_volume_box(vid, [12.0, 12.0, 12.0], 6.0)
+        entry = app._volume_entry(vid)
+        assert entry.get("box"), "box did not stick"
+        boxed = vols / f"{vid}.box.map"
+        assert boxed.is_file(), "no boxed display copy written"
+        coarse = VolumeData.from_map_file(str(boxed))
+        # radius 6 + 1 voxel margin -> 15^3 around the grid center, on-lattice.
+        assert coarse.grid == (15, 15, 15), coarse.grid
+        assert coarse.origin == (5, 5, 5), coarse.origin
+
+        scene = json.loads(_scene_text(app))
+        params = {}
+
+        def walk(node):
+            params.update(node.get("params") or {})
+            for child in node.get("children") or []:
+                walk(child)
+        walk(scene["root"])
+        assert "absolute_isovalue" in params, params
+        mean, std = app._display_map_stats(entry)
+        assert abs(params["absolute_isovalue"] - (mean + 2.0 * std)) < 1e-3, (
+            params["absolute_isovalue"], mean + 2.0 * std)
+        assert ".box.map" in _scene_text(app)
+
+        # Composition: the decimation is carved off the box now, not the full map.
+        app.set_volume_downsample(vid, 2)
+        assert (vols / f"{vid}.box.d2.map").is_file()
+        assert ".box.d2.map" in _scene_text(app)
+
+        # A display-map rewrite re-carves the box rather than leaving stale density.
+        data2 = VolumeData.from_numpy(np.ones((24, 24, 24), dtype=np.float32),
+                                      name="big")
+        app._write_display_map(vid, data2)
+        reboxed = VolumeData.from_map_file(str(boxed))
+        assert float(reboxed.array.mean()) > 0.9, "box kept stale density"
+
+        # Clearing returns the (decimated) full grid; off puts the full file back.
+        app.set_volume_box(vid)
+        assert ".box" not in _scene_text(app)
+        assert ".d2.map" in _scene_text(app)
+        app.set_volume_downsample(vid, 1)
+        scene = _scene_text(app)
+        assert ".box" not in scene and ".d" not in scene and f"{vid}.map" in scene
     finally:
         app.stop()
 

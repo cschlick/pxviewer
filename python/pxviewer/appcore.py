@@ -1287,16 +1287,30 @@ class AppCore:
         nodes = []
         for v in drawn:
             factor = int(v.get("localres_downsample") or 1)
-            url = (v.get("downsample_urls") or {}).get(factor, v["map_url"])
+            if factor > 1 and (v.get("downsample_urls") or {}).get(factor):
+                url = v["downsample_urls"][factor]
+            elif v.get("box"):
+                url = v["box_url"]
+            else:
+                url = v["map_url"]
+            iso_kind = v.get("iso_kind", "relative")
+            iso, neg_iso = v["iso"], v.get("negative_iso")
+            if v.get("box") and iso_kind == "relative":
+                # A boxed file's sigma is not the map's: hand Mol* the absolute
+                # level the sigma value means on the full map, so the pane still
+                # reads in map sigma rather than needing a boxed-σ correction.
+                mean, std = self._display_map_stats(v)
+                neg_iso = (float(v["iso"]) if neg_iso is None else float(neg_iso)) * std - mean
+                iso, iso_kind = mean + float(iso) * std, "absolute"
             nodes.append(Volume(
                 url=url, ref=v["ref"], format="map",
                 # Maps contour in sigma, which is what makes one slider range serve every
                 # map. A severity field is the exception: its levels are calibrated (1.0 *is*
                 # the outlier cut), so it must contour on the absolute value or the level
                 # would mean something different for every structure.
-                isosurface_kind=v.get("iso_kind", "relative"), isosurface_value=v["iso"],
+                isosurface_kind=iso_kind, isosurface_value=iso,
                 color=v["color"], negative_color=v.get("negative_color"),
-                negative_isosurface_value=v.get("negative_iso"),
+                negative_isosurface_value=neg_iso,
                 negative_opacity=v.get("negative_opacity"),
                 negative_style=v.get("negative_style"),
                 opacity=v["opacity"], style=v["style"],
@@ -4294,9 +4308,43 @@ class AppCore:
         control = self._control_session()
         if control is not None:
             try:
-                control.set_volume_iso(entry["ref"], self._iso_for_wire(entry, value))
+                if entry.get("box"):
+                    # The drawn repr is contoured absolutely (the boxed file's
+                    # sigma is not the map's) — a sigma message would flip its
+                    # kind back to relative and drift the level.
+                    pos, kwargs = self._boxed_iso_for_wire(entry, value)
+                    control.set_volume_iso(entry["ref"], pos, **kwargs)
+                else:
+                    control.set_volume_iso(
+                        entry["ref"], self._iso_for_wire(entry, value))
             except Exception:  # pragma: no cover - defensive
                 pass
+
+
+    def _boxed_iso_for_wire(self, entry, value: float):
+        """``(positive, kwargs)`` — a boxed grid's live contour as absolute levels.
+
+        Same conversion the scene build does, plus the negative contour spelled
+        out: ``-(absolute positive)`` is not ``mean - n*sigma``.
+        """
+        mag = value if entry.get("negative_iso") is None else entry["negative_iso"]
+        if entry.get("iso_kind") == "absolute":
+            return float(value), {"kind": "absolute",
+                                  "negative_value": -float(mag)}
+        mean, std = self._display_map_stats(entry)
+        return mean + float(value) * std, {"kind": "absolute",
+                                           "negative_value": mean - float(mag) * std}
+
+
+    def _boxed_negative_iso_for_wire(self, entry, value):
+        """A boxed difference map's detached negative contour, absolute — None
+        re-links it at the positive level's magnitude."""
+        if entry.get("iso_kind") == "absolute":
+            mag = entry["iso"] if value is None else value
+            return -float(mag)
+        mean, std = self._display_map_stats(entry)
+        mag = entry["iso"] if value is None else value
+        return mean - float(mag) * std
 
 
     @staticmethod
@@ -4386,9 +4434,15 @@ class AppCore:
         control = self._control_session()
         if control is not None:
             try:
-                control.set_volume_negative_iso(
-                    entry["ref"],
-                    None if value is None else self._iso_for_wire(entry, value))
+                if entry.get("box"):
+                    control.set_volume_negative_iso(
+                        entry["ref"],
+                        self._boxed_negative_iso_for_wire(entry, value),
+                        kind="absolute")
+                else:
+                    control.set_volume_negative_iso(
+                        entry["ref"],
+                        None if value is None else self._iso_for_wire(entry, value))
             except Exception:  # pragma: no cover - defensive
                 pass
 
@@ -5005,13 +5059,17 @@ class AppCore:
         vols_dir.mkdir(parents=True, exist_ok=True)
         data.write_map(str(vols_dir / f"{vid}.map"), working_frame=True)
         entry = self._volume_entry(vid)
-        if entry is not None and entry.pop("downsample_urls", None):
-            # The file the decimated copies were derived from just changed (a
-            # mask, a frame shift) — regenerate the active one or the coarse
-            # map keeps drawing the pre-rewrite density.
-            factor = int(entry.get("localres_downsample") or 1)
-            if factor > 1:
-                self._downsample_url(entry, factor)
+        if entry is not None:
+            # The file the derived copies were carved from just changed (a mask,
+            # a frame shift) — re-derive them or they keep drawing the
+            # pre-rewrite density.
+            had_derived = bool(entry.pop("downsample_urls", None))
+            if had_derived or entry.get("box"):
+                if entry.get("box"):
+                    self._write_boxed_display_map(entry)
+                factor = int(entry.get("localres_downsample") or 1)
+                if factor > 1:
+                    self._downsample_url(entry, factor)
 
 
     def _display_map_data(self, entry):
@@ -5504,21 +5562,121 @@ class AppCore:
         return float(st["mean"] + float(entry["iso"]) * st["std"])
 
 
+    def _display_map_stem(self, entry: dict) -> str:
+        """The base file the scene draws: the boxed copy when carved, else full."""
+        return f"{entry['id']}.box" if entry.get("box") else entry["id"]
+
+    def _display_map_stats(self, entry: dict) -> tuple:
+        """(mean, std) of the full display map — what a relative contour level
+        means on it. Computed on the flex array, not through numpy: a boxed
+        scene write would otherwise materialize a copy of the very grid the
+        box exists to avoid shipping."""
+        from scitbx.array_family import flex
+
+        from .volume_io import VolumeData
+
+        vols_dir = self._webapp.volume_dir / "vols"
+        shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
+        mv = flex.mean_and_variance(shown.map_manager.map_data().as_1d())
+        return mv.mean(), mv.unweighted_sample_standard_deviation()
+
     def _downsample_url(self, entry: dict, factor: int) -> str:
         """The decimated display copy's URL, writing the file on first use.
 
-        The source is the display map (already in the working frame), so the
-        coarse map lands exactly where the full one draws."""
+        The source is the current display base — the box when carved, else the
+        full map (already in the working frame either way) — so the coarse map
+        lands exactly where the full one draws."""
         urls = entry.setdefault("downsample_urls", {})
         if factor not in urls:
             from .volume_io import VolumeData
 
             vols_dir = self._webapp.volume_dir / "vols"
-            shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
-            name = f"{entry['id']}.d{factor}.map"
+            stem = self._display_map_stem(entry)
+            shown = VolumeData.from_map_file(str(vols_dir / f"{stem}.map"))
+            name = f"{stem}.d{factor}.map"
             shown.decimated(factor).write_map(str(vols_dir / name))
             urls[factor] = f"{self._webapp.url}vols/{name}"
         return urls[factor]
+
+    def _write_boxed_display_map(self, entry: dict) -> None:
+        """Carve the display map's box file: the grid points inside the sphere
+        ``entry["box"]`` (center in Angstrom, radius in Angstrom + a voxel of
+        margin), written beside the full map as ``<id>.box.map``.
+
+        Marching cubes pays per voxel, not per drawn triangle — a clip sphere
+        shrinks the render but not the build, which is why a full-fibril mesh
+        still dies clipped. Carving the served grid is clip-before-extraction:
+        the mesher never sees the outside. The grid is sliced on-lattice off
+        the display file, so the box lands exactly where the full map draws.
+        """
+        from .volume_io import VolumeData, grid_affine
+
+        box = entry["box"]
+        vols_dir = self._webapp.volume_dir / "vols"
+        shown = VolumeData.from_map_file(str(vols_dir / f"{entry['id']}.map"))
+        mm = shown.map_manager
+        cell_angles = np.asarray(mm.unit_cell().parameters()[3:], dtype=float)
+        if np.any(np.abs(cell_angles - 90.0) > 1e-3):
+            self._status(f"{entry['name']}: non-orthogonal grid — cannot box it")
+            entry.pop("box", None)
+            return
+        g0, steps = grid_affine(mm)
+        inv = np.linalg.inv(steps)
+        center_g = inv @ (np.asarray(box["center"], dtype=float) - g0)
+        # Per-axis halfwidth in grid units: radius over the step vector's length,
+        # plus one voxel so a contour right at the box face still closes.
+        hw = float(box["radius"]) / np.linalg.norm(steps, axis=0) + 1.0
+        dims = np.asarray(shown.grid, dtype=float)
+        lo = np.maximum(0, np.floor(center_g - hw)).astype(int)
+        hi = np.minimum(dims, np.ceil(center_g + hw) + 1).astype(int)
+        if np.any(hi - lo < 2):
+            self._status(f"{entry['name']}: box is outside the map")
+            entry.pop("box", None)
+            return
+        arr = shown.array
+        sliced = np.ascontiguousarray(
+            arr[lo[0]:hi[0], lo[1]:hi[1], lo[2]:hi[2]]).astype(np.float32)
+        new_origin = tuple(int(o) + int(l) for o, l in zip(shown.origin, lo))
+        (VolumeData.from_numpy(sliced, spacing=shown.pixel_sizes,
+                               origin=new_origin, name=f"{entry['name']} box")
+         .write_map(str(vols_dir / f"{entry['id']}.box.map")))
+        entry["box_url"] = f"{self._webapp.url}vols/{entry['id']}.box.map"
+
+    def set_volume_box(self, vid: str, center=None, radius=None) -> None:
+        """Carve a volume's display grid to a box around ``center`` (Angstroms)
+        with half-width ``radius`` — clip before extraction.
+
+        A clip sphere shrinks the render but not the marching-cubes build; the
+        box shrinks both, which is what makes a clipped mesh on a huge map safe
+        under software rendering. Everything outside the box stops existing to
+        the viewer. Contour levels stay honest: the scene contours the boxed
+        file at the absolute level the sigma value means on the full map, so
+        the number in the pane still reads in map sigma — no boxed-statistics
+        inflation. ``center=None`` clears the box back to the full grid.
+
+        Display-only: ``entry["data"]`` keeps the full map, so analysis,
+        masking and minimization are unaffected. Composes with Downsample —
+        the box is what gets decimated."""
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return
+        if center is None or radius is None:
+            if not entry.pop("box", None):
+                return
+            entry.pop("box_url", None)
+        else:
+            entry["box"] = {"center": [float(c) for c in center],
+                            "radius": float(radius)}
+            self._write_boxed_display_map(entry)
+            if entry.get("box") is None:
+                return   # unwritable box already reported
+        entry.pop("downsample_urls", None)   # the base changed — re-derive
+        factor = int(entry.get("localres_downsample") or 1)
+        if factor > 1:
+            self._downsample_url(entry, factor)
+        if not entry.get("color_by_resolution"):
+            self._reload_viewport()
+        self._emit_loaded_changed()
 
     #: Voxel count above which a map opens decimated. Marching cubes cost scales
     #: with the grid — a 400^3 map builds ~64x the wire of a 160^3 one — and a

@@ -2939,10 +2939,12 @@ const negativeHidden = new Set<string>();
  *  `window.__isoApplied` (see the harness hooks). */
 let isoApplied = 0;
 
-function isoParams(v: number) {
+function isoParams(v: number, kind?: string) {
     return (old: any) => {
         if (old.type?.name === 'isosurface') {
-            old.type.params.isoValue = { kind: 'relative', relativeValue: v };
+            old.type.params.isoValue = kind === 'absolute'
+                ? { kind: 'absolute', absoluteValue: v }
+                : { kind: 'relative', relativeValue: v };
         }
     };
 }
@@ -2952,16 +2954,25 @@ function isoParams(v: number) {
  *
  *  A difference map's second contour follows at the negative of it, unless it has been
  *  given a level of its own (see setVolumeNegativeIso).
+ *
+ *  kind='absolute' carries density values, not sigma — a boxed (carved) grid cannot
+ *  take a sigma, since its own statistics are not the map's. negative_value then
+ *  spells the second contour out: -(absolute positive) is not mean - n*sigma. The
+ *  sender has already folded any detached negative level into it, so it wins over
+ *  the local override.
  */
-async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
+async function setVolumeIso(plugin: PluginContext, ref: string, value: number,
+                            kind?: string, negativeValue?: number) {
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
     isoApplied += 1;
-    const build = plugin.state.data.build().to(repr.transform.ref).update(isoParams(value));
+    const build = plugin.state.data.build().to(repr.transform.ref).update(isoParams(value, kind));
     const negative = findVolumeNegativeReprCell(plugin, ref);
     if (negative) {
-        build.to(negative.transform.ref)
-            .update(isoParams(-(negativeIsoOverride.get(ref) ?? value)));
+        const v = kind === 'absolute'
+            ? (negativeValue ?? -value)
+            : -(negativeIsoOverride.get(ref) ?? value);
+        build.to(negative.transform.ref).update(isoParams(v, kind));
     }
     await build.commit();
 }
@@ -2972,7 +2983,18 @@ async function setVolumeIso(plugin: PluginContext, ref: string, value: number) {
  *  The two features a difference map shows are not obliged to be equally strong, and one
  *  knob driving both at once means a level that reads the green well over-contours the
  *  red, or the reverse. */
-async function setVolumeNegativeIso(plugin: PluginContext, ref: string, value: number | null) {
+async function setVolumeNegativeIso(plugin: PluginContext, ref: string,
+                                    value: number | null, kind?: string) {
+    if (kind === 'absolute') {
+        // A boxed grid's contour arrives as a density value, not a magnitude —
+        // the sender owns the semantics, so no local override is kept.
+        negativeIsoOverride.delete(ref);
+        const negative = await awaitVolumeNegativeReprCell(plugin, ref);
+        if (!negative || value === null) return;
+        await plugin.state.data.build().to(negative.transform.ref)
+            .update(isoParams(value, 'absolute')).commit();
+        return;
+    }
     if (value === null) negativeIsoOverride.delete(ref);
     else negativeIsoOverride.set(ref, value);
     const negative = await awaitVolumeNegativeReprCell(plugin, ref);
@@ -3946,11 +3968,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 }
             } else if (msg.type === 'volume_iso' && typeof msg.ref === 'string' && typeof msg.value === 'number') {
                 const ref = msg.ref;
-                applyLatest(`iso:${ref}`, msg.value, (v) => setVolumeIso(plugin, ref, v));
+                const args = { v: msg.value, kind: msg.kind, neg: msg.negative_value };
+                applyLatest(`iso:${ref}`, args,
+                            (a) => setVolumeIso(plugin, ref, a.v, a.kind, a.neg));
             } else if (msg.type === 'volume_negative_iso' && typeof msg.ref === 'string') {
                 const ref = msg.ref;
-                applyLatest(`negiso:${ref}`, typeof msg.value === 'number' ? msg.value : null,
-                            (v) => setVolumeNegativeIso(plugin, ref, v));
+                const args = { v: typeof msg.value === 'number' ? msg.value : null,
+                               kind: msg.kind };
+                applyLatest(`negiso:${ref}`, args,
+                            (a) => setVolumeNegativeIso(plugin, ref, a.v, a.kind));
             } else if (msg.type === 'volume_negative_visible' && typeof msg.ref === 'string'
                        && typeof msg.value === 'boolean') {
                 await setVolumeNegativeVisible(plugin, msg.ref, msg.value);

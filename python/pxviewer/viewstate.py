@@ -164,6 +164,7 @@ def _volume_spec(app, entry, path, data_dir, bundle_data) -> dict:
         "pinned_to": entry.get("pinned_to"),
         "color_by_resolution": bool(entry.get("color_by_resolution")),
         "downsample": int(entry.get("localres_downsample") or 1),
+        "box": dict(entry["box"]) if entry.get("box") else None,
     }
     spec["data"] = _volume_data(app, entry, path, data_dir, bundle_data)
     return spec
@@ -514,6 +515,10 @@ def _apply_volume_state(app, spec, vid) -> None:
             app.set_volume_mask(vid, spec["mask_radius"])
         except Exception:
             pass     # needs the pair; restored above when both came back
+    box = spec.get("box") or {}
+    if box.get("center") and box.get("radius"):
+        # Before the downsample: its derived file is carved off the box's.
+        app.set_volume_box(vid, box["center"], box["radius"])
     if (spec.get("downsample") or 1) > 1:
         app.set_volume_downsample(vid, int(spec["downsample"]))
     if spec.get("visible") is not None:
