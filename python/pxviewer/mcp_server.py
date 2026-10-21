@@ -365,6 +365,34 @@ def _make_server():
         "locates verbs; api itself lists them.\n"
         "  help     bare help() prints the console guide; "
         "help(obj) is Python's own help.\n\n"
+        "Capabilities — these exist, use them rather than working "
+        "around their absence:\n"
+        "  Regions & clipping: every model and map has a live clip "
+        "sphere (app.set_model_sphere, app.set_volume_sphere) and slab "
+        "clip (app.set_model_clip, app.set_volume_clip) — shader-side, "
+        "instant, reversible. For a huge map, app.set_volume_box carves "
+        "the served grid before isosurface extraction and "
+        "app.set_volume_downsample thins it — never make clipped or "
+        "cropped copies of map files to show a region.\n"
+        "  Selections are literal: app.select_by_expression / "
+        "session.select_by make real selections, then focus, clip, "
+        "highlight, measure, or give them their own representation "
+        "layer (session.add_representation(on=sel)).\n"
+        "  Representations compose: set_representation replaces the "
+        "stack, add_representation layers, color_by resets to one rep.\n"
+        "  Maps: level in sigma, style surface|mesh, color, opacity, "
+        "visibility; difference maps carry a negative contour with its "
+        "own controls; app.set_volume_mask cuts a map to a model's "
+        "footprint.\n"
+        "  Coordinates: edit session.model then session.push(); "
+        "app.minimize_model refines; the tug tools pull atoms into "
+        "density.\n"
+        "  Analysis: measurements, clashes, probe dots, "
+        "app.run_validation, real-space difference and resolution maps, "
+        "hotspot fields.\n"
+        "  Output & jobs: screenshot/save_screenshot for eyes, "
+        "app.write_object saves an object to disk, app.run_background + "
+        "app.job_state() for long work.\n\n"
         "Names you assign persist between calls — stash intermediate "
         "objects in the namespace rather than re-deriving them. Results "
         "come back as {stdout, stderr, result, data, error}: result is the "
@@ -395,7 +423,9 @@ def _make_server():
         - ``app``: the AppCore through a proxy whose calls run on the app
           thread — load_file/load_files/fetch_and_load/select_by_expression/
           run_background/job_state, everything the panels can do.
-        - ``api``: categorized map of the API (api.find("color")).
+        - ``api``: categorized map of both objects (``api.find("clip")``,
+          ``api.find("map")``) — and ``dir(app)``/``dir(session)`` list
+          every verb directly.
         - ``help``: the console guide (bare) or help(obj).
 
         Scenes compose — representations are a stack, not a mode:

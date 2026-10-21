@@ -55,6 +55,29 @@ def exercise_tools_carry_docstrings():
         assert t.description and t.description.strip(), t.name
 
 
+def exercise_the_handshake_carries_a_capability_inventory():
+    """``instructions`` is the one text every agent reads at connect time, so the
+    *existence* of the major capabilities has to be stated there — an agent
+    cannot api.find() a verb it never suspects. Pin the task-language inventory:
+    clipping, carving, decimation, selection, layered representations, sigma
+    levels, coordinate editing, analysis, jobs and output."""
+    from pxviewer import mcp_server
+
+    instructions = mcp_server._make_server().instructions
+    assert instructions, "no instructions on the server"
+
+    for task_term in (
+        "clip", "set_volume_sphere", "set_volume_box", "set_volume_downsample",
+        "select_by_expression", "add_representation", "sigma",
+        "minimize_model", "run_validation", "run_background", "screenshot",
+    ):
+        assert task_term in instructions, f"handshake never mentions {task_term!r}"
+
+    # The trap this inventory exists to close: carving new map files instead of
+    # using the live region tools — the text must steer away from it.
+    assert "never make clipped or" in instructions
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):

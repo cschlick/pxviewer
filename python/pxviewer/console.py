@@ -444,8 +444,8 @@ CONSOLE_NAMES = [
                 "add_representation(on=selection) stacks a subset on top."),
     ("app", "The desktop: every object loaded, and every action the panels take — "
             "loading, validation, minimization, maps."),
-    ("api", "A categorized map of everything session can do. Type api, or "
-            "api.find(\"color\")."),
+    ("api", "A categorized map of everything session and app can do. Type api, "
+            "or api.find(\"color\")."),
 ]
 
 #: The cctbx objects underneath, and the exact expression that reaches each. Every one

@@ -6298,12 +6298,11 @@ class AppCore:
         if not console_mod.console_available():
             return None
         from .api_guide import ApiGuide
-        from .live import LiveSession
 
         namespace = {
             "app": console_mod.GuiThreadProxy(self, self.invoke_on_gui),
             "session": self.active_model_session(),
-            "api": ApiGuide(LiveSession),
+            "api": ApiGuide.full(),
             # Over the builtin, and taking nothing from it: bare help() is the
             # console's guide, help(obj) is still Python's (see ConsoleHelp).
             "help": console_mod.ConsoleHelp(),

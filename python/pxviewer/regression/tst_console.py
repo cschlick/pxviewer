@@ -137,6 +137,35 @@ def exercise_the_guide_runs_what_it_advertises():
         dispose(app)
 
 
+def exercise_dir_of_the_proxy_is_the_wrapped_surface():
+    """dir(app) is a discovery path — if it returned proxy internals an agent
+    could never introspect the AppCore surface."""
+    from concurrent.futures import Future
+
+    from pxviewer.console import GuiThreadProxy
+
+    class Wrapped(object):
+        def semantic_method(self):
+            """A verb an agent would look for."""
+            return 1
+
+        plain_attribute = "value"
+
+    def invoke(fn):
+        fut = Future()
+        fut.set_result(fn())
+        return fut
+
+    proxy = GuiThreadProxy(Wrapped(), invoke)
+    names = dir(proxy)
+
+    assert "semantic_method" in names
+    assert "plain_attribute" in names
+    # The proxy's own machinery is hidden — the listing is the wrapped object.
+    assert "_px_invoke" not in names
+    assert len(names) > 10
+
+
 def exercise_bare_help_is_the_guide_and_help_of_a_thing_is_pythons():
     """Binding over the builtin has to take nothing away: help() is what someone types
     to learn what this console is, help(obj) is what they type for one docstring."""

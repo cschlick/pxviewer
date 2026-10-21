@@ -106,6 +106,40 @@ def exercise_the_real_livesession_is_mostly_categorized():
     assert "set_volume_color" in groups["Volumes"]
 
 
+def exercise_the_full_guide_covers_both_objects_by_task_word():
+    """``ApiGuide.full()`` is what the console binds as ``api`` — it has to cover
+    ``app`` (AppCore) as well as ``session`` (LiveSession), with the right prefix
+    on each, and a task-word search has to surface the capability an agent could
+    not otherwise know exists (the set_volume_box carve, the clip spheres)."""
+    if not have("iotbx.data_manager"):
+        print("    (skipped: iotbx.data_manager not available)")
+        return
+
+    guide = ApiGuide.full()
+    text = repr(guide)
+
+    # Both prefixes, both surfaces.
+    assert "session.select_by" in text
+    assert "app.load_file" in text
+    assert "Regions & clipping" in text
+
+    # Task-word finds: the verb behind "clip a region" / "carve a huge map" /
+    # "make it faster" does not have to be guessed.
+    for term, expected in (
+        ("clip", "app.set_volume_sphere"),
+        ("clip", "app.set_model_clip"),
+        ("box", "app.set_volume_box"),
+        ("downsample", "app.set_volume_downsample"),
+        ("mask", "app.set_volume_mask"),
+        ("sigma", "app.set_volume_iso"),
+    ):
+        found = repr(guide.find(term))
+        assert expected in found, f"find({term!r}) missed {expected}: {found}"
+
+    # App rows must not print as session.* — the prefix is the call target.
+    assert "session.set_volume_box" not in text
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
