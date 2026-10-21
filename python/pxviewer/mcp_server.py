@@ -2,7 +2,7 @@
 
 The semantic surface is one tool — ``python(code)`` — which executes in the
 app's embedded IPython kernel: the very namespace the Console tab shows
-(``session``, ``app``, ``api``, ``np``, ``help``). The objects, not the
+(``session``, ``app``, ``api``, ``help``). The objects, not the
 schema, are the API; the kernel is shared state, so names an agent assigns
 in one call are there for the next. The remaining tools are operational:
 ``status`` for scene + kernel state, ``ping``/``reload_viewport`` for
@@ -363,7 +363,7 @@ def _make_server():
         "app.select_by_expression(expr), app.job_state().\n"
         "  api      a categorized map of the API — api.find('color') "
         "locates verbs; api itself lists them.\n"
-        "  np       numpy.  help — bare help() prints the console guide; "
+        "  help     bare help() prints the console guide; "
         "help(obj) is Python's own help.\n\n"
         "Names you assign persist between calls — stash intermediate "
         "objects in the namespace rather than re-deriving them. Results "
@@ -396,7 +396,7 @@ def _make_server():
           thread — load_file/load_files/fetch_and_load/select_by_expression/
           run_background/job_state, everything the panels can do.
         - ``api``: categorized map of the API (api.find("color")).
-        - ``np``: numpy.  ``help``: the console guide (bare) or help(obj).
+        - ``help``: the console guide (bare) or help(obj).
 
         Scenes compose — representations are a stack, not a mode:
         ``session.set_representation("cartoon")`` replaces the whole stack;

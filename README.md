@@ -700,7 +700,7 @@ the same live objects — names assigned in one client are visible in the others
 ### Agents (MCP)
 
 An MCP server hands an agent that same kernel: its `python(code)` tool
-executes in the namespace above (`app`, `session`, `api`, `np`, `help`),
+executes in the namespace above (`app`, `session`, `api`, `help`),
 alongside operational tools `status`, `ping`, `screenshot`, `save_screenshot`
 and `reload_viewport`. The tool descriptions teach the namespace, so the agent
 needs no extra instructions — point its MCP config at pxviewer and it can load

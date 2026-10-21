@@ -2,7 +2,7 @@
 
 The semantic surface collapsed to ``python`` — code executes in the app's own
 IPython kernel, the same namespace the Console tab shows (``session``, ``app``,
-``api``, ``np``, ``help``), so the API is the objects rather than a schema of
+``api``, ``help``), so the API is the objects rather than a schema of
 wrapped verbs. What remains here as named tools is what exec cannot do as well:
 viewport liveness, page recovery and binary screenshot output. The contract this
 test pins is therefore small on purpose — the kernel bindings are pinned by
