@@ -3869,6 +3869,46 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 if (typeof msg.overlay === 'boolean') perf.setVisible(msg.overlay);
                 if (typeof msg.occlusionOff === 'boolean') quality.setOcclusionForcedOff(msg.occlusionOff);
                 if (typeof msg.pixelScale === 'number') quality.setPixelScale(msg.pixelScale);
+                if (msg.post && typeof msg.post === 'object') {
+                    // Merge into Mol*'s postprocessing group — each entry is a
+                    // named pass ('occlusion', 'shadow', 'outline', 'dof',
+                    // 'antialiasing', 'sharpening', 'bloom', 'background') taking
+                    // a name ('on'/'off'/'smaa'/'fxaa') or { name, params }.
+                    // One-off setProps is safe (the recursion hazard is per-frame
+                    // toggling during streaming, not an idle switch — see
+                    // InteractiveQuality's note).
+                    plugin.canvas3d?.setProps((p: Canvas3DProps) => {
+                        const post = p.postprocessing as any;
+                        post.enabled = true;
+                        for (const [k, v] of Object.entries(msg.post)) {
+                            const entry = post[k];
+                            if (!entry) continue;
+                            if (typeof v === 'string') {
+                                entry.name = v;
+                            } else if (v && typeof v === 'object') {
+                                if (typeof (v as any).name === 'string') entry.name = (v as any).name;
+                                if ((v as any).params && typeof (v as any).params === 'object') {
+                                    Object.assign(entry.params ??= {}, (v as any).params);
+                                }
+                            }
+                        }
+                    });
+                }
+                if (msg.illumination !== undefined) {
+                    // The progressive illumination pass — bounces, soft shadows,
+                    // denoise: Mol*'s closest thing to raytracing. Boolean toggles
+                    // it; an object merges params (bounces, steps, denoise). The
+                    // most expensive render mode there is — a figure switch, not
+                    // an interactive one.
+                    plugin.canvas3d?.setProps((p: Canvas3DProps) => {
+                        const il = (p as any).illumination;
+                        if (!il) return;
+                        if (typeof msg.illumination === 'boolean') il.enabled = msg.illumination;
+                        else if (msg.illumination && typeof msg.illumination === 'object') {
+                            Object.assign(il, msg.illumination);
+                        }
+                    });
+                }
             } else if (msg.type === 'markers' && Array.isArray(msg.markers)) {
                 // Where the visible markers are, for the Shift-drag hit-test (module-level,
                 // shared across sessions). We hit-test these rather than the drawn spheres.

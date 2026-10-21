@@ -782,9 +782,25 @@ class LiveSession:
     def set_perf_prefs(self, **prefs: Any) -> None:
         """Push debug render overrides to the viewer (see the frontend PerfMonitor).
 
-        Recognized keys: ``overlay`` (bool, the live HUD), ``occlusionOff`` (bool, pin SSAO
-        off), ``pixelScale`` (float, render-resolution scale). Canvas-global — every session
-        shares the one plugin, so this need only be sent on one. Thread-safe.
+        Recognized keys:
+
+        - ``overlay`` (bool): the live perf HUD.
+        - ``occlusionOff`` (bool): pin SSAO off.
+        - ``pixelScale`` (float): render-resolution scale — above 1 is
+          supersampling, the cheapest "make the picture better" switch
+          (2 is a good figure value; it multiplies pixel cost by its square).
+        - ``post`` (dict): merge into Mol*'s postprocessing group — per pass
+          (``occlusion``, ``shadow``, ``outline``, ``dof``, ``antialiasing``,
+          ``sharpening``, ``bloom``, ``background``) either a name
+          (``"on"``/``"off"``/``"smaa"``/``"fxaa"``) or
+          ``{"name": ..., "params": {...}}``.
+        - ``illumination`` (bool or dict): Mol*'s progressive illumination
+          pass — bounces, soft shadows, denoise; its closest thing to
+          raytracing, and its most expensive render mode. A figure-quality
+          switch, not an interactive one.
+
+        Canvas-global — every session shares the one plugin, so this need only
+        be sent on one. Thread-safe.
         """
         message = json.dumps({"type": "perf_prefs", **prefs})
         loop = self._loop

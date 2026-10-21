@@ -3910,9 +3910,13 @@ class AppCore:
     # -- performance debugging -------------------------------------------
 
     def set_perf_prefs(self, **prefs) -> None:
-        """Push debug render overrides (overlay, occlusionOff, pixelScale) to the viewer.
+        """Push debug render overrides to the viewer.
 
-        Canvas-global — sent on whichever session the viewport is connected to.
+        ``overlay``, ``occlusionOff``, ``pixelScale`` (supersampling above 1),
+        ``post`` (postprocessing merge: shadow/outline/dof/bloom/…), and
+        ``illumination`` (the progressive path-traced-style pass) — see
+        ``LiveSession.set_perf_prefs`` for the full key list. Canvas-global —
+        sent on whichever session the viewport is connected to.
         """
         control = self._control_session()
         if control is not None:
