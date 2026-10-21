@@ -9,7 +9,7 @@ import urllib.request
 from libtbx.test_utils import Exception_expected
 
 from pxviewer import appserver
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("websockets"):
     skip("websockets not available")
@@ -96,7 +96,7 @@ def exercise_the_ws_port_answers_plain_http_without_crashing():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

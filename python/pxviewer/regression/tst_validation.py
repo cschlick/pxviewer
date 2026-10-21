@@ -10,7 +10,8 @@ from __future__ import absolute_import, division, print_function
 import sys
 
 from pxviewer import validation
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("iotbx.data_manager"):
     skip("iotbx.data_manager not available")
@@ -162,7 +163,7 @@ def exercise_every_validator_labels_its_tab_and_explains_its_columns():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

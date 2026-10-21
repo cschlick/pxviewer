@@ -11,7 +11,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import sys
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("PySide6"):
     skip("PySide6 not available")
@@ -278,7 +278,7 @@ def exercise_z_transparency_guards_oversized_grids():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

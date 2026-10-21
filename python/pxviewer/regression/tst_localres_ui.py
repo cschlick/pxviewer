@@ -15,7 +15,8 @@ from __future__ import absolute_import, division, print_function
 import os
 import sys
 
-from pxviewer.regression.tst_utils import have, process_events, skip, tmp_dir
+from pxviewer.regression.tst_utils import (_exercise_selected, have,
+    process_events, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "numpy"):
     skip("PySide6 QtWebEngine not available")
@@ -655,7 +656,6 @@ def exercise_a_real_space_difference_is_added_as_a_difference_map():
     from pxviewer.live import LiveSession
     from pxviewer.reflections import MAP_STYLE
     from pxviewer.regression.tst_utils import data_path, dispose
-
     # With no map there is nothing to subtract from.
     app = DesktopApp(port=0)
     try:
@@ -700,7 +700,7 @@ def exercise_a_real_space_difference_is_added_as_a_difference_map():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

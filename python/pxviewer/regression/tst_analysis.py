@@ -12,7 +12,8 @@ from __future__ import absolute_import, division, print_function
 import sys
 import time
 
-from pxviewer.regression.tst_utils import data_path, dispose, have, skip
+from pxviewer.regression.tst_utils import (data_path, dispose,
+    _exercise_selected, have, skip)
 
 if not have("mmtbx", "numpy"):
     skip("mmtbx / numpy not available")
@@ -204,7 +205,6 @@ def exercise_moving_the_atoms_drops_the_shared_caches():
         print("    (skipped: PySide6 not available)")
         return
     from pxviewer.regression.tst_utils import qt_application, shipped_defaults
-
     qt_application()
     from pxviewer.desktop import DesktopApp
 
@@ -230,7 +230,7 @@ def exercise_moving_the_atoms_drops_the_shared_caches():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

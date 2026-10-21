@@ -29,7 +29,8 @@ import collections
 import struct
 import sys
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("iotbx.data_manager", "numpy", "msgpack"):
     skip("iotbx.data_manager / numpy / msgpack not available")
@@ -245,7 +246,7 @@ def exercise_an_atom_without_a_conformer_is_described_plainly():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

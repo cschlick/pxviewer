@@ -9,8 +9,8 @@ from __future__ import absolute_import, division, print_function
 import contextlib
 import sys
 
-from pxviewer.regression.tst_utils import (
-    data_path, dispose, have, qt_application, shipped_defaults, skip)
+from pxviewer.regression.tst_utils import (data_path, dispose,
+    _exercise_selected, have, qt_application, shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
             "mmtbx.geometry_restraints.reference", "numpy"):
@@ -119,7 +119,7 @@ def run():
     # so the whole file runs against a fresh install's preferences, not the user's.
     with shipped_defaults():
         for name, fn in sorted(globals().items()):
-            if name.startswith("exercise"):
+            if name.startswith("exercise") and _exercise_selected(name):
                 print("  %s" % name)
                 sys.stdout.flush()
                 fn()

@@ -25,8 +25,8 @@ import os
 import random
 import sys
 
-from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, process_events, qt_application,
+from pxviewer.regression.tst_utils import (closing_modals, data_path,
+    dispose, _exercise_selected, have, process_events, qt_application,
     shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "numpy"):
@@ -408,7 +408,7 @@ def run():
     # left blocking.
     with shipped_defaults(), closing_modals():
         for name, fn in sorted(globals().items()):
-            if name.startswith("exercise"):
+            if name.startswith("exercise") and _exercise_selected(name):
                 print("  %s" % name)
                 sys.stdout.flush()
                 fn()

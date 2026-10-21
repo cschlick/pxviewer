@@ -49,6 +49,20 @@ def skip(reason):
     sys.exit(0)
 
 
+def _exercise_selected(name):
+    """Whether an ``exercise_*`` function is in this run.
+
+    ``sys.argv[1:]`` are substrings matched against the exercise name --
+
+        python tst_desktop_interaction.py marker drag
+
+    runs every exercise whose name contains "marker" or "drag". No arguments
+    selects everything, so the full-suite invocation is unchanged.
+    """
+    patterns = sys.argv[1:]
+    return not patterns or any(p in name for p in patterns)
+
+
 @contextlib.contextmanager
 def tmp_dir(suffix=""):
     """A temporary directory, removed afterwards."""

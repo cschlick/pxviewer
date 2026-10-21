@@ -22,7 +22,8 @@ from __future__ import absolute_import, division, print_function
 import os
 import sys
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("iotbx.data_manager"):
     skip("iotbx.data_manager not available")
@@ -163,7 +164,7 @@ def exercise_a_stale_redirect_does_not_survive_configuration():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

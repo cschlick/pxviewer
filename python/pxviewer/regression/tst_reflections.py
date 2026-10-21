@@ -17,7 +17,8 @@ import sys
 
 from libtbx.test_utils import approx_equal
 
-from pxviewer.regression.tst_utils import data_path, have, skip, tmp_dir
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip, tmp_dir)
 
 if not have("iotbx.data_manager", "numpy"):
     skip("iotbx.data_manager / numpy not available")
@@ -176,7 +177,7 @@ def exercise_phased_maps_take_a_live_model_and_scale_it():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

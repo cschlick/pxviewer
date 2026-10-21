@@ -14,7 +14,7 @@ import sys
 
 from libtbx.test_utils import approx_equal, raises
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("websockets", "numpy"):
     skip("websockets / numpy not available")
@@ -396,7 +396,7 @@ def exercise_a_click_built_measurement_is_drawn_and_reported():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

@@ -22,7 +22,7 @@ import subprocess
 import sys
 import tempfile
 
-from pxviewer.regression.tst_utils import skip
+from pxviewer.regression.tst_utils import _exercise_selected, skip
 
 _here = os.path.dirname(os.path.abspath(__file__))
 _frontend = os.path.abspath(os.path.join(_here, os.pardir, os.pardir, os.pardir, "frontend"))
@@ -61,7 +61,7 @@ def exercise_the_grid_helpers_match_their_references():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

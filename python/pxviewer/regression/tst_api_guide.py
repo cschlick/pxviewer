@@ -10,7 +10,7 @@ from __future__ import absolute_import, division, print_function
 import sys
 
 from pxviewer.api_guide import ApiGuide, build_groups
-from pxviewer.regression.tst_utils import have
+from pxviewer.regression.tst_utils import _exercise_selected, have
 
 
 class Stand_in(object):
@@ -142,7 +142,7 @@ def exercise_the_full_guide_covers_both_objects_by_task_word():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

@@ -11,7 +11,7 @@ import sys
 
 from libtbx.test_utils import approx_equal
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("numpy"):
     skip("numpy not available")
@@ -59,7 +59,7 @@ def exercise_multi_char_strings_offsets():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

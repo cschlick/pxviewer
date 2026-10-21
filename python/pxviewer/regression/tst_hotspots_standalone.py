@@ -14,7 +14,8 @@ import os
 import subprocess
 import sys
 
-from pxviewer.regression.tst_utils import data_path, have, skip, tmp_dir
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip, tmp_dir)
 
 if not have("mmtbx"):
     skip("mmtbx not available")
@@ -121,7 +122,7 @@ def run():
     if _hotspots_dir() is None:
         skip("hotspots/ has been split back out")
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

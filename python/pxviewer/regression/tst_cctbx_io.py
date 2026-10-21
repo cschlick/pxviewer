@@ -9,7 +9,8 @@ import sys
 
 from libtbx.test_utils import raises
 
-from pxviewer.regression.tst_utils import data_path, have, skip, tmp_dir
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip, tmp_dir)
 
 if not have("iotbx.data_manager", "numpy", "websockets"):
     skip("iotbx.data_manager / numpy / websockets not available")
@@ -491,7 +492,7 @@ def exercise_read_model_reads_through_a_given_data_manager():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

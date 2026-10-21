@@ -6,7 +6,7 @@ import colorsys
 import sys
 
 from pxviewer.palettes import PaletteCycler, load_palettes, suggested_colors
-
+from pxviewer.regression.tst_utils import _exercise_selected
 
 def palettes_as_sets():
     return [set(group) for group in load_palettes()]
@@ -86,7 +86,7 @@ def exercise_different_sessions_get_different_colors():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

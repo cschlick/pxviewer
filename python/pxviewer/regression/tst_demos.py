@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("iotbx.data_manager", "numpy"):
     skip("iotbx.data_manager / numpy not available")
@@ -196,7 +196,7 @@ def exercise_the_measure_demo_enables_measure_modes():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

@@ -13,7 +13,8 @@ import sys
 
 from libtbx.test_utils import approx_equal, raises
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("mmtbx", "numpy"):
     skip("mmtbx/numpy not available")
@@ -329,7 +330,7 @@ def exercise_per_atom_rolls_up_with_max():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

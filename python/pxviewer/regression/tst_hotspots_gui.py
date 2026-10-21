@@ -14,9 +14,9 @@ import time
 from libtbx.test_utils import approx_equal
 
 from pxviewer.regression.tst_concern import write_manifest
-from pxviewer.regression.tst_utils import (
-    data_path, dispose, have, process_events, qt_application, shipped_defaults, skip,
-    tmp_dir)
+from pxviewer.regression.tst_utils import (data_path, dispose,
+    _exercise_selected, have, process_events, qt_application,
+    shipped_defaults, skip, tmp_dir)
 
 if not have("mmtbx", "numpy", "websockets", "PySide6.QtWebEngineWidgets"):
     skip("needs mmtbx, websockets and PySide6 QtWebEngine")
@@ -483,7 +483,7 @@ def run():
     # the whole file runs against a fresh install's preferences, not the user's.
     with shipped_defaults():
         for name, fn in sorted(globals().items()):
-            if name.startswith("exercise"):
+            if name.startswith("exercise") and _exercise_selected(name):
                 print("  %s" % name)
                 sys.stdout.flush()
                 fn()

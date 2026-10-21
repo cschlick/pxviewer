@@ -11,7 +11,7 @@ import urllib.request
 from libtbx.test_utils import Exception_expected
 
 from pxviewer import appserver
-from pxviewer.regression.tst_utils import skip
+from pxviewer.regression.tst_utils import _exercise_selected, skip
 from pxviewer.webapp import Webapp
 
 
@@ -111,7 +111,7 @@ def run():
     if frontend is None or not appserver.frontend_is_built(frontend):
         skip("frontend not built (run scripts/build_frontend.sh)")
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

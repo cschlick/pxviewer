@@ -11,7 +11,8 @@ import sys
 
 from libtbx.test_utils import approx_equal
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("mmtbx.geometry_restraints.reference", "numpy"):
     skip("mmtbx.geometry_restraints.reference not available")
@@ -412,7 +413,7 @@ def exercise_arm_from_the_viewport_reaches_a_handler():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

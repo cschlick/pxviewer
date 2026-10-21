@@ -6,7 +6,7 @@ import struct
 import sys
 
 from pxviewer.probe import _dot_rgb, encode_dots
-from pxviewer.regression.tst_utils import data_path, have
+from pxviewer.regression.tst_utils import data_path, _exercise_selected, have
 
 _cache = []
 
@@ -95,7 +95,7 @@ def exercise_probe_dots_split_is_a_subset():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

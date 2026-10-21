@@ -16,7 +16,14 @@ A test is an ordinary program. No runner, no collection, no plugins:
 ```bash
 libtbx.python -m pxviewer.run_tests                                  # everything
 libtbx.python python/pxviewer/regression/tst_validation_events.py    # one test
+libtbx.python python/pxviewer/regression/tst_desktop_interaction.py marker drag
+                                                     # only exercises whose name matches
 ```
+
+The extra arguments are substrings, OR-ed: the example runs every `exercise_*` in
+that file whose name contains `marker` or `drag`. The heavy GUI suites each build a
+`DesktopApp` per exercise, so this is the per-edit check — run the exercises that
+cover the change, leave the full file for a pre-push pass.
 
 Once pxviewer is a configured libtbx module, `libtbx.run_tests_parallel module=pxviewer
 nproc=8` works with no change — `run_tests.py` uses `libtbx.test_utils.run_tests` when the

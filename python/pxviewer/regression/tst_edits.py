@@ -7,7 +7,7 @@ import sys
 from libtbx.test_utils import approx_equal
 
 from pxviewer import edits
-from pxviewer.regression.tst_utils import data_path, have
+from pxviewer.regression.tst_utils import data_path, _exercise_selected, have
 
 
 def exercise_geometry_value_distance_angle_dihedral():
@@ -428,7 +428,7 @@ def exercise_the_old_dict_shape_is_refused_rather_than_ignored():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

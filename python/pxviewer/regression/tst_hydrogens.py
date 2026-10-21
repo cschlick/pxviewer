@@ -4,7 +4,8 @@ from __future__ import absolute_import, division, print_function
 
 import sys
 
-from pxviewer.regression.tst_utils import data_path, have, skip
+from pxviewer.regression.tst_utils import (data_path, _exercise_selected,
+    have, skip)
 
 if not have("iotbx.data_manager", "mmtbx.programs.reduce2"):
     skip("iotbx data_manager / reduce2 not available")
@@ -35,7 +36,7 @@ def exercise_add_hydrogens_on_ubiquitin():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

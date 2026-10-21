@@ -5,7 +5,7 @@ from __future__ import absolute_import, division, print_function
 import sys
 
 from pxviewer.kinemage import parse_kinemage
-
+from pxviewer.regression.tst_utils import _exercise_selected
 
 def exercise_balllist_with_radius():
     """Real cbetadev output: a magenta ball with an r= radius (labels contain numbers)."""
@@ -97,7 +97,7 @@ def exercise_unknown_color_and_empty():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

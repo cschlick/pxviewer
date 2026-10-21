@@ -17,7 +17,7 @@ import urllib.request
 
 from libtbx.test_utils import approx_equal, raises
 
-from pxviewer.regression.tst_utils import have, tmp_dir
+from pxviewer.regression.tst_utils import _exercise_selected, have, tmp_dir
 
 if not have("numpy"):
     from pxviewer.regression.tst_utils import skip
@@ -184,7 +184,7 @@ def fetch(url, timeout=5):
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

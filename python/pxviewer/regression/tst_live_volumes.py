@@ -19,7 +19,7 @@ import json
 import sys
 import threading
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("websockets", "numpy"):
     skip("websockets / numpy not available")
@@ -589,7 +589,7 @@ def exercise_requests_sent_in_the_gap_are_not_replayed():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

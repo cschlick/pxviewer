@@ -14,7 +14,7 @@ import sys
 
 from libtbx.test_utils import raises
 
-from pxviewer.regression.tst_utils import have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, have, skip
 
 if not have("websockets", "numpy"):
     skip("websockets / numpy not available")
@@ -195,7 +195,7 @@ def exercise_a_replaced_attribute_payload_is_pruned():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

@@ -24,8 +24,8 @@ import sys
 import threading
 import time
 
-from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, process_events, qt_application,
+from pxviewer.regression.tst_utils import (closing_modals, data_path,
+    dispose, _exercise_selected, have, process_events, qt_application,
     shipped_defaults, skip, tmp_dir)
 
 if not have("mcp", "PySide6.QtWebEngineWidgets", "websockets.sync.client",
@@ -329,7 +329,7 @@ def exercise_exec_sees_validation_results():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

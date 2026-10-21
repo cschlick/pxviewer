@@ -7,7 +7,8 @@ import sys
 
 os.environ.setdefault("QT_API", "pyside6")
 
-from pxviewer.regression.tst_utils import have, qt_application, skip
+from pxviewer.regression.tst_utils import (_exercise_selected, have,
+    qt_application, skip)
 
 if not have("PySide6", "qtconsole", "ipykernel"):
     skip("PySide6 / qtconsole / ipykernel not available")
@@ -121,7 +122,6 @@ def exercise_the_guide_runs_what_it_advertises():
     from pxviewer.desktop import DesktopApp
     from pxviewer.live import LiveSession
     from pxviewer.regression.tst_utils import data_path, dispose
-
     app = DesktopApp(port=0)
     try:
         app._add_model(LiveSession.from_model_file(data_path("1ubq.pdb")), "1ubq")
@@ -193,7 +193,7 @@ def exercise_bare_help_is_the_guide_and_help_of_a_thing_is_pythons():
 def run():
     qt_application()        # the console widgets need one, created once per process
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

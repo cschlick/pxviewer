@@ -14,8 +14,8 @@ import sys
 
 from libtbx.test_utils import approx_equal, raises
 
-from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, process_events, qt_application,
+from pxviewer.regression.tst_utils import (closing_modals, data_path,
+    dispose, _exercise_selected, have, process_events, qt_application,
     shipped_defaults, skip)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets", "numpy"):
@@ -1290,7 +1290,6 @@ def exercise_tests_never_touch_the_users_settings():
     user's live preference domain -- test runs used to fight the user's real settings
     (the GUI fuzzer toggling a persisted checkbox rewrote it on disk)."""
     from pxviewer.regression.tst_utils import TEST_SETTINGS_DIR
-
     with desktop() as app:
         path = app._settings.fileName()
         # Qt reports '/' separators on every platform; compare normalized paths.
@@ -1308,7 +1307,7 @@ def run():
     # so the whole file runs against a fresh install's preferences, not the user's.
     with shipped_defaults():
         for name, fn in sorted(globals().items()):
-            if name.startswith("exercise"):
+            if name.startswith("exercise") and _exercise_selected(name):
                 print("  %s" % name)
                 sys.stdout.flush()
                 fn()

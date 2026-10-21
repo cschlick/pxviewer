@@ -17,7 +17,7 @@ import gzip
 import os
 import sys
 
-from pxviewer.regression.tst_utils import skip, tmp_dir
+from pxviewer.regression.tst_utils import _exercise_selected, skip, tmp_dir
 
 try:
     import iotbx.pdb.fetch as iotbx_fetch
@@ -281,7 +281,7 @@ def exercise_byte_sizes_read_the_way_a_person_would():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()

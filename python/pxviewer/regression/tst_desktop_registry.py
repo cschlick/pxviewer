@@ -17,8 +17,8 @@ import time
 
 from libtbx.test_utils import approx_equal, raises
 
-from pxviewer.regression.tst_utils import (
-    closing_modals, data_path, dispose, have, process_events, qt_application,
+from pxviewer.regression.tst_utils import (closing_modals, data_path,
+    dispose, _exercise_selected, have, process_events, qt_application,
     shipped_defaults, skip, tmp_dir)
 
 if not have("PySide6.QtWebEngineWidgets", "websockets",
@@ -533,7 +533,7 @@ def run():
     # so the whole file runs against a fresh install's preferences, not the user's.
     with shipped_defaults():
         for name, fn in sorted(globals().items()):
-            if name.startswith("exercise"):
+            if name.startswith("exercise") and _exercise_selected(name):
                 print("  %s" % name)
                 sys.stdout.flush()
                 fn()

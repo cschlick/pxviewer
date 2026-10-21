@@ -19,7 +19,7 @@ import sys
 from libtbx.test_utils import raises
 
 from pxviewer import gpu
-from pxviewer.regression.tst_utils import tmp_dir
+from pxviewer.regression.tst_utils import _exercise_selected, tmp_dir
 
 #: Everything the chooser reads. Cleared per exercise so one cannot leak into the next --
 #: the module decides from the environment, so a stale variable is a wrong answer.
@@ -476,7 +476,7 @@ def exercise_ensure_display_env_defaults_do_not_clobber_user_choice():
 
 def run():
     for name, fn in sorted(globals().items()):
-        if name.startswith("exercise"):
+        if name.startswith("exercise") and _exercise_selected(name):
             print("  %s" % name)
             sys.stdout.flush()
             fn()
