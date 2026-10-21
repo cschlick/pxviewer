@@ -77,6 +77,12 @@ def exercise_the_handshake_carries_a_capability_inventory():
     # using the live region tools — the text must steer away from it.
     assert "never make clipped or" in instructions
 
+    # The figure guidance — the second observed trap: figures saved from an
+    # unchecked draw state (a map still decimated from load, a level chosen by
+    # habit). The text has to teach check-appearance → iterate-on-screenshot.
+    for task_term in ("volume_appearance", "downsample", "max_sigma"):
+        assert task_term in instructions, f"handshake never mentions {task_term!r}"
+
 
 def run():
     for name, fn in sorted(globals().items()):

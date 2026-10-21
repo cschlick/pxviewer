@@ -395,6 +395,23 @@ def _make_server():
         "  Output & jobs: screenshot/save_screenshot for eyes, "
         "app.write_object saves an object to disk, app.run_background + "
         "app.job_state() for long work.\n\n"
+        "Figures — a figure is what the page draws, not what you asked "
+        "for, so verify before saving:\n"
+        "  Check the draw state: app.volume_appearance(vid) reports the "
+        "level (sigma), style, downsample factor, box and max_sigma — "
+        "the level where the map empties. An oversized map opens "
+        "decimated for interactivity; that is not a publishable "
+        "contour. app.set_volume_downsample(vid, 1) restores the full "
+        "grid — or box the map and keep the coarse grid, the point is "
+        "the choice must be deliberate, not inherited.\n"
+        "  Pick the level against the map, not from habit (~1σ is a "
+        "starting point, not an answer; a difference map wants its "
+        "negative contour set too). Then screenshot() and LOOK at the "
+        "frame — crop, level, framing, colors — and iterate until it "
+        "is right. save_screenshot only then; "
+        "session.set_perf_prefs(pixelScale=2, illumination=True) is "
+        "the final-render step, restored to interactive settings "
+        "after.\n\n"
         "Names you assign persist between calls — stash intermediate "
         "objects in the namespace rather than re-deriving them. Results "
         "come back as {stdout, stderr, result, data, error}: result is the "
@@ -467,7 +484,8 @@ def _make_server():
                             "active": e["id"] == _app._active_model_id}
                            for e in _app._models],
                 "volumes": [{"id": e["id"], "name": e.get("name"),
-                             "iso": e.get("iso"), "opacity": e.get("opacity")}
+                             "iso": e.get("iso"), "opacity": e.get("opacity"),
+                             "downsample": int(e.get("localres_downsample") or 1)}
                             for e in _app._volumes],
                 "selection": {mid: len(ix) for mid, ix in
                               _app._scene_selection.items()},

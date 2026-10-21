@@ -195,6 +195,12 @@ def exercise_volume_box_carves_the_grid_and_keeps_sigma_honest():
         assert (vols / f"{vid}.box.d2.map").is_file()
         assert ".box.d2.map" in _scene_text(app)
 
+        # The draw state reports both: a figure caller must be able to see the
+        # decimation and the carve it inherited, not just the level it set.
+        look = app.volume_appearance(vid)
+        assert look["downsample"] == 2, look
+        assert look["box"]["radius"] == 6.0, look
+
         # A display-map rewrite re-carves the box rather than leaving stale density.
         data2 = VolumeData.from_numpy(np.ones((24, 24, 24), dtype=np.float32),
                                       name="big")

@@ -4536,7 +4536,12 @@ class AppCore:
 
 
     def volume_appearance(self, vid: str) -> dict:
-        """A volume's current style/color/opacity/level.
+        """A volume's current style/color/opacity/level — and what is drawn.
+
+        ``downsample`` is the display decimation actually in effect (1 = full
+        grid), ``box`` the carved region if any, and ``max_sigma`` the level
+        above which the map empties — the read-back a figure needs before it
+        can be trusted to show what was intended.
 
         The Loaded summary is a snapshot taken when it was emitted, and these can change
         without one — from the console, or by the wheel in the viewport — so the
@@ -4548,7 +4553,11 @@ class AppCore:
         out = {key: entry.get(key)
                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
                            "negative_color", "negative_iso",
-                           "negative_opacity", "negative_style")}
+                           "negative_opacity", "negative_style", "box")}
+        # What grid the surface is actually drawn from. A figure caller must be
+        # able to see this: an oversized map opens decimated for interactivity,
+        # which is not a publishable contour until set_volume_downsample(vid, 1).
+        out["downsample"] = int(entry.get("localres_downsample") or 1)
         out["sphere"] = self._sphere_state(entry)
         out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
