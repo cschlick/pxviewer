@@ -49,6 +49,16 @@ import { MeshBuilder } from 'molstar/lib/mol-geo/geometry/mesh/mesh-builder';
 import { addSphere } from 'molstar/lib/mol-geo/geometry/mesh/builder/sphere';
 import { addSimpleCylinder } from 'molstar/lib/mol-geo/geometry/mesh/builder/cylinder';
 import { computeMarchingCubesMesh } from 'molstar/lib/mol-geo/util/marching-cubes/algorithm';
+import { BoundaryHelper } from 'molstar/lib/mol-math/geometry/boundary-helper';
+
+// Calibrated against rendered pixels, not against the camera state. Measured with
+// screenshots at known camera distances (2026-08-31, scripts/dev_snap.py): the
+// render's effective half-angle tangent is ~1.0 -- as if the vertical fov were ~90
+// deg -- while state.fov reads 45 deg and the projection code looks standard.
+// Mechanism unidentified; the factor is what the screen does. If framing ever
+// drifts (a Mol* upgrade), recalibrate the same way: aim at a known distance,
+// screenshot, measure the fraction spanned. Used by orient() and focus(frame).
+const FOV_CALIBRATION = 2.42;
 
 export interface AtomInfo {
     id: number;
@@ -1213,11 +1223,64 @@ export class LiveViewer {
         } catch { /* as above */ }
     }
 
-    /** Zoom the camera to the given positional atom indices. */
-    focusIndices(indices: number[]) {
+    /** Zoom the camera to the given positional atom indices.
+     *
+     *  Bare focus only re-aims the target — Mol*'s focusLoci leaves the eye where
+     *  it is, so aimed at a residue from a whole-map distance the subject stays a
+     *  dot. `distance` also dollies the eye to that many Angstroms from the
+     *  selection; `frame` dollies so the selection's bounding sphere fills the
+     *  viewport. Both keep the current orientation — a dolly, not an orbit.
+     */
+    focusIndices(indices: number[], opts?: { distance?: number; frame?: boolean }) {
         const structure = this.currentStructure();
         if (!structure || indices.length === 0) return;
-        this.plugin.managers.camera.focusLoci(lociFromElementIndices(structure, indices));
+        const loci = lociFromElementIndices(structure, indices);
+        const camera = this.plugin.canvas3d?.camera;
+        if (!camera || (opts?.distance === undefined && !opts?.frame)) {
+            this.plugin.managers.camera.focusLoci(loci);
+            return;
+        }
+        const boundary = new BoundaryHelper('98');
+        const v = Vec3();
+        for (const e of loci.elements) {
+            // e.indices holds positions into e.unit.elements (UnitIndex), so the
+            // coordinate index conformation.position takes is unit.elements[i].
+            OrderedSet.forEach(e.indices, (i) => {
+                e.unit.conformation.position(e.unit.elements[i], v);
+                boundary.includePosition(v);
+                boundary.finishedIncludeStep();
+            });
+        }
+        const sphere = boundary.getSphere();
+        const center = sphere.center;
+        if (!(center.length === 3) || !center.every(Number.isFinite)) {
+            this.plugin.managers.camera.focusLoci(loci);
+            return;
+        }
+        const state = camera.state;
+        const direction = Vec3.normalize(Vec3(), Vec3.sub(Vec3(), state.target, state.position));
+        // A single atom is a point — give the frame a floor so 'frame' still flies in.
+        const r = Math.max(sphere.radius, 1.0);
+        let distance = opts?.distance;
+        if (distance === undefined || !(distance > 0)) {
+            const fov = state.fov;
+            const { width, height } = camera.viewport;
+            const aspect = width > 0 && height > 0 ? width / height : 1;
+            const halfTan = Math.tan(fov / 2) * FOV_CALIBRATION;
+            // The same fit as orient(): fill shy of full, plus the subject's own
+            // depth so its near face cannot project out of frame.
+            const fill = 0.62;
+            distance = Math.max(r / (fill * halfTan), r / (fill * halfTan * aspect), 5) + r;
+        }
+        // Keep the scene's slab — a focus dolly must not clip what surrounds the
+        // subject (the clip=false arm of orient()).
+        const slab = Math.max(state.radiusMax || 0, r, 1.0);
+        const snapshot = camera.getInvariantFocus(center, slab, state.up, direction);
+        const position = Vec3();
+        Vec3.scale(position, direction, distance);
+        Vec3.sub(position, center, position);
+        snapshot.position = position;
+        camera.setState(snapshot, 250);
     }
 
     /**
@@ -1261,14 +1324,7 @@ export class LiveViewer {
             // whole residue in frame with margin, and a framing that sometimes crops
             // its subject is worse than one that always leaves room.
             const fill = 0.62;
-            // Calibrated against rendered pixels, not against the state. Measured with
-            // screenshots at known camera distances (2026-08-31, scripts/dev_snap.py):
-            // the render's effective half-angle tangent is ~1.0 -- as if the vertical
-            // fov were ~90 deg -- while state.fov reads 45 deg and the projection code
-            // looks standard. Mechanism unidentified; the factor is what the screen
-            // does. If framing ever drifts (a Mol* upgrade), recalibrate the same way:
-            // orient at a known distance, screenshot, measure the fraction spanned.
-            const FOV_CALIBRATION = 2.42;
+            // See FOV_CALIBRATION for why the nominal fov cannot be trusted as-is.
             const halfTan = Math.tan(fov / 2) * FOV_CALIBRATION;
             // The rx/ry terms fit the selection at the *target's* depth, but the
             // selection is rz deep: an atom on the near face sits at distance - rz and
@@ -1594,10 +1650,13 @@ export class LiveViewer {
         const colors = [this.mapBoxColors.positive, this.mapBoxColors.negative];
         const build = this.plugin.state.data.build();
         this.mapBoxReprRefs.forEach((ref, i) => {
-            build.to(ref).update((old: any) => {
-                old.colorTheme = { name: 'uniform', params: { value: colors[i] } };
-                if (old.type?.name === 'isosurface') old.type.params.visuals = this.mapBoxVisuals;
-            });
+            build.to(ref).update((old: any) => ({
+                ...old,
+                colorTheme: { name: 'uniform', params: { value: colors[i] } },
+                type: old.type?.name === 'isosurface'
+                    ? { ...old.type, params: { ...old.type.params, visuals: this.mapBoxVisuals } }
+                    : old.type,
+            }));
         });
         await build.commit();
     }
@@ -2893,14 +2952,14 @@ function styleMutation(style: string) {
         console.warn('Unknown volume style:', style);
         return undefined;
     }
-    return (old: any) => {
-        if (old.type?.name === 'isosurface') old.type.params.visuals = visuals;
-    };
+    return (old: any) => old.type?.name === 'isosurface'
+        ? { ...old, type: { ...old.type, params: { ...old.type.params, visuals } } }
+        : old;
 }
 
-const opacityMutation = (opacity: number) => (old: any) => {
-    if (old.type?.name === 'isosurface') old.type.params.alpha = opacity;
-};
+const opacityMutation = (opacity: number) => (old: any) => old.type?.name === 'isosurface'
+    ? { ...old, type: { ...old.type, params: { ...old.type.params, alpha: opacity } } }
+    : old;
 
 async function setVolumeStyle(plugin: PluginContext, ref: string, style: string) {
     const mutate = styleMutation(style);
@@ -2941,11 +3000,15 @@ let isoApplied = 0;
 
 function isoParams(v: number, kind?: string) {
     return (old: any) => {
-        if (old.type?.name === 'isosurface') {
-            old.type.params.isoValue = kind === 'absolute'
-                ? { kind: 'absolute', absoluteValue: v }
-                : { kind: 'relative', relativeValue: v };
-        }
+        if (old.type?.name !== 'isosurface') return old;
+        const isoValue = kind === 'absolute'
+            ? { kind: 'absolute', absoluteValue: v }
+            : { kind: 'relative', relativeValue: v };
+        // Fresh objects down to the changed leaf: Mol* can skip an update whose
+        // incoming params are identity-equal to the stored ones, which is what an
+        // in-place mutation produces — the change then sits in the state tree but
+        // never reaches the drawn render objects (see applySlabTo).
+        return { ...old, type: { ...old.type, params: { ...old.type.params, isoValue } } };
     };
 }
 
@@ -3059,9 +3122,8 @@ async function setVolumeColor(plugin: PluginContext, ref: string, color: string)
     // and the pair being different colors is the whole point of drawing both.
     const repr = await findVolumeReprCell(plugin, ref);
     if (!repr) return;
-    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
-        old.colorTheme = { name: 'uniform', params: { value: decoded } };
-    }).commit();
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) =>
+        ({ ...old, colorTheme: { name: 'uniform', params: { value: decoded } } })).commit();
 }
 
 /** Make every volume representation invisible to identify().
@@ -3128,9 +3190,8 @@ async function setVolumeNegativeColor(plugin: PluginContext, ref: string, color:
     }
     const repr = findVolumeNegativeReprCell(plugin, ref);
     if (!repr) return;
-    await plugin.state.data.build().to(repr.transform.ref).update((old: any) => {
-        old.colorTheme = { name: 'uniform', params: { value: decoded } };
-    }).commit();
+    await plugin.state.data.build().to(repr.transform.ref).update((old: any) =>
+        ({ ...old, colorTheme: { name: 'uniform', params: { value: decoded } } })).commit();
 }
 
 /** Clip a volume (an MVSJ representation) to a front/rear slab. */
@@ -3153,16 +3214,20 @@ async function setVolumePosition(plugin: PluginContext, ref: string, position: [
     const [x, y, z] = position;
     await plugin.state.data.build().to(cell.transform.ref).update((old: any) => {
         if (old.transform?.name === 'matrix' && old.transform.params?.data) {
-            const data = old.transform.params.data;
+            const data = old.transform.params.data.slice();
             data[12] = x;
             data[13] = y;
             data[14] = z;
+            return { ...old, transform: { ...old.transform, params: { ...old.transform.params, data } } };
         } else if (old.transform?.name === 'components' && old.transform.params?.translation) {
-            old.transform.params.translation[0] = x;
-            old.transform.params.translation[1] = y;
-            old.transform.params.translation[2] = z;
+            const translation = old.transform.params.translation.slice();
+            translation[0] = x;
+            translation[1] = y;
+            translation[2] = z;
+            return { ...old, transform: { ...old.transform, params: { ...old.transform.params, translation } } };
         } else {
             console.warn('Volume', ref, 'does not have a position transform; set Volume.position to enable live position updates.');
+            return old;
         }
     }).commit();
 }
@@ -3759,10 +3824,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     // Bounded by the scene, not by absolute numbers: stepping in must stop
                     // before the camera is inside the atom it is looking at, and stepping
                     // out before the structure is a dot. The trackball's own clamps are
-                    // deliberately wide open (see applyCootBindings).
+                    // deliberately wide open (see applyCootBindings). Clamp the
+                    // destination, never reverse the step: a camera parked outside the
+                    // bounds by focus()/set_camera() must not be snapped back the other
+                    // way by a step it requested.
                     const radius = plugin.canvas3d?.boundingSphere.radius || 10;
-                    const next = Math.min(Math.max(distance * msg.factor, radius * 0.05),
-                                          radius * 40);
+                    const raw = distance * msg.factor;
+                    const next = msg.factor < 1
+                        ? Math.min(distance, Math.max(raw, radius * 0.05))
+                        : Math.max(distance, Math.min(raw, radius * 40));
                     if (Math.abs(next - distance) > 1e-6) {
                         Vec3.setMagnitude(eye, eye, next);
                         cam.setState({ position: Vec3.add(Vec3(), cam.target, eye) }, 120);
@@ -3989,7 +4059,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             } else if (msg.type === 'highlight' && viewer) {
                 viewer.setHighlight(decodeIndexSet(msg.atoms));
             } else if (msg.type === 'focus' && viewer) {
-                viewer.focusIndices(decodeIndexSet(msg.atoms));
+                viewer.focusIndices(decodeIndexSet(msg.atoms), {
+                    distance: typeof msg.distance === 'number' ? msg.distance : undefined,
+                    frame: msg.frame === true,
+                });
             } else if (msg.type === 'orient' && viewer) {
                 viewer.orient(msg.target, msg.up, msg.direction, msg.radius, msg.extents,
                               msg.clip !== false);

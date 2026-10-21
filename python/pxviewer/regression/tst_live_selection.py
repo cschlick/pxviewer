@@ -51,6 +51,29 @@ def exercise_focus_broadcasts_an_index_set():
                 live.focus(live.select_by(indices=[3]))
                 message = await next_text(ws, "focus")
                 assert decode_index_set(message["atoms"]) == [3]
+                assert "distance" not in message and "frame" not in message
+
+        run_client(scenario)
+
+
+def exercise_focus_distance_and_frame_ride_the_same_message():
+    """focus(sel, distance=…) / focus(sel, frame=True) dolly the eye as well as
+    aiming — the client needs the opt-in on the wire, and bare focus must not
+    change behavior."""
+    with session() as live:
+        async def scenario():
+            async with client(live) as ws:
+                sel = live.select_by(indices=[3])
+                live.focus(sel, distance=30)
+                message = await next_text(ws, "focus")
+                assert decode_index_set(message["atoms"]) == [3]
+                assert message["distance"] == 30.0
+                assert "frame" not in message
+
+                live.focus(sel, frame=True)
+                message = await next_text(ws, "focus")
+                assert message["frame"] is True
+                assert "distance" not in message
 
         run_client(scenario)
 

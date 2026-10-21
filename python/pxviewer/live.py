@@ -1923,10 +1923,22 @@ class LiveSession:
         self._send_control({"type": "highlight", "atoms": _encode_index_set(sel.indices)})
         return sel
 
-    def focus(self, atoms: Any) -> Selection:
-        """Aim the viewer camera at the given atoms (:class:`Selection` or coercible)."""
+    def focus(self, atoms: Any, *, distance: Optional[float] = None,
+              frame: bool = False) -> Selection:
+        """Aim the viewer camera at the given atoms (:class:`Selection` or coercible).
+
+        A bare ``focus`` only re-aims the target — from far out the subject stays
+        a dot. ``distance`` also dollies the eye to that many Angstroms from the
+        selection, and ``frame`` dollies so the selection's bounding sphere fills
+        the viewport. Both keep the current orientation — a dolly, not an orbit.
+        """
         sel = self._as_selection(atoms)
-        self._send_control({"type": "focus", "atoms": _encode_index_set(sel.indices)})
+        message: dict = {"type": "focus", "atoms": _encode_index_set(sel.indices)}
+        if distance is not None:
+            message["distance"] = float(distance)
+        elif frame:
+            message["frame"] = True
+        self._send_control(message)
         return sel
 
     def orient_camera(self, target: Any, up: Any, direction: Any, radius: float,
