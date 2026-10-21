@@ -6051,7 +6051,11 @@ class AppCore:
         try:
             # Without a reload the page keeps painting the last scene forever —
             # dots and all — and nothing the user presses can clear a dead frame.
-            self._reload_viewport()
+            # Skipped at teardown: the viewport is being closed next anyway, and a
+            # reload on an empty scene lazily starts a new dummy session — a server
+            # thread created during shutdown that nothing stops.
+            if not self._stopped:
+                self._reload_viewport()
         except Exception:  # pragma: no cover - defensive (called during shutdown)
             pass
 
