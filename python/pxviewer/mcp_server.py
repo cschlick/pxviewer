@@ -412,7 +412,8 @@ def _make_server():
         "alive and, if merely busy, what is holding its apply chain; "
         "screenshot() returns the frame so you can see the scene; "
         "save_screenshot(path) writes a PNG; reload_viewport() rebuilds a "
-        "dead page (Python-side state survives).\n\n"
+        "dead page — Python-side state, the camera, and styling all "
+        "survive, so there is no need to re-assert anything after it.\n\n"
         + SELECTION_LANGUAGE + "\n\n" + CCTBX_IDIOMS))
 
     @mcp.tool()

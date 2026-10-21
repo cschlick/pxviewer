@@ -1,11 +1,12 @@
 """Volume appearance, clipping and screenshots over the wire.
 
-A volume's color, style and level are baked into the MVSJ scene, so they survive a
-reload on their own and only need a live command to avoid one. Three things are *not* in
-the scene and so have to be replayed on connect: the clip, which is recomputed from the
-camera as it moves; the scroll target, which says which volume the wheel contours; and
-hidden state, which is a render skip. All three went dead after any scene change before
-they were replayed -- for hidden state that meant every viewport reload silently redrew
+A volume's color, style and level are baked into the MVSJ scene — but the scene is
+composed from the app's entry state, so an appearance command issued at session level
+never reaches it: those are recorded and replayed on connect, like everything else a
+reload would lose. The clip, which is recomputed from the camera as it moves; the
+scroll target, which says which volume the wheel contours; and hidden state, a render
+skip, are replayed the same way. All of it went dead after any scene change before it
+was replayed -- for hidden state that meant every viewport reload silently redrew
 every hidden map, which is how a "hidden" local-resolution map ended up on screen as a
 giant featureless blob.
 """
@@ -189,6 +190,36 @@ def exercise_a_clip_is_replayed_to_a_late_client():
                 assert await next_text(ws, "clip") == {
                     "type": "clip", "ref": "vol9", "front": 0.2, "back": 0.8,
                     "radius": 12.0, "center": None}
+
+        run_client(scenario)
+
+
+def exercise_live_styling_is_replayed_to_a_late_client():
+    """A session-level appearance command never reaches the entry state the
+    reload's MVSJ is composed from — so the session replays what it was told, or
+    a reload falls back to composed defaults (a live-set color came back blue)."""
+    with session() as live:
+        live.set_volume_color("vol30", "teal")
+        live.set_volume_opacity("vol30", 0.4)
+        live.set_volume_position("vol30", [1, 2, 3])
+        live.set_volume_negative_color("vol30", "#ff0000")
+        live.set_volume_negative_style("vol30", "mesh")
+        live.set_volume_negative_opacity("vol30", 0.7)
+
+        async def scenario():
+            async with client(live) as ws:
+                assert await next_text(ws, "volume_color") == {
+                    "type": "volume_color", "ref": "vol30", "color": "teal"}
+                assert await next_text(ws, "volume_opacity") == {
+                    "type": "volume_opacity", "ref": "vol30", "opacity": 0.4}
+                assert await next_text(ws, "volume_position") == {
+                    "type": "volume_position", "ref": "vol30", "position": [1.0, 2.0, 3.0]}
+                assert await next_text(ws, "volume_negative_color") == {
+                    "type": "volume_negative_color", "ref": "vol30", "color": "#ff0000"}
+                assert await next_text(ws, "volume_negative_style") == {
+                    "type": "volume_negative_style", "ref": "vol30", "style": "mesh"}
+                assert await next_text(ws, "volume_negative_opacity") == {
+                    "type": "volume_negative_opacity", "ref": "vol30", "opacity": 0.7}
 
         run_client(scenario)
 

@@ -4366,8 +4366,37 @@ class AppCore:
 
     def set_volume_opacity(self, vid: str, value: float) -> None:
         """Set a volume's opacity (0-1) live."""
+        self._guard_transparent_map_size(vid, value)
         self._volume_command(vid, "opacity", float(value),
                              lambda c, ref, v: c.set_volume_opacity(ref, v))
+
+
+    def _guard_transparent_map_size(self, vid: str, value: float) -> None:
+        """Keep a transparent pass off an oversized grid.
+
+        Transparency lowers the same geometry ceiling the mesh deaths hit — a
+        transparent isosurface on a cryo-EM-sized grid killed the render process
+        in agent sessions. A full-res oversized map asking for alpha gets the
+        auto-downsample first. A boxed map is already small by the caller's
+        choice, a caller-set factor stands, and maps under the cap are
+        untouched.
+        """
+        if float(value) >= 1:
+            return
+        entry = self._volume_entry(vid)
+        if (entry is None or entry.get("box")
+                or int(entry.get("localres_downsample") or 1) > 1):
+            return
+        data = entry.get("data")
+        if data is None:
+            return
+        factor = self._auto_downsample_factor(data)
+        if factor <= 1:
+            return
+        self._status(
+            f"{entry.get('name', vid)}: transparent pass on a large grid — "
+            f"drawing a {factor}x-downsampled copy (Downsample: Full restores)")
+        self.set_volume_downsample(vid, factor)
 
 
     def set_volume_color(self, vid: str, color: str) -> None:

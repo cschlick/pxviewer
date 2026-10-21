@@ -78,6 +78,24 @@ def exercise_focus_distance_and_frame_ride_the_same_message():
         run_client(scenario)
 
 
+def exercise_a_reported_camera_is_replayed_to_a_reconnect():
+    """The page volunteers its settled camera (debounced client-side); a viewport
+    reload is a new client, so the stored state goes back out as a camera-set."""
+    with session() as live:
+        async def scenario():
+            async with client(live) as ws:
+                live._on_message(json.dumps({"type": "camera-report", "state": {
+                    "target": [1, 2, 3], "position": [0, 0, 40],
+                    "up": [0, 1, 0], "radius": 15, "radiusMax": 60, "fov": 45}}))
+                live._on_message('{"type": "camera-report", "state": "junk"}')
+            async with client(live) as ws:
+                message = await next_text(ws, "camera-set")
+                assert message["state"]["position"] == [0, 0, 40]
+                assert message["state"]["radius"] == 15
+
+        run_client(scenario)
+
+
 def exercise_selection_prose_never_reaches_the_wire():
     """The whole selection flow resolves prose in Python via cctbx; every control
     message the session can emit must carry index sets, never a query string."""

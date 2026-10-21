@@ -3548,8 +3548,24 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
             reaiming = false;
         }
     };
+    // The settled camera, reported upstream so a viewport reload can hand the
+    // new page its framing back (LiveSession stores it and replays camera-set on
+    // reconnect). Trailing-edge debounce — one send per gesture, not per frame.
+    let cameraReportTimer: ReturnType<typeof setTimeout> | null = null;
     const cameraSub = plugin.canvas3d?.camera.stateChanged.subscribe(() => {
         void reaimSlabs();   // (quality.ping is a no-op now — see InteractiveQuality's note)
+        if (cameraReportTimer !== null) clearTimeout(cameraReportTimer);
+        cameraReportTimer = setTimeout(() => {
+            cameraReportTimer = null;
+            const cam = plugin.canvas3d?.camera;
+            if (cam && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'camera-report', state: {
+                    target: Array.from(cam.state.target), position: Array.from(cam.state.position),
+                    up: Array.from(cam.state.up), radius: cam.state.radius,
+                    radiusMax: cam.state.radiusMax, fov: cam.state.fov,
+                }}));
+            }
+        }, 400);
     });
 
     // Tugging is coordinate-changing and therefore off until the Tools-tab mode explicitly
@@ -3952,7 +3968,20 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 const valid = cam && validVec(s.target) && validVec(s.position) && validVec(s.up)
                     && Number.isFinite(s.radius) && s.radius > 0
                     && Number.isFinite(s.fov) && s.fov > 0 && s.fov < 180;
-                if (valid) {
+                if (valid && (plugin.canvas3d?.boundingSphere?.radius ?? 0) <= 0) {
+                    // The replay of a stored camera lands before the rebuilt scene has
+                    // geometry — and the first-frame auto-fit that follows would stomp
+                    // a restore applied now. Hold for the fit, then take it back.
+                    let tries = 0;
+                    const wait = () => {
+                        if ((plugin.canvas3d?.boundingSphere?.radius ?? 0) > 0 || tries++ > 200) {
+                            if (cam) handleControlMessage({ type: 'camera-set', state: s });
+                        } else {
+                            setTimeout(wait, 50);
+                        }
+                    };
+                    setTimeout(wait, 50);
+                } else if (valid) {
                     // A saved view is a fixed camera, so take it off the
                     // bounding-sphere leash now: Mol* re-fits the camera on every
                     // scene commit while camera.manualReset is false, and the

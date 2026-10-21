@@ -506,6 +506,20 @@ class LiveSession:
         # clients like the visibility map is — a reload connects a new client.
         self._volume_iso: Dict[str, float] = {}
         self._volume_style: Dict[str, str] = {}
+        # The rest of a volume's appearance, same replay contract — color, opacity,
+        # translation, and the negative contour's own color/style/opacity. Without
+        # them a viewport reload fell back to the scene's composed defaults and
+        # live-set styling was lost.
+        self._volume_color: Dict[str, str] = {}
+        self._volume_opacity: Dict[str, float] = {}
+        self._volume_position: Dict[str, list] = {}
+        self._volume_negative_color: Dict[str, str] = {}
+        self._volume_negative_opacity: Dict[str, float] = {}
+        self._volume_negative_style: Dict[str, str] = {}
+        # The camera the page last reported, replayed to a reconnected client as a
+        # camera-set — a viewport reload is a new page and would otherwise drop the
+        # user's framing for a scene-wide refit.
+        self._last_camera_state: Optional[dict] = None
         # Control text broadcast while no client was attached — the navigation
         # gap of a viewport reload, or a dead renderer before reconnect. Flushed
         # to the next client after the stored-state replay, so newer intent
@@ -1144,8 +1158,10 @@ class LiveSession:
         """Broadcast a command to change the color of a volume by reference.
 
         The ``ref`` is the volume reference used when the scene was built (e.g.
-        ``volume-0`` or a custom :class:`Volume` ref). Thread-safe.
+        ``volume-0`` or a custom :class:`Volume` ref). Recorded and replayed to
+        late clients — a viewport reload is a new client. Thread-safe.
         """
+        self._volume_color[str(ref)] = str(color)
         message = json.dumps({"type": "volume_color", "ref": str(ref), "color": str(color)})
         loop = self._loop
         if loop is not None:
@@ -1161,7 +1177,9 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_volume_negative_color(self, ref: str, color: str) -> None:
-        """Change a difference map's negative-contour color by reference. Thread-safe."""
+        """Change a difference map's negative-contour color by reference.
+        Recorded and replayed to late clients. Thread-safe."""
+        self._volume_negative_color[str(ref)] = str(color)
         message = json.dumps(
             {"type": "volume_negative_color", "ref": str(ref), "color": str(color)})
         loop = self._loop
@@ -1206,7 +1224,8 @@ class LiveSession:
     def set_volume_negative_style(self, ref: str, style: str) -> None:
         """Change a difference map's negative-contour style (surface or mesh). The
         contour is its own row in the object panel, so this is its own setting rather
-        than the map's. Thread-safe."""
+        than the map's. Recorded and replayed to late clients. Thread-safe."""
+        self._volume_negative_style[str(ref)] = str(style)
         message = json.dumps(
             {"type": "volume_negative_style", "ref": str(ref), "style": str(style)})
         loop = self._loop
@@ -1214,7 +1233,9 @@ class LiveSession:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
     def set_volume_negative_opacity(self, ref: str, opacity: float) -> None:
-        """Change a difference map's negative-contour opacity. Thread-safe."""
+        """Change a difference map's negative-contour opacity. Recorded and
+        replayed to late clients. Thread-safe."""
+        self._volume_negative_opacity[str(ref)] = float(opacity)
         message = json.dumps({"type": "volume_negative_opacity", "ref": str(ref),
                               "opacity": float(opacity)})
         loop = self._loop
@@ -1247,8 +1268,10 @@ class LiveSession:
     def set_volume_opacity(self, ref: str, opacity: float) -> None:
         """Broadcast a command to change the opacity of a volume by reference.
 
-        Thread-safe: may be called from any thread.
+        Recorded and replayed to late clients. Thread-safe: may be called from
+        any thread.
         """
+        self._volume_opacity[str(ref)] = float(opacity)
         message = json.dumps({"type": "volume_opacity", "ref": str(ref), "opacity": float(opacity)})
         loop = self._loop
         if loop is not None:
@@ -1546,10 +1569,11 @@ class LiveSession:
     def set_volume_position(self, ref: str, position: Any) -> None:
         """Broadcast a command to translate a volume by reference.
 
-        ``position`` is a 3-element sequence of Angstrom offsets.
-        Thread-safe: may be called from any thread.
+        ``position`` is a 3-element sequence of Angstrom offsets. Recorded and
+        replayed to late clients. Thread-safe: may be called from any thread.
         """
         x, y, z = position
+        self._volume_position[str(ref)] = [float(x), float(y), float(z)]
         message = json.dumps({"type": "volume_position", "ref": str(ref), "position": [float(x), float(y), float(z)]})
         loop = self._loop
         if loop is not None:
@@ -2105,6 +2129,12 @@ class LiveSession:
     def _send_representations(self) -> None:
         self._prune_attributes()  # drop payloads no representation references anymore
         self._send_control({"type": "representations", "reprs": list(self._representations.values())})
+        # A rebuilt representation starts from spec params — the clip that patched
+        # the old nodes is gone with them. Re-asserting the standing clips keeps
+        # "clip is scene state" true across set/add/remove/color_by however the
+        # frontend built the new nodes. Volume-ref clips re-apply harmlessly.
+        for clip in self._clips.values():
+            self._send_control(clip)
 
     def _as_selection(self, spec: Any) -> Selection:
         """Coerce a Selection / index / indices / mask to a Selection.
@@ -2344,6 +2374,24 @@ class LiveSession:
             for ref, style in list(self._volume_style.items()):
                 await self._locked_send(websocket, json.dumps(
                     {"type": "volume_style", "ref": ref, "style": style}))
+            for ref, color in list(self._volume_color.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_color", "ref": ref, "color": color}))
+            for ref, opacity in list(self._volume_opacity.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_opacity", "ref": ref, "opacity": opacity}))
+            for ref, position in list(self._volume_position.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_position", "ref": ref, "position": position}))
+            for ref, color in list(self._volume_negative_color.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_negative_color", "ref": ref, "color": color}))
+            for ref, opacity in list(self._volume_negative_opacity.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_negative_opacity", "ref": ref, "opacity": opacity}))
+            for ref, style in list(self._volume_negative_style.items()):
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "volume_negative_style", "ref": ref, "style": style}))
             for ref, hidden in list(self._volume_negative_hidden.items()):
                 if hidden:
                     await self._locked_send(websocket, json.dumps(
@@ -2388,6 +2436,13 @@ class LiveSession:
             if self._focus_surroundings:
                 await self._locked_send(websocket, json.dumps(
                     {"type": "focus-surroundings", "enabled": True}))
+            if self._last_camera_state is not None:
+                # Give the reconnecting page its framing back — otherwise a
+                # viewport reload opens at a scene-wide refit. The client delays
+                # the restore until the scene has geometry, so the auto-fit can't
+                # stomp it.
+                await self._locked_send(websocket, json.dumps(
+                    {"type": "camera-set", "state": self._last_camera_state}))
             # Commands broadcast while nobody was attached land last: they are
             # newer intent than the stored-state replay above.
             for message in self._outbox:
@@ -2527,6 +2582,14 @@ class LiveSession:
             if slot is not None:
                 slot["state"] = event.get("state")
                 slot["event"].set()
+        elif etype == "camera-report":
+            # The page's running camera, volunteered on state change (debounced
+            # client-side). Stored so a reconnected/reloaded client gets its
+            # framing back as a camera-set — the viewport reload is a new page
+            # with no memory of where the old one was looking.
+            state = event.get("state")
+            if isinstance(state, dict):
+                self._last_camera_state = state
         elif etype == "screenshot-result":
             req_id = event.get("reqId")
             with self._pending_lock:

@@ -236,6 +236,46 @@ def exercise_invoke_on_gui_marshals_onto_the_app_thread():
         app.stop()
 
 
+def exercise_z_transparency_guards_oversized_grids():
+    """Transparency lowers the same geometry ceiling the mesh deaths hit — a
+    transparent isosurface on an oversized grid gets the auto-decimate before
+    the alpha lands. A boxed map is already small, a caller's factor stands,
+    and opaque values touch nothing."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app._DOWNSAMPLE_VOXEL_CAP = 10_000          # a 24^3 grid counts as huge
+        data = VolumeData.from_numpy(np.zeros((24, 24, 24), dtype=np.float32),
+                                     name="big")
+        vid = app._add_volume(data, "big")
+        app.set_volume_downsample(vid, 1)           # back to full-res, as a caller may
+        entry = app._volume_entry(vid)
+
+        app.set_volume_opacity(vid, 1.0)            # opaque: nothing to guard
+        assert int(entry.get("localres_downsample") or 1) == 1
+
+        app.set_volume_opacity(vid, 0.5)            # alpha on the oversized grid
+        assert int(entry.get("localres_downsample") or 1) == 2
+
+        app.set_volume_downsample(vid, 3)           # a caller's factor is not clobbered
+        app.set_volume_opacity(vid, 0.3)
+        assert int(entry.get("localres_downsample") or 1) == 3
+
+        app.set_volume_downsample(vid, 1)           # a boxed map is already small
+        app.set_volume_box(vid, [0, 0, 0], 10.0)
+        app.set_volume_opacity(vid, 0.4)
+        assert int(entry.get("localres_downsample") or 1) == 1
+    finally:
+        app.stop()
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise"):
