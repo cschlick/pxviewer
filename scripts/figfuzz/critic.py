@@ -95,13 +95,16 @@ def evaluate(client, spec, png_bytes):
         def deliberate(l, auto):
             if l.get("box"):
                 return True
+            if l.get("downsample_source") == "user":
+                return True   # the caller set it — a kept auto factor still counts
             if auto is None:   # auto factor unreadable — fall back to full-res
                 return (l.get("downsample") or 1) == 1
             return (l.get("downsample") or 1) != auto
         pairs = list(zip(looks, (autos + [None] * len(looks))[:len(looks)]))
         ok = bool(looks) and all(deliberate(l, a) for l, a in pairs)
         find("grid_deliberate", ok,
-             "; ".join(f"d{l.get('downsample')}/auto{a} box={bool(l.get('box'))}"
+             "; ".join(f"d{l.get('downsample')}/{l.get('downsample_source') or 'unset'}"
+                       f"/auto{a} box={bool(l.get('box'))}"
                        for l, a in pairs) or "no volumes")
 
     if expect.get("regioned"):
@@ -156,7 +159,9 @@ def evaluate(client, spec, png_bytes):
             if frac is None:
                 findings.append(("nonblank", None, "PIL unavailable"))
             else:
-                find("nonblank", frac > 0.02,
+                # 1%, not 2 — a legitimately drawn thin slab or sparse wireframe
+                # can sit under 2% coverage and still be a valid figure.
+                find("nonblank", frac > 0.01,
                      f"{frac * 100:.1f}% of pixels differ from the border")
 
     return findings

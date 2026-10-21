@@ -4400,7 +4400,7 @@ class AppCore:
         self._status(
             f"{entry.get('name', vid)}: transparent pass on a large grid — "
             f"drawing a {factor}x-downsampled copy (Downsample: Full restores)")
-        self.set_volume_downsample(vid, factor)
+        self.set_volume_downsample(vid, factor, _source="auto")
 
 
     def set_volume_color(self, vid: str, color: str) -> None:
@@ -4558,6 +4558,9 @@ class AppCore:
         # able to see this: an oversized map opens decimated for interactivity,
         # which is not a publishable contour until set_volume_downsample(vid, 1).
         out["downsample"] = int(entry.get("localres_downsample") or 1)
+        # "user" the caller picked the drawn grid; "auto" pxviewer decimated it
+        # for interactivity — the distinction a figure workflow must check.
+        out["downsample_source"] = entry.get("downsample_source")
         out["sphere"] = self._sphere_state(entry)
         out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
@@ -5211,6 +5214,7 @@ class AppCore:
         auto = self._auto_downsample_factor(data)
         if auto > 1:
             entry["localres_downsample"] = auto
+            entry["downsample_source"] = "auto"
             self._downsample_url(entry, auto)
             self._status(
                 f"{name}: large grid — drawing a {auto}x-downsampled copy "
@@ -5738,7 +5742,7 @@ class AppCore:
             return 1
         return max(1, math.ceil((voxels / self._DOWNSAMPLE_VOXEL_CAP) ** (1 / 3)))
 
-    def set_volume_downsample(self, vid: str, factor: int) -> None:
+    def set_volume_downsample(self, vid: str, factor: int, _source: str = "user") -> None:
         """Set a map's display downsampling: draw every nth voxel (1 = full grid).
 
         The plain isosurface redraws from an exactly on-lattice decimated copy
@@ -5752,6 +5756,7 @@ class AppCore:
             return
         factor = max(1, int(factor))
         entry["localres_downsample"] = factor
+        entry["downsample_source"] = _source
         session = self._control_session()
         if session is not None:
             session.set_localres_downsample(factor)   # the colored surface's path
