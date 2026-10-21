@@ -3487,10 +3487,60 @@ class ControlsWindow:
 
         # (The "Drag atoms" group used to sit here. It is now the Refine drag box on the
         # Tools tab, wrapped around the switch it was giving directions to.)
+        layout.addWidget(self._build_quality_group())
         layout.addWidget(self._build_perf_group())
 
         layout.addStretch()
         return tab
+
+    def _build_quality_group(self):
+        """Figure-quality render passes: supersampling, the shadow/outline/bloom
+        passes, and the progressive illumination renderer."""
+        from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout,
+                                       QLabel, QVBoxLayout)
+
+        box = QGroupBox("Image quality")
+        qg = QVBoxLayout(box)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Supersample"))
+        scale = QComboBox()
+        for label, v in (("Native", 1.0), ("1.5×", 1.5), ("2×", 2.0), ("3×", 3.0)):
+            scale.addItem(label, v)
+        scale.setToolTip(
+            "Render at N× resolution and downsample — sharper edges and smoother "
+            "surfaces. Cost scales with the square of the factor.")
+        scale.currentIndexChanged.connect(
+            lambda i: self._safe(
+                lambda: self._desktop.set_perf_prefs(pixelScale=scale.itemData(i))))
+        row.addWidget(scale)
+        row.addStretch()
+        qg.addLayout(row)
+
+        for label, key, tip in (
+            ("Shadows", "shadow",
+             "Directional shadow-casting pass — adds depth cueing on surfaces."),
+            ("Outlines", "outline",
+             "Dark edge outlines — the illustration look."),
+            ("Bloom", "bloom",
+             "A soft glow around bright areas."),
+        ):
+            check = QCheckBox(label)
+            check.setToolTip(tip)
+            check.toggled.connect(
+                lambda on, k=key: self._safe(
+                    lambda: self._desktop.set_perf_prefs(post={k: "on" if on else "off"})))
+            qg.addWidget(check)
+
+        illum = QCheckBox("Progressive illumination (figure quality — slow)")
+        illum.setToolTip(
+            "Mol*'s path-traced-style renderer: multi-bounce light, soft shadows, "
+            "denoise. Refines the image over a second or two — the most expensive "
+            "render mode there is. For stills, not for dragging.")
+        illum.toggled.connect(lambda on: self._safe(
+            lambda: self._desktop.set_perf_prefs(illumination=bool(on))))
+        qg.addWidget(illum)
+        return box
 
     def _build_perf_group(self):
         """Performance-debugging controls: a live overlay, render overrides to isolate what

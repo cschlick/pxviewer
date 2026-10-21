@@ -2119,6 +2119,36 @@ def exercise_a_checkable_combo_requires_a_click_inside_the_popup():
     combo.hidePopup()
 
 
+def exercise_the_settings_tab_carries_image_quality_controls():
+    """The figure-quality render passes live in a Settings "Image quality" group:
+    supersampling, the shadow/outline/bloom passes, and the illumination renderer —
+    and each control drives set_perf_prefs."""
+    from PySide6.QtWidgets import QCheckBox, QComboBox, QGroupBox
+
+    with bare_desktop() as app:
+        controls = app._controls
+        settings = controls._tabs.widget(controls._tab_labels.index("Settings"))
+        box = next((b for b in settings.findChildren(QGroupBox)
+                    if b.title() == "Image quality"), None)
+        assert box is not None
+
+        sent = []
+        app.set_perf_prefs = lambda **kw: sent.append(kw)
+        scale = box.findChild(QComboBox)
+        scale.setCurrentIndex(2)                    # 2x supersampling
+        illum = next(c for c in box.findChildren(QCheckBox)
+                     if "illumination" in c.text().lower())
+        illum.setChecked(True)
+        outline = next(c for c in box.findChildren(QCheckBox)
+                       if c.text() == "Outlines")
+        outline.setChecked(True)
+        process_events()
+
+        assert {"pixelScale": 2.0} in sent, sent
+        assert {"illumination": True} in sent, sent
+        assert {"post": {"outline": "on"}} in sent, sent
+
+
 def run():
     # Every exercise here builds a DesktopApp, which reads its defaults from QSettings --
     # so the whole file runs against a fresh install's preferences, not the user's.
