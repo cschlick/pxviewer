@@ -250,7 +250,8 @@ def main():
                         help="print the resolved specs and exit")
     args = parser.parse_args()
 
-    chosen = (specmod.corpus(str(DATA), seed=args.seed) if args.all
+    chosen = (specmod.corpus(str(DATA), seed=args.seed)
+              if args.all or args.only
               else specmod.generate(str(DATA), args.count, args.seed))
     if args.no_fetch:
         chosen = [s for s in chosen if not s["fetch"]]

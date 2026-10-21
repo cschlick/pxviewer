@@ -40,6 +40,25 @@ Requires: the real desktop (a display), the `mcp` client package, PIL for the
 blank-frame check, and an agent CLI — `devin` on PATH or the app-bundle
 binary (auto-detected). Network only for the `--fetch` specs.
 
+## Orchestrated mode — no CLI auth needed
+
+Any agent that can launch subprocesses and call MCP tools can play
+orchestrator instead of `run.py` — including a Devin session itself, whose
+subagents inherit the session's auth and the project's MCP config. The loop
+is the same, with every spec's app on the one configured port
+(`pxviewer-live` = `127.0.0.1:8753`) since runs are serial:
+
+1. stage the spec's files (`_stage_files`), launch
+   `python -m pxviewer desktop --port <webapp> --mcp-port 8753`;
+2. maker subagent: `MAKER_PROMPT` with "the pxviewer-live MCP server" for the
+   config clause;
+3. deterministic checks via `critic.evaluate` against `127.0.0.1:8753/mcp`;
+4. judge subagent: `critic.judge_prompt`, reading `critique.png` and
+   `figure.png` with its file tools;
+5. kill the app, next spec.
+
+`run.py --list` emits the spec texts to feed that loop.
+
 ## Output
 
 `build/figfuzz/run-<timestamp>/` holds one directory per spec: staged inputs,

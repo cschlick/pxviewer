@@ -774,7 +774,11 @@ class LiveSession:
         Deliberately not a reframe: the target and orientation are left alone, so this
         answers "closer, please" without moving what is being looked at. Thread-safe.
         """
-        message = json.dumps({"type": "zoom", "factor": float(factor)})
+        factor = float(factor)
+        if factor <= 0:
+            raise ValueError(
+                f"zoom factor must be positive (< 1 in, > 1 out), got {factor}")
+        message = json.dumps({"type": "zoom", "factor": factor})
         loop = self._loop
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)

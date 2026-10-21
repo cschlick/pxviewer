@@ -80,13 +80,29 @@ def evaluate(client, spec, png_bytes):
              "; ".join(f"{l.get(key)!r}" for l in looks) or "no volumes")
 
     if expect.get("grid_deliberate"):
-        # The rendered grid must be a choice, not inherited decimation: either
-        # full resolution (downsample 1) or deliberately carved (box set).
-        ok = bool(looks) and all(
-            (l.get("downsample") or 1) == 1 or l.get("box") for l in looks)
+        # The rendered grid must be a choice, not inherited decimation. The
+        # tell is whether the factor differs from what load-time auto-decimate
+        # handed out: a caller who checked picks 1, a box, or a factor of
+        # their own — a caller who didn't leaves the auto value in place.
+        try:
+            out = client.call("python", {
+                "code": "import json; print(json.dumps("
+                        "[app._auto_downsample_factor(v['data']) "
+                        "for v in app._volumes]))"})
+            autos = _python_stdout_json(out) or []
+        except Exception:
+            autos = []
+        def deliberate(l, auto):
+            if l.get("box"):
+                return True
+            if auto is None:   # auto factor unreadable — fall back to full-res
+                return (l.get("downsample") or 1) == 1
+            return (l.get("downsample") or 1) != auto
+        pairs = list(zip(looks, (autos + [None] * len(looks))[:len(looks)]))
+        ok = bool(looks) and all(deliberate(l, a) for l, a in pairs)
         find("grid_deliberate", ok,
-             "; ".join(f"d{l.get('downsample')} box={bool(l.get('box'))}"
-                       for l in looks) or "no volumes")
+             "; ".join(f"d{l.get('downsample')}/auto{a} box={bool(l.get('box'))}"
+                       for l, a in pairs) or "no volumes")
 
     if expect.get("regioned"):
         ok = bool(looks) and all(
