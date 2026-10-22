@@ -4653,6 +4653,7 @@ class AppCore:
         # for interactivity — the distinction a figure workflow must check.
         out["downsample_source"] = entry.get("downsample_source")
         out["sphere"] = self._sphere_state(entry)
+        out["visible"] = entry.get("visible", True)
         out["negative_visible"] = entry.get("negative_visible", True)
         # The map's maximum on the sigma scale -- the level above which nothing is left.
         # The Level slider spans up to here, so its right end genuinely empties the map.

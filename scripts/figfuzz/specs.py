@@ -14,13 +14,20 @@ Each spec is a dict:
     stage    files the runner materializes into the run dir first:
              {"path": "map.mrc", "kind": "blob"|"big"|"diff", "shape": (n,n,n)}
     expect   declarative checks for the programmatic critic (see critic.py):
-             models / volumes      -- exact or minimum counts
+             models / volumes      -- minimum counts
+             models_exact          -- exact counts (removal specs)
+             volumes_exact
              volume_props          -- attrs every volume must show
              grid_deliberate       -- drawn grid is full-res or boxed
              regioned              -- some clip/box/mask state exists
              negative_visible      -- a difference map's minus contour is on
+             volume_hidden         -- at least N maps not drawn
              primitives            -- at least N drawing primitives exist
              model_clipped         -- the model carries a clip
+             selection_nonempty    -- a selection is active
+             reflections           -- at least N reflection sets loaded
+             conformer_set         -- a model has a conformer chosen
+             background            -- the viewport's background hex
              nonblank              -- the screenshot is not empty (default on)
              no_job_errors         -- status() reports none (default on)
     fetch    needs the network (skipped under --no-fetch)
@@ -148,6 +155,104 @@ def corpus(data_dir, seed=0):
               stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
               anchor=f14m,
               expect={"models": 1, "volumes": 1}),
+
+        # ---- round 2: machinery the first corpus never touched -------------
+
+        _spec("g01-express-color", "Selection-grammar coloring",
+              f"Load {m()} and make a figure where the lysines stand out "
+              "from the rest of the protein — use the app's typed/expression "
+              "selection machinery to pick them, not a hand-built atom list.",
+              expect={"models": 1, "selection_nonempty": True}),
+
+        _spec("g02-surface", "Molecular surface",
+              f"Load {m()} and make a figure of the molecule's surface — "
+              "not its cartoon — with any bound ligand or metal drawn "
+              "through it in enough detail to identify.",
+              expect={"models": 1}),
+
+        _spec("g03-demo-pair", "Demo pair: model in its density",
+              "The app has a built-in demo that loads a model together with "
+              "a density map computed for it — find it (look for a "
+              "load_*_demo method on the app object). Then make a figure of "
+              "the model sitting inside its own density.",
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("g04-xray-maps", "Maps from the x-ray demo",
+              "The app has a demo that loads a model together with real or "
+              "synthesized diffraction data unpaired — find it (a "
+              "load_xray_demo-style method). Then make the maps from the "
+              "reflections and produce a figure of the model inside the "
+              "2mFo-DFc-style density.",
+              expect={"models": 1, "volumes": 1, "reflections": 1}),
+
+        _spec("g05-remove", "Scene mutation: remove the map",
+              f"Load {m()} and blob.mrc from this directory, then remove the "
+              "map from the scene entirely. The figure is the model alone — "
+              "verify no density is left drawn.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              expect={"models": 1, "volumes_exact": 0}),
+
+        _spec("g06-model-sphere", "Spherical model clip",
+              f"Load {m()}, pick a residue near its middle, and make a "
+              "figure where only the structure within ~15 Å of that residue "
+              "is drawn — a spherical neighborhood, not a slab.",
+              expect={"models": 1, "model_clipped": True}),
+
+        _spec("g07-rsr-stream", "Live real-space refinement",
+              "The app has a demo that loads a model shaken away from its "
+              "own density — find it (a load_real_space_refinement_demo-style "
+              "method). Run its real-space refinement ('minimize' into the "
+              "density) and make the figure of the model sitting correctly "
+              "inside the density again.",
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("g08-two-volumes", "Two maps, one hidden",
+              "Load blob.mrc and diffmap.mrc from this directory. Make a "
+              "figure that shows exactly one of them — your choice — with "
+              "the other not drawn.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)},
+                     {"path": "diffmap.mrc", "kind": "diff", "shape": (96, 96, 96)}],
+              expect={"volumes": 2, "volume_hidden": 1}),
+
+        _spec("g09-validation", "Validation outliers on screen",
+              f"Load {m()}, run the app's geometry validation, and make a "
+              "figure that lets a reader find the outliers it reports.",
+              expect={"models": 1}),
+
+        _spec("g10-iso-choice", "A contour level, chosen twice",
+              "Load blob.mrc from this directory. First look at it at a low "
+              "contour, then make the final figure at 3.0 sigma — the saved "
+              "frame must be at 3.0, not the level you started from.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              expect={"volumes": 1, "volume_props": {"iso": 3.0}}),
+
+        _spec("g11-focus-residue", "Residue-level framing",
+              f"Load {m()} and use the app's residue-navigation machinery to "
+              "walk to a residue near the middle of the structure — the "
+              "figure frames on that residue, centered and filling a good "
+              "part of the view.",
+              expect={"models": 1}),
+
+        _spec("g12-conformers", "One conformer of several",
+              "Load multiconf.pdb from this directory — a multi-conformer "
+              "model — and make a figure that shows exactly one conformer, "
+              "with the others not drawn.",
+              stage=[{"path": "multiconf.pdb", "kind": "multiconf",
+                      "from": p("1ubq.pdb"), "copies": 3}],
+              expect={"models": 1, "conformer_set": True}),
+
+        _spec("g13-white-background", "Publication figure on white",
+              f"Load {m()} and make a figure on a white background with the "
+              "structure in a dark color — the kind of figure that goes on a "
+              "white slide.",
+              expect={"models": 1, "background": "#ffffff"}),
+
+        _spec("g14-volume-clip", "A slab of density only",
+              "Load blob.mrc from this directory and make a figure of a thin "
+              "slab of the density — the map outside the slab must not be "
+              "drawn. Clip the volume, not the camera.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              expect={"volumes": 1, "regioned": True}),
     ]
     return specs
 

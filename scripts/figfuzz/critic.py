@@ -62,6 +62,40 @@ def evaluate(client, spec, png_bytes):
     if "volumes" in expect:
         find("volumes", len(volumes) >= expect["volumes"],
              f"{len(volumes)} loaded")
+    if "models_exact" in expect:
+        find("models_exact", len(models) == expect["models_exact"],
+             f"{len(models)} loaded")
+    if "volumes_exact" in expect:
+        find("volumes_exact", len(volumes) == expect["volumes_exact"],
+             f"{len(volumes)} loaded")
+    if "reflections" in expect:
+        refl = state.get("reflections") or []
+        find("reflections", len(refl) >= expect["reflections"],
+             f"{len(refl)} loaded")
+    if expect.get("selection_nonempty"):
+        sel = state.get("selection") or {}
+        ok = any(n > 0 for n in sel.values())
+        detail = str(sel)[:120]
+        if not ok:
+            # A representation restricted to a subset is the other honest way
+            # to use the selection machinery — ``select_by`` returning a
+            # Selection that then scopes an ``add_representation``.
+            try:
+                out = client.call("python", {
+                    "code": "import json; print(json.dumps("
+                            "[bool(r.get('on')) for m in app._models "
+                            "for r in "
+                            "m['session']._representations.values()]))"})
+                on_subsets = _python_stdout_json(out) or []
+                ok = any(on_subsets)
+                detail += f"; rep-subsets {on_subsets}"
+            except Exception:
+                pass
+        find("selection_nonempty", ok, detail)
+    if "background" in expect:
+        bg = (state.get("background") or "").lower()
+        find("background", bg == expect["background"].lower(),
+             f"actual {bg or 'unset'}")
 
     looks = []
     for v in volumes:
@@ -120,6 +154,12 @@ def evaluate(client, spec, png_bytes):
         ok = bool(looks) and any(l.get("negative_visible") for l in looks)
         find("negative_visible", ok)
 
+    if "volume_hidden" in expect:
+        hidden = sum(1 for l in looks if l.get("visible") is False)
+        find("volume_hidden", hidden >= expect["volume_hidden"],
+             "; ".join(f"{l.get('name') or '?'} visible={l.get('visible')}"
+                       for l in looks) or "no volumes")
+
     if expect.get("model_clipped"):
         ok = False
         try:
@@ -145,6 +185,17 @@ def evaluate(client, spec, png_bytes):
             find("primitives", ok, str(counts))
         except Exception as exc:
             findings.append(("primitives", None, repr(exc)[:120]))
+
+    if expect.get("conformer_set"):
+        try:
+            out = client.call("python", {
+                "code": "import json; print(json.dumps("
+                        "[m.get('conformer') for m in app._models]))"})
+            labels = _python_stdout_json(out)
+            ok = bool(labels) and any(c for c in labels)
+            find("conformer_set", ok, str(labels))
+        except Exception as exc:
+            findings.append(("conformer_set", None, repr(exc)[:120]))
 
     if expect.get("no_job_errors"):
         errors = state.get("job_errors") or []

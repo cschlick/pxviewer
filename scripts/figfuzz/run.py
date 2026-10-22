@@ -110,6 +110,40 @@ def _stage_files(rundir, stage, anchor=None):
         centroid = xyz.mean(axis=0)
 
     for item in stage:
+        if item["kind"] == "multiconf":
+            # True alternate conformers (altlocs) — what pxviewer's
+            # conformer machinery acts on (model_conformers/set_model_conformer
+            # address altloc labels; MODEL records are collapsed at load).
+            # A stretch of residues gets a second side-chain pose at occupancy
+            # 0.5, so "show only conformer A" has atoms to hide.
+            lines = []
+            src = Path(item["from"]).read_text().splitlines()
+            atoms = [l for l in src if l.startswith(("ATOM", "HETATM"))]
+            rng = np.random.default_rng(11)
+            n_alt = item.get("alt_residues", 8)
+            # Pick a contiguous interior run of protein residues.
+            resseqs = sorted({int(l[22:26]) for l in atoms
+                              if l[17:20].strip() not in ("HOH", "WAT")})
+            run = resseqs[len(resseqs) // 3: len(resseqs) // 3 + n_alt]
+            for l in atoms:
+                resseq = int(l[22:26])
+                atom = l[12:16].strip()
+                is_protein = l[17:20].strip() not in ("HOH", "WAT")
+                if resseq in run and is_protein and atom not in ("N", "CA", "C", "O"):
+                    xyz = np.array([float(l[30:38]), float(l[38:46]),
+                                    float(l[46:54])])
+                    jit = rng.normal(0, 0.6, 3)
+                    lines.append(f"{l[:16]}A{l[17:22]}{l[22:30]}"
+                                 f"{xyz[0]:8.3f}{xyz[1]:8.3f}{xyz[2]:8.3f}"
+                                 f"  0.50{l[60:]}")
+                    xyz2 = xyz + jit
+                    lines.append(f"{l[:16]}B{l[17:22]}{l[22:30]}"
+                                 f"{xyz2[0]:8.3f}{xyz2[1]:8.3f}{xyz2[2]:8.3f}"
+                                 f"  0.50{l[60:]}")
+                else:
+                    lines.append(l)
+            (rundir / item["path"]).write_text("\n".join(lines) + "\n")
+            continue
         shape = item["shape"]
         rng = np.random.default_rng(7)
         grid = np.indices(shape, dtype=np.float32)
