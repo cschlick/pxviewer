@@ -605,6 +605,47 @@ def exercise_z_transparency_guards_oversized_grids():
         app.stop()
 
 
+def exercise_a_stopped_session_fails_loudly():
+    """A session kept past ``remove_model`` is dead, not silent: its verbs
+    raise instead of reporting success on sends that go nowhere (figfuzz
+    k05 — ``focus`` on the removed model's session used to return a live
+    Selection while doing nothing). And a minimization running on the
+    removed model is drained first: a held run would otherwise spin its
+    hold loop forever over a dead session and stay in ``busy`` for good.
+    """
+    import threading
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.loader import sample_structure_path
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(sample_structure_path())
+        mid = app._models[0]["id"]
+        session = app._models[0]["session"]
+
+        # A held run on this model — simulated like the real worker's
+        # wind-down, which clears idle at its last step boundary.
+        app._minimize_mid = mid
+        app._minimize_idle.clear()
+        threading.Timer(0.1, app._minimize_idle.set).start()
+        app.remove_model(mid)
+        assert app._minimize_stop.is_set(), "the run was never told to stop"
+        assert session._stopped
+        for verb in (lambda: session.focus([0]),
+                     lambda: session.push(
+                         [[0.0, 0.0, 0.0]] * session._n_atoms),
+                     lambda: session.zoom_view(1.1)):
+            try:
+                verb()
+                raise AssertionError("a stopped session accepted a verb")
+            except RuntimeError as exc:
+                assert "stopped" in str(exc), str(exc)
+    finally:
+        app.stop()
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise") and _exercise_selected(name):

@@ -539,6 +539,9 @@ class AppCore:
         # same coordinates at once — the drag takes the model over from a clean stop.
         self._minimize_idle = threading.Event()
         self._minimize_idle.set()
+        # Which model the run refines, so remove_model can stop a run on a
+        # departing model instead of orphaning it over a dead session.
+        self._minimize_mid: Optional[str] = None
         self._volume_scroll_target: Optional[str] = None  # volume the wheel contours
         # Zoom-button presses per direction — how the tutorial's zoom step knows
         # the camera was stepped (wheel zoom lives in the page and reports nothing).
@@ -3997,6 +4000,7 @@ class AppCore:
 
         self._minimize_stop.clear()
         self._minimize_idle.clear()
+        self._minimize_mid = entry["id"]
 
         def work():
             from .geometry import monomer_library_available
@@ -4005,6 +4009,7 @@ class AppCore:
             if not monomer_library_available():
                 self._status("minimization needs the monomer library (set MMTBX_CCP4_MONOMER_LIB)")
                 self._minimize_idle.set()
+                self._minimize_mid = None
                 self.bridge.minimizing_changed.emit(False)
                 return
             first = last = None
@@ -4081,6 +4086,7 @@ class AppCore:
                 return
             finally:
                 self._minimize_idle.set()  # the model is the drag's to take now
+                self._minimize_mid = None
                 self.bridge.minimizing_changed.emit(False)
             if first is not None:
                 self._status(
@@ -5494,8 +5500,21 @@ class AppCore:
         if entry is None:
             return
         self._models.remove(entry)
+        if self._tug_model == mid:
+            # A drag in flight on the departing model: abandon it. Settling is
+            # pointless — the model is leaving — and the worker's next
+            # _push_tug must not land on a session that is about to stop.
+            self._tug = None
+            self._tug_model = None
+            self._tug_session = None
         if self._tug_cache is not None and self._tug_cache[0][0] == mid:
             self._tug_cache = None  # do not keep the removed model's zone alive
+        if self._minimize_mid == mid and not self._minimize_idle.is_set():
+            # A run on this model outlives it only by spinning its hold loop
+            # forever over a dead session — stop it and let the wind-down's
+            # pushes land before the session goes away (figfuzz k05).
+            self._minimize_stop.set()
+            self._minimize_idle.wait(timeout=5.0)
         try:
             entry["session"].stop()
         except Exception:  # pragma: no cover - defensive
@@ -6471,6 +6490,15 @@ class AppCore:
 
     def _clear_all(self) -> None:
         """Stop and drop every model, volume, group, and the dummy control session."""
+        # Drain in-flight model work first: a held minimize or a live drag
+        # keeps pushing to a session long after its model is gone otherwise.
+        self._tug = None
+        self._tug_model = None
+        self._tug_session = None
+        self._tug_cache = None
+        if not self._minimize_idle.is_set():
+            self._minimize_stop.set()
+            self._minimize_idle.wait(timeout=5.0)
         for m in list(self._models):
             try:
                 m["session"].stop()

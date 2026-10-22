@@ -548,6 +548,12 @@ class LiveSession:
         self._last_chain_stall: Optional[dict] = None
 
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Set by stop(): the session is dead, not merely clientless. Sends at a
+        # clientless-but-live session queue to the outbox; sends at a stopped
+        # one could only ever be dropped, so they raise instead of silently
+        # doing nothing (figfuzz k05 — a kept session outliving remove_model
+        # reported success on a focus that went nowhere).
+        self._stopped = False
         self._server: Any = None
         self._clients: set = set()
         self._thread: Optional[threading.Thread] = None
@@ -693,6 +699,7 @@ class LiveSession:
         """
         if self._thread is not None:
             raise RuntimeError("LiveSession already started")
+        self._stopped = False
         self.host = host
         self.port = port
         self._thread = threading.Thread(target=self._run, name="pxviewer-live", daemon=True)
@@ -722,6 +729,7 @@ class LiveSession:
             thread.join(timeout=5)
         self._thread = None
         self._loop = None
+        self._stopped = True
 
     def __enter__(self) -> "LiveSession":
         if self._thread is None:
@@ -770,7 +778,7 @@ class LiveSession:
             if len(idx) and len(idx) * 2 < self._n_atoms:
                 payload = (struct.pack("<III", _TAG_FRAME_DELTA, index, len(idx))
                            + idx.tobytes() + arr[idx].tobytes())
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, payload)
         return index
@@ -780,7 +788,7 @@ class LiveSession:
         """Reframe the camera to fit the whole scene at its default orientation.
         Thread-safe: may be called from any thread."""
         message = json.dumps({"type": "reset-view"})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -795,7 +803,7 @@ class LiveSession:
             raise ValueError(
                 f"zoom factor must be positive (< 1 in, > 1 out), got {factor}")
         message = json.dumps({"type": "zoom", "factor": factor})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -823,7 +831,7 @@ class LiveSession:
         be sent on one. Thread-safe.
         """
         message = json.dumps({"type": "perf_prefs", **prefs})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -864,7 +872,7 @@ class LiveSession:
             message = json.dumps({"type": "interactions", "action": "set", "contacts": contacts})
         else:
             message = json.dumps({"type": "interactions", "action": "clear"})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
         return contacts
@@ -873,7 +881,7 @@ class LiveSession:
         """Remove all explicit interactions. See :meth:`set_interactions`."""
         self._interactions_contacts = []
         message = json.dumps({"type": "interactions", "action": "clear"})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -889,7 +897,7 @@ class LiveSession:
         visible = bool(visible)
         self._computed_interactions_visible = visible
         message = json.dumps({"type": "computed-interactions", "visible": visible})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -920,7 +928,7 @@ class LiveSession:
             message = json.dumps({"type": "clashes", "action": "set", "pairs": clashes})
         else:
             message = json.dumps({"type": "clashes", "action": "clear"})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
         return [(c["a"], c["b"]) for c in clashes]
@@ -929,7 +937,7 @@ class LiveSession:
         """Remove all clash markers. See :meth:`set_clashes`."""
         self._clashes = []
         message = json.dumps({"type": "clashes", "action": "clear"})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -952,7 +960,7 @@ class LiveSession:
             return 0
         payload = struct.pack("<II", _TAG_DOTS, channel) + encode_dots(dots)
         self._probe_dots_payloads[channel] = payload
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, payload)
         return len(dots)
@@ -965,7 +973,7 @@ class LiveSession:
         else:
             self._probe_dots_payloads.pop(channel, None)
         message = json.dumps({"type": "dots", "action": "clear", "channel": channel})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -996,7 +1004,7 @@ class LiveSession:
             style_message = json.dumps(body)
         self._last_map_box = payload
         self._map_box_style = style_message
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             if style_message is not None:
                 loop.call_soon_threadsafe(self._broadcast_text, style_message)
@@ -1006,7 +1014,7 @@ class LiveSession:
         """Remove the live density window (see :meth:`show_map_box`). Thread-safe."""
         self._last_map_box = None
         self._map_box_style = None
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps({"type": "map_box", "action": "clear"}))
@@ -1026,7 +1034,7 @@ class LiveSession:
         message = struct.pack("<I", _TAG_HOTSPOT_VOLUME) + payload
         self._last_hotspot_volume = message
         self._hotspot_knee = None  # a fresh cloud starts at its header's default knee (the cut)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, message)
 
@@ -1040,7 +1048,7 @@ class LiveSession:
         Thread-safe.
         """
         self._hotspot_knee = float(knee)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text,
@@ -1067,7 +1075,7 @@ class LiveSession:
             "anchors": dict(anchors) if anchors else None,
             "colors": [[int(c), float(s)] for c, s in colors] if colors else None,
         }
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text,
@@ -1078,7 +1086,7 @@ class LiveSession:
         self._last_hotspot_volume = None
         self._hotspot_knee = None
         self._hotspot_anchors = None
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps({"type": "hotspot_volume", "action": "clear"}))
@@ -1095,7 +1103,7 @@ class LiveSession:
         """
         message = struct.pack("<I", _TAG_LOCALRES) + payload
         self._last_localres = message
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, message)
 
@@ -1108,7 +1116,7 @@ class LiveSession:
         in the payload header to patch. Thread-safe.
         """
         self._localres_downsample = max(1, int(factor))
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
                 {"type": "localres", "action": "downsample",
@@ -1118,7 +1126,7 @@ class LiveSession:
         """Hide or show the localres coloring in place -- a render skip, everything
         kept, so showing again is instant. Stored and replayed. Thread-safe."""
         self._localres_visible = bool(visible)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
                 {"type": "localres", "action": "visible", "value": bool(visible)}))
@@ -1142,7 +1150,7 @@ class LiveSession:
             patched = bytearray(self._last_localres)
             struct.pack_into("<f", patched, 4, float(iso_level))
             self._last_localres = bytes(patched)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
                 {"type": "localres", "action": "level", "value": float(iso_level)}))
@@ -1159,7 +1167,7 @@ class LiveSession:
             patched = bytearray(self._last_localres)
             struct.pack_into("<ff", patched, 8, float(lo), float(hi))
             self._last_localres = bytes(patched)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, json.dumps(
                 {"type": "localres", "action": "domain",
@@ -1170,7 +1178,7 @@ class LiveSession:
         self._last_localres = None
         self._localres_downsample = None
         self._localres_visible = None
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps({"type": "localres", "action": "clear"}))
@@ -1181,7 +1189,7 @@ class LiveSession:
         triangles — rendered as a Mesh. Pass an empty list to clear. Thread-safe."""
         primitives = list(primitives)
         message = json.dumps({"type": "markup", "channel": int(channel), "primitives": primitives})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
         return len(primitives)
@@ -1199,7 +1207,7 @@ class LiveSession:
         """
         self._volume_color[str(ref)] = str(color)
         message = json.dumps({"type": "volume_color", "ref": str(ref), "color": str(color)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1208,7 +1216,7 @@ class LiveSession:
         place. The camera and every appearance setting stand — unlike a viewport
         reload. For maps whose backing file was rewritten (re-phasing). Thread-safe."""
         message = json.dumps({"type": "volume_reload", "ref": str(ref)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1218,7 +1226,7 @@ class LiveSession:
         self._volume_negative_color[str(ref)] = str(color)
         message = json.dumps(
             {"type": "volume_negative_color", "ref": str(ref), "color": str(color)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1229,7 +1237,7 @@ class LiveSession:
         hidden. Thread-safe."""
         self._structure_visible = bool(visible)
         message = json.dumps({"type": "structure_visible", "value": bool(visible)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1240,7 +1248,7 @@ class LiveSession:
         replay, every reload redrew every hidden map. Thread-safe."""
         self._volume_visibility[str(ref)] = bool(visible)
         message = json.dumps({"type": "volume_visible", "ref": str(ref), "value": bool(visible)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1253,7 +1261,7 @@ class LiveSession:
         self._volume_negative_hidden[str(ref)] = not bool(visible)
         message = json.dumps(
             {"type": "volume_negative_visible", "ref": str(ref), "value": bool(visible)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1264,7 +1272,7 @@ class LiveSession:
         self._volume_negative_style[str(ref)] = str(style)
         message = json.dumps(
             {"type": "volume_negative_style", "ref": str(ref), "style": str(style)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1274,7 +1282,7 @@ class LiveSession:
         self._volume_negative_opacity[str(ref)] = float(opacity)
         message = json.dumps({"type": "volume_negative_opacity", "ref": str(ref),
                               "opacity": float(opacity)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1297,7 +1305,7 @@ class LiveSession:
         else:
             self._volume_negative_iso[str(ref)] = msg
         message = json.dumps(msg)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1309,7 +1317,7 @@ class LiveSession:
         """
         self._volume_opacity[str(ref)] = float(opacity)
         message = json.dumps({"type": "volume_opacity", "ref": str(ref), "opacity": float(opacity)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1321,7 +1329,7 @@ class LiveSession:
         """
         self._volume_style[str(ref)] = str(style)
         message = json.dumps({"type": "volume_style", "ref": str(ref), "style": str(style)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1344,7 +1352,7 @@ class LiveSession:
             msg["negative_value"] = float(negative_value)
         self._volume_iso[str(ref)] = msg
         message = json.dumps(msg)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1534,7 +1542,7 @@ class LiveSession:
         else:
             self._clips[key] = clip
         message = json.dumps(clip)
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1581,7 +1589,7 @@ class LiveSession:
         payload = [{"id": str(m["id"]), "position": [float(c) for c in m["position"]]}
                    for m in markers]
         message = json.dumps({"type": "markers", "markers": payload, "radius": float(radius)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1592,7 +1600,7 @@ class LiveSession:
         the view-plane depth for a click in empty space. Thread-safe.
         """
         message = json.dumps({"type": "marker-mode", "on": bool(on)})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1606,7 +1614,7 @@ class LiveSession:
         self._volume_scroll_target = None if ref is None else str(ref)
         message = json.dumps(
             {"type": "volume_scroll_target", "ref": self._volume_scroll_target})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1637,7 +1645,7 @@ class LiveSession:
         x, y, z = position
         self._volume_position[str(ref)] = [float(x), float(y), float(z)]
         message = json.dumps({"type": "volume_position", "ref": str(ref), "position": [float(x), float(y), float(z)]})
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast_text, message)
 
@@ -1993,7 +2001,7 @@ class LiveSession:
         self._attribute_payloads[key] = payload
 
         # Send the values (binary) before the representation (JSON) that names them.
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(self._broadcast, payload)
         self._send_representations()
@@ -2141,9 +2149,21 @@ class LiveSession:
 
     # -- internals -------------------------------------------------------
 
+    def _send_loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """The serving loop, or None while the session simply has no server yet.
+
+        Raises for a *stopped* session: its loop is gone for good, so a send
+        would be silently dropped while the caller is told the verb ran.
+        """
+        if self._stopped:
+            raise RuntimeError(
+                "this LiveSession is stopped — its model was removed "
+                "(or the app is closing) and it no longer feeds a viewer")
+        return self._loop
+
     def _send_control(self, message: dict) -> None:
         """Broadcast a JSON control message to all clients (thread-safe)."""
-        loop = self._loop
+        loop = self._send_loop()
         if loop is not None:
             loop.call_soon_threadsafe(
                 self._broadcast_text, json.dumps(message))
