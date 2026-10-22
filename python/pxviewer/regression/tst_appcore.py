@@ -474,6 +474,20 @@ def exercise_point_sphere_freezes_the_standing_sphere():
         assert state["center"] is not None
         app.set_model_sphere(mid, "point", 6.0)
         assert app.model_sphere_state(mid)["radius"] == 6.0
+        # A non-positive radius must be refused, not stored: the viewer ignores
+        # it, so a stored one reports a clip nothing is drawing (figfuzz k06).
+        # set_model_sphere swallows internal exceptions, so the check must land
+        # before that try — assert the raise, not just an unchanged state.
+        for bad in (0.0, -5.0, float("nan"), float("inf")):
+            for call in (lambda b=bad: app.set_model_sphere(mid, "point", b),
+                         lambda b=bad: app.set_view_radius(b)):
+                try:
+                    call()
+                    raise AssertionError(f"radius {bad} accepted")
+                except ValueError:
+                    pass
+        assert app.model_sphere_state(mid)["radius"] == 6.0
+        assert app.view_radius is None
     finally:
         app.stop()
 
@@ -605,7 +619,7 @@ def exercise_z_transparency_guards_oversized_grids():
         app.stop()
 
 
-def exercise_a_stopped_session_fails_loudly():
+def exercise_stopped_session_fails_loudly():
     """A session kept past ``remove_model`` is dead, not silent: its verbs
     raise instead of reporting success on sends that go nowhere (figfuzz
     k05 — ``focus`` on the removed model's session used to return a live

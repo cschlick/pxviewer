@@ -5008,7 +5008,7 @@ class AppCore:
         and it follows the view rather than editing the map (see set_volume_radius, the
         per-map primitive this drives).
         """
-        self.view_radius = None if radius is None else float(radius)
+        self.view_radius = self._check_sphere_radius(radius)
         for entry in list(self._volumes):
             self.set_volume_radius(entry["id"], self.view_radius)
 
@@ -5059,7 +5059,7 @@ class AppCore:
         its Appearance pane is the per-map version of the same control.
         """
         entry = self._volume_entry(vid)
-        radius = None if radius is None else float(radius)
+        radius = self._check_sphere_radius(radius)
         want = ({"mode": "view", "radius": radius, "center": None}
                 if radius is not None else dict(self._SPHERE_OFF))
         if entry is None or self._sphere_state(entry) == want:
@@ -5178,6 +5178,24 @@ class AppCore:
         if sph["mode"] in ("selection", "point"):
             return sph["radius"], sph.get("center")
         return sph["radius"], None
+
+
+    @staticmethod
+    def _check_sphere_radius(radius: Optional[float]) -> Optional[float]:
+        """A stored sphere radius is a positive finite number of Angstrom, or None.
+
+        A non-positive or NaN/inf value must never reach ``entry["sphere"]``: the
+        viewer ignores it, so the app would report a clip it is not drawing —
+        the phantom-hidden-types bug again, spatial (figfuzz k06).
+        """
+        if radius is None:
+            return None
+        radius = float(radius)
+        if not math.isfinite(radius) or radius <= 0:
+            raise ValueError(
+                f"clip sphere radius must be a positive number of Å "
+                f"(or None to lift it), got {radius}")
+        return radius
 
 
     def _send_model_clip(self, entry, *, depth=None) -> None:
@@ -5327,6 +5345,7 @@ class AppCore:
         entry = self._model_entry(mid)
         if entry is None or mode not in ("off", "selection", "view", "point"):
             return
+        radius = self._check_sphere_radius(radius)  # before the swallow-all try
         if mode in ("view", "point"):
             # A user-placed sphere displaces the selection's clip, so the camera
             # slab it parked is no longer ours to restore. "Off" is a pure lift —
@@ -5381,6 +5400,7 @@ class AppCore:
         entry = self._volume_entry(vid)
         if entry is None or mode not in ("off", "view", "point"):
             return
+        radius = self._check_sphere_radius(radius)
         if mode == "point":
             if center is None:
                 center = self._default_sphere_center(entry)
