@@ -4217,8 +4217,12 @@ class AppCore:
     def start_perf_capture(self) -> None:
         """Begin recording per-frame drag timings in the viewer (see stop_perf_capture)."""
         run_js = getattr(self._viewport, "run_javascript", None)
-        if run_js is not None:
-            run_js("window.__pxviewerPerf && window.__pxviewerPerf.startCapture()")
+        if run_js is None:
+            # No page means no capture — claiming one started is the same
+            # silent-no-op family as a send to a stopped session.
+            self._status("performance capture needs a live viewport")
+            return
+        run_js("window.__pxviewerPerf && window.__pxviewerPerf.startCapture()")
         self._status("performance capture started — drag now, then stop to save the log")
 
 

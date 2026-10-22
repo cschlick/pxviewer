@@ -2705,15 +2705,20 @@ class PerfMonitor {
         this.captureBuf = [];
     }
 
-    /** Stop capturing and return the log as a JSON string (read by Python). */
+    /** Stop capturing and return the log as a JSON string (read by Python).
+     *  Returns '' when no capture is running — a bare re-stop used to re-emit
+     *  the previous capture's buffer under a fresh name (figfuzz l03). */
     stopCapture(): string {
+        if (!this.capturing) return '';
         this.capturing = false;
         const canvas = this.plugin.canvas3d;
         const props: any = canvas ? canvas.props : {};
         const cv = document.querySelector('canvas') as HTMLCanvasElement | null;
+        const samples = this.captureBuf;
+        this.captureBuf = [];
         return JSON.stringify({
             meta: {
-                samples: this.captureBuf.length,
+                samples: samples.length,
                 canvas: cv ? `${cv.width}x${cv.height}` : 'n/a',
                 devicePixelRatio: window.devicePixelRatio,
                 pixelScale: (this.plugin as any).canvas3dContext?.props?.pixelScale,
@@ -2721,7 +2726,7 @@ class PerfMonitor {
                 multiSample: props.multiSample?.mode,
                 antialiasing: props.postprocessing?.antialiasing?.name,
             },
-            samples: this.captureBuf,
+            samples,
         });
     }
 
