@@ -188,6 +188,30 @@ def exercise_spatial_and_structural_selection_keywords():
     assert len(backbone) == 304  # 76 residues x 4 backbone atoms
 
 
+def exercise_model_selection_sees_the_full_grammar_before_the_warm():
+    """session.model.selection is a documented path — it must answer with the
+    same grammar as session.select_by even before anything has processed the
+    model. Before figfuzz m03, 'backbone' on a fresh model raised
+    AtomSelectionError while select_by already accepted it, because the
+    monomer mappings only arrive with the first restraint build."""
+    session = LiveSession.from_model_file(UBIQUITIN)
+    model = session.model
+    assert getattr(model, "_all_monomer_mappings", None) is None  # still cold
+
+    sel = model.selection("backbone")
+    assert sel.count(True) == 304                               # self-healed
+
+    # Same index set as the session path, not just same count.
+    through_session = session.select_by(selection="backbone")
+    assert sel.iselection().as_numpy_array().tolist() == through_session.indices
+
+    # A genuinely bad string still raises the grammar's own error — the heal
+    # must not swallow real selection failures.
+    from iotbx.pdb.atom_selection import AtomSelectionError
+    with raises(AtomSelectionError):
+        model.selection("resseq 5 7 9")
+
+
 def exercise_diff_detects_model_drift():
     loaded = load_model(UBIQUITIN)
     data = ModelData(loaded.arrays, model=loaded.model)

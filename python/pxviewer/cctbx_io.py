@@ -448,7 +448,56 @@ class ModelData:
         self.attributes: dict = attributes or {}
         self._cache: Any = None
         self._process_for_selection: Optional[bool] = None
-        self._lock = threading.Lock()
+        # RLock, not Lock: building restraints resolves the edit phil's own
+        # selection strings through model.selection, and the wrapper below
+        # re-enters this same lock when one of those lookups fails.
+        self._lock = threading.RLock()
+        if model is not None and hasattr(model, "selection"):
+            self._wrap_model_selection(model)
+
+    def _ensure_processed_for_selection(self) -> None:
+        """The once-only build that turns on the selection manager's extra
+        predicates (``backbone``, ``sidechain``, ``rna``/``dna``/``nucleotide``,
+        ``phosphate``, ``ribose``). Funnels through ``edits.build_restraints``
+        — the serialized entry point that also folds in the user's custom
+        bond/angle edits — not a bare ``model.process()`` (a concurrent bare
+        build can race the load-time warm or a minimize build, and would ignore
+        the edits scope). ~0.5 s on 1ubq, scales with size; a failure leaves
+        the plain cache grammar (still has ``within`` when crystal symmetry
+        exists). Attempted once. Caller holds ``self._lock``."""
+        if self._process_for_selection is not None:
+            return
+        self._process_for_selection = True
+        if getattr(self.model, "_all_monomer_mappings", None) is None:
+            try:
+                from .edits import build_restraints
+                build_restraints(self.model)
+            except Exception:
+                pass
+
+    def _wrap_model_selection(self, model: Any) -> None:
+        """Shadow ``model.selection`` with a self-healing wrapper.
+
+        Until the model is processed (pdb_interpretation builds
+        ``_all_monomer_mappings``, which the load-time restraint warm does a
+        beat after ``load_file`` returns) the bare atom-selection cache answers
+        with a *smaller* grammar — ``backbone`` and friends raise while the
+        session's own ``selection_indices`` path already accepts them, so two
+        documented ways to ask the same question disagree (figfuzz m03). A
+        failed lookup funnels through the same serialized build and retries
+        once, so every caller of ``model.selection`` sees the full grammar.
+        """
+        original = model.selection
+        def selection(string, optional=True):
+            try:
+                return original(string, optional=optional)
+            except Exception:
+                if getattr(model, "_all_monomer_mappings", None) is not None:
+                    raise  # processed already — the failure is the grammar's own
+                with self._lock:
+                    self._ensure_processed_for_selection()
+                return original(string, optional=optional)
+        model.selection = selection
 
     @classmethod
     def from_model(cls, model: Any) -> "ModelData":
@@ -511,22 +560,7 @@ class ModelData:
                 "(build it via LiveSession.from_model_file / from_cctbx_model)"
             )
         with self._lock:
-            if self._process_for_selection is None:
-                # Funnel through edits.build_restraints — the serialized entry
-                # point that also folds in the user's custom bond/angle edits —
-                # not a bare model.process() (a concurrent bare build can race
-                # the load-time warm or a minimize build, and would ignore the
-                # edits scope). ~0.5 s on 1ubq, scales with size; a failure
-                # leaves the plain cache grammar (still has within() when
-                # crystal symmetry exists). Attempted once.
-                self._process_for_selection = True
-                if (hasattr(self.model, "selection")
-                        and getattr(self.model, "_all_monomer_mappings", None) is None):
-                    try:
-                        from .edits import build_restraints
-                        build_restraints(self.model)
-                    except Exception:
-                        pass
+            self._ensure_processed_for_selection()
             if hasattr(self.model, "selection"):
                 bsel = self.model.selection(expression)  # flex.bool
             else:  # raw hierarchy — bare cache, no spatial keywords
