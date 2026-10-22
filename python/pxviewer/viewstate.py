@@ -101,6 +101,12 @@ def _model_spec(app, entry, path, data_dir, bundle_data) -> dict:
     with app._scene_lock:
         selection = sorted(app._scene_selection.get(mid, ()))
     attribute = entry.get("attribute") or {}
+    # The live stack is the truth: session.set_representation()/color_by()
+    # bypass entry["rep"], which keeps the load-time default — saving that
+    # restores the wrong rep. set_/color_by clear-then-insert, so the first
+    # spec is always the main layer (context/extra layers append after).
+    live = list(getattr(entry.get("session"), "_representations", {}).values())
+    rep = live[0]["type"] if live else entry.get("rep")
     spec = {
         "kind": "model",
         "id": mid,
@@ -109,7 +115,7 @@ def _model_spec(app, entry, path, data_dir, bundle_data) -> dict:
         "data": None,
         "visible": bool(entry["visible"]),
         "group": _group_name(app, entry.get("group")),
-        "rep": entry.get("rep"),
+        "rep": rep,
         "color": entry.get("color"),
         # Serialized, not re-rolled: the palette pick is random per session, so
         # without it a reloaded view could come back a different color.
@@ -488,13 +494,14 @@ def _apply_volume_state(app, spec, vid) -> None:
         app.set_volume_opacity(vid, spec["opacity"])
     if spec.get("color") is not None:
         app.set_volume_color(vid, spec["color"])
-    # Each leg guards on its own key: gating the block on negative_color would
-    # drop a negative iso/style saved with the default color.
+    # The contour exists before its attributes: negative_color first, or the
+    # iso/opacity/style setters — which refuse a map with no negative contour —
+    # would drop their saved values.
     for key, setter in (
+            ("negative_color", app.set_volume_negative_color),
             ("negative_iso", app.set_volume_negative_iso),
             ("negative_opacity", app.set_volume_negative_opacity),
-            ("negative_style", app.set_volume_negative_style),
-            ("negative_color", app.set_volume_negative_color)):
+            ("negative_style", app.set_volume_negative_style)):
         if spec.get(key) is not None:
             setter(vid, spec[key])
     if spec.get("negative_visible") is not None:

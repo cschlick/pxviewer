@@ -373,6 +373,9 @@ def exercise_volume_boxed_iso_reads_back_in_sigma():
         entry = app._volumes[-1]
         assert entry.get("box"), "the box did not take"
         app.set_volume_iso(vid, 4.5)
+        # A level belongs to a contour — the map gets one first (the color is
+        # what creates it), then the level reads back through the same wire.
+        app.set_volume_negative_color(vid, "red")
         app.set_volume_negative_iso(vid, 3.0)
         rec = app._control_session()._volume_iso[str(vid)]
         assert rec.get("kind") == "absolute" and abs(rec["value"] - 4.5) > 0.01, \

@@ -161,6 +161,9 @@ class _NullViewport:
     def close(self) -> None:
         pass
 
+    def run_javascript(self, code: str, callback=None) -> None:
+        pass
+
     def widget(self):
         return None
 
@@ -4204,10 +4207,9 @@ class AppCore:
 
     def start_perf_capture(self) -> None:
         """Begin recording per-frame drag timings in the viewer (see stop_perf_capture)."""
-        page = getattr(self._viewport, "_view", None)
-        if page is not None:
-            page.page().runJavaScript(
-                "window.__pxviewerPerf && window.__pxviewerPerf.startCapture()")
+        run_js = getattr(self._viewport, "run_javascript", None)
+        if run_js is not None:
+            run_js("window.__pxviewerPerf && window.__pxviewerPerf.startCapture()")
         self._status("performance capture started — drag now, then stop to save the log")
 
 
@@ -4221,8 +4223,8 @@ class AppCore:
         import json as _json
         import tempfile
 
-        page = getattr(self._viewport, "_view", None)
-        if page is None:
+        run_js = getattr(self._viewport, "run_javascript", None)
+        if run_js is None:
             return
 
         def _write(result) -> None:
@@ -4242,8 +4244,7 @@ class AppCore:
             if on_saved is not None:
                 on_saved(str(path))
 
-        page.page().runJavaScript(
-            "window.__pxviewerPerf ? window.__pxviewerPerf.stopCapture() : ''", _write)
+        run_js("window.__pxviewerPerf ? window.__pxviewerPerf.stopCapture() : ''", _write)
 
 
     def write_object(self, kind: str, ident: str, path: str) -> None:
@@ -4803,22 +4804,16 @@ class AppCore:
         the second control.
         """
         entry = self._volume_entry(vid)
-        if entry is None:
+        # No contour, no level: the level belongs to a negative contour, which
+        # exists once the map is a difference map — opened as one, or made one
+        # by set_volume_negative_color. Setting it earlier would invent a
+        # contour the map never had (a dead row under every plain 2Fo-Fc map).
+        if entry is None or not entry.get("negative_color"):
             return
         value = None if value is None else float(value)
-        created = not entry.get("negative_color")
-        if created and entry.get("negative_iso") == value:
-            # Nothing to change AND nothing to create — a re-linked negative
-            # level on a map with no negative contour means the same nothing.
+        if entry.get("negative_iso") == value:
             return
-        if created:
-            # An explicit negative level is a request for the contour — create
-            # it in the difference-map color and recompose so the node exists.
-            entry["negative_color"] = "red"
         entry["negative_iso"] = value
-        if created:
-            self._reload_viewport()
-            return
         control = self._control_session()
         if control is not None:
             try:

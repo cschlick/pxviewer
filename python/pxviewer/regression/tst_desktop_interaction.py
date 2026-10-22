@@ -1163,6 +1163,29 @@ def exercise_the_clip_sphere_mode_lifts_a_standing_selection_clip():
         assert None not in entry["session"]._clips
 
 
+def exercise_a_worker_thread_load_is_marshalled():
+    """load()/run_javascript() on the viewport from a non-GUI thread reach the
+    webengine on the Qt thread. Before the marshal this was a process-killing
+    SIGTRAP inside UpdateWebPreferences — the k01 crash — so the exercise's
+    assertion is simply that the queued call lands and the app is still here."""
+    import threading
+
+    with desktop() as app:
+        landed = []
+        app._viewport._do_load = lambda url: landed.append(url)
+        t = threading.Thread(target=lambda: app._viewport.load("about:blank"))
+        t.start()
+        t.join(timeout=10)
+        pump_until(lambda: landed, "the off-thread load never reached the view")
+
+        got = []
+        t = threading.Thread(
+            target=lambda: app._viewport.run_javascript("1+1", got.append))
+        t.start()
+        t.join(timeout=10)
+        pump_until(lambda: got, "the off-thread eval never ran")
+
+
 def exercise_a_saved_view_round_trips():
     """A view file is the scene, restorable: objects, representations, colors,
     clip slab and sphere, hidden atoms and types, the standing selection and
@@ -1340,11 +1363,25 @@ def exercise_a_saved_view_round_trips():
         viewstate.save_view(restored, f"{tmp}/explicit.pxview.json",
                             bundle_data=False)
 
+        # A rep set straight on the session — how automation drives it —
+        # serializes too: the saved rep is the live stack's first layer, not
+        # the load-time value entry["rep"] still holds.
+        nentry["session"].set_representation("cartoon")
+        live = viewstate.save_view(restored, f"{tmp}/live.pxview.json",
+                                 bundle_data=False)
+        assert next(o for o in live["objects"]
+                    if o["kind"] == "model")["rep"] == "cartoon"
+
       with desktop() as restored2:
         viewstate.load_view(restored2, f"{tmp}/explicit.pxview.json")
         n2 = restored2._models[0]
         assert n2["color"] == "#112233"
         assert not (n2.get("attribute") or {}).get("name")
+
+      with desktop() as restored3:
+        viewstate.load_view(restored3, f"{tmp}/live.pxview.json")
+        n3 = restored3._models[0]
+        assert n3["rep"] == "cartoon"
 
 
 def exercise_a_saved_view_restores_linkage_and_provenance():

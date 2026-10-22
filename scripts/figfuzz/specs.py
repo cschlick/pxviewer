@@ -68,6 +68,7 @@ def corpus(data_dir, seed=0):
     h05m = m()
     i09m = m()
     j01m = m()
+    k01m = m()
     specs = [
         _spec("f01-ligand-site", "Heme site with its environment",
               f"Load {p('heme_site.pdb')} and make a figure of the heme site: "
@@ -522,6 +523,94 @@ def corpus(data_dir, seed=0):
                       "shape": (64, 64, 64)}],
               anchor=i09m,
               expect={"models": 2, "volumes": 2}),
+
+        # Round 6 — the last untested machinery
+        _spec("k01-viewstate", "Saved view round trip",
+              f"Load {k01m} and the map blob.mrc from this directory as a "
+              "group. Set up a deliberate scene: a representation change, a "
+              "clip sphere on the model, a nondefault iso, a selection, an "
+              "unusual camera. Then `from pxviewer import viewstate` and "
+              "viewstate.save_view(app, '<rundir>/view.pxview.json'). Now "
+              "MUTATE everything: clear the selection, change the rep, lift "
+              "the sphere, reset the camera, change the iso. Finally "
+              "viewstate.load_view(app, path) and verify each piece came "
+              "back — rep, sphere, iso, selection, camera. Report what did "
+              "not survive.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (64, 64, 64)}],
+              anchor=k01m,
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("k02-edits-reload", "Edits and labels survive a reload",
+              f"Load {p('zn_site.pdb')}. Author a custom bond edit between "
+              "the Zn and its nearest donor (app.add_edit_from_selection "
+              "with explicit atoms), place a measurement and a marker. Then "
+              "reload_viewport(). Verify afterward: model_edits still lists "
+              "the bond, i_seqs resolve to the same atoms, the restraint is "
+              "still applied (show_restraint_notations), the measurement "
+              "and marker survived or are honestly documented as lost. "
+              "Report what survived and what did not.",
+              expect={"models": 1}),
+
+        _spec("k03-mapcc-color", "Direct attribute coloring",
+              f"Load {p('zn_site.pdb')} and the map blob.mrc from this "
+              "directory as a group. Call app.color_model_by_mapcc "
+              "DIRECTLY (not through set_model_color) — verify the model "
+              "actually recolors per-residue against the map and status "
+              "reports the attribute. Then call app.color_model_by_hotspots "
+              "directly after running hotspots, same check. Direct calls "
+              "used to silently no-op when the color mode wasn't preset "
+              "(h04) — confirm each direct call works now.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (96, 96, 96)}],
+              anchor=p('zn_site.pdb'),
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("k04-tug-drag", "Refine-drag lifecycle",
+              f"Load {p('zn_site.pdb')}. Drive the refine-drag protocol the "
+              "frontend sends: app._on_tug('model-1','arm',-1,None), then "
+              "'begin' with a real atom index, 'move' with a target a few "
+              "Angstrom away, more 'move's, then 'end'. Verify the atom "
+              "actually moved (compare get_sites_cart before/after), the "
+              "model didn't corrupt, and job state stayed clean. Then end "
+              "on a framed figure. This is the same entry the websocket "
+              "delivers to — treat it as the protocol.",
+              expect={"models": 1}),
+
+        _spec("k05-spatial-select", "Spatial selection chains",
+              f"Load {p('3nir.pdb')}. Build selections through "
+              "select_by_expression: residues_within(6, resname CYS), "
+              "within(4, chain A), then a compound like 'chain A and "
+              "resseq 40:60 and not resname PRO'. Verify each selection's "
+              "atom count against the hierarchy (session.model.selection "
+              "gives the same mask — cross-check a couple of indices), "
+              "focus each, and end on a figure of the last compound "
+              "selection highlighted.",
+              expect={"models": 1}),
+
+        _spec("k06-view-radius", "View radius and render prefs",
+              f"Load {p('zn_site.pdb')} and the map blob.mrc from this "
+              "directory as a group. Exercise app.set_view_radius — a small "
+              "radius should drop far density; restore with None. Then "
+              "push render prefs for a figure: session.set_perf_prefs("
+              "pixelScale=2, illumination=True) and produce a publication "
+              "frame; verify the saved PNG is at the larger pixel scale.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (96, 96, 96)}],
+              anchor=p('zn_site.pdb'),
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("k07-write-display", "write_object on a derived map",
+              f"Load {p('zn_site.pdb')} and the map blob.mrc from this "
+              "directory as a group. Mask the map to ~10 Å around the model "
+              "(set_volume_mask), then set_volume_box around the model. Now "
+              "app.write_object the volume — inspect what was written "
+              "(full original grid, masked grid, or boxed grid?) and "
+              "report whether the semantics are honest and documented.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (96, 96, 96)}],
+              anchor=p('zn_site.pdb'),
+              expect={"models": 1, "volumes": 1}),
     ]
     return specs
 

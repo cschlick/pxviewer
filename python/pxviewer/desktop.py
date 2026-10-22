@@ -1195,6 +1195,23 @@ def _make_dock_close_filter(dock, host_alive):
     return _DockCloseFilter()
 
 
+def _make_call_relay():
+    """A QObject whose signal runs a callable on the GUI thread.
+
+    Construct it on the GUI thread: emitting ``call`` from any other thread
+    queues the thunk for delivery to that thread, so non-GUI callers (kernel
+    exec, MCP) can drive webengine work without tripping Chromium's
+    thread-affinity CHECKs."""
+    from PySide6.QtCore import QObject, Signal
+
+    class _CallRelay(QObject):
+        call = Signal(object)
+
+    relay = _CallRelay()
+    relay.call.connect(lambda fn: fn())
+    return relay
+
+
 class ViewportWindow:
     """A Qt window wrapping the Mol* viewer in a QWebEngineView."""
 
@@ -1232,6 +1249,24 @@ class ViewportWindow:
         # spawned-then-killed renderer; the watchdog in load() covers one that never
         # registered a process at all. Both feed pxviewer.gpu's one-shot restart.
         self._view.page().renderProcessTerminated.connect(self._renderer_gone)
+        # QWebEngineView is GUI-thread-only, but callers are not: kernel exec
+        # (Console tab, MCP ``python``) and any code driving AppCore off the Qt
+        # thread — ``viewstate.load_view`` restoring a scene, ``with
+        # app._batch_load()`` in a script — reaches load()/close() from there.
+        # A webengine call on the wrong thread corrupts the mojo endpoint and
+        # kills the process (SIGTRAP in UpdateWebPreferences). Emitted from
+        # anywhere, the relay lands on the GUI thread this object was built on.
+        self._relay = _make_call_relay()
+
+    def _on_gui(self, fn) -> None:
+        """Run ``fn`` on the Qt thread: inline when already there, else queued
+        through the relay. Any webengine or widget touch must go through this."""
+        from PySide6.QtCore import QThread
+
+        if self._view.thread() == QThread.currentThread():
+            fn()
+        else:
+            self._relay.call.emit(fn)
 
     def _build_coach_pane(self):
         """The guided-tutorial coach: a pane docked below the viewer (hidden until a
@@ -1297,12 +1332,29 @@ class ViewportWindow:
     _RENDERER_WATCHDOG_MS = 15000
 
     def load(self, url: str) -> None:
+        """Navigate the view. Safe from any thread — the webengine call itself
+        is marshalled to the GUI thread, matching BrowserViewport's contract."""
+        self._load_done = False
+        self._on_gui(lambda: self._do_load(url))
+
+    def _do_load(self, url: str) -> None:
         from PySide6.QtCore import QTimer, QUrl
         from . import gpu
-        self._load_done = False
         self._view.load(QUrl(url))
         if gpu.sandbox_autofix_enabled():
             QTimer.singleShot(self._RENDERER_WATCHDOG_MS, self._watchdog)
+
+    def run_javascript(self, code: str, callback=None) -> None:
+        """Evaluate ``code`` in the page — marshalled like load()."""
+        def _go():
+            page = self._view.page()
+            if page is None:
+                return
+            if callback is None:
+                page.runJavaScript(code)
+            else:
+                page.runJavaScript(code, callback)
+        self._on_gui(_go)
 
     def _renderer_gone(self, status, exit_code) -> None:
         """A spawned renderer died (or was killed). Normal teardown is ignored —
@@ -1362,6 +1414,9 @@ class ViewportWindow:
         where re-entering the loop would be unsafe.
         """
         self._closed = True          # stand down the renderer watchdog for teardown
+        self._on_gui(self._do_close)
+
+    def _do_close(self) -> None:
         try:
             self._view.stop()
             self._view.setPage(None)   # detaches and tears down the render process
