@@ -384,6 +384,34 @@ def exercise_volume_boxed_iso_reads_back_in_sigma():
         app.stop()
 
 
+def exercise_type_hiding_rejects_labels_the_model_lacks():
+    """set_model_type_hidden stored ANY string in hidden_types — status then
+    claimed atoms hidden that do not exist (figfuzz j05). Labels resolve
+    against the types the model actually has, case-insensitively."""
+    from pxviewer.appcore import AppCore
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(str(data_path("1ubq.pdb")))
+        mid = app._models[0]["id"]
+        types = app.model_structure_types(mid)
+        assert "Water" in types and "Protein" in types, types
+        app.set_model_type_hidden(mid, "water", True)     # case-insensitive
+        assert app._models[0]["hidden_types"] == {"Water"}
+        for label in ("bogus-type", "Ligand / other"):    # absent and junk
+            try:
+                app.set_model_type_hidden(mid, label, True)
+                raise AssertionError(f"{label!r} was silently accepted")
+            except ValueError as exc:
+                assert "Water" in str(exc), exc  # the error names what IS there
+        assert app._models[0]["hidden_types"] == {"Water"}
+        app.set_model_type_hidden(mid, "WATER", False)
+        assert app._models[0]["hidden_types"] == set()
+    finally:
+        app.stop()
+
+
 def exercise_unknown_object_ids_fail_loudly():
     """``set_volume_iso('volume-99')`` used to return None on nothing — the
     figfuzz error probe found the silent no-op. Registry lookups now raise on
@@ -417,6 +445,32 @@ def exercise_unknown_object_ids_fail_loudly():
             app.write_object("volume", "volume-99", "/tmp/x.map")
         except ValueError as exc:
             assert "no such volume" in str(exc), exc
+    finally:
+        app.stop()
+
+
+def exercise_point_sphere_freezes_the_standing_sphere():
+    """Switching a view sphere to 'point' freezes what stood — spot AND radius.
+    It used to snap to radius=10 and the object middle (figfuzz j01): 'point'
+    is documented as freezing the current sphere, and a radius the caller
+    never asked to change is not theirs to reset."""
+    from pxviewer.appcore import AppCore
+    from pxviewer.loader import sample_structure_path
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(sample_structure_path())
+        mid = app._models[0]["id"]
+        app.set_model_sphere(mid, "view", 15.0)
+        assert app.model_sphere_state(mid)["mode"] == "view"
+        app.set_model_sphere(mid, "point")
+        state = app.model_sphere_state(mid)
+        assert state["mode"] == "point", state
+        assert state["radius"] == 15.0, state      # the standing radius, not 10
+        assert state["center"] is not None
+        app.set_model_sphere(mid, "point", 6.0)
+        assert app.model_sphere_state(mid)["radius"] == 6.0
     finally:
         app.stop()
 

@@ -330,8 +330,12 @@ def exercise_refine_drag_arm_is_exactly_pause():
         assert not app._minimize_stop.is_set()
         assert status == []
 
-        # A run is going, with idle cleared as minimize_model would leave it.
+        # A run is going, with idle cleared as minimize_model would leave it —
+        # and it winds down promptly on the stop request, like a real worker's
+        # finally setting the event (stop_minimization now waits on it).
         app._minimize_idle.clear()
+        import threading
+        threading.Timer(0.05, app._minimize_idle.set).start()
         app._on_tug("m", "arm", -1, None)
         process_events()
         armed = list(status)

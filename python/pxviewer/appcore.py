@@ -1881,14 +1881,24 @@ class AppCore:
 
 
     def set_model_type_hidden(self, mid: str, label: str, hidden: bool) -> None:
-        """Show or hide a structure type (protein/water/…) on a model."""
+        """Show or hide a structure type on a model.
+
+        ``label`` is one of the display names :meth:`model_structure_types`
+        reports ('Protein', 'Water', 'Ligand / other', …), matched
+        case-insensitively. A label the model does not actually contain
+        raises — storing it would report atoms hidden that do not exist
+        (figfuzz j05)."""
         entry = self._model_entry(mid)
-        if entry is None:
-            return
+        present = {k.lower(): k for k in self._type_groups(entry)}
+        key = present.get(str(label).strip().lower())
+        if key is None:
+            raise ValueError(
+                f"no structure type {label!r} on {mid} — has "
+                f"{', '.join(present.values()) or 'nothing'}")
         types = entry.setdefault("hidden_types", set())
-        if (label in types) == bool(hidden):
+        if (key in types) == bool(hidden):
             return
-        types.add(label) if hidden else types.discard(label)
+        types.add(key) if hidden else types.discard(key)
         self._apply_model_rep(entry)
 
 
@@ -2952,6 +2962,11 @@ class AppCore:
             session.show_markup(channel, result.markup)
         else:
             session.clear_markup(channel)
+            if visible and (result is None or not result.markup):
+                # Distinguish "ran, found nothing" from a broken toggle —
+                # otherwise a silent no-op reads the same (figfuzz j07).
+                self._status(f"{key} has nothing to draw"
+                             + ("" if result is not None else " (not run yet)"))
 
 
     def set_tug_into_density(self, enabled: bool) -> None:
@@ -4086,13 +4101,21 @@ class AppCore:
 
 
     def stop_minimization(self) -> None:
-        """Halt a running minimization at its next step.
+        """Halt a running minimization, returning once the model has stopped moving.
 
-        The model keeps the progress made so far — a stopped run is a shorter run, not
-        a discarded one.
+        The flag alone is only a request — the run ends at its next step
+        boundary, and until then the coordinates still change. A caller that
+        samples geometry right after this returns needs "stopped" to mean
+        stopped, so wait out the wind-down (bounded: a wedged run must not
+        hang the caller either). The model keeps the progress made so far —
+        a stopped run is a shorter run, not a discarded one (figfuzz j03).
         """
         self._minimize_stop.set()
         self._status("stopping minimization…")
+        # Bounded to the scale of a hold-loop poll plus a step's wind-down —
+        # this can run on the GUI thread, which must not park for long.
+        if not self._minimize_idle.wait(timeout=5.0):
+            self._status("minimization is still winding down")
 
 
     def reset_view(self) -> None:
@@ -5231,6 +5254,14 @@ class AppCore:
         sph = self._sphere_state(entry)
         if sph.get("center") is not None:
             return list(sph["center"])
+        if sph.get("mode") == "view":
+            # A view sphere's spot is wherever the camera target is — freezing
+            # it to a point means keeping exactly that spot, not the object's
+            # middle (figfuzz j01).
+            control = self._control_session()
+            cam = control.camera_state() if control is not None else None
+            if cam and cam.get("target"):
+                return [float(c) for c in cam["target"]]
         mid = entry.get("id")
         model = getattr(entry.get("session"), "model", None)
         if model is not None:
@@ -5306,8 +5337,11 @@ class AppCore:
                 center = self._default_sphere_center(entry)
                 if center is None:
                     return
-                self._apply_model_sphere(entry, mode, radius=radius or 10.0,
-                                         center=center, refresh=refresh)
+                keep = self._sphere_state(entry).get("radius")
+                self._apply_model_sphere(
+                    entry, mode,
+                    radius=radius if radius is not None else (keep or 10.0),
+                    center=center, refresh=refresh)
                 return
             if mode == "selection":
                 with self._scene_lock:
@@ -5351,7 +5385,10 @@ class AppCore:
                 center = self._default_sphere_center(entry)
             if center is None:
                 return
-            entry["sphere"] = {"mode": mode, "radius": radius or 10.0,
+            keep = self._sphere_state(entry).get("radius")
+            entry["sphere"] = {"mode": mode,
+                               "radius": (radius if radius is not None
+                                          else (keep or 10.0)),
                                "center": [float(c) for c in center]}
         else:
             entry["sphere"] = {"mode": mode,

@@ -522,6 +522,8 @@ def _make_server():
                 "models": [{"id": e["id"], "name": e.get("name"),
                             "group": e.get("group"),
                             "rep": live_rep(e), "color": e.get("color"),
+                            "hidden_types": sorted(e.get("hidden_types") or ()),
+                            "conformer": e.get("conformer"),
                             "active": e["id"] == _app._active_model_id}
                            for e in _app._models],
                 "volumes": [_volume_status(e) for e in _app._volumes],

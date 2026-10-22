@@ -67,6 +67,7 @@ def corpus(data_dir, seed=0):
     h04m = m()
     h05m = m()
     i09m = m()
+    j01m = m()
     specs = [
         _spec("f01-ligand-site", "Heme site with its environment",
               f"Load {p('heme_site.pdb')} and make a figure of the heme site: "
@@ -444,6 +445,83 @@ def corpus(data_dir, seed=0):
                       "shape": (96, 96, 96)}],
               anchor=i09m,
               expect={"models": 1, "volumes": 1}),
+
+        # Round 5 — machinery still untouched after 46 specs
+        _spec("j01-model-sphere", "Model clip sphere, every mode",
+              f"Load {j01m}. Exercise app.set_model_sphere through its modes "
+              "in order: 'view' at radius ~15, then 'point', then 'selection' "
+              "after making a real selection, then 'off'. After each, call "
+              "app.model_sphere_state and confirm the read-back matches what "
+              "you asked for — and that 'off' restores the whole model. "
+              "Finish on a figure with a ~15 Å view sphere active.",
+              expect={"models": 1}),
+
+        _spec("j02-two-models", "Two models, active-model switching",
+              f"Load {p('1ubq.pdb')} AND {p('3nir.pdb')} (two separate "
+              "models, not a group). Switch the active model with "
+              "app.set_active_model and confirm status agrees each time; "
+              "check which model app.measure_selection atoms refer to under "
+              "each active id; then app.remove_model one of them and confirm "
+              "the survivor is fully intact. Finish on a figure of the "
+              "surviving model.",
+              expect={"models": 1}),
+
+        _spec("j03-minimize", "Live minimization lifecycle",
+              f"Load {p('zn_site.pdb')} and run app.minimize_model(). Watch "
+              "the run via status/busy, let it settle, then "
+              "app.stop_minimization(). Verify: job_errors stays empty, the "
+              "model's coordinates actually differ from the file's (compare "
+              "a few atoms), and the app stays usable after stop. Finish on "
+              "a framed figure of the minimized model.",
+              expect={"models": 1}),
+
+        _spec("j04-orient-views", "Cardinal views and figure framing",
+              f"Load {m()}. Use app.orient_camera to take three orthographic "
+              "views (down X, down Y, down Z — pick target/up/direction that "
+              "achieve it) and app.set_view_radius/app.zoom_view to frame "
+              "each. Check app.camera_state() after each orient reports the "
+              "orientation you asked for. End on the best view on a white "
+              "background (session.set_background).",
+              expect={"models": 1}),
+
+        _spec("j05-type-visibility", "Hide/show whole structure types",
+              f"Load {p('1ubq.pdb')}. List types with "
+              "app.model_structure_types, hide the waters "
+              "with app.set_model_type_hidden, verify status reports them "
+              "hidden AND the viewport drops them, then show them again. "
+              "Probe a type the model does not have and a misspelled label — "
+              "report honest error vs silent no-op for each. Finish on a "
+              "figure with only the water hidden.",
+              expect={"models": 1}),
+
+        _spec("j06-conformer-switch", "Live conformer switching",
+              "Load multiconf.pdb from this directory — a model with "
+              "altlocs A and B. Call app.model_conformers, switch to 'A', "
+              "verify only A draws (status/scene), switch to 'B', then "
+              "back to all conformers. Also probe a conformer that does not "
+              "exist and report whether it fails honestly.",
+              stage=[{"path": "multiconf.pdb", "kind": "multiconf",
+                      "from": p("1ubq.pdb"), "copies": 3}],
+              expect={"models": 1}),
+
+        _spec("j07-validation-markers", "Validation overlays, per-kind",
+              f"Load {m()} and run app.run_validation with the per-residue "
+              "validators plus hotspots=True. When it finishes, toggle each "
+              "validator's MolProbity markup off and on with "
+              "app.set_validation_markers and confirm it redraws without a "
+              "re-run (no new busy job). Report what each validator drew.",
+              expect={"models": 1}),
+
+        _spec("j08-write-objects", "write_object round trips",
+              f"Load {m()} and the map blob.mrc from this directory as a "
+              "group. Use app.write_object to save the model as mmCIF and "
+              "the volume as a map file, then load both written files back "
+              "and verify the reloaded model's coordinates match the "
+              "original's atom-for-atom and the map's grid matches.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (64, 64, 64)}],
+              anchor=i09m,
+              expect={"models": 2, "volumes": 2}),
     ]
     return specs
 

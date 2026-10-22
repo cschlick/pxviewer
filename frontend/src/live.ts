@@ -3980,6 +3980,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         { kind: 'delta', indices: Uint32Array, xyz: Float32Array }
     > = [];
 
+    // The destination of the most recent zoom step, while its transition is
+    // still animating — see the 'zoom' branch for why it must not be derived
+    // from cam.position mid-flight.
+    let zoomPending: { position: Vec3; target: Vec3; expires: number } | null = null;
+
     const handleControlMessage = async (msg: any) => {
             if (msg.type === 'reset-view') {
                 plugin.managers.camera.reset();  // reframe the whole scene, default orientation
@@ -3990,7 +3995,18 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 // what you are already looking at.
                 const cam = plugin.canvas3d?.camera;
                 if (cam) {
-                    const eye = Vec3.sub(Vec3(), cam.position, cam.target);
+                    // A press landing while the previous step's transition is still
+                    // animating reads cam.position mid-flight — or worse, before the
+                    // first frame ticked, the ORIGIN — so two presses in one exec used
+                    // to compute the same destination and collapse to one step. Chain
+                    // off the last requested position instead (figfuzz j04); once the
+                    // transition has had time to land, the live position is the truth
+                    // again, so the pending spot expires rather than pinning forever.
+                    const now = Date.now();
+                    const pending = (zoomPending && now < zoomPending.expires
+                        && Vec3.distance(zoomPending.target, cam.target) < 1e-3)
+                        ? zoomPending.position : cam.position;
+                    const eye = Vec3.sub(Vec3(), pending, cam.target);
                     const distance = Vec3.magnitude(eye);
                     // Bounded by the scene, not by absolute numbers: stepping in must stop
                     // before the camera is inside the atom it is looking at, and stepping
@@ -4006,7 +4022,12 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                         : Math.max(distance, Math.min(raw, radius * 40));
                     if (Math.abs(next - distance) > 1e-6) {
                         Vec3.setMagnitude(eye, eye, next);
-                        cam.setState({ position: Vec3.add(Vec3(), cam.target, eye) }, 120);
+                        const position = Vec3.add(Vec3(), cam.target, eye);
+                        zoomPending = { position, target: Vec3.copy(Vec3(), cam.target),
+                                        expires: now + 200 };
+                        cam.setState({ position }, 120);
+                    } else {
+                        zoomPending = null;
                     }
                 }
             } else if (msg.type === 'focus-surroundings') {

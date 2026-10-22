@@ -101,6 +101,9 @@ def channel_for(key: str) -> int:
     """The probe-dot channel for a validator's markers: ``CHANNEL_BASE`` + its
     index in the stable validator order, so every validator owns a distinct one."""
     order = [spec.key for spec in validators()]
+    if key not in order:
+        raise ValueError(f"no validator {key!r} — registered: "
+                         f"{', '.join(order)}")
     return CHANNEL_BASE + order.index(key)
 
 
