@@ -188,6 +188,50 @@ def exercise_non_finite_camera_payloads_are_rejected():
             live.set_camera({"radiusMax": float("inf")})
 
 
+def exercise_degenerate_camera_frames_are_rejected():
+    """Finiteness is not enough (figfuzz m04): a camera parked on its own
+    target has no view axis, a zero or axis-parallel up leaves no basis,
+    a non-positive radius and an out-of-range fov are silently clamped or
+    stored into a blank frame. All finite, all refused."""
+    with session() as live:
+        good = {"target": [0, 0, 0], "position": [0, 0, 10],
+                "up": [0, 1, 0], "radius": 10.0, "fov": 0.785}
+        live.set_camera(dict(good))                     # a sound frame lands
+        for bad in (
+            dict(good, position=[0, 0, 0]),             # no view axis
+            dict(good, up=[0, 0, 0]),                   # no up
+            dict(good, up=[0, 0, 5]),                   # up parallel to axis
+            dict(good, radius=0.0),
+            dict(good, radius=-4.0),
+            dict(good, fov=0.0),
+            dict(good, fov=100.0),                      # rad nonsense that
+                                                        # bricked reset_view
+            dict(good, fov=3.1416),
+        ):
+            with raises(ValueError):
+                live.set_camera(bad)
+
+        # orient_camera: arity and degeneracy used to leak IndexError or die
+        # silently in the page — they must raise here.
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0], 10.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 0, 0], [0, 0, 1], 10.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0, 0], 10.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 0, 1], [0, 0, 1], 10.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0, 1], 0.0)
+        with raises(ValueError):
+            live.orient_camera([0, 0, 0], [0, 1, 0], [0, 0, 1], 10.0,
+                               extents=[1.0, -2.0, 1.0])
+        # Numpy rows still route — the isolate path passes them through.
+        import numpy as np
+        live.orient_camera(np.array([0., 0., 0.]), np.array([0., 1., 0.]),
+                           np.array([0., 0., 1.]), 10.0)
+
+
 def exercise_clear_selection_sends_an_empty_highlight():
     """Clearing also drops the replayed state, so a late client stays clear."""
     with session() as live:

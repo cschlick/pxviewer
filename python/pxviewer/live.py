@@ -1463,6 +1463,29 @@ class LiveSession:
                 values.append(float(snapshot[key]))
         if not all(math.isfinite(v) for v in values):
             raise ValueError("set_camera received a non-finite camera state")
+        # Geometric degeneracy is as fatal as NaN: a camera sitting on its own
+        # target has no view axis, a zero or view-parallel up vector leaves no
+        # basis to build the frame from, and a non-positive radius or
+        # out-of-range fov is silently clamped client-side — "accepted" while
+        # drawing a blank frame (figfuzz m04).
+        target, position, up = values[0:3], values[3:6], values[6:9]
+        axis = [t - p for t, p in zip(target, position)]
+        axis_n = math.sqrt(sum(c * c for c in axis))
+        up_n = math.sqrt(sum(c * c for c in up))
+        if axis_n < 1e-9:
+            raise ValueError("set_camera: position equals target — no view axis")
+        if up_n < 1e-9:
+            raise ValueError("set_camera: up is the zero vector — no frame")
+        cross = (axis[1] * up[2] - axis[2] * up[1],
+                 axis[2] * up[0] - axis[0] * up[2],
+                 axis[0] * up[1] - axis[1] * up[0])
+        if math.sqrt(sum(c * c for c in cross)) < 1e-9 * axis_n * up_n:
+            raise ValueError("set_camera: up is parallel to the view axis")
+        if float(snapshot["radius"]) <= 0:
+            raise ValueError("set_camera: radius must be positive")
+        fov = float(snapshot["fov"])
+        if not 0.0 < fov < math.pi:
+            raise ValueError("set_camera: fov must be in (0, pi) radians")
         self._send_or_arm({"type": "camera-set", "state": snapshot})
 
     def set_background(self, color: str) -> None:
@@ -2032,10 +2055,12 @@ class LiveSession:
               frame: bool = False) -> Selection:
         """Aim the viewer camera at the given atoms (:class:`Selection` or coercible).
 
-        A bare ``focus`` only re-aims the target — from far out the subject stays
-        a dot. ``distance`` also dollies the eye to that many Angstroms from the
-        selection, and ``frame`` dollies so the selection's bounding sphere fills
-        the viewport. Both keep the current orientation — a dolly, not an orbit.
+        A bare ``focus`` aims and dollies to fit the selection's bounding
+        sphere (Mol*'s own focus — the subject fills a sensible share of the
+        frame). ``distance`` instead dollies the eye to exactly that many
+        Angstroms from the selection, and ``frame`` dollies so the bounding
+        sphere fills the viewport. All three keep the current orientation —
+        a dolly, not an orbit.
         """
         sel = self._as_selection(atoms)
         message: dict = {"type": "focus", "atoms": _encode_index_set(sel.indices)}
@@ -2056,15 +2081,44 @@ class LiveSession:
         the numbers travel and the trigonometry stays client-side. Thread-safe.
         Used to show a residue N->C left-to-right, side chain up.
         """
-        numbers = ([float(c) for c in target] + [float(c) for c in up]
-                   + [float(c) for c in direction] + [float(radius)])
-        ext = [float(c) for c in extents] if extents is not None else None
+        def vec3(value, name):
+            try:
+                out = [float(c) for c in value]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"orient_camera: {name} is not a numeric 3-vector "
+                    f"({exc})") from exc
+            if len(out) != 3:
+                raise ValueError(
+                    f"orient_camera: {name} must be a 3-vector, got {value!r}")
+            return out
+
+        t, u, d = vec3(target, "target"), vec3(up, "up"), vec3(direction, "direction")
+        numbers = t + u + d + [float(radius)]
+        ext = vec3(extents, "extents") if extents is not None else None
         if ext is not None:
             numbers += ext
         # A non-finite component would serialize as bare NaN/Infinity — invalid
         # JSON the page drops silently — or worse, poison the camera outright.
         if not all(math.isfinite(v) for v in numbers):
             raise ValueError("orient_camera received a non-finite camera parameter")
+        # Degenerate frames must fail HERE, not as a silent drop in the page:
+        # a zero axis or a zero up vector leaves nothing to build the view
+        # from (the viewer checks the same things and refuses quietly).
+        if math.sqrt(sum(c * c for c in u)) < 1e-9:
+            raise ValueError("orient_camera: up is the zero vector")
+        d_n = math.sqrt(sum(c * c for c in d))
+        if d_n < 1e-9:
+            raise ValueError("orient_camera: direction is the zero vector")
+        u_n = math.sqrt(sum(c * c for c in u))
+        cross = (d[1] * u[2] - d[2] * u[1], d[2] * u[0] - d[0] * u[2],
+                 d[0] * u[1] - d[1] * u[0])
+        if math.sqrt(sum(c * c for c in cross)) < 1e-9 * d_n * u_n:
+            raise ValueError("orient_camera: up is parallel to direction")
+        if float(radius) <= 0:
+            raise ValueError("orient_camera: radius must be positive")
+        if ext is not None and any(e < 0 for e in ext):
+            raise ValueError("orient_camera: extents must be non-negative")
         message = {
             "type": "orient",
             "target": numbers[0:3],

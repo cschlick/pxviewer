@@ -4201,6 +4201,11 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 const settled = cam?.transition.inTransition
                     ? cam.transition.target : cam?.state;
                 const state = cam && settled ? {
+                    // In-flight reads are honest but potentially torn: the pose
+                    // comes from the transition target while near/far below are
+                    // the live per-frame planes. Callers comparing "did it land"
+                    // should poll until transitioning is false.
+                    transitioning: cam.transition.inTransition,
                     target: Array.from(settled.target), position: Array.from(settled.position),
                     up: Array.from(settled.up), radius: settled.radius,
                     // `radius` is the depth slab that drives near/far — NOT how far
@@ -4229,7 +4234,21 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     // radius is the depth slab — a ~zero value clips everything, the
                     // signature of a never-fitted camera rather than a saved view.
                     && Number.isFinite(s.radius) && s.radius > 0.05
-                    && Number.isFinite(s.fov) && s.fov > 0 && s.fov < 180;
+                    // fov is RADIANS — the old < 180 bound admitted fov=100 rad,
+                    // which stuck in state and broke every later reset_view.
+                    && Number.isFinite(s.fov) && s.fov > 0 && s.fov < Math.PI
+                    // Degenerate bases poison the camera the same way NaN does:
+                    // no view axis, no up, or up parallel to the axis leaves no
+                    // frame to build (figfuzz m04).
+                    && (() => {
+                        const axis = [s.target[0] - s.position[0], s.target[1] - s.position[1], s.target[2] - s.position[2]];
+                        const an = Math.hypot(...axis), un = Math.hypot(...s.up);
+                        if (an < 1e-9 || un < 1e-9) return false;
+                        const cx = axis[1] * s.up[2] - axis[2] * s.up[1],
+                            cy = axis[2] * s.up[0] - axis[0] * s.up[2],
+                            cz = axis[0] * s.up[1] - axis[1] * s.up[0];
+                        return Math.hypot(cx, cy, cz) >= 1e-9 * an * un;
+                    })();
                 if (valid && (plugin.canvas3d?.boundingSphere?.radius ?? 0) <= 0) {
                     // The replay of a stored camera lands before the rebuilt scene has
                     // geometry — and the first-frame auto-fit that follows would stomp

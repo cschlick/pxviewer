@@ -611,6 +611,146 @@ def corpus(data_dir, seed=0):
                       "shape": (96, 96, 96)}],
               anchor=p('zn_site.pdb'),
               expect={"models": 1, "volumes": 1}),
+
+        _spec("l01-xray-demo", "Synthetic reflections phasing lifecycle",
+              "Call app.load_xray_demo(d_min=2.5) — it synthesizes (or "
+              "fetches) an MTZ for the sample structure, adds a reflections "
+              "object and phases maps. Verify status() lists a reflections "
+              "entry, that phased volumes appear and are grouped with the "
+              "model, and that app.update_maps(rid) re-phases cleanly. "
+              "Check the difference map carries an honest negative contour. "
+              "Then remove_reflections and confirm the phased maps go with "
+              "it — or report what actually happens.",
+              expect={"models": 1, "volumes": 1, "reflections": 1}),
+
+        _spec("l02-conformers", "Alternate conformer switching",
+              f"Load {p('3nir.pdb')} — it has altlocs. Inspect "
+              "app.model_conformers(mid), then app.set_model_conformer to "
+              "each named conformer and None. Verify get_sites_cart "
+              "actually changes between conformers (coordinates are the "
+              "contract, not a label), status() reports the chosen "
+              "conformer, and a bogus conformer name fails honestly. "
+              "End on a figure of one alternate conformer.",
+              expect={"models": 1, "conformer_set": True}),
+
+        _spec("l03-perf-capture", "Performance capture lifecycle",
+              f"Load {p('zn_site.pdb')}. app.start_perf_capture(), drive a "
+              "real drag (app._on_tug arm/begin/move/end — same protocol "
+              "k04 used), then app.stop_perf_capture with an on_saved "
+              "callback — verify a JSON file actually lands with frame "
+              "samples. Then a second capture with NO drag: does stop "
+              "report 'nothing recorded' honestly, or write an empty log? "
+              "Report which.",
+              expect={"models": 1}),
+
+        _spec("l04-picked-save", "Picked selection through a saved view",
+              f"Load {p('zn_site.pdb')}. Build a scene selection through "
+              "the picking API (app.select_picked_atom and/or "
+              "toggle_picked_residue — the same entry the viewport's "
+              "clicks feed), measure_selection('distance'), add a marker. "
+              "save_view, then load_view — does the scene selection come "
+              "back (status's selection map, not just a highlight layer)? "
+              "Do the measurement primitive and marker survive? Report "
+              "exactly what persists and what does not.",
+              expect={"models": 1, "selection_nonempty": True}),
+
+        _spec("l05-model-demo", "Animated demo lifecycle",
+              "Load a scripted demo: app.load_model_demo('morph') (or "
+              "another from pxviewer.demos.list_demos()). Verify "
+              "get_sites_cart actually advances between samples — the "
+              "Player must drive real coordinate frames, not just claim "
+              "to. Then app.stop_demo() mid-animation and confirm frames "
+              "stop arriving and job state is clean. Report what status() "
+              "shows during the run.",
+              expect={"models": 1}),
+
+        _spec("l06-measure-values", "Measurement numeric correctness",
+              f"Load {p('zn_site.pdb')}. measure_selection with explicit "
+              "atoms for distance, angle and dihedral — then compute the "
+              "same values by hand from session.model.get_sites_cart() "
+              "(numpy geometry: norms, arccos of dot products, the "
+              "dihedral atan2). Every app value must match the hand "
+              "computation to float noise. Check angle vertex order "
+              "semantics ([a,b,c] measures at b), and that a malformed "
+              "atom list (1 atom for a dihedral, out-of-range index) "
+              "fails honestly. List the primitives status() reports.",
+              expect={"models": 1, "primitives": 1}),
+
+        _spec("m01-edits-phil", "Hand-written restraint edits file",
+              f"Load {p('zn_site.pdb')} and apply the shipped edits file "
+              f"{p('zn_site_edits.phil')} — find the verb "
+              "(api.find('edits') — it loads a phenix geometry_restraints "
+              ".phil). Verify app.model_edits(mid) reports the Zn-water "
+              "bond with distance_ideal 2.1 / sigma 0.05, the restraint "
+              "shows in the geometry layer, and re-exporting the edits as "
+              "phil round-trips the entry. Then a malformed phil (hand it "
+              "a syntax error or a selection matching no atom) must fail "
+              "honestly — report exactly which error path each takes.",
+              expect={"models": 1, "edits": 1}),
+
+        _spec("m02-headless-parity", "Headless AppCore semantic parity",
+              "This app is the desktop build; the SAME semantic API must "
+              "work headless. In a subprocess, spawn python with "
+              "PXVIEWER_HEADLESS=1, construct pxviewer.appcore.AppCore "
+              "directly (app = AppCore(port=0); app._webapp.start()), "
+              f"load {p('zn_site.pdb')}, and drive a semantic loop: "
+              "select_by_expression, set_model_representation, "
+              "measure_selection, model_edits — verifying each returns the "
+              "same answers the desktop gives (coordinate diffs, selection "
+              "counts, measurement values). Report any verb that exists "
+              "on one side but not the other, or returns differently.",
+              expect={"models": 1}),
+
+        _spec("m03-selection-grammar", "Selection grammar edge cases",
+              f"Load {p('3nir.pdb')} (has altlocs) — put the selection "
+              "grammar through its edge cases via app.select_by_expression "
+              "and session.model.selection (must agree on atom count): "
+              "altloc selectors ('altloc A'), 'resseq 40:60', 'resid' with "
+              "icodes if present, 'element' symbols, negative indices if "
+              "the grammar allows, 'within'/'residues_within' at boundary "
+              "radii (4.0 vs 4.0001), 'not' precedence, parentheses, "
+              "selection naming water/hetero/backbone. For every accepted "
+              "expression the two paths must return the SAME index set; "
+              "every malformed expression must fail the same way on both.",
+              expect={"models": 1, "selection_nonempty": True}),
+
+        _spec("m04-camera-truth", "Camera state truthfulness",
+              f"Load {p('zn_site.pdb')}. The camera is async — interrogate "
+              "session.camera_state() during and after transitions: "
+              "session.focus(atom_sel, frame=True) then read camera_state "
+              "immediately vs after settling (does it report the "
+              "transition TARGET or the stale in-flight state?). "
+              "orient_camera with explicit up/direction/extents: verify "
+              "the drawn frame matches what was asked (screenshot + "
+              "camera_state read-back). set_camera with malformed states "
+              "(nan, wrong arity, zero radius) must fail honestly — j04 "
+              "added validation, confirm it holds. Report any state "
+              "reported that was never the real camera.",
+              expect={"models": 1}),
+
+        _spec("m05-mcp-surface", "MCP tool catalog",
+              "Enumerate every MCP tool this server exposes (the helper "
+              "calls python/status/ping — find the full catalog via "
+              "tools/list on the HTTP endpoint at port 8753). Call each "
+              "read-only tool and check the result shape matches what its "
+              "schema/docstring promises. Then probe error paths: python "
+              "exec with a syntax error, a raise, a print; save_screenshot "
+              "with a bad path; unknown tool name. Every error must come "
+              "back as a structured MCP error or honest result — never a "
+              "hang, never a silent empty reply.",
+              expect={"models": 1}),
+
+        _spec("m06-kinemage-io", "Kinemage and validation markup round trip",
+              f"Load {p('zn_site.pdb')}. Run app.run_validation (or "
+              "find the verb via api.find('validation')) — probe dots, "
+              "clashes, rotamer markup appear on named channels "
+              "(session.show_markup). Then inspect pxviewer.kinemage "
+              "directly: parse the module's primitive kinds, write a small "
+              "kinemage by hand through the session's markup channel, and "
+              "verify each kind draws (screenshot pixel check per kind). "
+              "Check channel isolation — clearing one channel must leave "
+              "the others drawn.",
+              expect={"models": 1}),
     ]
     return specs
 
