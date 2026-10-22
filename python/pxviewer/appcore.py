@@ -1563,6 +1563,9 @@ class AppCore:
         entry = self._model_entry(mid)
         if entry is None:
             return
+        if conformer is not None and not isinstance(conformer, str):
+            raise ValueError(
+                f"conformer is an altloc letter or None, got {conformer!r}")
         wanted = (conformer or "").strip() or None
         if wanted is not None and wanted not in self._conformers_of(entry):
             raise ValueError(
