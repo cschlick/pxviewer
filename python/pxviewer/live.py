@@ -745,6 +745,14 @@ class LiveSession:
         index = self._frame_index
         self._frame_index += 1
         self._last_frame = struct.pack("<II", _TAG_FRAME, index) + arr.tobytes()
+        # The pushed frame is what the page draws — keep the Python-side
+        # coordinate columns on it too, or select_by/masks/Selection.coords
+        # keep reading the pre-push sites (the model's columns only refresh
+        # when the cctbx manager itself is re-extracted).
+        arrs = self._data.arrays
+        arrs.x[:] = arr[:, 0]
+        arrs.y[:] = arr[:, 1]
+        arrs.z[:] = arr[:, 2]
 
         payload = self._last_frame
         if changed is not None:
@@ -1398,6 +1406,14 @@ class LiveSession:
         either corrupt the frame or make the page drop the message silently.
         """
         snapshot = dict(state)
+        missing = [k for k in ("target", "position", "up", "radius", "fov")
+                   if snapshot.get(k) is None]
+        if missing:
+            # The client rejects a partial spec on arrival — catching it here
+            # turns a silent drop into an error at the call site.
+            raise ValueError(
+                f"set_camera needs {missing} — a snapshot from camera_state() "
+                "carries all of them")
         values: List[float] = []
         for key in ("target", "position", "up"):
             vec = snapshot.get(key)

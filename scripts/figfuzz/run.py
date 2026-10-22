@@ -91,12 +91,23 @@ def _wait_port(port, timeout=120.0):
     return False
 
 
-def _stage_files(rundir, stage):
+def _stage_files(rundir, stage, anchor=None):
     """Materialize a spec's synthetic maps. Shapes are deliberately padded off
-    perfect powers of two so a decimated grid is visibly decimated."""
+    perfect powers of two so a decimated grid is visibly decimated.
+
+    ``anchor`` is a model path the map should land on: the blob's box center is
+    shifted to the model's centroid, so "density near the site" tasks actually
+    have the density at the site rather than ~70 Å away in the map's own frame.
+    """
     import numpy as np
 
     from pxviewer.volume_io import VolumeData
+
+    centroid = None
+    if anchor:
+        from iotbx.pdb import input as pdb_input
+        xyz = np.asarray(pdb_input(str(anchor)).atoms().extract_xyz())
+        centroid = xyz.mean(axis=0)
 
     for item in stage:
         shape = item["shape"]
@@ -113,7 +124,11 @@ def _stage_files(rundir, stage):
             arr = np.exp(-r2 / (2 * width ** 2)) * 5.0
         arr = arr.astype(np.float32) + rng.normal(
             0, 0.02, shape).astype(np.float32)
-        vol = VolumeData.from_numpy(arr, name=item["path"])
+        origin = (0, 0, 0)
+        if centroid is not None:
+            origin = tuple(int(round(c - s / 2.0))
+                           for c, s in zip(centroid, shape))
+        vol = VolumeData.from_numpy(arr, name=item["path"], origin=origin)
         vol.write_map(rundir / item["path"])
 
 
@@ -155,7 +170,7 @@ def run_spec(spec, rundir, port, agent_argv, args):
     figure_png = rundir / "figure.png"
     critique_png = rundir / "critique.png"
 
-    _stage_files(rundir, spec["stage"])
+    _stage_files(rundir, spec["stage"], anchor=spec.get("anchor"))
     url = f"http://127.0.0.1:{port}/mcp"
     _write_mcp_config(rundir, url)
 

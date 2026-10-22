@@ -734,6 +734,12 @@ class AppCore:
     # -- registry (models + volumes + groups) ----------------------------
 
     def _model_entry(self, mid):
+        if mid in ("model", "volume", "reflections", "group"):
+            # load_file returns the *kind*, not the id — handing the kind back
+            # in is the one mistake this warn exists to catch.
+            self._warn(f"{mid!r} is a kind, not an object id — "
+                       f"status() lists the ids (e.g. 'model-1')")
+            return None
         return next((m for m in self._models if m["id"] == mid), None)
 
 
@@ -933,10 +939,18 @@ class AppCore:
 
 
     def _volume_entry(self, vid):
+        if vid in ("model", "volume", "reflections", "group"):
+            self._warn(f"{vid!r} is a kind, not an object id — "
+                       f"status() lists the ids (e.g. 'volume-1')")
+            return None
         return next((v for v in self._volumes if v["id"] == vid), None)
 
 
     def _reflection_entry(self, rid):
+        if rid in ("model", "volume", "reflections", "group"):
+            self._warn(f"{rid!r} is a kind, not an object id — "
+                       f"status() lists the ids (e.g. 'reflections-1')")
+            return None
         return next((r for r in self._reflections if r["id"] == rid), None)
 
 
@@ -1045,7 +1059,7 @@ class AppCore:
 
 
     @staticmethod
-    def _detect_map_model_shift(model: Any, map_data: Any,
+    def _detect_map_model_shift(model: Any, map_manager: Any,
                                 initial_shift: Any = None) -> tuple:
         """Find a density-supported translation on a copy, leaving ``model`` untouched.
 
@@ -1055,6 +1069,7 @@ class AppCore:
         """
         from mmtbx.refinement.real_space.rigid_body import translation_search
 
+        map_data = map_manager.map_data()
         probe = model.deep_copy()
         before = probe.get_sites_cart().deep_copy()
         if initial_shift is not None and max(abs(float(v)) for v in initial_shift) > 1e-6:
@@ -1065,6 +1080,25 @@ class AppCore:
             probe.shift_model_and_set_crystal_symmetry(
                 shift_cart=tuple(float(v) for v in initial_shift),
                 crystal_symmetry=model.crystal_symmetry())
+        else:
+            # The coarse pass samples only +/-20 A on an axis, so a map loaded in its
+            # own frame (tens of Angstrom from the model) is unreachable without a
+            # hypothesis. The map box center against the model's centroid is that
+            # hypothesis — density then scores and refines only the residual.
+            try:
+                n = map_data.all()                    # (nx, ny, nz)
+                ucg = map_manager.unit_cell_grid
+                frac = [(o + ni / 2.0) / u for o, ni, u
+                        in zip(map_data.origin(), n, ucg)]
+                center = map_manager.unit_cell().orthogonalize(frac)
+                guess = tuple(float(c - m) for c, m
+                              in zip(center, before.mean()))
+            except Exception:  # pragma: no cover - defensive
+                guess = None
+            if guess is not None and max(abs(v) for v in guess) > 1e-6:
+                probe.shift_model_and_set_crystal_symmetry(
+                    shift_cart=guess,
+                    crystal_symmetry=model.crystal_symmetry())
         # A broad first pass catches the common missing boxed-map origin; two finer passes
         # settle between its 0.5 A samples. Each pass starts from the previous best position.
         for shifts in (
@@ -1124,7 +1158,7 @@ class AppCore:
         detected = None
         if detect_shift:
             detected = self._detect_map_model_shift(
-                mmm.model(), mmm.map_manager().map_data(),
+                mmm.model(), mmm.map_manager(),
                 initial_shift=external_hint)
             if max(abs(v) for v in detected) > 1e-6:
                 # This is deliberately not set_sites_cart: the exact Cartesian translation
@@ -1201,7 +1235,7 @@ class AppCore:
                 external_hint = tuple(-float(v) for v in external)
 
         detected = self._detect_map_model_shift(
-            mmm.model(), mm.map_data(), initial_shift=external_hint)
+            mmm.model(), mm, initial_shift=external_hint)
         if max(abs(v) for v in detected) > 1e-6:
             mmm.model().shift_model_and_set_crystal_symmetry(
                 shift_cart=detected, crystal_symmetry=mm.crystal_symmetry())
@@ -1313,6 +1347,9 @@ class AppCore:
                 negative_isosurface_value=neg_iso,
                 negative_opacity=v.get("negative_opacity"),
                 negative_style=v.get("negative_style"),
+                # Every map gets a transform node (zero translation when
+                # unpositioned) so set_volume_position has a node to update.
+                position=v.get("position") or (0.0, 0.0, 0.0),
                 opacity=v["opacity"], style=v["style"],
                 focus=(focus_first and v is first_visible),
             ))
@@ -4403,6 +4440,32 @@ class AppCore:
         self.set_volume_downsample(vid, factor, _source="auto")
 
 
+    def set_volume_position(self, vid: str, position) -> None:
+        """Translate a volume's display by an Angstrom offset — live and reload-safe.
+
+        A display transform, not a change to the data: the written scene gives
+        every map a zero-translation transform node for this to update, and the
+        offset is recomposed on reload like the rest of the draw state. Use it to
+        bring a map loaded in its own frame over the model — though for a paired
+        model+map, :meth:`align_paired_model_with_map` is the density-scored way.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None:
+            return
+        pos = [float(c) for c in position]
+        if len(pos) != 3 or any(not math.isfinite(c) for c in pos):
+            raise ValueError("position must be three finite Angstrom offsets")
+        if entry.get("position") == pos:
+            return
+        entry["position"] = pos
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_position(entry["ref"], pos)
+            except Exception:  # pragma: no cover - defensive
+                pass
+
+
     def set_volume_color(self, vid: str, color: str) -> None:
         """Set a volume's color live."""
         self._volume_command(vid, "color", color,
@@ -4410,9 +4473,27 @@ class AppCore:
 
 
     def set_volume_negative_color(self, vid: str, color: str) -> None:
-        """Set a difference map's negative-contour color live."""
-        self._volume_command(vid, "negative_color", color,
-                             lambda c, ref, v: c.set_volume_negative_color(ref, v))
+        """Set a difference map's negative-contour color live.
+
+        Setting the color *creates* the contour on a map that opened without one
+        — naming a color is what makes the second isosurface a thing. The scene
+        is recomposed for it: a live command can only reach a node the composed
+        scene already has.
+        """
+        entry = self._volume_entry(vid)
+        if entry is None or entry.get("negative_color") == color:
+            return
+        created = not entry.get("negative_color")
+        entry["negative_color"] = color
+        if created:
+            self._reload_viewport()
+            return
+        control = self._control_session()
+        if control is not None:
+            try:
+                control.set_volume_negative_color(entry["ref"], color)
+            except Exception:  # pragma: no cover - defensive
+                pass
 
 
     def set_volume_negative_style(self, vid: str, style: str) -> None:
@@ -4458,12 +4539,22 @@ class AppCore:
         the second control.
         """
         entry = self._volume_entry(vid)
-        if entry is None or not entry.get("negative_color"):
+        if entry is None:
             return
         value = None if value is None else float(value)
-        if entry.get("negative_iso") == value:
+        created = not entry.get("negative_color")
+        if created and entry.get("negative_iso") == value:
+            # Nothing to change AND nothing to create — a re-linked negative
+            # level on a map with no negative contour means the same nothing.
             return
+        if created:
+            # An explicit negative level is a request for the contour — create
+            # it in the difference-map color and recompose so the node exists.
+            entry["negative_color"] = "red"
         entry["negative_iso"] = value
+        if created:
+            self._reload_viewport()
+            return
         control = self._control_session()
         if control is not None:
             try:
@@ -4552,7 +4643,7 @@ class AppCore:
             return {}
         out = {key: entry.get(key)
                for key in ("style", "color", "opacity", "iso", "clip", "mask_radius",
-                           "negative_color", "negative_iso",
+                           "negative_color", "negative_iso", "position",
                            "negative_opacity", "negative_style", "box")}
         # What grid the surface is actually drawn from. A figure caller must be
         # able to see this: an oversized map opens decimated for interactivity,
@@ -6693,7 +6784,8 @@ class AppCore:
         mid = self._add_model(session, Path(path).name)
         self._model_entry(mid)["source"] = {
             "kind": "file", "path": str(Path(path).resolve())}
-        self._status(f"Loaded model: {Path(path).name} ({session._n_atoms} atoms)")
+        self._status(f"Loaded model {mid}: {Path(path).name} "
+                     f"({session._n_atoms} atoms)")
         return "model"
 
 
@@ -6708,7 +6800,7 @@ class AppCore:
             VolumeData.from_map_file(path), Path(path).name)
         self._volume_entry(vid)["source"] = {
             "kind": "file", "path": str(Path(path).resolve())}
-        self._status(f"Loaded volume: {Path(path).name}")
+        self._status(f"Loaded volume {vid}: {Path(path).name}")
         return "volume"
 
 

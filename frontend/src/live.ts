@@ -1235,30 +1235,114 @@ export class LiveViewer {
         const structure = this.currentStructure();
         if (!structure || indices.length === 0) return;
         const loci = lociFromElementIndices(structure, indices);
-        const camera = this.plugin.canvas3d?.camera;
-        if (!camera || (opts?.distance === undefined && !opts?.frame)) {
-            this.plugin.managers.camera.focusLoci(loci);
-            return;
-        }
+        // focusLoci on an empty loci aims the camera at the origin — indices can
+        // resolve to nothing (stale element ids, a structure that re-loaded
+        // since), and "nothing to focus" must not move the camera. The scene
+        // bounds are the least surprising fallback: show what is there.
+        const focusScene = () => {
+            const b = this.plugin.canvas3d?.boundingSphere;
+            if (b && b.radius > 0) {
+                this.plugin.managers.camera.focusSphere(b);
+            } else {
+                this.plugin.managers.camera.reset();
+            }
+        };
+        // Bound the selection from the live trajectory buffers, not the
+        // structure's conformation: cx/cy/cz are the streamed coordinates
+        // themselves — the same buffers the pick path reads — and need no
+        // index-space mapping through units.
         const boundary = new BoundaryHelper('98');
         const v = Vec3();
-        for (const e of loci.elements) {
-            // e.indices holds positions into e.unit.elements (UnitIndex), so the
-            // coordinate index conformation.position takes is unit.elements[i].
-            OrderedSet.forEach(e.indices, (i) => {
-                e.unit.conformation.position(e.unit.elements[i], v);
-                boundary.includePosition(v);
-                boundary.finishedIncludeStep();
-            });
+        const positions: Vec3[] = [];
+        if (this.cx && this.nAtoms) {
+            for (let i = 0; i < indices.length; i++) {
+                const a = indices[i];
+                if (a < 0 || a >= this.nAtoms) continue;
+                const p = Vec3.create(this.cx[a], this.cy[a], this.cz[a]);
+                boundary.includePosition(p);
+                positions.push(p);
+            }
+        } else {
+            for (const e of loci.elements) {
+                // e.indices holds positions into e.unit.elements (UnitIndex), so the
+                // coordinate index conformation.position takes is unit.elements[i].
+                OrderedSet.forEach(e.indices, (i) => {
+                    e.unit.conformation.position(e.unit.elements[i], v);
+                    boundary.includePosition(v);
+                    positions.push(Vec3.clone(v));
+                });
+            }
         }
+        // BoundaryHelper is a two-pass accumulator: includePosition() across the
+        // whole set, ONE finishedIncludeStep() to seal the centroid, then the
+        // radius pass over the same positions. Calling finishedIncludeStep per
+        // position rescales the running centroid each time — the target lands at
+        // centroid/n, i.e. near the origin for any sizable selection — and with
+        // no radius pass the sphere collapses to r=0. Both were the "blank
+        // viewport / camera at origin" bug (focus aimed at ~(0.05,0.05,0.02) for
+        // a 660-atom model centered at ~(30,29,15): 30.8/660 = 0.047).
+        boundary.finishedIncludeStep();
+        for (const p of positions) boundary.radiusPosition(p);
         const sphere = boundary.getSphere();
-        const center = sphere.center;
-        if (!(center.length === 3) || !center.every(Number.isFinite)) {
-            this.plugin.managers.camera.focusLoci(loci);
+        const focusOrScene = () => {
+            if (positions.length > 0) {
+                this.plugin.managers.camera.focusSphere(sphere);
+            } else if (loci.elements.length > 0) {
+                this.plugin.managers.camera.focusLoci(loci);
+            } else {
+                focusScene();
+            }
+        };
+        const camera = this.plugin.canvas3d?.camera;
+        if (!camera || (opts?.distance === undefined && !opts?.frame)) {
+            focusOrScene();
             return;
         }
+        const center = sphere.center;
         const state = camera.state;
-        const direction = Vec3.normalize(Vec3(), Vec3.sub(Vec3(), state.target, state.position));
+        const finite3 = (a: ArrayLike<number>) =>
+            a.length === 3 && Number.isFinite(a[0]) && Number.isFinite(a[1])
+            && Number.isFinite(a[2]);
+        // The frame path poisons the camera on any degenerate input: an empty
+        // loci bounds the origin, a non-finite radius NaNs the distance, and a
+        // camera sitting on its own target has no view axis — normalize() turns
+        // that into a NaN position and setState blanks the viewport. Bail to
+        // Mol*'s own focus instead of trusting the math.
+        //
+        // The subtler failure is a *plausible-looking* degenerate sphere: indices
+        // can resolve yet read positions from an unpopulated conformation — many
+        // atoms collapsing to ~identical coordinates near the origin (observed
+        // on a healthy 660-atom selection dollied to target ≈(0.05,0.05,0.02),
+        // radius < 1 Å). Atoms cannot stack like that; the sphere is a lie.
+        // Likewise a focus sphere far outside the drawn scene bounds. Frame the
+        // scene rather than trusting the math.
+        const viewAxis = Vec3.sub(Vec3(), state.target, state.position);
+        const scene = this.plugin.canvas3d?.boundingSphere;
+        const farOutsideScene = !!scene && scene.radius > 0
+            && Vec3.distance(center, scene.center) > scene.radius * 4 + 50;
+        const collapsed = positions.length > 8 && sphere.radius < 1.0;
+        if (positions.length === 0 || farOutsideScene || collapsed) {
+            // The loci themselves are suspect — do not hand them to focusLoci.
+            console.warn(`[pxviewer] focus: degenerate loci (${indices.length} idx -> ${loci.elements.length} units, ${positions.length} pos, r=${sphere.radius.toFixed(2)}, c=(${center[0].toFixed(1)},${center[1].toFixed(1)},${center[2].toFixed(1)}), nAtoms=${this.nAtoms}, cx0=${this.cx ? this.cx[0].toFixed(2) : '—'}) — framing scene instead`);
+            focusScene();
+            return;
+        }
+        if (!finite3(center) || !Number.isFinite(sphere.radius)
+            || !finite3(state.position) || !finite3(state.up)) {
+            focusOrScene();
+            return;
+        }
+        let direction: Vec3;
+        if (Vec3.magnitude(viewAxis) > 1e-9 && finite3(viewAxis)) {
+            direction = Vec3.normalize(Vec3(), viewAxis);
+        } else {
+            // No live view axis to preserve: aim from the eye at the subject,
+            // or screen-forward when the eye itself is meaningless.
+            const toCenter = Vec3.sub(Vec3(), center, state.position);
+            direction = Vec3.magnitude(toCenter) > 1e-9
+                ? Vec3.normalize(Vec3(), toCenter)
+                : Vec3.create(0, 0, -1);
+        }
         // A single atom is a point — give the frame a floor so 'frame' still flies in.
         const r = Math.max(sphere.radius, 1.0);
         let distance = opts?.distance;
@@ -1272,9 +1356,14 @@ export class LiveViewer {
             const fill = 0.62;
             distance = Math.max(r / (fill * halfTan), r / (fill * halfTan * aspect), 5) + r;
         }
+        if (!Number.isFinite(distance) || distance <= 0) {
+            this.plugin.managers.camera.focusLoci(loci);
+            return;
+        }
         // Keep the scene's slab — a focus dolly must not clip what surrounds the
         // subject (the clip=false arm of orient()).
-        const slab = Math.max(state.radiusMax || 0, r, 1.0);
+        const slab = Math.max(
+            Number.isFinite(state.radiusMax) ? state.radiusMax : 0, r, 1.0);
         const snapshot = camera.getInvariantFocus(center, slab, state.up, direction);
         const position = Vec3();
         Vec3.scale(position, direction, distance);
@@ -3558,11 +3647,15 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
         cameraReportTimer = setTimeout(() => {
             cameraReportTimer = null;
             const cam = plugin.canvas3d?.camera;
-            if (cam && ws.readyState === WebSocket.OPEN) {
+            // Same readback rule as camera-state: report the transition's
+            // destination, not a mid-flight interpolation.
+            const settled = cam?.transition.inTransition
+                ? cam.transition.target : cam?.state;
+            if (cam && settled && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'camera-report', state: {
-                    target: Array.from(cam.state.target), position: Array.from(cam.state.position),
-                    up: Array.from(cam.state.up), radius: cam.state.radius,
-                    radiusMax: cam.state.radiusMax, fov: cam.state.fov,
+                    target: Array.from(settled.target), position: Array.from(settled.position),
+                    up: Array.from(settled.up), radius: settled.radius,
+                    radiusMax: cam.state.radiusMax, fov: settled.fov ?? cam.state.fov,
                 }}));
             }
         }, 400);
@@ -3903,9 +3996,19 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                     plugin.canvas3d?.setProps((p: Canvas3DProps) => {
                         const il = (p as any).illumination;
                         if (!il) return;
+                        const asked = (typeof msg.illumination === 'object' && msg.illumination !== null)
+                            ? msg.illumination : {};
                         if (typeof msg.illumination === 'boolean') il.enabled = msg.illumination;
                         else if (msg.illumination && typeof msg.illumination === 'object') {
                             Object.assign(il, msg.illumination);
+                        }
+                        // Unbounded illumination stalls the render loop for
+                        // minutes — the default maxIterations multiplies into
+                        // tens of tracing passes at high pixelScale, and a held
+                        // apply chain can refuse even reload_viewport. A caller
+                        // who wants the long render names its iterations.
+                        if (il.enabled && asked.maxIterations === undefined) {
+                            il.maxIterations = Math.min(il.maxIterations ?? 5, 2);
                         }
                     });
                 }
@@ -3987,11 +4090,16 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 // to what a command sent -- the gap between the two is where
                 // orientation bugs live.
                 const cam = plugin.canvas3d?.camera;
-                const state = cam ? {
-                    target: Array.from(cam.state.target), position: Array.from(cam.state.position),
-                    up: Array.from(cam.state.up), radius: cam.state.radius,
+                // Mid-transition cam.state reads interpolated — a caller checking
+                // that its orient() landed sees the take-off, not the destination.
+                // The transition's target is the state the last command committed.
+                const settled = cam?.transition.inTransition
+                    ? cam.transition.target : cam?.state;
+                const state = cam && settled ? {
+                    target: Array.from(settled.target), position: Array.from(settled.position),
+                    up: Array.from(settled.up), radius: settled.radius,
                     radiusMax: cam.state.radiusMax,
-                    near: cam.near, far: cam.far, fov: cam.state.fov,
+                    near: cam.near, far: cam.far, fov: settled.fov ?? cam.state.fov,
                     viewport: { width: cam.viewport.width, height: cam.viewport.height },
                 } : null;
                 ws.send(JSON.stringify({ type: 'camera-state-result', reqId: msg.reqId, state }));

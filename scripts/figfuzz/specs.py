@@ -35,10 +35,11 @@ import random
 MODELS = ["1ubq.pdb", "1tec.pdb", "3nir.pdb", "heme_site.pdb", "zn_site.pdb"]
 
 
-def _spec(id_, title, task, *, stage=(), expect=None, fetch=False):
+def _spec(id_, title, task, *, stage=(), expect=None, fetch=False, anchor=None):
     expect = {"nonblank": True, "no_job_errors": True, **(expect or {})}
     return {"id": id_, "title": title, "task": task,
-            "stage": list(stage), "expect": expect, "fetch": fetch}
+            "stage": list(stage), "expect": expect, "fetch": fetch,
+            "anchor": anchor}
 
 
 def corpus(data_dir, seed=0):
@@ -47,6 +48,12 @@ def corpus(data_dir, seed=0):
     rng = random.Random(seed)
     p = lambda name: f"{data_dir}/{name}"
     m = lambda: p(rng.choice(MODELS))
+    # Model+map specs name the model once — the maps are staged with their
+    # box centered on that model's centroid, or the "density near the site"
+    # task would be unreachable (the fixture map has its own frame).
+    f03m = m()
+    f06m = m()
+    f14m = m()
     specs = [
         _spec("f01-ligand-site", "Heme site with its environment",
               f"Load {p('heme_site.pdb')} and make a figure of the heme site: "
@@ -62,11 +69,12 @@ def corpus(data_dir, seed=0):
               expect={"models": 1}),
 
         _spec("f03-boxed-site", "Density carved around a site",
-              f"Load {m()} and the map file sitediff.mrc from this directory. "
+              f"Load {f03m} and the map file sitediff.mrc from this directory. "
               "Make a figure showing the density only within ~15 Å of the "
               "ligand — as a mesh at a sensible contour. The point is the "
               "surrounding density must not appear.",
               stage=[{"path": "sitediff.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              anchor=f03m,
               expect={"models": 1, "volumes": 1, "regioned": True}),
 
         _spec("f04-bigmap", "Publishable mesh from an oversized map",
@@ -85,10 +93,11 @@ def corpus(data_dir, seed=0):
               expect={"volumes": 1, "negative_visible": True}),
 
         _spec("f06-masked", "Map masked to the model footprint",
-              f"Load {m()} and blob.mrc from this directory. Make a figure of "
+              f"Load {f06m} and blob.mrc from this directory. Make a figure of "
               "the map cut down to the model's footprint — density well away "
               "from any atom should not show.",
               stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              anchor=f06m,
               expect={"models": 1, "volumes": 1, "regioned": True}),
 
         _spec("f07-slab", "A slab through the structure",
@@ -133,10 +142,11 @@ def corpus(data_dir, seed=0):
               expect={"models": 1}),
 
         _spec("f14-transparent", "Transparent surface over the model",
-              f"Load {m()} and blob.mrc from this directory. Make a figure "
+              f"Load {f14m} and blob.mrc from this directory. Make a figure "
               "with the map as a transparent surface around the cartoon "
               "model — the model must read through the surface.",
               stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              anchor=f14m,
               expect={"models": 1, "volumes": 1}),
     ]
     return specs
