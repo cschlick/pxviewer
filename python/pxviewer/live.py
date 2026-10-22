@@ -330,14 +330,19 @@ def _angle_deg(a: np.ndarray, b: np.ndarray, c: np.ndarray) -> Optional[float]:
 
 
 def _dihedral_deg(p0: np.ndarray, p1: np.ndarray, p2: np.ndarray, p3: np.ndarray) -> Optional[float]:
-    """Signed dihedral across the p1-p2 axis, in degrees on (-180, 180]."""
-    b0, b1, b2 = p0 - p1, p2 - p1, p3 - p2
-    n1, n2 = np.cross(b0, b1), np.cross(b1, b2)
-    b1n = np.linalg.norm(b1)
-    if np.linalg.norm(n1) == 0 or np.linalg.norm(n2) == 0 or b1n == 0:
-        return None
-    m1 = np.cross(n1, b1 / b1n)
-    return float(np.degrees(np.arctan2(float(np.dot(m1, n2)), float(np.dot(n1, n2)))))
+    """Signed dihedral across the p1-p2 axis, in degrees on (-180, 180].
+
+    Delegated to scitbx so the reported value is cctbx's own convention —
+    the one the viewer's label draws. A hand-rolled normals formula here
+    used to disagree with both (figfuzz l06).
+    """
+    from scitbx.array_family import flex
+    from scitbx.math import dihedral_angle
+    value = dihedral_angle(
+        flex.vec3_double([tuple(float(c) for c in p)
+                          for p in (p0, p1, p2, p3)]),
+        deg=True)
+    return None if value is None else float(value)
 
 
 def _coords_to_f32(coords: Any, n_atoms: int) -> np.ndarray:

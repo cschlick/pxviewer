@@ -83,6 +83,24 @@ def exercise_dihedral_is_signed():
     assert approx_equal(neg.add_dihedral(0, 1, 2, 3).value, -90.0)
 
 
+def exercise_dihedral_matches_cctbx_on_real_geometry():
+    """The symmetric L-quartet above cannot see a sign or offset error — every
+    hand-rolled formula that once shipped agreed there. On asymmetric real
+    coordinates the session's value must be scitbx's own convention, the one
+    the viewer's label draws (figfuzz l06 found both app formulas wrong)."""
+    from scitbx.array_family import flex
+    from scitbx.math import dihedral_angle
+    import iotbx.pdb
+
+    from pxviewer.regression.tst_utils import data_path
+
+    h = iotbx.pdb.input(str(data_path("zn_site.pdb"))).construct_hierarchy()
+    sites = [tuple(a.xyz) for a in h.atoms()][:4]
+    s = LiveSession.from_sites(sites)
+    ref = dihedral_angle(flex.vec3_double(sites), deg=True)
+    assert approx_equal(s.add_dihedral(0, 1, 2, 3).value, float(ref))
+
+
 def exercise_label_has_no_value():
     p = session().add_label(2, "atom two")
     assert p.kind == "label"

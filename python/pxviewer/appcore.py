@@ -2794,14 +2794,15 @@ class AppCore:
         if kind == "angle":
             cos = np.dot(b1, b2) / (np.linalg.norm(b1) * np.linalg.norm(b2))
             return float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
-        p0, p1, p2, p3 = xyz
-        b0, b1, b2 = p1 - p0, p2 - p1, p3 - p2
-        n1 = np.cross(b0, b1)
-        n2 = np.cross(b1, b2)
-        m1 = np.cross(n1, b1 / np.linalg.norm(b1))
-        x = np.dot(n1, n2)
-        y = np.dot(m1, n2)
-        return float(np.degrees(np.arctan2(y, x)))
+        # Delegated to scitbx so the reported value is cctbx's own convention —
+        # the one the viewer's label draws. The hand-rolled normals formula this
+        # replaced was sign-flipped against both (figfuzz l06).
+        from scitbx.array_family import flex
+        from scitbx.math import dihedral_angle
+        value = dihedral_angle(
+            flex.vec3_double([tuple(float(c) for c in p) for p in xyz]),
+            deg=True)
+        return float(value) if value is not None else float("nan")
 
 
     def clear_measurements(self) -> None:
