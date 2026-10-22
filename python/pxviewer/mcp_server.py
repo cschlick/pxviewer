@@ -482,6 +482,11 @@ def _make_server():
             raise RuntimeError(
                 "the 'console' extra (ipykernel) is not installed — "
                 "pip install 'pxviewer[console]'")
+        if not float(timeout) > 0:
+            raise ValueError(
+                f"timeout must be positive, got {timeout} — a deadline that "
+                "already elapsed would report a 'still busy' kernel it "
+                "never waited on")
         return await asyncio.to_thread(kernel.execute, code, float(timeout))
 
     @mcp.tool()
