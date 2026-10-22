@@ -482,16 +482,38 @@ def _make_server():
         `job_errors` when an exec's effect never appears. `camera`/
         `background` are null until a viewer session exists; the scene lists
         answer regardless."""
+        def _volume_status(e):
+            # Entry fields can lag session-level set_volume_* calls — the
+            # control session's replay records are the newer store.
+            out = {"id": e["id"], "name": e.get("name"),
+                   "iso": e.get("iso"), "opacity": e.get("opacity"),
+                   "downsample": int(e.get("localres_downsample") or 1)}
+            session = _app._control_session()
+            if session is not None:
+                ref = str(e["ref"])
+                iso = session._volume_iso.get(ref)
+                if iso is not None:
+                    out["iso"] = iso.get("value") if isinstance(iso, dict) else iso
+                op = session._volume_opacity.get(ref)
+                if op is not None:
+                    out["opacity"] = op
+            return out
+
         def work():
+            def live_rep(e):
+                # The entry's `rep` is what the model opened as; the session's
+                # representation stack is what it draws NOW (a kernel caller's
+                # session.set_representation bypasses the entry).
+                reps = getattr(e.get("session"), "_representations", None) or {}
+                types = [r.get("type") for r in reps.values() if r.get("type")]
+                return "+".join(types) if types else e.get("rep")
+
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
-                            "rep": e.get("rep"), "color": e.get("color"),
+                            "rep": live_rep(e), "color": e.get("color"),
                             "active": e["id"] == _app._active_model_id}
                            for e in _app._models],
-                "volumes": [{"id": e["id"], "name": e.get("name"),
-                             "iso": e.get("iso"), "opacity": e.get("opacity"),
-                             "downsample": int(e.get("localres_downsample") or 1)}
-                            for e in _app._volumes],
+                "volumes": [_volume_status(e) for e in _app._volumes],
                 "selection": {mid: len(ix) for mid, ix in
                               _app._scene_selection.items()},
                 "markers": [{"id": m["id"], "position": m["position"],

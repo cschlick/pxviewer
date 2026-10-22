@@ -76,6 +76,33 @@ def exercise_external_clients_attach_over_the_wire():
         kernel.shutdown()
 
 
+def exercise_the_proxy_shows_real_signatures():
+    """``inspect.signature(app.*)`` through the kernel proxy used to report
+    ``(*args, **kwargs)`` for everything — an agent discovering the API saw
+    nothing. ``__wrapped__`` is the channel signature() and help() follow."""
+    import concurrent.futures
+    import inspect
+
+    from pxviewer.console import GuiThreadProxy
+
+    class FakeApp:
+        def focus_residue(self, chain: str, resid: str, *, focus: bool = True):
+            """Select + focus a residue."""
+            return 1
+
+        attr = "value"
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    proxy = GuiThreadProxy(FakeApp(), pool.submit)
+    try:
+        sig = inspect.signature(proxy.focus_residue)
+        assert "chain" in sig.parameters and "focus" in sig.parameters, sig
+        assert proxy.focus_residue.__doc__ == "Select + focus a residue."
+        assert proxy.attr == "value"
+    finally:
+        pool.shutdown(wait=True)
+
+
 def exercise_the_console_suppresses_the_kernel_banner():
     """The widget squelches IPython's own banner so only our greeting shows."""
     from pxviewer.console import AppKernel, EmbeddedConsole

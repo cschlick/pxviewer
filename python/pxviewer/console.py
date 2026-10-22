@@ -93,6 +93,12 @@ class GuiThreadProxy:
 
             marshalled.__name__ = name
             marshalled.__doc__ = getattr(attr, "__doc__", None)
+            # __wrapped__ is the functools.wraps channel: inspect.signature and
+            # help() follow it to the real callable, so a proxied method shows
+            # its own signature and docstring instead of (*args, **kwargs).
+            marshalled.__wrapped__ = attr
+            marshalled.__module__ = getattr(attr, "__module__", None)
+            marshalled.__qualname__ = getattr(attr, "__qualname__", name)
             return marshalled
         return self._px_wrap(attr)
 

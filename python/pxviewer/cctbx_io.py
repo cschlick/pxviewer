@@ -19,6 +19,7 @@ from __future__ import annotations
 import itertools
 import re
 import threading
+import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -284,6 +285,13 @@ def first_model(model: Any) -> Any:
     models = model.get_hierarchy().models()
     if len(models) <= 1:
         return model
+    # Not silent: two-thirds of a staged ensemble vanishing without a word reads
+    # as a loader bug (and did, in figfuzz g12). There is currently no in-app
+    # path to the other models — conformer switching addresses altlocs, not
+    # MODEL records.
+    warnings.warn(
+        f"model file has {len(models)} MODEL records — only model 1 is shown "
+        "(multi-model ensembles are not yet switchable)")
     return model.select(models[0].atoms().extract_i_seq())
 
 

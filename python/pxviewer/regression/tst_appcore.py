@@ -219,6 +219,98 @@ def exercise_volume_box_carves_the_grid_and_keeps_sigma_honest():
         app.stop()
 
 
+def exercise_volume_load_detects_a_difference_map():
+    """A map file declares no map type, so content decides: a grid with a real
+    negative lobe is a difference map and must draw both lobes (green/red at
+    the difference-map's +-3 sigma), not sit there with half its data undrawn.
+    A positive-only grid keeps the ordinary map look."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        vols_dir = app._webapp.volume_dir / "vols"
+        vols_dir.mkdir(parents=True, exist_ok=True)
+
+        grid = np.zeros((16, 16, 16), dtype=np.float32)
+        grid[2:5, 2:5, 2:5] = 8.0
+        grid[10:13, 10:13, 10:13] = -6.0
+        diff = vols_dir / "diff.map"
+        VolumeData.from_numpy(grid, name="diff").write_map(str(diff))
+        assert app.load_file(str(diff)) == "volume"
+        entry = app._volumes[-1]
+        assert entry.get("negative_color") == "red", entry.get("negative_color")
+        assert entry.get("color") == "green", entry.get("color")
+
+        positive = np.zeros((16, 16, 16), dtype=np.float32)
+        positive[4:8, 4:8, 4:8] = 5.0
+        reg = vols_dir / "reg.map"
+        VolumeData.from_numpy(positive, name="reg").write_map(str(reg))
+        app.load_file(str(reg))
+        entry = app._volumes[-1]
+        assert not entry.get("negative_color"), entry.get("negative_color")
+    finally:
+        app.stop()
+
+
+def exercise_volume_appearance_sees_session_writes():
+    """``session.set_volume_*`` records the wire value on the session; the app
+    entry is untouched. An appearance read-back that only looked at the entry
+    reported the load-time value — the lie behind the stale-status bug."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        data = VolumeData.from_numpy(np.zeros((10, 10, 10), dtype=np.float32),
+                                     name="small")
+        vid = app._add_volume(data, "small")
+        session = app._control_session()
+        assert session is not None
+        session.set_volume_iso(str(vid), 2.5)
+        session.set_volume_opacity(str(vid), 0.5)
+        look = app.volume_appearance(vid)
+        assert look["iso"] == 2.5, look
+        assert look["opacity"] == 0.5, look
+        assert "visible" in look  # the field the hide check reads
+    finally:
+        app.stop()
+
+
+def exercise_volume_reload_marks_sessions():
+    """``_reload_viewport`` calls ``begin_reload`` on every session feeding the
+    page — the flag that diverts sends to the outbox while the old websocket is
+    still nominally open."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        data = VolumeData.from_numpy(np.zeros((10, 10, 10), dtype=np.float32),
+                                     name="small")
+        app._add_volume(data, "small")
+        session = app._control_session()
+        app._reload_viewport()
+        assert session._awaiting_reload, "the reload did not mark its session"
+    finally:
+        app.stop()
+
+
 def exercise_invoke_on_gui_marshals_onto_the_app_thread():
     """The dispatcher the kernel/MCP marshal through is the same one the
     desktop uses — it must deliver a callable on this thread and return it."""

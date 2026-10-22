@@ -96,6 +96,45 @@ def exercise_a_reported_camera_is_replayed_to_a_reconnect():
         run_client(scenario)
 
 
+def exercise_commands_during_a_reload_queue_for_the_new_client():
+    """``begin_reload`` says the page this socket feeds is navigating away: a
+    command sent while it still nominally holds a client must not reach the
+    wire (the dying page would drop it) — it queues for the next client."""
+    with session() as live:
+        async def scenario():
+            async with client(live) as ws:
+                live.begin_reload()
+                live.clear_selection()   # issued mid-reload, socket still open
+                try:
+                    await asyncio.wait_for(ws.recv(), 0.5)
+                    raise AssertionError("a command reached the dying page")
+                except asyncio.TimeoutError:
+                    pass
+            # The old client is gone; the new one replays stored state, then
+            # the queued command lands on top of it.
+            async with client(live) as ws2:
+                event = await next_text(ws2, "highlight")
+                assert decode_index_set(event["atoms"]) == []
+
+        run_client(scenario)
+
+
+def exercise_a_request_sent_mid_reload_is_answered_by_the_new_page():
+    """A request/response message (screenshot, camera-state) issued during the
+    reload window queues too — its waiter is usually still blocked on the
+    timeout, so the reloaded page answering is better than a guaranteed miss."""
+    with session() as live:
+        async def scenario():
+            async with client(live) as ws:
+                live.begin_reload()
+                live._send_control({"type": "camera-state", "reqId": 77})
+            async with client(live) as ws2:
+                event = await next_text(ws2, "camera-state")
+                assert event["reqId"] == 77
+
+        run_client(scenario)
+
+
 def exercise_selection_prose_never_reaches_the_wire():
     """The whole selection flow resolves prose in Python via cctbx; every control
     message the session can emit must carry index sets, never a query string."""

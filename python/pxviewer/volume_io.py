@@ -160,6 +160,28 @@ class VolumeData:
         return VolumeData.from_numpy(sliced, spacing=spacing, origin=new_origin,
                                      name=f"{self.name} (1/{f})")
 
+    def trimmed(self, pad: int = 2) -> "VolumeData":
+        """A copy sliced to its nonzero voxels (plus ``pad`` grid units), in place
+        on the same lattice — the origin shifts so every kept voxel stays where it
+        was. For display this is lossless: masked maps are exactly zero outside the
+        mask, and the isosurface only reads the nonzero region. The grid extent is
+        what the viewport's bounding sphere fits to, so a full-extent masked copy
+        would keep the scene bounds at the source grid's size. Noisy maps have
+        nonzero voxels everywhere and return unchanged.
+        """
+        arr = self.array
+        idx = np.nonzero(arr)
+        if idx[0].size == 0:
+            return self
+        lo = [max(int(i.min()) - pad, 0) for i in idx]
+        hi = [min(int(i.max()) + 1 + pad, s) for i, s in zip(idx, arr.shape)]
+        if all(l == 0 for l in lo) and all(h == s for h, s in zip(hi, arr.shape)):
+            return self
+        sliced = np.ascontiguousarray(arr[tuple(slice(l, h) for l, h in zip(lo, hi))])
+        new_origin = tuple(int(o) + l for o, l in zip(self.origin, lo))
+        return VolumeData.from_numpy(sliced, spacing=self.pixel_sizes,
+                                     origin=new_origin, name=self.name)
+
     def stats(self) -> dict:
         """Basic grid statistics (min/max/mean/std) — forces the numpy copy."""
         a = self.array

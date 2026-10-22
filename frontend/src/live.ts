@@ -501,10 +501,12 @@ function buildMarkupMesh(primitives: MarkupPrimitive[]): Shape<Mesh> {
         state.currentGroup = i;
         colors[i] = Color.fromRgb(prim.color[0], prim.color[1], prim.color[2]);
         if (prim.kind === 'balls' && prim.balls) {
-            // Cbeta's ball radius is the deviation itself (~0.3 A) — floor it so a
-            // small deviation is still findable.
+            // Cbeta's ball radius is the deviation itself (~0.3 A) — at that size
+            // the marker is a sub-pixel speck at whole-molecule zoom, which is not
+            // a marker. Floor it clearly above atom radius; a bad deviation still
+            // out-sizes a mild one.
             for (const [c, r] of prim.balls) {
-                addSphere(state, Vec3.create(c[0], c[1], c[2]), Math.max(r, 0.3), 2);
+                addSphere(state, Vec3.create(c[0], c[1], c[2]), Math.max(r, 0.45), 2);
             }
         } else if (prim.kind === 'dots' && prim.points) {
             for (const p of prim.points) addSphere(state, Vec3.create(p[0], p[1], p[2]), 0.1, 0);
@@ -2121,10 +2123,27 @@ export class LiveViewer {
     }
 
     /** Show or hide this model's whole structure in place — a render skip (no dispose, no
-     *  reload), so hiding one object never disturbs the others. */
+     *  reload), so hiding one object never disturbs the others. The session's
+     *  overlays go with it: probe dots, validator markup, kinemage nodes, the live
+     *  map window and the hotspot cloud all belong to the model — hiding it while
+     *  they keep floating is not hiding it. Channels the user already cleared were
+     *  deleted outright, so every node still here belongs to a visible overlay and
+     *  should come back with the model. */
     setStructureVisible(visible: boolean) {
         if (this.structure?.ref) {
             setSubtreeVisibility(this.plugin.state.data, this.structure.ref, !visible);
+        }
+        const roots: (StateObjectSelector | undefined)[] = [
+            this.interactionsNode, this.clashesNode, this.mapVolume,
+            this.hotspotVolume, this.hotspotRepr, this.localresSurface,
+            ...this.primitives.values(),
+        ];
+        for (const nodes of this.probeChannels.values()) roots.push(...nodes);
+        for (const nodes of this.markupChannels.values()) roots.push(...nodes);
+        for (const node of roots) {
+            if (node?.ref && this.plugin.state.data.tree.transforms.has(node.ref)) {
+                setSubtreeVisibility(this.plugin.state.data, node.ref, !visible);
+            }
         }
     }
 
@@ -2417,6 +2436,20 @@ function lockCameraOnceFramed(plugin: PluginContext) {
             return;
         }
         if (!framed) return;  // never got any geometry; leave the camera as Mol* shipped it
+        // Geometry can land after Mol*'s one-shot auto-fit already missed its
+        // moment — a streamed map's surface builds after the commit that would
+        // have triggered the reset, leaving the camera at its degenerate start
+        // (target ~origin, radius ~0) over a scene that is actually somewhere
+        // else entirely. That is the volume-only-load blank frame. If the fit
+        // clearly never ran, ask for it now. Gated on manualReset so a
+        // saved-camera restore — which sets the flag itself — is never stomped.
+        const cam = canvas.camera;
+        const bound = canvas.boundingSphereVisible;
+        if (!(canvas.props.camera as any)?.manualReset && bound && bound.radius > 0) {
+            const aimedOutside = Vec3.distance(cam.state.target as Vec3, bound.center) > bound.radius;
+            const neverFitted = !Number.isFinite(cam.state.radius) || cam.state.radius < 0.05;
+            if (neverFitted || aimedOutside) canvas.requestCameraReset();
+        }
         // Past cameraResetDurationMs, so the fit has finished moving before it is frozen.
         setTimeout(() => canvas.setProps((p: Canvas3DProps) => {
             (p.camera as any).manualReset = true;
@@ -3183,22 +3216,23 @@ async function setVolumeOpacity(plugin: PluginContext, ref: string, opacity: num
 }
 
 async function setVolumeVisible(plugin: PluginContext, ref: string, visible: boolean) {
-    // A render skip on the map's isosurface (no dispose, no reload) — findVolumeReprCell
-    // waits for the cell, so this also works when replayed just after a scene reload.
+    // A render skip on the map's isosurface (no dispose, no reload). Hide/show the
+    // whole volume node: both contours are its subtree, so one call covers the
+    // negative lobe too — including one still being built when the call lands,
+    // which the synchronous cell lookup below would miss (g04).
+    const cell = await findVolumeCell(plugin, ref);
+    if (cell) setSubtreeVisibility(plugin.state.data, cell.transform.ref, !visible);
     const repr = await findVolumeReprCell(plugin, ref);
     if (repr) setSubtreeVisibility(plugin.state.data, repr.transform.ref, !visible);
-    // ...and its negative lobe, which is the same map. A difference map is drawn as two
-    // contours at +level and -level; hiding only the positive one left the red half on
-    // screen with nothing in the object list still claiming to own it. Color is the one
-    // thing the two deliberately do NOT share (see setVolumeColor); opacity and
-    // visibility belong to the map, not to one of its lobes.
-    //
-    // A negative contour switched off on its own stays off: showing the map again must
-    // not undo a deliberate "just the green one, please".
-    const negative = findVolumeNegativeReprCell(plugin, ref);
-    if (negative) {
-        setSubtreeVisibility(plugin.state.data, negative.transform.ref,
-                             !(visible && !negativeHidden.has(ref)));
+    // A negative contour switched off on its own stays off: showing the map again
+    // must not undo a deliberate "just the green one, please". Its cell may still
+    // be building on a fresh scene, so wait — but only when the flag says one
+    // exists, or every plain map would stall the chain for a contour it lacks.
+    if (visible && negativeHidden.has(ref)) {
+        const negative = await awaitVolumeNegativeReprCell(plugin, ref);
+        if (negative) {
+            setSubtreeVisibility(plugin.state.data, negative.transform.ref, true);
+        }
     }
 }
 
@@ -3667,6 +3701,10 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 ws.send(JSON.stringify({ type: 'camera-report', state: {
                     target: Array.from(settled.target), position: Array.from(settled.position),
                     up: Array.from(settled.up), radius: settled.radius,
+                    distance: Math.hypot(
+                        settled.position[0] - settled.target[0],
+                        settled.position[1] - settled.target[1],
+                        settled.position[2] - settled.target[2]),
                     radiusMax: cam.state.radiusMax, fov: settled.fov ?? cam.state.fov,
                 }}));
             }
@@ -4127,6 +4165,13 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 const state = cam && settled ? {
                     target: Array.from(settled.target), position: Array.from(settled.position),
                     up: Array.from(settled.up), radius: settled.radius,
+                    // `radius` is the depth slab that drives near/far — NOT how far
+                    // the camera sits. The dolly distance is what a caller checking
+                    // "did my focus land" needs; they diverge after any zoom.
+                    distance: Math.hypot(
+                        settled.position[0] - settled.target[0],
+                        settled.position[1] - settled.target[1],
+                        settled.position[2] - settled.target[2]),
                     radiusMax: cam.state.radiusMax,
                     near: cam.near, far: cam.far, fov: settled.fov ?? cam.state.fov,
                     viewport: { width: cam.viewport.width, height: cam.viewport.height },

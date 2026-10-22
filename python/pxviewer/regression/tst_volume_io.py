@@ -50,6 +50,26 @@ def exercise_metadata_from_a_map_manager():
     assert vol.suggested_iso() > 0
 
 
+def exercise_trimmed_slices_to_the_density():
+    """A masked display map is exactly zero outside the mask, so slicing it to
+    its nonzero voxels loses nothing — and tightens the grid extent the
+    viewport's bounding sphere fits to. The origin shifts so kept voxels stay
+    put; a map with no zero border returns itself."""
+    vol = VolumeData.from_numpy(np.zeros((20, 20, 20), dtype=np.float32),
+                                origin=(5, 5, 5), name="m")
+    arr = vol.array
+    arr[7:10, 8:12, 9:11] = 3.0
+    trimmed = vol.trimmed()
+    assert trimmed.grid == (7, 8, 6), trimmed.grid   # nonzero extent + pad 2 each side
+    assert trimmed.origin == (10, 11, 12), trimmed.origin
+    np.testing.assert_allclose(trimmed.array, arr[5:12, 6:14, 7:13])
+
+    noisy = VolumeData.from_numpy(np.ones((8, 8, 8), dtype=np.float32), name="n")
+    assert noisy.trimmed() is noisy
+    empty = VolumeData.from_numpy(np.zeros((8, 8, 8), dtype=np.float32), name="e")
+    assert empty.trimmed() is empty
+
+
 def exercise_the_array_is_lazy_and_cached():
     """Metadata and re-writing the map need only the map_manager, so the flex->numpy copy
     is deferred until something actually asks for values."""

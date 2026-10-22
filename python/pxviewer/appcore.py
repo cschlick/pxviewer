@@ -275,6 +275,24 @@ def _first_line(exc: Exception) -> str:
     return text.splitlines()[0].strip()
 
 
+def _bipolar_map(stats: dict) -> bool:
+    """Whether a loaded grid is a difference map by content — a real negative
+    lobe, not an ordinary map's noise floor.
+
+    The file does not say (map formats record no map type), so this is a guess the
+    way ``reflections.is_difference_map`` is a guess: the negative lobe must be
+    deep on the sigma scale *and* a substantial fraction of the positive one —
+    that pair separates a bipolar map from a normal map, whose minimum is a
+    shallow negative tail next to a tall positive distribution.
+    """
+    std = stats.get("std") or 0.0
+    if std <= 0:
+        return False
+    low = stats["min"] - stats["mean"]
+    high = stats["max"] - stats["mean"]
+    return low < -2.5 * std and abs(low) > 0.3 * abs(high)
+
+
 def _make_bridge():
     """A QObject that marshals background-thread events onto the Qt GUI thread.
 
@@ -1372,6 +1390,15 @@ class AppCore:
             ws.append(self._ensure_dummy_ws())
         self._reassert_volume_clips()
         self._reassert_hidden_volumes()
+        # The page is about to navigate: tell every session feeding it so a
+        # command issued in the same breath (the orient right after a mask call)
+        # queues for the new page instead of dying with the old one.
+        for m in self._models:
+            s = m.get("session")
+            if s is not None:
+                s.begin_reload()
+        if self._dummy is not None:
+            self._dummy.begin_reload()
         params = []
         if mvsj:
             params.append(f"mvsj={mvsj}")
@@ -2667,6 +2694,12 @@ class AppCore:
             box["mid"] = self._add_model(hsession, f"{name} + H", rep="ball-and-stick")
             box["session"] = hsession
             self.set_model_visible(src_mid, False)  # hide the H-less original
+            # _add_model made the sibling active — but the object the caller
+            # validated (and whose entry caches the validation results that
+            # set_validation_markers draws) is the original. Keep it active so
+            # a check does not silently re-point "the model" out from under
+            # whoever asked for it.
+            self.set_active_model(src_mid)
             ready.set()
 
         self.bridge.run_on_main.emit(add_on_main)
@@ -4655,6 +4688,28 @@ class AppCore:
         out["sphere"] = self._sphere_state(entry)
         out["visible"] = entry.get("visible", True)
         out["negative_visible"] = entry.get("negative_visible", True)
+        # Session-level setters (kernel callers using ``session.set_volume_*``)
+        # record the wire value but never touch this entry — the session's replay
+        # dicts are the newer of the two stores for anything they carry.
+        session = self._control_session()
+        if session is not None:
+            ref = str(entry["ref"])
+            for attr, key in (("_volume_iso", "iso"),
+                              ("_volume_opacity", "opacity"),
+                              ("_volume_style", "style"),
+                              ("_volume_color", "color"),
+                              ("_volume_position", "position"),
+                              ("_volume_negative_color", "negative_color"),
+                              ("_volume_negative_style", "negative_style"),
+                              ("_volume_negative_opacity", "negative_opacity"),
+                              ("_volume_negative_iso", "negative_iso")):
+                recorded = getattr(session, attr, {}).get(ref)
+                if recorded is not None:
+                    out[key] = (recorded.get("value")
+                                if isinstance(recorded, dict) else recorded)
+            hidden = getattr(session, "_volume_negative_hidden", {}).get(ref)
+            if hidden is not None:
+                out["negative_visible"] = not hidden
         # The map's maximum on the sigma scale -- the level above which nothing is left.
         # The Level slider spans up to here, so its right end genuinely empties the map.
         try:
@@ -5220,7 +5275,11 @@ class AppCore:
         from .volume_io import VolumeData, masked_map_copy
 
         masked = masked_map_copy(mmm, entry["data"].map_id, radius)
-        return VolumeData.from_map_manager(masked, name=entry["data"].name)
+        vd = VolumeData.from_map_manager(masked, name=entry["data"].name)
+        # Sliced to its nonzero region — the served grid's extent is what the
+        # viewport's bounding sphere fits to, so reset_view should frame the
+        # density that is actually drawn, not the source grid the mask kept.
+        return vd.trimmed()
 
 
     def set_volume_mask(self, vid: str, radius: Optional[float]) -> None:
@@ -6795,10 +6854,19 @@ class AppCore:
         self.stop_demo()
         self._reset_interactions()
 
+        from .reflections import MAP_STYLE
         from .volume_io import VolumeData
 
+        data = VolumeData.from_map_file(path)
+        # A file map with a real negative lobe is a difference map by content, whatever
+        # it is named — draw it the way difference maps are read (green/red at ±3σ)
+        # rather than as a positive map with half its data undrawn.
+        color, iso, negative = (
+            MAP_STYLE[True] if _bipolar_map(data.stats())
+            else (None, None, None))
         vid = self._add_volume(
-            VolumeData.from_map_file(path), Path(path).name)
+            data, Path(path).name,
+            color=color, iso=iso, negative_color=negative)
         self._volume_entry(vid)["source"] = {
             "kind": "file", "path": str(Path(path).resolve())}
         self._status(f"Loaded volume {vid}: {Path(path).name}")

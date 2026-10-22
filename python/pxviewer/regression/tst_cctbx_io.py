@@ -226,9 +226,16 @@ def exercise_altloc_topology_writes_label_alt_id():
 
 
 def exercise_multi_model_is_reduced_to_the_first():
+    import warnings
+
     model = model_from_str(_NMR_PDB)
     assert model.get_number_of_atoms() == 4   # both models
-    assert first_model(model).get_number_of_atoms() == 2        # model 1 only
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        assert first_model(model).get_number_of_atoms() == 2    # model 1 only
+    # Dropping two-thirds of an ensemble without a word reads as a loader bug.
+    assert any("MODEL records" in str(w.message) for w in seen), [
+        str(w.message) for w in seen]
 
     session = LiveSession.from_cctbx_model(model)
     assert session._n_atoms == 2              # the session took model 1

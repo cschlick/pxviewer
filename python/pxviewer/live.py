@@ -70,6 +70,7 @@ import json
 import math
 import struct
 import threading
+import time
 from http import HTTPStatus
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, get_args
 
@@ -526,6 +527,13 @@ class LiveSession:
         # lands on top of it. Bounded: a session that never gains a viewer keeps
         # only its newest few hundred commands.
         self._outbox: "collections.deque" = collections.deque(maxlen=512)
+        # Set by begin_reload() while the page this session feeds is navigating
+        # away: the websocket is still open on this side, so a send now would
+        # land on a dying page and vanish. Sends queue to the outbox instead.
+        # A timestamp, not a flag: if the reload never happens (the load call
+        # failed and the page stayed), it expires on its own and the still-live
+        # client keeps getting commands rather than queueing forever.
+        self._awaiting_reload = 0.0
         # The localres display-resolution factor, replayed to late clients *before* the
         # payload so the first build already uses it (control messages are applied ahead
         # of the queued binary payload on the client).
@@ -2113,11 +2121,8 @@ class LiveSession:
         """Broadcast a JSON control message to all clients (thread-safe)."""
         loop = self._loop
         if loop is not None:
-            # reqId messages are request/response: only a live page can answer,
-            # and the waiter is already gone by the time a reconnect could.
             loop.call_soon_threadsafe(
-                self._broadcast_text, json.dumps(message),
-                "reqId" not in message)
+                self._broadcast_text, json.dumps(message))
 
     def _next_primitive_id(self, kind: str) -> str:
         with self._lock:
@@ -2484,6 +2489,9 @@ class LiveSession:
             for message in self._outbox:
                 await self._locked_send(websocket, message)
             self._outbox.clear()
+            # A client is attached again — the reload (if any) is behind us, so
+            # sends go to the wire rather than queueing behind nothing.
+            self._awaiting_reload = 0.0
             async for message in websocket:
                 if isinstance(message, (bytes, bytearray)):
                     continue
@@ -2497,6 +2505,9 @@ class LiveSession:
                 # A reload reconnects: ready must mean THIS client's build, so a
                 # wait_for_client caller can hold a command until it lands.
                 self._client_ready.clear()
+                # The dying page is gone; sends from here queue on the empty
+                # client set until the new page attaches, not on the flag.
+                self._awaiting_reload = 0.0
 
     def _on_message(self, message: str) -> None:
         try:
@@ -2648,13 +2659,29 @@ class LiveSession:
             # Fire-and-forget: scheduling the coroutine keeps push() non-blocking.
             asyncio.ensure_future(self._safe_send(websocket, payload))
 
-    def _broadcast_text(self, message: str, queue_if_idle: bool = True) -> None:
-        if not self._clients:
-            # No page attached right now: the navigation gap of a viewport
-            # reload, or a dead renderer before reconnect. Queue for the next
-            # client instead of dropping the command silently.
-            if queue_if_idle:
-                self._outbox.append(message)
+    def begin_reload(self) -> None:
+        """The page this session feeds is about to navigate away (an app-initiated
+        viewport reload). The socket stays open on this side until the close
+        handshake lands, so a send issued right now would reach a dying page and
+        be silently lost — the race behind commands issued in the same breath as
+        a box/mask reload being dropped. Sends queue to the outbox instead until
+        the old client is actually gone. Thread-safe."""
+        self._awaiting_reload = time.monotonic()
+
+    def _broadcast_text(self, message: str) -> None:
+        # 15 s covers the close handshake after navigation with room to spare;
+        # a still-connected client past that means the reload never happened.
+        reloading = self._awaiting_reload and time.monotonic() - self._awaiting_reload < 15
+        if not self._clients or reloading:
+            # No page attached right now (the navigation gap of a viewport
+            # reload, or a dead renderer before reconnect) — or a page on its
+            # way out that a send would reach only as it dies. Queue for the
+            # next client instead of dropping the command silently. Request/
+            # response messages queue too: their waiter is usually still
+            # blocked on its timeout, so an answer from the reloaded page is
+            # strictly better than a guaranteed miss — and one for a waiter
+            # that already expired is ignored.
+            self._outbox.append(message)
             return
         for websocket in list(self._clients):
             asyncio.ensure_future(self._safe_send_text(websocket, message))
