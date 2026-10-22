@@ -4256,8 +4256,15 @@ class AppCore:
     def write_object(self, kind: str, ident: str, path: str) -> None:
         """Write a loaded object to disk: the model's cctbx coordinates, or the map.
 
-        This writes what the DataManager holds (the model's own coordinates), not
-        anything from the viewer — the same bytes cctbx would round-trip.
+        This writes what the DataManager holds (the model's own coordinates, the
+        map's own grid), not anything from the viewer — the same bytes cctbx
+        would round-trip. Masking, boxing and display decimation are view
+        state; none of it reaches the file.
+
+        The extension picks the format and the file must say so honestly —
+        ``.pdb``/``.ent`` for PDB, ``.cif``/``.mmcif`` for mmCIF, and
+        ``.map``/``.ccp4``/``.mrc`` for a CCP4 map. Anything else is refused
+        rather than writing one format under another's name (figfuzz k07).
         """
         p = str(path)
         if kind == "model":
@@ -4265,7 +4272,12 @@ class AppCore:
             model = entry["session"].model if entry else None
             if model is None:
                 raise ValueError("no cctbx model to write")
-            is_pdb = p.lower().endswith((".pdb", ".ent"))
+            lower = p.lower()
+            is_pdb = lower.endswith((".pdb", ".ent"))
+            if not is_pdb and not lower.endswith((".cif", ".mmcif")):
+                raise ValueError(
+                    f"cannot tell what format {Path(p).name!r} asks for — "
+                    "write models as .pdb/.ent or .cif/.mmcif")
             if is_pdb:
                 text = model.model_as_pdb()
             else:
@@ -4282,7 +4294,13 @@ class AppCore:
             entry = self._volume_entry(ident, missing_ok=True)
             if entry is None:
                 raise ValueError("no such volume")
-            entry["data"].write_map(p)  # cctbx writes the map
+            # cctbx writes one format — CCP4 — whatever the extension says, so
+            # an unrecognized one would name a file it is not.
+            if not p.lower().endswith((".map", ".ccp4", ".mrc")):
+                raise ValueError(
+                    f"cannot tell what format {Path(p).name!r} asks for — "
+                    "maps are written as CCP4 (.map/.ccp4/.mrc)")
+            entry["data"].write_map(p)
         else:
             raise ValueError("nothing to write")
 
