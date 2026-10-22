@@ -16,6 +16,7 @@ import { StateObjectSelector, StateTransformer } from 'molstar/lib/mol-state';
 import { PluginContext } from 'molstar/lib/mol-plugin/context';
 import { Task } from 'molstar/lib/mol-task';
 import { ParamDefinition as PD } from 'molstar/lib/mol-util/param-definition';
+import { PostprocessingParams } from 'molstar/lib/mol-canvas3d/passes/postprocessing';
 import { Bond, Model, Structure, StructureElement, StructureProperties, StructureSelection, Unit } from 'molstar/lib/mol-model/structure';
 import { Color, ColorScale } from 'molstar/lib/mol-util/color';
 import { Mat4, Vec2, Vec3, Vec4, Tensor } from 'molstar/lib/mol-math/linear-algebra';
@@ -3506,6 +3507,17 @@ export interface LiveConnectionHandle {
  */
 export function connectLive(plugin: PluginContext, url: string): LiveConnectionHandle {
     registerAttributeColorTheme(plugin);
+    // A promise-chain rejection silently stops the draw loop — the page stays
+    // alive, screenshots just time out, and the console shows only the error
+    // line. Log the stack so a wedged loop is diagnosable from the log alone.
+    window.addEventListener('unhandledrejection', (e) => {
+        const err = (e as PromiseRejectionEvent).reason;
+        console.error(`[pxviewer] unhandled rejection: ${err?.stack || err}`);
+    });
+    window.addEventListener('error', (e) => {
+        const err = (e as ErrorEvent).error;
+        if (err?.stack) console.error(`[pxviewer] uncaught error: ${err.stack}`);
+    });
     void applyCootBindings(plugin);  // the mouse, as a crystallographer expects it
     const quality = interactiveQuality(plugin);
     const perf = perfMonitor(plugin);
@@ -3976,10 +3988,27 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                         for (const [k, v] of Object.entries(msg.post)) {
                             const entry = post[k];
                             if (!entry) continue;
+                            // Mapped variants carry their params with them:
+                            // switching `name` without seeding the variant's
+                            // params leaves `{}` behind — a missing `define`
+                            // (e.g. CAS denoise) then crashes program-variant
+                            // hashing mid-draw and wedges the render loop.
+                            const def = (PostprocessingParams as any)[k];
+                            const variantParams = (name: string) =>
+                                def?.type === 'mapped' ? def.map(name)?.params : undefined;
                             if (typeof v === 'string') {
-                                entry.name = v;
+                                if (entry.name !== v) {
+                                    entry.name = v;
+                                    const vp = variantParams(v);
+                                    if (vp) entry.params = PD.getDefaultValues(vp);
+                                }
                             } else if (v && typeof v === 'object') {
-                                if (typeof (v as any).name === 'string') entry.name = (v as any).name;
+                                const name = typeof (v as any).name === 'string' ? (v as any).name : entry.name;
+                                if (name !== entry.name) {
+                                    entry.name = name;
+                                    const vp = variantParams(name);
+                                    if (vp) entry.params = PD.getDefaultValues(vp);
+                                }
                                 if ((v as any).params && typeof (v as any).params === 'object') {
                                     Object.assign(entry.params ??= {}, (v as any).params);
                                 }

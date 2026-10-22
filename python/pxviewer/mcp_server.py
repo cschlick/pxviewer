@@ -543,8 +543,16 @@ def _make_server():
         when ping() reports the page is dead, or when calls fail with
         'viewport never came up' and ping does not answer."""
         await _qt(lambda: _app._reload_viewport())
-        _wait_ready(timeout=60)
-        return {"reloaded": True, "camera": _session().camera_state()}
+        try:
+            _wait_ready(timeout=60)
+        except RuntimeError as exc:
+            # The reload was issued and Python state survives — the page is
+            # just slow to come back (usually a heavy pipeline still drawing).
+            # Report that honestly instead of claiming the reload failed.
+            return {"reloaded": True, "ready": False,
+                    "detail": f"reload issued; page not ready yet — {exc}"}
+        return {"reloaded": True, "ready": True,
+                "camera": _session().camera_state()}
 
     @mcp.tool()
     async def save_screenshot(path: str) -> dict:
@@ -561,7 +569,18 @@ def _make_server():
                 "apply chain, or reload_viewport()")
         out = Path(path).expanduser()
         out.write_bytes(png)
-        return {"saved": str(out), "bytes": out.stat().st_size}
+        result = {"saved": str(out), "bytes": out.stat().st_size}
+        try:
+            pong = session.ping(timeout=2)
+        except Exception:
+            pong = None
+        if pong and pong.get("busy"):
+            result["warning"] = (
+                f"apply chain still busy ({pong['busy']}, "
+                f"{pong.get('busyMs')}ms, {pong.get('pending')} queued) — "
+                "the frame may predate updates still in flight"
+            )
+        return result
 
     @mcp.tool()
     async def screenshot() -> Image:
