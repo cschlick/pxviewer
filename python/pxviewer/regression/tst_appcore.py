@@ -360,6 +360,83 @@ def exercise_volume_boxed_iso_reads_back_in_sigma():
         app.stop()
 
 
+def exercise_unknown_object_ids_fail_loudly():
+    """``set_volume_iso('volume-99')`` used to return None on nothing — the
+    figfuzz error probe found the silent no-op. Registry lookups now raise on
+    any unknown non-None id; genuinely-optional lookups opt out."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        data = VolumeData.from_numpy(np.zeros((8, 8, 8), dtype=np.float32),
+                                     name="m")
+        app._add_volume(data, "m")
+        for call in (lambda: app.set_volume_iso("volume-99", 3.0),
+                     lambda: app.set_volume_iso("volume", 3.0),
+                     lambda: app.remove_volume("volume-99")):
+            try:
+                call()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("bad id was silently accepted")
+        # The opt-outs stay tolerant: Optional-returning probes and the
+        # write_object kind dispatch keep their own domain errors.
+        assert app.session_for("model-99") is None
+        try:
+            app.write_object("volume", "volume-99", "/tmp/x.map")
+        except ValueError as exc:
+            assert "no such volume" in str(exc), exc
+    finally:
+        app.stop()
+
+
+def exercise_set_camera_rejects_malformed_states():
+    """``set_camera`` validates before the wire — a 2-vector target or a
+    string radius used to pass the checks and die silently in the page."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app._add_volume(VolumeData.from_numpy(
+            np.zeros((8, 8, 8), dtype=np.float32), name="m"), "m")
+        session = app._control_session()
+        assert session is not None
+        good = {"target": [0, 0, 0], "position": [0, 0, 50], "up": [0, 1, 0],
+                "radius": 40.0, "fov": 30.0}
+        bad = [
+            (TypeError, "nonsense"),
+            (TypeError, 42),
+            (ValueError, {**good, "target": [0, 0]}),
+            (ValueError, {**good, "position": ["x", 0, 10]}),
+            (ValueError, {**good, "radius": "big"}),
+            (ValueError, {**good, "radius": float("nan")}),
+            (ValueError, {k: v for k, v in good.items() if k != "up"}),
+        ]
+        for exc_type, state in bad:
+            try:
+                session.set_camera(state)
+            except exc_type:
+                pass
+            else:
+                raise AssertionError(f"set_camera accepted {state!r}")
+        session.set_camera(good)   # a valid snapshot still sends
+    finally:
+        app.stop()
+
+
 def exercise_volume_reload_marks_sessions():
     """``_reload_viewport`` calls ``begin_reload`` on every session feeding the
     page — the flag that diverts sends to the outbox while the old websocket is

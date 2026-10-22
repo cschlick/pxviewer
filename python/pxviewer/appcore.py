@@ -751,14 +751,27 @@ class AppCore:
 
     # -- registry (models + volumes + groups) ----------------------------
 
-    def _model_entry(self, mid):
+    def _model_entry(self, mid, *, missing_ok: bool = False):
+        """The registry entry for a model id — loud on a bad one.
+
+        ``None`` returns ``None`` so the ``mid or self._active_model_id``
+        idiom stays short. A kind name ('model', from ``load_file``'s return)
+        or an unknown id is a caller bug: it raises, never silently returns
+        — the figfuzz error probe found ``set_volume_iso('volume-99')``
+        reporting success on nothing. ``missing_ok=True`` is for ids that can
+        legitimately be stale — pinned children, guards racing an unload."""
+        if mid is None:
+            return None
         if mid in ("model", "volume", "reflections", "group"):
-            # load_file returns the *kind*, not the id — handing the kind back
-            # in is the one mistake this warn exists to catch.
             self._warn(f"{mid!r} is a kind, not an object id — "
                        f"status() lists the ids (e.g. 'model-1')")
-            return None
-        return next((m for m in self._models if m["id"] == mid), None)
+            raise ValueError(f"{mid!r} is a kind, not an object id — "
+                             f"status() lists the ids (e.g. 'model-1')")
+        entry = next((m for m in self._models if m["id"] == mid), None)
+        if entry is None and not missing_ok:
+            raise ValueError(f"no model {mid!r} — "
+                             f"status() lists the ids (e.g. 'model-1')")
+        return entry
 
 
     def run_background(self, work, *, name: str, label: str) -> None:
@@ -956,20 +969,34 @@ class AppCore:
         self.bridge.validation_stale_changed.emit(stale)
 
 
-    def _volume_entry(self, vid):
+    def _volume_entry(self, vid, *, missing_ok: bool = False):
+        if vid is None:
+            return None
         if vid in ("model", "volume", "reflections", "group"):
             self._warn(f"{vid!r} is a kind, not an object id — "
                        f"status() lists the ids (e.g. 'volume-1')")
+            raise ValueError(f"{vid!r} is a kind, not an object id — "
+                             f"status() lists the ids (e.g. 'volume-1')")
+        entry = next((v for v in self._volumes if v["id"] == vid), None)
+        if entry is None and not missing_ok:
+            raise ValueError(f"no volume {vid!r} — "
+                             f"status() lists the ids (e.g. 'volume-1')")
+        return entry
+
+
+    def _reflection_entry(self, rid, *, missing_ok: bool = False):
+        if rid is None:
             return None
-        return next((v for v in self._volumes if v["id"] == vid), None)
-
-
-    def _reflection_entry(self, rid):
         if rid in ("model", "volume", "reflections", "group"):
             self._warn(f"{rid!r} is a kind, not an object id — "
                        f"status() lists the ids (e.g. 'reflections-1')")
-            return None
-        return next((r for r in self._reflections if r["id"] == rid), None)
+            raise ValueError(f"{rid!r} is a kind, not an object id — "
+                             f"status() lists the ids (e.g. 'reflections-1')")
+        entry = next((r for r in self._reflections if r["id"] == rid), None)
+        if entry is None and not missing_ok:
+            raise ValueError(f"no reflections {rid!r} — "
+                             f"status() lists the ids (e.g. 'reflections-1')")
+        return entry
 
 
     @contextmanager
@@ -4115,7 +4142,7 @@ class AppCore:
         """
         p = str(path)
         if kind == "model":
-            entry = self._model_entry(ident)
+            entry = self._model_entry(ident, missing_ok=True)
             model = entry["session"].model if entry else None
             if model is None:
                 raise ValueError("no cctbx model to write")
@@ -4133,7 +4160,7 @@ class AppCore:
             with open(p, "w") as fh:
                 fh.write(text)
         elif kind == "volume":
-            entry = self._volume_entry(ident)
+            entry = self._volume_entry(ident, missing_ok=True)
             if entry is None:
                 raise ValueError("no such volume")
             entry["data"].write_map(p)  # cctbx writes the map
@@ -5255,7 +5282,7 @@ class AppCore:
         this follows the focused object rather than the viewport picking for itself.
         (Coot's binding: in map work the contour level is what you reach for most.)
         """
-        entry = self._volume_entry(vid) if vid else None
+        entry = self._volume_entry(vid, missing_ok=True) if vid else None
         # Always re-assert: the viewport reloads on any scene change, and the session
         # carrying volume commands can switch (dummy <-> active model), so the target
         # has to be told to whoever is carrying them now.
@@ -5369,7 +5396,9 @@ class AppCore:
         vols_dir = self._webapp.volume_dir / "vols"
         vols_dir.mkdir(parents=True, exist_ok=True)
         data.write_map(str(vols_dir / f"{vid}.map"), working_frame=True)
-        entry = self._volume_entry(vid)
+        # The write can precede registration (_add_volume writes before it
+        # appends), so a not-yet-there entry is expected.
+        entry = self._volume_entry(vid, missing_ok=True)
         if entry is not None:
             # The file the derived copies were carved from just changed (a mask,
             # a frame shift) — re-derive them or they keep drawing the
@@ -5531,7 +5560,7 @@ class AppCore:
         if res_vid is not None:
             self._remove_resolution_map(res_vid)  # the pinned resolution map goes with it
         if entry.get("is_resolution") and entry.get("pinned_to"):
-            parent = self._volume_entry(entry["pinned_to"])
+            parent = self._volume_entry(entry["pinned_to"], missing_ok=True)
             if parent is not None:
                 if parent.get("color_by_resolution"):
                     self.set_color_by_resolution(parent["id"], False)
@@ -5787,7 +5816,7 @@ class AppCore:
     def _pin_resolution_map(self, full_vid: str, res_data, *, color: bool = True) -> None:
         """Add a computed resolution map as a hidden volume pinned under ``full_vid``
         (replacing any previous one), then optionally turn on color-by-resolution."""
-        full = self._volume_entry(full_vid)
+        full = self._volume_entry(full_vid, missing_ok=True)
         if full is None:
             return
         old = full.get("resolution_map")
@@ -5822,7 +5851,7 @@ class AppCore:
 
     def _remove_resolution_map(self, res_vid: str) -> None:
         """Drop a pinned resolution map (used when replacing one, or removing its full map)."""
-        entry = self._volume_entry(res_vid)
+        entry = self._volume_entry(res_vid, missing_ok=True)
         if entry is None:
             return
         self._volumes.remove(entry)
@@ -6559,7 +6588,7 @@ class AppCore:
 
     def session_for(self, mid: Optional[str]):
         """The LiveSession for a model id (or None) — used by the atoms table."""
-        entry = self._model_entry(mid) if mid else None
+        entry = self._model_entry(mid, missing_ok=True) if mid else None
         return entry["session"] if entry else None
 
 
@@ -6655,9 +6684,22 @@ class AppCore:
 
 
     def shutdown_kernel(self) -> None:
-        if self._kernel is not None:
-            self._kernel.shutdown()
-            self._kernel = None
+        """Detach the app's exec channel from the python kernel.
+
+        Only our client detaches — ``IPKernelApp`` is a process-lifetime
+        singleton (its sockets can't init twice), so the kernel keeps running
+        and serving other clients, and a later ``python`` exec or
+        :meth:`ensure_kernel` re-attaches a fresh client to the same
+        namespace (names pushed earlier survive). ``status``'s ``kernel``
+        field reports this attachment, not kernel liveness.
+
+        The channel stop is deferred a beat: called through the kernel's own
+        exec channel — the MCP ``python`` tool — stopping it synchronously
+        severs the very reply the caller is waiting on, and a successful
+        detach returns as a timeout."""
+        kernel, self._kernel = self._kernel, None
+        if kernel is not None:
+            threading.Timer(0.25, kernel.shutdown).start()
 
 
     # -- loading ---------------------------------------------------------
@@ -6748,7 +6790,8 @@ class AppCore:
                 # longer exist, so drop them rather than leave a group paired to a model
                 # that is gone. (Runs on the GUI thread, as does the unload, so once this
                 # starts the check cannot be undercut.)
-                if self._model_entry(mid) is None or self._reflection_entry(rid) is None:
+                if (self._model_entry(mid, missing_ok=True) is None
+                        or self._reflection_entry(rid, missing_ok=True) is None):
                     self._status("maps discarded: the model or reflections were unloaded")
                     return
                 types = list(out["maps"])
@@ -6894,7 +6937,7 @@ class AppCore:
         chain checks the same preconditions first and quietly does nothing if they no
         longer hold. Safe on the GUI thread: the unload runs there too, so this cannot be
         undercut mid-check."""
-        entry = self._reflection_entry(rid)
+        entry = self._reflection_entry(rid, missing_ok=True)
         if (entry is None or entry.get("r_work") is None
                 or self.group_mmm(entry.get("group")) is None
                 or self.group_mmm(entry.get("group")).model() is None):

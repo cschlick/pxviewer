@@ -1413,6 +1413,9 @@ class LiveSession:
         Non-finite components are refused here — the wire is JSON, so they would
         either corrupt the frame or make the page drop the message silently.
         """
+        if not isinstance(state, dict):
+            raise TypeError("set_camera expects a dict — a snapshot from "
+                            "camera_state() carries all the fields")
         snapshot = dict(state)
         missing = [k for k in ("target", "position", "up", "radius", "fov")
                    if snapshot.get(k) is None]
@@ -1422,13 +1425,28 @@ class LiveSession:
             raise ValueError(
                 f"set_camera needs {missing} — a snapshot from camera_state() "
                 "carries all of them")
+        # Validate every field ourselves: anything malformed that reaches the
+        # wire is dropped client-side, which reads as a silent no-op (the
+        # figfuzz probe: a 2-vector target and a string radius both passed
+        # this check and died in the page).
         values: List[float] = []
         for key in ("target", "position", "up"):
             vec = snapshot.get(key)
-            if isinstance(vec, (list, tuple)):
+            if not isinstance(vec, (list, tuple)) or len(vec) != 3:
+                raise ValueError(
+                    f"set_camera: {key} must be a 3-vector, got {vec!r}")
+            try:
                 values += [float(c) for c in vec]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"set_camera: {key} is not numeric ({exc})") from exc
         for key in ("radius", "fov", "radiusMax"):
-            if isinstance(snapshot.get(key), (int, float)):
+            if snapshot.get(key) is not None:
+                if isinstance(snapshot[key], bool) or not isinstance(
+                        snapshot[key], (int, float)):
+                    raise ValueError(
+                        f"set_camera: {key} must be a number, "
+                        f"got {snapshot[key]!r}")
                 values.append(float(snapshot[key]))
         if not all(math.isfinite(v) for v in values):
             raise ValueError("set_camera received a non-finite camera state")

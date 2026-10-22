@@ -307,13 +307,17 @@ def corpus(data_dir, seed=0):
               "Attach pxviewer's Jupyter kernel, push a small Python object "
               "into it, and confirm the kernel reports alive in status. Then "
               "shut it down cleanly. Report what each step returned.",
-              expect={"kernel": True}),
+              # No scene, no figure — and the spec ENDS with the kernel
+              # detached, so a post-hoc kernel/nonblank check can't hold.
+              expect={"nonblank": False}),
 
         _spec("h07-hide-show", "Hide it, then bring it back",
               f"Load {m()}. Select a loop or a few residues and hide just "
               "those atoms — then show them again and finish with the whole "
               "molecule visible in the frame.",
-              expect={"models": 1, "selection_nonempty": True}),
+              # Ends with the selection plausibly cleared for a clean figure —
+              # a post-hoc selection check can't hold.
+              expect={"models": 1}),
 
         _spec("h08-error-honesty", "Bad input must fail loudly",
               f"Probe the API's error behavior, then make a figure. In order: "
@@ -322,7 +326,7 @@ def corpus(data_dir, seed=0):
               "set a contour level on a volume id that does not exist; (4) try "
               "a camera state that is not valid numbers. For each, record "
               "whether you got an honest error or a silent no-op — report them "
-              "all. Then load {m()} and frame it so the final screenshot has "
+              f"all. Then load {m()} and frame it so the final screenshot has "
               "content.",
               expect={"models": 1}),
 
