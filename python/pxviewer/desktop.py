@@ -2510,7 +2510,8 @@ class ControlsWindow:
         time somebody pressed Minimize.
         """
         mid = mid or self._desktop._active_model_id
-        entry = self._desktop._model_entry(mid) if mid else None
+        entry = (self._desktop._model_entry(mid, missing_ok=True)
+                 if mid else None)
         if not (entry and entry.get("restraints_error")):
             return
         model = getattr(entry["session"], "model", None)
@@ -3199,7 +3200,8 @@ class ControlsWindow:
             QMessageBox.warning(self._window, "Open concern fields failed", str(exc))
             return
 
-        entry = self._desktop._model_entry(self._desktop._active_model_id)
+        entry = self._desktop._model_entry(self._desktop._active_model_id,
+                                           missing_ok=True)
         imported = entry.get("concern") if entry else None
         self._hotspot_show3d.setEnabled(True)
         self._hotspot_show3d.blockSignals(True)
@@ -3225,7 +3227,8 @@ class ControlsWindow:
     def _on_hotspot_field_changed(self, *_args) -> None:
         """The 3-D toggle or the cloud/contour selector changed: redraw (or clear)."""
         on = self._hotspot_show3d.isChecked()
-        entry = self._desktop._model_entry(self._desktop._active_model_id)
+        entry = self._desktop._model_entry(self._desktop._active_model_id,
+                                           missing_ok=True)
         self._hotspot_style.setEnabled(on)
         # Quality is cloud-only; the absolute threshold controls both cloud and contour.
         is_cloud = on and self._hotspot_style.currentData() == "cloud"
@@ -5652,7 +5655,7 @@ class ControlsWindow:
 
     def _on_measure(self, kind: str) -> None:
         try:
-            self._set_status(self._desktop.measure_selection(kind))
+            self._set_status(self._desktop.measure_selection(kind)["summary"])
         except Exception as exc:
             self._set_status(str(exc))
 
@@ -6179,7 +6182,7 @@ class ControlsWindow:
         promotes to the residue — the unit the click could actually have meant.
         A hit on the ball-and-stick neighborhood layer stays atom-precise."""
         desktop = self._desktop
-        entry = desktop._model_entry(mid)
+        entry = desktop._model_entry(mid, missing_ok=True)  # clicks race unloads
         tool_owns_click = (
             desktop._selection_enabled or desktop._tug_enabled
             or (entry is not None
@@ -6878,7 +6881,7 @@ class ControlsWindow:
                                      focus=focus, context=context) is not None:
                 return
         atoms = [i for r in rows for i in self._component_model.row_atoms(r)]
-        entry = desktop._model_entry(mid)
+        entry = desktop._model_entry(mid, missing_ok=True)  # rows can outlive the model
         session = entry["session"] if entry else None
         if session is not None and getattr(session, "model", None) is not None:
             desktop._select_fragment(mid, session, entry, atoms,
@@ -6903,7 +6906,7 @@ class ControlsWindow:
         atoms = [self._atom_model.row_atom(r) for r in rows]
         mid = self._table_model_id
         self._engage_step_view(self._atom_view)
-        entry = self._desktop._model_entry(mid)
+        entry = self._desktop._model_entry(mid, missing_ok=True)  # rows can outlive the model
         session = entry["session"] if entry else None
         if session is not None and getattr(session, "model", None) is not None:
             focus, context = self._selection_flags()

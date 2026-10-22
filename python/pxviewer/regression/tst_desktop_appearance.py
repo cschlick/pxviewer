@@ -850,7 +850,7 @@ def exercise_tools_and_appearance_setters():
         mid = app._add_model(LiveSession.from_sites([[0, 0, 0], [1.5, 0, 0]]), "m")
 
         app._on_model_selection(mid, SimpleNamespace(indices=[0, 1]))
-        assert "distance" in app.measure_selection("distance")
+        assert app.measure_selection("distance")["kind"] == "distance"
 
         app._on_model_selection(mid, SimpleNamespace(indices=[0]))
         with raises(ValueError):                         # wrong atom count, clear error

@@ -66,6 +66,7 @@ def corpus(data_dir, seed=0):
     f14m = m()
     h04m = m()
     h05m = m()
+    i09m = m()
     specs = [
         _spec("f01-ligand-site", "Heme site with its environment",
               f"Load {p('heme_site.pdb')} and make a figure of the heme site: "
@@ -358,6 +359,90 @@ def corpus(data_dir, seed=0):
               "model to the map and align them so the model sits inside the "
               "density. The figure should show them together.",
               stage=[{"path": "offmap.mrc", "kind": "blob", "shape": (48, 48, 48)}],
+              expect={"models": 1, "volumes": 1}),
+
+        # -- round 4: the machinery rounds 1-3 left untouched -------------
+
+        _spec("i01-edits-roundtrip", "Edits saved and restored",
+              f"Load {m()}. Add a custom bond or angle edit between two atoms "
+              "that are close but not bonded (a coordination bond is the "
+              "classic case — check distances with the hierarchy or "
+              "measure_selection first). List the edits, save them to a file "
+              "in this directory, clear them, then load the file back and "
+              "confirm the edit is restored and drawn. Keep it visible in "
+              "the final frame.",
+              expect={"models": 1, "edits": 1}),
+
+        _spec("i02-marker-move", "Move a placed marker",
+              f"Load {m()}. Place a marker on the structure (place_marker or "
+              "the arm-the-tool path), move it a few Angstrom along one axis "
+              "through its move callback (a Shift-drag in the viewport lands "
+              "on the same handler), confirm the new position in status, "
+              "then clear all markers. Report what each step returned.",
+              expect={"models": 1, "nonblank": False}),
+
+        _spec("i03-model-slab", "Clip a slab through the model",
+              f"Load {m()}. Clip the model down to a thin slab through its "
+              "middle — a few Angstrom deep — so the interior packing shows "
+              "in cross-section, then release the clip so the whole "
+              "molecule returns. Report what the slab controls were called.",
+              expect={"models": 1}),
+
+        _spec("i04-ordered-measure", "Angle vertex order is semantic",
+              f"Load {m()}. Build an angle measurement by picking three "
+              "atoms in a specific order (use the picked-atom API or an "
+              "explicit atoms list), then pick the SAME three atoms in a "
+              "different order and compare the reported angles — the vertex "
+              "must follow pick order, not sorted index order. Then measure "
+              "a dihedral across four atoms. Report what each call "
+              "returned.",
+              expect={"models": 1}),
+
+        _spec("i05-export-roundtrip", "Write the model out and reload it",
+              f"Load {m()}. Write the loaded model's coordinates back out "
+              "to a PDB file in this directory through the app's export "
+              "verb (not by copying the input). Remove the model, load the "
+              "file you wrote, and confirm the atom count and frame look "
+              "identical. Finish on the reloaded model.",
+              expect={"models": 1}),
+
+        _spec("i06-push-stream", "Move atoms live through the session",
+              f"Load {m()}. Move a residue or two a few Angstrom along an "
+              "axis by editing the model's coordinates through the cctbx "
+              "model and pushing the new conformation to the viewport "
+              "(the session's push/stream path — the same one minimization "
+              "uses). Confirm the atoms visibly moved and that the model "
+              "data and the drawn atoms agree afterward.",
+              expect={"models": 1}),
+
+        _spec("i07-ligand-restraints", "Restraints for an unknown ligand",
+              f"Load {p('heme_site.pdb')}. Ask the app which residues it "
+              "cannot build geometry restraints for, generate restraints "
+              "for what it reports, and export the ligand's cif to this "
+              "directory. Report which residues needed them and what each "
+              "verb returned.",
+              expect={"models": 1}),
+
+        _spec("i08-bad-edits", "Measure and edit calls refuse bad input",
+              f"Probe the measurement and edit APIs' error behavior, then "
+              f"make a figure. In order: (1) measure_selection or "
+              "add_edit_from_selection with too few atoms (e.g. 1); "
+              "(2) measure with FIVE atoms — more than any measurement "
+              "takes; (3) an edit naming atom indices that do not exist in "
+              "the model; (4) remove_edit on an edit id that does not "
+              "exist. Record honest error vs silent no-op for each. Then "
+              f"load {m()} and finish on a framed figure.",
+              expect={"models": 1}),
+
+        _spec("i09-group-load", "Model and map in one group",
+              f"Load {i09m} and the map blob.mrc from this directory "
+              "TOGETHER as a group (one load_files call or the group's "
+              "load path), so they arrive in a shared frame. Confirm they "
+              "share a group in status and that the model sits in the "
+              "density without any manual pairing.",
+              stage=[{"path": "blob.mrc", "kind": "blob",
+                      "shape": (96, 96, 96)}],
+              anchor=i09m,
               expect={"models": 1, "volumes": 1}),
     ]
     return specs

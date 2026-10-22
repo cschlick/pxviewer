@@ -105,8 +105,16 @@ def exercise_measure_and_edit_take_explicit_atoms():
             raise AssertionError("should have raised")
         except ValueError as exc:
             assert "session.select" in str(exc), str(exc)
-        # explicit atoms work without any scene selection
-        assert "distance" in app.measure_selection("distance", atoms=[0, 1])
+        # explicit atoms work without any scene selection — and the value
+        # comes back in the result, not just in the viewport's label
+        measured = app.measure_selection("distance", atoms=[0, 1])
+        assert measured["kind"] == "distance"
+        assert measured["unit"] == "Å" and isinstance(measured["value"], float)
+        # vertex order is semantic: the same three atoms in two orders give
+        # the angles at DIFFERENT vertices, not the sorted-index answer twice
+        a = app.measure_selection("angle", atoms=[0, 1, 2])["value"]
+        b = app.measure_selection("angle", atoms=[1, 0, 2])["value"]
+        assert abs(a - b) > 1e-6, (a, b)
         # a custom bond must be near but not already bonded — a metal
         # coordination is the classic case (the library has no such bond)
         app.load_file(str(data_path("zn_site.pdb")))
@@ -123,6 +131,22 @@ def exercise_measure_and_edit_take_explicit_atoms():
         edit = app.add_edit_from_selection(zmid, "bond", atoms=[zn, donor])
         assert edit["kind"] == "bond"
         assert len(app.model_edits(zmid)) == 1
+        # bad input fails loudly (figfuzz i08): an atom index that does not
+        # exist names itself, and removing a nonexistent edit must not no-op —
+        # a removal the caller *thinks* happened is worse than an error
+        try:
+            app.add_edit_from_selection(zmid, "bond", atoms=[zn, 99999])
+            raise AssertionError("should have raised")
+        except IndexError as exc:
+            assert "99999" in str(exc), str(exc)
+        try:
+            app.remove_edit(zmid, 99)
+            raise AssertionError("should have raised")
+        except IndexError:
+            pass
+        assert len(app.model_edits(zmid)) == 1
+        app.remove_edit(zmid, 0)
+        assert len(app.model_edits(zmid)) == 0
     finally:
         app.stop()
 

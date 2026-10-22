@@ -250,19 +250,34 @@ def _restraints_built(entry) -> bool:
         return False
 
 
-def _edit_summaries(scope) -> list:
+def _edit_summaries(scope, model=None) -> list:
     """``[{"kind", "summary"}]`` for a model's edits scope, for the tree and edits list.
 
     A read-only projection of cctbx's own scope. It is deliberately not the thing that
     gets applied -- the scope is (see edits.build_restraints) -- so a field this summary
     has no room for cannot go missing from the restraints.
+
+    Given ``model``, each entry also carries ``"i_seqs"`` — the atom indices the
+    selections resolve to, in selection order — which is what
+    :meth:`AppCore.show_restraint_notations` takes, closing the
+    list-edits -> draw-edits loop the figfuzz maker had to reconstruct by hand.
     """
     from . import edits
 
     if scope is None:
         return []
-    return [{"kind": kind, "summary": edits.summarize(kind, obj)}
-            for kind, obj in edits.entries(scope)]
+    out = []
+    for kind, obj in edits.entries(scope):
+        item = {"kind": kind, "summary": edits.summarize(kind, obj)}
+        if model is not None:
+            try:
+                item["i_seqs"] = [
+                    i for sel in edits.selections_of(kind, obj)
+                    for i in model.selection(sel).iselection()]
+            except Exception:  # pragma: no cover - a selection the model can't parse
+                pass
+        out.append(item)
+    return out
 
 
 def _first_line(exc: Exception) -> str:
@@ -1778,9 +1793,10 @@ class AppCore:
         what the restraints *contain* (the two build paths produce identical proxies), is
         what made a restraint-table test fail intermittently before the paths were unified.
         """
-        entry = self._model_entry(mid if mid is not None else self._active_model_id)
+        entry = self._model_entry(mid if mid is not None else self._active_model_id,
+                                  missing_ok=True)
         if entry is None:
-            return
+            return  # a tug arriving for a model already removed
         model = getattr(entry["session"], "model", None)
         if model is None:
             return
@@ -2698,7 +2714,7 @@ class AppCore:
     _MEASURE_ARITY = {"distance": 2, "angle": 3, "dihedral": 4}
 
 
-    def measure_selection(self, kind: str, atoms: Optional[list] = None) -> str:
+    def measure_selection(self, kind: str, atoms: Optional[list] = None) -> dict:
         """Draw a distance/angle/dihedral from the active model's selected atoms.
 
         ``atoms`` may name the vertices explicitly (positional indices, in order —
@@ -2706,6 +2722,10 @@ class AppCore:
         selection. Note that ``session.select()``/``session.highlight()`` only
         *draw* — they do not feed the selection this method reads; build it with
         select_picked_atom / select_by_expression / toggle_picked_residue / clicks.
+
+        Returns ``{"kind", "atoms", "value", "unit", "summary"}`` — the measured
+        value is computed here from the model's coordinates, since the drawn
+        label is the only place the number otherwise exists.
         """
         session = self.active_model_session()
         if session is None:
@@ -2722,7 +2742,7 @@ class AppCore:
                     "select_picked_atom, select_by_expression, or clicks, "
                     "or pass atoms=[...]")
             raise ValueError(
-                f"need exactly {need} atoms for a {kind} (have {len(atoms)}){hint}")
+                f"{kind} needs exactly {need} atoms (have {len(atoms)}){hint}")
         self.ensure_atoms_shown()  # the measurement marks atoms — show them under the ribbon
         if kind == "distance":
             session.add_distance(atoms[0], atoms[1])
@@ -2730,7 +2750,39 @@ class AppCore:
             session.add_angle(atoms[0], atoms[1], atoms[2])
         else:
             session.add_dihedral(atoms[0], atoms[1], atoms[2], atoms[3])
-        return f"drew {kind} on {need} atoms"
+        # Compute the value ourselves: it lives only in the viewport's label
+        # otherwise — an API measurement no caller could ever read back
+        # (figfuzz i04: 'drew angle on 3 atoms' was the whole answer).
+        value = self._measure_value(session.model.get_sites_cart(), kind, atoms)
+        return {"kind": kind, "atoms": atoms, "value": value,
+                "unit": "Å" if kind == "distance" else "°",
+                "summary": f"{kind} {value:.2f}"
+                           f"{' Å' if kind == 'distance' else '°'} "
+                           f"on {need} atoms"}
+
+
+    @staticmethod
+    def _measure_value(sites_cart, kind: str, atoms: list) -> float:
+        """The number the viewport's label will draw for these vertices.
+
+        Distance in Angstrom; angle in degrees at the middle vertex; dihedral
+        in degrees, signed (the label shows its magnitude)."""
+        xyz = sites_cart.as_numpy_array()[list(atoms)]
+        if kind == "distance":
+            return float(np.linalg.norm(xyz[1] - xyz[0]))
+        b1 = xyz[0] - xyz[1]
+        b2 = xyz[2] - xyz[1]
+        if kind == "angle":
+            cos = np.dot(b1, b2) / (np.linalg.norm(b1) * np.linalg.norm(b2))
+            return float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+        p0, p1, p2, p3 = xyz
+        b0, b1, b2 = p1 - p0, p2 - p1, p3 - p2
+        n1 = np.cross(b0, b1)
+        n2 = np.cross(b1, b2)
+        m1 = np.cross(n1, b1 / np.linalg.norm(b1))
+        x = np.dot(n1, n2)
+        y = np.dot(m1, n2)
+        return float(np.degrees(np.arctan2(y, x)))
 
 
     def clear_measurements(self) -> None:
@@ -3334,11 +3386,9 @@ class AppCore:
 
         code = (code or "").strip().upper()
         if not code:
-            self._status("enter a monomer code, e.g. GOL")
-            return
+            raise ValueError("enter a monomer code, e.g. GOL")
         if not ligands.available(code):
-            self._status(f"no monomer '{code}' in the library")
-            return
+            raise ValueError(f"no monomer '{code}' in the library")
         self._place_ligand(
             mid, code,
             lambda position, cs: ligands.build_ligand_model(
@@ -3356,8 +3406,7 @@ class AppCore:
 
         smiles = (smiles or "").strip()
         if not smiles:
-            self._status("enter a SMILES string, e.g. CCO")
-            return
+            raise ValueError("enter a SMILES string, e.g. CCO")
         code = (code or "LIG").strip().upper()[:3] or "LIG"
         self._place_ligand(
             mid, code,
@@ -3388,16 +3437,15 @@ class AppCore:
             cs = mmm.crystal_symmetry() if mmm is not None else None
 
         def work():
-            try:
-                self._status(f"building {code}…")
-                model = builder(position, cs)
-                if map_data is not None:
-                    self._status(f"fitting {code} into density ({trials} trials)…")
-                    ligands.fit_into_density(
-                        model, map_data, resolution=3.0, number_of_trials=trials)
-            except Exception as exc:  # pragma: no cover - cctbx/runtime errors
-                self._status(f"could not place {code}: {exc}")
-                return
+            # Failures propagate to run_background's wrapper — it records them
+            # in _job_errors and warns, instead of a status line the caller
+            # (or an MCP client watching job_errors) could never see (i07).
+            self._status(f"building {code}…")
+            model = builder(position, cs)
+            if map_data is not None:
+                self._status(f"fitting {code} into density ({trials} trials)…")
+                ligands.fit_into_density(
+                    model, map_data, resolution=3.0, number_of_trials=trials)
 
             def add_on_main():
                 from .live import LiveSession
@@ -3706,7 +3754,10 @@ class AppCore:
         """
         if not self._maps_after_drag:
             return
-        reflections = self.reflections_for_model(entry["id"])
+        try:
+            reflections = self.reflections_for_model(entry["id"])
+        except ValueError:
+            return  # the model was removed mid-drag; there is nothing to re-phase
         if reflections is None:
             return  # nothing phased against this model; there are no maps to bring up to date
         self.bridge.run_on_main.emit(
@@ -4221,8 +4272,12 @@ class AppCore:
             return []
         try:
             return ligands_mod.unknown_ligands(model)
-        except Exception:  # pragma: no cover - a model cctbx cannot interpret at all
-            return []
+        except Exception as exc:
+            # "cctbx cannot interpret this model at all" is NOT "nothing
+            # unknown" — returning [] for both hid a broken model behind a
+            # clean answer (figfuzz i07).
+            raise ValueError(
+                f"could not check for unknown ligands: {exc}") from exc
 
 
     def generate_ligand_restraints(self, mid: str, codes=None) -> dict:
@@ -4266,6 +4321,12 @@ class AppCore:
             raise ValueError("; ".join(failures) or "no ligands needed restraints")
 
         ligands_mod.apply_generated_restraints(model, generated)
+        # Keep the generated dictionaries on the entry too — they ARE this
+        # model's restraints now, and save_restraints_cif/export_ligand read
+        # the entry field; without it a generated dictionary could never be
+        # exported (figfuzz i07).
+        entry["restraints_cif"] = "\n".join(
+            generated[c] for c in sorted(generated))
         edits_mod.build_restraints(model, force=True)
         self.bridge.restraints_changed.emit(mid)
         if failures:
@@ -4310,14 +4371,17 @@ class AppCore:
     # -- custom geometry restraint edits (phenix/cctbx geometry_restraints.edits) --------
 
     def model_edits(self, mid: str) -> list:
-        """One ``{"kind", "summary"}`` per custom restraint edit carried on a model.
+        """One ``{"kind", "summary", "i_seqs"}`` per custom restraint edit on a model.
 
         A summary for display and counting. The edits themselves live on the model as
         cctbx's own PHIL scope -- reachable with ``pxviewer.edits.get_edits(model)`` --
         because that is what gets handed to pdb_interpretation.
         """
         entry = self._model_entry(mid)
-        return _edit_summaries(entry.get("edits")) if entry else []
+        if entry is None:
+            return []
+        return _edit_summaries(entry.get("edits"),
+                               getattr(entry["session"], "model", None))
 
 
     def _apply_edits(self, entry: dict, scope) -> None:
@@ -4373,8 +4437,6 @@ class AppCore:
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
-        if entry is None:
-            raise ValueError("no such model")
         model = entry["session"].model
         if model is None:
             raise ValueError("the object has no cctbx model")
@@ -4392,8 +4454,13 @@ class AppCore:
                     "select_picked_atom, select_by_expression, or clicks, "
                     "or pass atoms=[...]")
             raise ValueError(
-                f"need exactly {need} atoms for a {kind} (have {len(atoms)}){hint}")
+                f"{kind} needs exactly {need} atoms (have {len(atoms)}){hint}")
         sites = model.get_sites_cart().as_numpy_array()
+        for i in atoms:
+            if not 0 <= i < len(sites):
+                raise IndexError(
+                    f"atom index {i} is out of range for a "
+                    f"{len(sites)}-atom model")
         # Authored here rather than read from a file, so a default weight is the app's to
         # choose — unlike a PHIL, where a missing sigma is refused (see AUTHORING_SIGMA).
         obj = edits_mod.new_entry(
@@ -4409,17 +4476,15 @@ class AppCore:
 
 
     def remove_edit(self, mid: str, index: int) -> None:
-        """Drop the edit at ``index`` and rebuild restraints without it."""
-        entry = self._model_entry(mid)
-        if entry is None:
-            return
+        """Drop the edit at ``index`` and rebuild restraints without it.
+
+        Raises ``IndexError`` if no edit sits at that position — a removal the
+        caller *thinks* happened is worse than an error."""
         from . import edits as edits_mod
 
+        entry = self._model_entry(mid)
         scope = self._edits_scope(entry)
-        try:
-            edits_mod.remove(scope, index)
-        except IndexError:
-            return
+        edits_mod.remove(scope, index)
         self._apply_edits(entry, scope)
 
 
@@ -4428,8 +4493,6 @@ class AppCore:
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
-        if entry is None:
-            return
         self._apply_edits(entry, edits_mod.empty_edits(entry["session"].model))
 
 
@@ -4444,8 +4507,6 @@ class AppCore:
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
-        if entry is None:
-            raise ValueError("no such model")
         model = entry["session"].model
         with open(str(path)) as fh:
             incoming = edits_mod.edits_from_phil(fh.read(), model)
@@ -4462,7 +4523,7 @@ class AppCore:
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
-        scope = entry.get("edits") if entry else None
+        scope = entry.get("edits")
         if scope is None or not edits_mod.count(scope):
             raise ValueError("this object has no edits to save")
         with open(str(path), "w") as fh:

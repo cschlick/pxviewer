@@ -495,7 +495,7 @@ def _make_server():
         def _volume_status(e):
             # Entry fields can lag session-level set_volume_* calls — the
             # control session's replay records are the newer store.
-            out = {"id": e["id"], "name": e.get("name"),
+            out = {"id": e["id"], "name": e.get("name"), "group": e.get("group"),
                    "iso": e.get("iso"), "opacity": e.get("opacity"),
                    "downsample": int(e.get("localres_downsample") or 1)}
             session = _app._control_session()
@@ -520,6 +520,7 @@ def _make_server():
 
             return {
                 "models": [{"id": e["id"], "name": e.get("name"),
+                            "group": e.get("group"),
                             "rep": live_rep(e), "color": e.get("color"),
                             "active": e["id"] == _app._active_model_id}
                            for e in _app._models],
