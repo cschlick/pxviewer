@@ -2,7 +2,8 @@
 
 A saved view is a *figure file*: one JSON document naming everything a view is
 made of — the objects, their representations, colors, clip slab and sphere,
-selections and context, visibility, and the camera — plus a sibling ``*.data``
+selections and context, visibility, the annotation layers (measurement
+primitives and markers), and the camera — plus a sibling ``*.data``
 directory holding the coordinates and maps the JSON cannot describe.
 
 ``bundle_data`` decides what goes in that directory:
@@ -90,6 +91,9 @@ def save_view(app, path, *, bundle_data: bool = True) -> dict:
         "background": background,
         "active": app._active_model_id,
         "objects": objects,
+        # Placed markers are app-level scene state — a figure file that
+        # drops them loses part of what it was saved to show (figfuzz l04).
+        "markers": [dict(m) for m in app._markers],
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2))
@@ -139,6 +143,13 @@ def _model_spec(app, entry, path, data_dir, bundle_data) -> dict:
                       "expression": (app._selection_expression(entry, selection)
                                      if selection else "")},
         "context": bool(entry.get("context_on")),
+        # The measurement/label primitives this model's session draws —
+        # stored verbatim as the wire "add" messages: groups are i_seqs,
+        # which are stable for the same coordinates, and the dicts are
+        # already JSON-shaped for the wire.
+        "primitives": [
+            dict(m) for m in
+            getattr(entry.get("session"), "_primitives", {}).values()],
     }
     spec["data"] = _model_data(app, entry, path, data_dir, bundle_data)
     return spec
@@ -338,6 +349,25 @@ def load_view(app, path) -> dict:
         except Exception:
             pass
 
+    # Markers are app-level: replace semantics, same as the objects — the file
+    # describes the whole scene, so markers from the pre-load scene go first.
+    app._markers.clear()
+    app._draw_markers()
+    markers = doc.get("markers") or []
+    if markers:
+        app._markers.extend(dict(m) for m in markers)
+        for m in markers:
+            try:
+                tail = int(str(m.get("id", "")).rsplit("-", 1)[-1])
+                app._marker_counter = max(app._marker_counter, tail)
+            except (TypeError, ValueError):
+                pass
+        try:
+            app._draw_markers()
+            app._emit_loaded_changed()
+        except Exception:
+            pass
+
     background = doc.get("background")
     camera = doc.get("camera")
     control = app._control_session()
@@ -480,6 +510,26 @@ def _apply_model_state(app, spec, mid) -> None:
         entry["session"].set_computed_interactions(entry["interactions"])
     except Exception:
         pass
+
+    # Annotation layers: the saved "add" messages go back into the session's
+    # primitive table (where a reconnecting page finds them) and onto the wire
+    # for the live one. The counter must advance past restored kind-N ids or
+    # the next add collides with one.
+    for message in spec.get("primitives") or []:
+        pid = message.get("id")
+        if not pid or message.get("action") != "add":
+            continue
+        session._primitives[pid] = dict(message)
+        try:
+            tail = int(str(pid).rsplit("-", 1)[-1])
+            session._primitive_counter = max(
+                session._primitive_counter, tail)
+        except (TypeError, ValueError):
+            pass
+        try:
+            session._send_control(dict(message))
+        except Exception:
+            pass
 
 
 def _apply_volume_state(app, spec, vid) -> None:

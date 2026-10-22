@@ -1242,6 +1242,11 @@ def exercise_a_saved_view_round_trips():
         # The camera slab a clipped orient parks is entry bookkeeping — it has
         # to come back, or a re-apply would lift the sphere and lose the frame.
         entry["_auto_clip_depth"] = 12.5
+        # The annotation layers are scene state too: a figure file that drops
+        # a measurement or a marker loses part of the figure (figfuzz l04).
+        entry["session"].add_distance(0, 1)
+        entry["session"].add_label(2, "site")
+        app.place_marker([1.0, 2.0, 3.0])
 
         bundled = viewstate.save_view(
             app, f"{tmp}/fig.pxview.json", bundle_data=True)
@@ -1332,6 +1337,19 @@ def exercise_a_saved_view_round_trips():
         assert nventry["negative_style"] == "mesh"
         assert nventry["negative_visible"] is True
         assert nventry["visible"] is False
+
+        # Annotations round-trip: the wire "add" messages are replayed into the
+        # restored session's primitive table, markers back into the app list —
+        # and the counters move past the restored ids so a fresh one cannot
+        # collide.
+        prims = nentry["session"]._primitives
+        assert sorted(prims) == ["distance-1", "label-2"], sorted(prims)
+        assert prims["distance-1"]["groups"] == [[0], [1]]
+        restored_markers = [m["id"] for m in restored._markers]
+        assert restored_markers == ["marker-1"], restored_markers
+        assert restored._markers[0]["position"] == [1.0, 2.0, 3.0]
+        fresh = nentry["session"].add_distance(1, 2)
+        assert fresh.id != "distance-1"  # the counter advanced past restore
 
         # The entry was right even while the render was wrong: a volume's
         # appearance is baked into the scene MVSJ, which was composed at
