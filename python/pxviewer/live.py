@@ -1634,6 +1634,12 @@ class LiveSession:
     ) -> Selection:
         """Show a set of atoms in the viewer: highlight and/or focus.
 
+        Draws only — the highlight is a viewing layer, not the app's scene
+        selection: it does not feed ``measure_selection``/``add_edit_from_selection``,
+        does not appear in ``status()``'s selection map, and does not survive a
+        viewport reload. For that selection use ``app.select_by_expression`` /
+        ``select_picked_atom`` / ``toggle_picked_residue`` (or viewport clicks).
+
         ``atoms`` is a :class:`Selection` or anything coercible to one — an atom
         index, an iterable of indices, or a boolean mask of length N. Selection
         prose is resolved first via :meth:`select_by` (``selection=...``) or

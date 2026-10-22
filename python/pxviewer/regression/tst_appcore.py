@@ -327,6 +327,39 @@ def exercise_volume_appearance_sees_session_writes():
         app.stop()
 
 
+def exercise_volume_boxed_iso_reads_back_in_sigma():
+    """A boxed map's live contour is sent as an absolute level (the box's sigma
+    is not the map's). ``volume_appearance`` must invert that record — reading
+    it raw reported ``3.59`` for a ``set_volume_iso(4.5)`` call (figfuzz h05)."""
+    if not have("iotbx.map_manager"):
+        return
+    import numpy as np
+
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        rng = np.random.RandomState(0)
+        data = VolumeData.from_numpy(
+            rng.rand(16, 16, 16).astype(np.float32), name="grad")
+        vid = app._add_volume(data, "grad")
+        app.set_volume_box(vid, center=(8.0, 8.0, 8.0), radius=4.0)
+        entry = app._volumes[-1]
+        assert entry.get("box"), "the box did not take"
+        app.set_volume_iso(vid, 4.5)
+        app.set_volume_negative_iso(vid, 3.0)
+        rec = app._control_session()._volume_iso[str(vid)]
+        assert rec.get("kind") == "absolute" and abs(rec["value"] - 4.5) > 0.01, \
+            rec            # the wire really does carry the absolute level
+        look = app.volume_appearance(vid)
+        assert look["iso"] == 4.5, look
+        assert look["negative_iso"] == 3.0, look   # the magnitude, not a level
+    finally:
+        app.stop()
+
+
 def exercise_volume_reload_marks_sessions():
     """``_reload_viewport`` calls ``begin_reload`` on every session feeding the
     page — the flag that diverts sends to the outbox while the old websocket is

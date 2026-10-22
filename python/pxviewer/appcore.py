@@ -1988,6 +1988,13 @@ class AppCore:
         entry = self._model_entry(mid)
         if entry is None:
             return
+        if entry.get("color") != _QSCORE_COLOR:
+            # Called directly rather than dispatched from set_model_color — go
+            # through it so the entry's color claim, the attribute cleanup, and
+            # the apply-time guard all stay in step. The old path computed fine
+            # then discarded the values, a silent no-op (figfuzz h04).
+            self.set_model_color(mid, _QSCORE_COLOR)
+            return
         mmm = self.group_mmm(entry.get("group"))
         if mmm is None:
             self._status("Q-score needs a map paired with this model — pair one, or Make maps")
@@ -2054,6 +2061,11 @@ class AppCore:
         """
         entry = self._model_entry(mid)
         if entry is None:
+            return
+        if entry.get("color") != _CC_COLOR:
+            # See color_model_by_qscore: route through set_model_color so the
+            # computed values are not discarded by the apply-time guard.
+            self.set_model_color(mid, _CC_COLOR)
             return
         mmm = self.group_mmm(entry.get("group"))
         if mmm is None or mmm.model() is None:
@@ -2260,6 +2272,11 @@ class AppCore:
         """
         entry = self._model_entry(mid)
         if entry is None:
+            return
+        if entry.get("color") != _HOTSPOT_COLOR:
+            # See color_model_by_qscore: route through set_model_color so the
+            # entry's color claim matches what the atoms show.
+            self.set_model_color(mid, _HOTSPOT_COLOR)
             return
         from . import hotspots
 
@@ -3970,6 +3987,44 @@ class AppCore:
             control.reset_view()
 
 
+    def camera_state(self) -> Optional[dict]:
+        """The viewport camera: target, position, up, radius (the near/far depth
+        slab, NOT the dolly distance — ``distance`` carries that), radiusMax, fov.
+
+        Scene-level: works in a volume-only scene, where ``session`` is None —
+        the camera belongs to the viewport, not to a model. ``radius`` is the
+        depth slab the near/far planes come from; it does not zoom. To dolly,
+        write ``set_camera`` a new ``position``.
+        """
+        session = self._control_session()
+        return None if session is None else session.camera_state()
+
+
+    def set_camera(self, state: dict) -> None:
+        """Write the viewport camera — the fields ``camera_state()`` reports.
+
+        Only present keys are applied (see :meth:`LiveSession.set_camera`), and
+        ``radius`` is the depth slab, not the dolly distance: to zoom, move
+        ``position`` toward or away from ``target``.
+        """
+        session = self._control_session()
+        if session is None:
+            raise ValueError("no viewport session — is a page connected?")
+        session.set_camera(state)
+
+
+    def orient_camera(self, target, up, direction, radius: float,
+                      extents=None, clip: bool = True) -> None:
+        """Aim the camera with an explicit orientation — see
+        :meth:`LiveSession.orient_camera` for the parameter contract. Scene-level,
+        so it works in a volume-only scene."""
+        session = self._control_session()
+        if session is None:
+            raise ValueError("no viewport session — is a page connected?")
+        session.orient_camera(target, up, direction, radius,
+                              extents=extents, clip=clip)
+
+
     #: One press of a zoom button, as a multiple of the camera's current distance.
     #: Big enough that a single click reads as motion, small enough that holding a
     #: course across several presses stays controllable.
@@ -4732,8 +4787,12 @@ class AppCore:
                               ("_volume_negative_iso", "negative_iso")):
                 recorded = getattr(session, attr, {}).get(ref)
                 if recorded is not None:
-                    out[key] = (recorded.get("value")
-                                if isinstance(recorded, dict) else recorded)
+                    if key in ("iso", "negative_iso") and isinstance(recorded, dict):
+                        out[key] = self._iso_from_wire(
+                            entry, recorded, negative=(key == "negative_iso"))
+                    else:
+                        out[key] = (recorded.get("value")
+                                    if isinstance(recorded, dict) else recorded)
             hidden = getattr(session, "_volume_negative_hidden", {}).get(ref)
             if hidden is not None:
                 out["negative_visible"] = not hidden
@@ -4745,6 +4804,34 @@ class AppCore:
         except Exception:  # pragma: no cover - defensive (a map with no data)
             out["max_sigma"] = None
         return out
+
+
+    def _iso_from_wire(self, entry: dict, msg: dict, *, negative: bool = False):
+        """Inverse of :meth:`_iso_for_wire`/``_boxed_iso_for_wire`` — report a
+        recorded wire level in the units ``entry["iso"]`` stores, i.e. the number
+        :meth:`set_volume_iso` takes. The wire is sigma for a whole map but
+        absolute for a boxed one (the box's sigma is not the map's), so reading
+        the recorded value back raw would report the wrong scale (figfuzz h05:
+        set 4.5σ on a boxed map, read back 3.59). ``negative`` inverts a negative
+        contour's absolute level back into the magnitude the entry stores
+        (``mean - n·σ`` on the wire, ``n`` in the entry)."""
+        value = msg.get("value")
+        if value is None:
+            return None
+        value = float(value)
+        if msg.get("kind") == "absolute":
+            if entry.get("iso_kind") == "absolute":
+                return -value if negative else value     # absolute magnitude
+            try:
+                mean, std = self._display_map_stats(entry)
+                sigma = (value - mean) / (std or 1.0)
+                return -sigma if negative else sigma
+            except Exception:  # pragma: no cover - display file gone
+                return -value if negative else value
+        if entry.get("iso_kind") == "absolute":
+            stats = entry["data"].stats()
+            return value * (stats["std"] or 1.0) + stats["mean"]
+        return value
 
 
     def set_volume_clip(self, vid: str, front: float, back: float) -> None:
@@ -5124,17 +5211,22 @@ class AppCore:
 
 
     def set_volume_sphere(self, vid: str, mode: str, radius: Optional[float] = None,
-                          *, refresh=True) -> None:
-        """Set a volume's clip sphere — "view" is the classic map-around-target bound."""
+                          center: Optional[list] = None, *, refresh=True) -> None:
+        """Set a volume's clip sphere — "view" is the classic map-around-target bound.
+
+        ``center`` (only read for "point") freezes the sphere at those xyz
+        coordinates; without it a point sphere sits at the standing spot,
+        the selection, or the grid middle."""
         entry = self._volume_entry(vid)
         if entry is None or mode not in ("off", "view", "point"):
             return
         if mode == "point":
-            center = self._default_sphere_center(entry)
+            if center is None:
+                center = self._default_sphere_center(entry)
             if center is None:
                 return
             entry["sphere"] = {"mode": mode, "radius": radius or 10.0,
-                               "center": list(center)}
+                               "center": [float(c) for c in center]}
         else:
             entry["sphere"] = {"mode": mode,
                                "radius": ((radius if radius is not None else 10.0)

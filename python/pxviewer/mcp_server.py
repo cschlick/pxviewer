@@ -24,6 +24,16 @@ Run it as ``python -m pxviewer mcp`` and point a client at the stdio
 transport, e.g. in an MCP client config::
 
     {"command": "/path/to/env/bin/python", "args": ["-m", "pxviewer", "mcp"]}
+
+``session`` is the ACTIVE model's LiveSession — it is ``None`` in a
+volume-only scene (and ``dir(session)`` shows nothing). Camera and scene
+verbs that are not per-model live on ``app``: ``app.camera_state()``,
+``app.set_camera(state)``, ``app.orient_camera(...)``, ``app.reset_view()``,
+``app.zoom_view(d)``, plus every ``app.set_volume_*``. Likewise
+``session.select()``/``highlight()`` only DRAW — the selection that measures,
+edits, persists across reloads and shows in ``status()`` is the app-level
+one built by ``app.select_by_expression`` / ``select_picked_atom`` /
+``toggle_picked_residue`` / viewport clicks.
 """
 
 from __future__ import annotations
@@ -573,8 +583,12 @@ def _make_server():
             # Report that honestly instead of claiming the reload failed.
             return {"reloaded": True, "ready": False,
                     "detail": f"reload issued; page not ready yet — {exc}"}
-        return {"reloaded": True, "ready": True,
-                "camera": _session().camera_state()}
+        # No camera payload: near/far is still settling behind the replayed
+        # state when the page first answers, so any value read here is a
+        # mid-rebuild snapshot callers mistook for the settled camera — the
+        # figfuzz maker recorded stale near/far from exactly this. status()
+        # after a moment is the honest read.
+        return {"reloaded": True, "ready": True}
 
     @mcp.tool()
     async def save_screenshot(path: str) -> dict:
