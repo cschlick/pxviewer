@@ -2429,23 +2429,35 @@ function lockCameraOnceFramed(plugin: PluginContext) {
     const canvas = plugin.canvas3d;
     if (!canvas) return;
     let tries = 0;
+    let lastRadius = -1;
+    let stableTicks = 0;
     const tick = () => {
-        const framed = (canvas.boundingSphere?.radius ?? 0) > 0;
-        if (!framed && tries++ < 60) {
+        // Judge against the VISIBLE bound — what a camera reset fits. The plain
+        // boundingSphere grows earlier (a streamed map registers its grid extent
+        // before the isosurface builds), and acting on that moment is exactly
+        // the volume-only blank frame: the check ran while the surface did not
+        // exist yet, then locked whatever camera was there. Also wait for the
+        // bound to stop growing — a big map's surface commits in stages, and
+        // fitting the first stage frames a fragment of the scene.
+        const bound = canvas.boundingSphereVisible;
+        const radius = bound?.radius ?? 0;
+        stableTicks = radius === lastRadius ? stableTicks + 1 : 0;
+        lastRadius = radius;
+        const settled = radius > 0 && stableTicks >= 4;
+        if (!settled && tries++ < 160) {
             setTimeout(tick, 50);
             return;
         }
-        if (!framed) return;  // never got any geometry; leave the camera as Mol* shipped it
+        if (!settled || !bound) return;  // never got drawn geometry; leave the camera as Mol* shipped it
         // Geometry can land after Mol*'s one-shot auto-fit already missed its
         // moment — a streamed map's surface builds after the commit that would
         // have triggered the reset, leaving the camera at its degenerate start
         // (target ~origin, radius ~0) over a scene that is actually somewhere
-        // else entirely. That is the volume-only-load blank frame. If the fit
-        // clearly never ran, ask for it now. Gated on manualReset so a
-        // saved-camera restore — which sets the flag itself — is never stomped.
+        // else entirely. If the fit clearly never ran, ask for it now. Gated on
+        // manualReset so a saved-camera restore — which sets the flag itself —
+        // is never stomped.
         const cam = canvas.camera;
-        const bound = canvas.boundingSphereVisible;
-        if (!(canvas.props.camera as any)?.manualReset && bound && bound.radius > 0) {
+        if (!(canvas.props.camera as any)?.manualReset) {
             const aimedOutside = Vec3.distance(cam.state.target as Vec3, bound.center) > bound.radius;
             const neverFitted = !Number.isFinite(cam.state.radius) || cam.state.radius < 0.05;
             if (neverFitted || aimedOutside) canvas.requestCameraReset();
@@ -4188,7 +4200,9 @@ export function connectLive(plugin: PluginContext, url: string): LiveConnectionH
                 // malformed components would stick in state (and in radiusMax) and
                 // poison every later setState/restore.
                 const valid = cam && validVec(s.target) && validVec(s.position) && validVec(s.up)
-                    && Number.isFinite(s.radius) && s.radius > 0
+                    // radius is the depth slab — a ~zero value clips everything, the
+                    // signature of a never-fitted camera rather than a saved view.
+                    && Number.isFinite(s.radius) && s.radius > 0.05
                     && Number.isFinite(s.fov) && s.fov > 0 && s.fov < 180;
                 if (valid && (plugin.canvas3d?.boundingSphere?.radius ?? 0) <= 0) {
                     // The replay of a stored camera lands before the rebuilt scene has

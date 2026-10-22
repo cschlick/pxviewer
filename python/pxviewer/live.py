@@ -2633,9 +2633,13 @@ class LiveSession:
             # The page's running camera, volunteered on state change (debounced
             # client-side). Stored so a reconnected/reloaded client gets its
             # framing back as a camera-set — the viewport reload is a new page
-            # with no memory of where the old one was looking.
+            # with no memory of where the old one was looking. A report with a
+            # ~zero slab is the *never-fitted* camera, not a view — storing it
+            # replays a blank frame over whatever the reload was for (a
+            # volume-only load's first page reports exactly this before its
+            # isosurface exists).
             state = event.get("state")
-            if isinstance(state, dict):
+            if isinstance(state, dict) and (state.get("radius") or 0) > 0.05:
                 self._last_camera_state = state
         elif etype == "screenshot-result":
             req_id = event.get("reqId")

@@ -88,6 +88,12 @@ def exercise_a_reported_camera_is_replayed_to_a_reconnect():
                     "target": [1, 2, 3], "position": [0, 0, 40],
                     "up": [0, 1, 0], "radius": 15, "radiusMax": 60, "fov": 45}}))
                 live._on_message('{"type": "camera-report", "state": "junk"}')
+                # A ~zero slab is the never-fitted camera, not a view — storing it
+                # replays a blank frame onto the next client (the volume-only load).
+                live._on_message(json.dumps({"type": "camera-report", "state": {
+                    "target": [0, 0, 0], "position": [0, 0, 10],
+                    "up": [0, 1, 0], "radius": 0.01, "radiusMax": 60, "fov": 45}}))
+                assert live._last_camera_state["radius"] == 15  # the good view stands
             async with client(live) as ws:
                 message = await next_text(ws, "camera-set")
                 assert message["state"]["position"] == [0, 0, 40]
