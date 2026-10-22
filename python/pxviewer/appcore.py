@@ -1080,11 +1080,23 @@ class AppCore:
         models = [m for m in self._models
                   if not self._is_paired(m) and getattr(m["session"], "model", None) is not None]
         volumes = [v for v in self._volumes if not self._is_paired(v)]
-        return models, volumes
+        # Slim summaries, not the registry dicts — a full entry carries the
+        # model's type-group index arrays and the volume's map object, which
+        # dumped pages of repr into MCP output (figfuzz h12).
+        return ([self._object_summary(m) for m in models],
+                [self._object_summary(v) for v in volumes])
+
+
+    @staticmethod
+    def _object_summary(entry: dict) -> dict:
+        """The id/name/group shape a chooser (or an MCP caller) actually needs."""
+        return {"id": entry["id"], "name": entry["name"],
+                "group": entry.get("group")}
 
 
     def alignable(self) -> list:
-        """Existing ``(model, volume)`` pairs that can be density-aligned in place."""
+        """Existing ``(model, volume)`` pairs that can be density-aligned in place —
+        returned as slim ``{"id", "name", "group"}`` summaries like :meth:`pairable`."""
         pairs = []
         for model in self._models:
             gid = model.get("group")
@@ -1099,7 +1111,8 @@ class AppCore:
                 except Exception:
                     mm = None
                 if mm is not None:
-                    pairs.append((model, volume))
+                    pairs.append((self._object_summary(model),
+                                  self._object_summary(volume)))
         return pairs
 
 
@@ -1165,10 +1178,16 @@ class AppCore:
 
         This is the explicit answer to the question :meth:`map_for_model` refuses to
         guess at. It is offered as an action rather than inferred because it *is* one:
-        cctbx relocates the model, and the map, into a common frame — a boxed map can
-        move a model several angstrom — and that is a change to the data, not a label on
-        it. Both objects move into a group holding the manager, which is what makes them
-        usable together (minimizing into density, and whatever joint work comes later).
+        cctbx relocates the model, and the map, into a common *grid* frame — a boxed
+        map can move a model several angstrom — and that is a change to the data, not
+        a label on it. Both objects move into a group holding the manager, which is
+        what makes them usable together (minimizing into density, and whatever joint
+        work comes later).
+
+        Note what pairing does NOT do: it will not slide an off-origin model into
+        the density. The map and model end up in one frame but keep their existing
+        offset — the Cartesian move that seats a model in its density is
+        ``detect_shift=True`` here or :meth:`align_paired_model_with_map` after.
         """
         from iotbx.map_model_manager import map_model_manager
 
@@ -3200,6 +3219,16 @@ class AppCore:
         self._status("Click in the viewport to place a ligand marker…")
 
 
+    def place_marker(self, position, atom=None) -> str:
+        """Drop a marker at ``position`` (3-vector, Angstrom) — the scripting path
+        to what :meth:`arm_marker` + a viewport click does. ``atom`` is the atom
+        index the marker snapped to, if any (same contract as a click landing on
+        one). Returns the new marker id (``'marker-N'``) for
+        :meth:`set_marker_visible`/:meth:`remove_marker`."""
+        self._on_marker(position, atom)
+        return self._markers[-1]["id"]
+
+
     def _on_marker(self, position, atom) -> None:
         """A marker was placed: register it (so it appears in the Objects list as a handle)
         and draw it. ``atom`` is the picked atom index if the click landed on one, else
@@ -3221,8 +3250,12 @@ class AppCore:
             f"— {len(self._markers)} placed")
 
 
-    def _marker_entry(self, mid):
-        return next((m for m in self._markers if m["id"] == mid), None)
+    def _marker_entry(self, mid, *, missing_ok: bool = False):
+        entry = next((m for m in self._markers if m["id"] == mid), None)
+        if entry is None and mid is not None and not missing_ok:
+            raise ValueError(f"no marker {mid!r} — "
+                             f"status() lists the ids (e.g. 'marker-1')")
+        return entry
 
 
     def _draw_markers(self) -> None:
@@ -3260,6 +3293,8 @@ class AppCore:
 
 
     def set_marker_visible(self, mid: str, visible: bool) -> None:
+        """Hide or show a placed marker — it stays in the Objects list, just
+        undrawn, until :meth:`remove_marker`."""
         entry = self._marker_entry(mid)
         if entry is None or entry["visible"] == bool(visible):
             return
@@ -3833,7 +3868,10 @@ class AppCore:
 
 
     def map_for_model(self, mid: Optional[str] = None) -> Any:
-        """The map this model is paired with, or None.
+        """The map this model is paired with — its cctbx ``flex.double`` density
+        array, or None when unpaired. (It is the data, not a handle: for the
+        paired volume's *id* and metadata, see :meth:`alignable` or the
+        ``volumes`` block of ``status()``, matching on ``group``.)
 
         Whether a model and a map go together is cctbx's call, not ours. They are paired
         exactly when they share a ``map_model_manager``, which is what puts them in a
