@@ -161,8 +161,9 @@ class _NullViewport:
     def close(self) -> None:
         pass
 
-    def run_javascript(self, code: str, callback=None) -> None:
-        pass
+    # No run_javascript: callers probe getattr(viewport, "run_javascript", None)
+    # and must see None here — a no-op method would let claims like
+    # "performance capture started" stand on a page that does not exist.
 
     def widget(self):
         return None
@@ -413,7 +414,7 @@ class AppCore:
         # anything mid-frame. A software renderer (SwiftShader) segfaults even on that, so
         # hiding is refused there and the tree checkboxes are non-checkable. run_desktop sets
         # this from the GL backend (hardware only). See pxviewer.gpu and [[gpu-webgl]].
-        self._can_hide = bool(can_hide)
+        self._can_hide = bool(can_hide) or self._headless
 
         self._webapp = Webapp(host=host, port=port)
 
@@ -4239,6 +4240,7 @@ class AppCore:
 
         run_js = getattr(self._viewport, "run_javascript", None)
         if run_js is None:
+            self._status("performance capture needs a live viewport")
             return
 
         def _write(result) -> None:
