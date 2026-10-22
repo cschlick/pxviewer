@@ -4462,7 +4462,7 @@ class AppCore:
                 edits_mod.build_restraints(model, force=True)
             except Exception:  # pragma: no cover - revert best effort
                 pass
-            raise ValueError(str(exc).splitlines()[0] if str(exc) else "cctbx rejected the edit")
+            raise ValueError(str(exc).strip() or "cctbx rejected the edit")
         entry["edits"] = scope
         self._emit_loaded_changed()
         # The restraints manager was just rebuilt, so anything cached off the old one --
