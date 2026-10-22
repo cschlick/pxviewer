@@ -375,6 +375,26 @@ def exercise_a_click_built_selection_is_reported_to_python():
         assert live.mouse_selection.ids == [2, 4]     # id == index + 1
 
 
+def exercise_a_click_built_selection_keeps_its_click_order():
+    """indices stays a sorted set, but .order remembers the pick sequence —
+    vertex order is semantic for angle/dihedral measures and edits (figfuzz)."""
+    with session() as live:
+        got = []
+        live.on_selection(lambda sel: got.append(sel))
+        live.enable_mouse_selection()
+
+        async def scenario():
+            async with client(live) as ws:
+                await ws.send(json.dumps(
+                    {"type": "mouse-selection", "indices": [3, 1, 3, 0]}))
+                assert await eventually(lambda: got)
+
+        run_client(scenario)
+
+        assert got[0].indices == [0, 1, 3]   # the set, sorted and deduped
+        assert got[0].order == [3, 1, 0]     # the clicks, in order, deduped
+
+
 def exercise_wait_for_selection_blocks_until_one_arrives():
     """The script-driving case: ask the user to pick something, and wait for it."""
     with session() as live:

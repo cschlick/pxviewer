@@ -11,7 +11,7 @@ from __future__ import absolute_import, division, print_function
 import os
 import sys
 
-from pxviewer.regression.tst_utils import _exercise_selected, have, skip
+from pxviewer.regression.tst_utils import _exercise_selected, data_path, have, skip
 
 if not have("PySide6"):
     skip("PySide6 not available")
@@ -83,6 +83,46 @@ def exercise_load_select_describe_without_a_viewer():
         description = app.selection_description()
         assert "5 residues" in description or "43 atoms" in description, description
         assert app.job_state() == {"busy": [], "errors": []}
+    finally:
+        app.stop()
+
+
+def exercise_measure_and_edit_take_explicit_atoms():
+    """atoms=[...] bypasses the scene selection — an agent can name vertices
+    deterministically, and the draw-only session.select() confusion surfaces
+    as a hint in the error instead of a bare arity complaint (figfuzz h01)."""
+    from pxviewer.appcore import AppCore
+    from pxviewer.loader import sample_structure_path
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(sample_structure_path())
+        mid = app._models[0]["id"]
+        # nothing selected: the error names the draw-vs-select distinction
+        try:
+            app.measure_selection("distance")
+            raise AssertionError("should have raised")
+        except ValueError as exc:
+            assert "session.select" in str(exc), str(exc)
+        # explicit atoms work without any scene selection
+        assert "distance" in app.measure_selection("distance", atoms=[0, 1])
+        # a custom bond must be near but not already bonded — a metal
+        # coordination is the classic case (the library has no such bond)
+        app.load_file(str(data_path("zn_site.pdb")))
+        zmid = app._models[-1]["id"]
+        model = app._models[-1]["session"].model
+        atoms = model.get_hierarchy().atoms()
+        zn = next(i for i, a in enumerate(atoms) if a.element.strip() == "ZN")
+        import numpy as np
+        zz = np.asarray(atoms[zn].xyz)
+        donor = min(
+            (i for i, a in enumerate(atoms)
+             if a.element.strip() in ("N", "O", "S") and i != zn),
+            key=lambda i: float(np.linalg.norm(np.asarray(atoms[i].xyz) - zz)))
+        edit = app.add_edit_from_selection(zmid, "bond", atoms=[zn, donor])
+        assert edit["kind"] == "bond"
+        assert len(app.model_edits(zmid)) == 1
     finally:
         app.stop()
 

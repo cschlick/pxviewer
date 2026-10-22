@@ -28,6 +28,9 @@ Each spec is a dict:
              reflections           -- at least N reflection sets loaded
              conformer_set         -- a model has a conformer chosen
              background            -- the viewport's background hex
+             markers               -- at least N markers placed
+             kernel                -- a Jupyter kernel reports attached
+             edits                 -- at least N custom restraint edits
              nonblank              -- the screenshot is not empty (default on)
              no_job_errors         -- status() reports none (default on)
     fetch    needs the network (skipped under --no-fetch)
@@ -61,6 +64,8 @@ def corpus(data_dir, seed=0):
     f03m = m()
     f06m = m()
     f14m = m()
+    h04m = m()
+    h05m = m()
     specs = [
         _spec("f01-ligand-site", "Heme site with its environment",
               f"Load {p('heme_site.pdb')} and make a figure of the heme site: "
@@ -253,6 +258,103 @@ def corpus(data_dir, seed=0):
               "drawn. Clip the volume, not the camera.",
               stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
               expect={"volumes": 1, "regioned": True}),
+
+        # -- round 3: the machinery the first two rounds never touched -------
+
+        _spec("h01-measure-edits", "Measurements and a custom restraint",
+              f"Load {m()}. Draw a distance between two atoms and an angle "
+              "across three — labels on screen, visible in the frame. Then "
+              "author a bond edit between two of the atoms (taking the current "
+              "geometry as the target), confirm the model lists the edit, and "
+              "save the edits to edits.phil in this directory.",
+              expect={"models": 1, "primitives": 2, "edits": 1,
+                      "selection_nonempty": True}),
+
+        _spec("h02-volume-sphere", "Map that follows the eye",
+              "Load blob.mrc from this directory. Put the map on a spherical "
+              "bound that follows where the camera is pointed, with a radius "
+              "around 25 Å — then move the view and show the density has "
+              "moved with it.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              expect={"volumes": 1, "regioned": True}),
+
+        _spec("h03-interactions", "Contact overlays on a fold",
+              f"Load {m()} and turn on its non-covalent interaction overlays — "
+              "the hydrogen-bond / contact markup, not a cartoon color change. "
+              "The figure should show the fold with its contact lines drawn.",
+              expect={"models": 1}),
+
+        _spec("h04-qscore", "Atoms colored by their fit to density",
+              f"Load {h04m} and the map qmap.mrc from this directory — it is "
+              "sited on the model. Color the model's atoms by how well each "
+              "fits the density (Q-score or map correlation), so a reader sees "
+              "which regions disagree with the data.",
+              stage=[{"path": "qmap.mrc", "kind": "blob", "shape": (64, 64, 64)}],
+              expect={"models": 1, "volumes": 1},
+              anchor=h04m),
+
+        _spec("h05-replay-stress", "Everything survives a viewport reload",
+              f"Load {h05m} and the map blob.mrc from this directory. Select a "
+              "handful of residues, contour the map to a level you choose, and "
+              "frame the site. THEN reload the viewport and confirm every "
+              "piece came back — models, map, contour, selection, and camera. "
+              "Report what status() shows after the reload.",
+              stage=[{"path": "blob.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              expect={"models": 1, "volumes": 1, "selection_nonempty": True},
+              anchor=h05m),
+
+        _spec("h06-kernel", "An attached Jupyter kernel",
+              "Attach pxviewer's Jupyter kernel, push a small Python object "
+              "into it, and confirm the kernel reports alive in status. Then "
+              "shut it down cleanly. Report what each step returned.",
+              expect={"kernel": True}),
+
+        _spec("h07-hide-show", "Hide it, then bring it back",
+              f"Load {m()}. Select a loop or a few residues and hide just "
+              "those atoms — then show them again and finish with the whole "
+              "molecule visible in the frame.",
+              expect={"models": 1, "selection_nonempty": True}),
+
+        _spec("h08-error-honesty", "Bad input must fail loudly",
+              f"Probe the API's error behavior, then make a figure. In order: "
+              "(1) try to load /nonexistent/model.pdb; (2) try a nonsense "
+              "selection expression like 'resname banana and and'; (3) try to "
+              "set a contour level on a volume id that does not exist; (4) try "
+              "a camera state that is not valid numbers. For each, record "
+              "whether you got an honest error or a silent no-op — report them "
+              "all. Then load {m()} and frame it so the final screenshot has "
+              "content.",
+              expect={"models": 1}),
+
+        _spec("h09-picked-residue", "Build a selection atom by atom",
+              f"Load {m()}. Using the picked-atom API (not selection "
+              "expressions): pick two or three atoms across different "
+              "residues, toggle one residue in and out of the selection, and "
+              "finish with a non-empty selection focused in the frame.",
+              expect={"models": 1, "selection_nonempty": True}),
+
+        _spec("h10-markers", "Ligand markers placed and managed",
+              f"Load {m()}. Place two ligand markers on the structure — arm "
+              "the marker tool and, if the viewport needs a click you cannot "
+              "give it, drive the marker callback directly. Show both in "
+              "status, hide one, remove it, and leave one visible marker in "
+              "the final frame.",
+              expect={"models": 1, "markers": 1}),
+
+        _spec("h11-residue-walk", "Walk down a helix",
+              f"Load {m()}. Frame one residue, then step along the chain "
+              "residue by residue a few times — the camera should follow each "
+              "step. Report the residue and camera target at each stop, and "
+              "finish framed on wherever you ended.",
+              expect={"models": 1}),
+
+        _spec("h12-pair-map", "Pair a model to an off-origin map",
+              f"Load {m()} and the map offmap.mrc from this directory — the "
+              "map is deliberately NOT co-located with the model. Pair the "
+              "model to the map and align them so the model sits inside the "
+              "density. The figure should show them together.",
+              stage=[{"path": "offmap.mrc", "kind": "blob", "shape": (48, 48, 48)}],
+              expect={"models": 1, "volumes": 1}),
     ]
     return specs
 

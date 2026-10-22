@@ -2635,16 +2635,31 @@ class AppCore:
     _MEASURE_ARITY = {"distance": 2, "angle": 3, "dihedral": 4}
 
 
-    def measure_selection(self, kind: str) -> str:
-        """Draw a distance/angle/dihedral from the active model's selected atoms."""
+    def measure_selection(self, kind: str, atoms: Optional[list] = None) -> str:
+        """Draw a distance/angle/dihedral from the active model's selected atoms.
+
+        ``atoms`` may name the vertices explicitly (positional indices, in order —
+        vertex order is semantic for angle/dihedral) instead of reading the scene
+        selection. Note that ``session.select()``/``session.highlight()`` only
+        *draw* — they do not feed the selection this method reads; build it with
+        select_picked_atom / select_by_expression / toggle_picked_residue / clicks.
+        """
         session = self.active_model_session()
         if session is None:
             raise ValueError("load a model first")
         need = self._MEASURE_ARITY[kind]
-        with self._scene_lock:
-            atoms = list(self._scene_selection.get(self._active_model_id, []))
+        if atoms is None:
+            with self._scene_lock:
+                atoms = list(self._scene_selection.get(self._active_model_id, []))
+        else:
+            atoms = [int(a) for a in atoms]
         if len(atoms) != need:
-            raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
+            hint = ("" if atoms else
+                    " — session.select()/highlight() only draw; select with "
+                    "select_picked_atom, select_by_expression, or clicks, "
+                    "or pass atoms=[...]")
+            raise ValueError(
+                f"need exactly {need} atoms for a {kind} (have {len(atoms)}){hint}")
         self.ensure_atoms_shown()  # the measurement marks atoms — show them under the ribbon
         if kind == "distance":
             session.add_distance(atoms[0], atoms[1])
@@ -4227,10 +4242,14 @@ class AppCore:
         return copy.deepcopy(existing)
 
 
-    def add_edit_from_selection(self, mid: str, kind: str, *, sigma: Optional[float] = None) -> dict:
-        """Author a bond/angle/dihedral edit from the active model's selected atoms (2/3/4),
-        taking the current geometry as the target. Order follows the selection, same as the
-        measurement tools. Raises if the wrong number of atoms is selected or cctbx rejects it."""
+    def add_edit_from_selection(self, mid: str, kind: str, *,
+                                atoms: Optional[list] = None,
+                                sigma: Optional[float] = None) -> dict:
+        """Author a bond/angle/dihedral edit from the model's selected atoms (2/3/4),
+        taking the current geometry as the target. ``atoms`` may name the vertices
+        explicitly (positional indices, in order — vertex order is semantic for
+        angle/dihedral) instead of reading the scene selection. Raises if the wrong
+        number of atoms is selected or cctbx rejects it."""
         from . import edits as edits_mod
 
         entry = self._model_entry(mid)
@@ -4242,10 +4261,18 @@ class AppCore:
         need = edits_mod.KIND_ARITY.get(kind)
         if need is None:
             raise ValueError(f"cannot author a {kind} edit")
-        with self._scene_lock:
-            atoms = list(self._scene_selection.get(mid, []))
+        if atoms is None:
+            with self._scene_lock:
+                atoms = list(self._scene_selection.get(mid, []))
+        else:
+            atoms = [int(a) for a in atoms]
         if len(atoms) != need:
-            raise ValueError(f"select exactly {need} atoms for a {kind} (have {len(atoms)})")
+            hint = ("" if atoms else
+                    " — session.select()/highlight() only draw; select with "
+                    "select_picked_atom, select_by_expression, or clicks, "
+                    "or pass atoms=[...]")
+            raise ValueError(
+                f"need exactly {need} atoms for a {kind} (have {len(atoms)}){hint}")
         sites = model.get_sites_cart().as_numpy_array()
         # Authored here rather than read from a file, so a default weight is the app's to
         # choose — unlike a PHIL, where a missing sigma is refused (see AUTHORING_SIGMA).
@@ -6244,7 +6271,9 @@ class AppCore:
     def _on_model_selection(self, mid: str, selection) -> None:
         """A model reported its picked atoms (WS thread). Fold into the scene selection."""
         with self._scene_lock:
-            indices = list(selection.indices)
+            # selection.order carries click order when the frontend supplied it;
+            # vertex sequence is semantic for angle/dihedral measures and edits.
+            indices = list(getattr(selection, "order", None) or selection.indices)
             if indices:
                 self._scene_selection[mid] = indices
             else:
@@ -7977,8 +8006,10 @@ class AppCore:
         else:
             residue = {a.i_seq for a in atoms[int(atom_index)].parent().parent().atoms()}
         with self._scene_lock:
-            current = set(self._scene_selection.get(mid, []))
-        grown = (current - residue) if residue <= current else (current | residue)
+            current_ordered = list(self._scene_selection.get(mid, []))
+            current = set(current_ordered)
+        removing = residue <= current
+        grown = (current - residue) if removing else (current | residue)
         if not grown:
             session.clear_selection()
             self._lift_selection_sphere(entry)
@@ -7989,6 +8020,10 @@ class AppCore:
             return ""
         indices = sorted(grown)
         sel = session.highlight(indices)
+        # Click order is semantic (angle/dihedral measures and edits read it):
+        # kept atoms stay in their places, a newly toggled-in unit lands last.
+        sel.order = ([i for i in current_ordered if i not in residue] if removing
+                     else current_ordered + sorted(residue - current))
         if clip and self._selection_clip_armed(entry):
             # The same sphere the focus path fits, re-fit to the grown selection —
             # without it a residue added outside the standing sphere is invisible.

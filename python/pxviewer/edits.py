@@ -371,6 +371,13 @@ def build_restraints(model: Any, *, make_restraints: bool = True, force: bool = 
         if not force and model.restraints_manager_available():
             return
         params = model.get_default_pdb_interpretation_params()
+        # pdb_interpretation defaults to swapping symmetric-pair coordinates
+        # (ASP OD1/OD2, PHE/TYR rings, ...) so names conform to IUPAC. That is a
+        # validation nicety for phenix — here it silently mutates sites_cart
+        # away from the file's atom order, and every i_seq-keyed structure
+        # pxviewer keeps (streamed wire, selection cache, measure/edit atoms)
+        # diverges from the model by ~2.5 A on those atoms.
+        params.pdb_interpretation.flip_symmetric_amino_acids = False
         scope = getattr(model, _ATTR, None)
         if scope is not None and count(scope):
             # cctbx skips an incomplete edit rather than refusing it, so check first --

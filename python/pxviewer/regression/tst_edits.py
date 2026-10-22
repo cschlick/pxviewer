@@ -21,6 +21,28 @@ def exercise_geometry_value_distance_angle_dihedral():
     assert abs(abs(d) - 90.0) < 1e-6
 
 
+def exercise_building_restraints_does_not_move_atoms():
+    """pdb_interpretation's flip_symmetric_amino_acids defaults to True and swaps
+    symmetric-pair coordinates (ASP OD1/OD2, PHE/TYR rings) so names match IUPAC.
+    pxviewer's wire frame and every i_seq-keyed structure keep file order, so the
+    build must not move sites_cart — found by figfuzz (measure/edit atoms landed
+    ~2.5 A from the drawn atoms)."""
+    if not have("mmtbx.model"):
+        print("  skipping: mmtbx not available")
+        return
+    import numpy as np
+
+    import iotbx.pdb
+    import mmtbx.model
+
+    model = mmtbx.model.manager(
+        model_input=iotbx.pdb.input(str(data_path("1tec.pdb"))))
+    before = model.get_sites_cart().as_numpy_array().copy()
+    edits.build_restraints(model)
+    after = model.get_sites_cart().as_numpy_array()
+    assert np.abs(before - after).max() < 1e-3
+
+
 def exercise_a_phil_round_trips_through_cctbx_unchanged():
     """Read a file, write it back, read it again: same restraints, same values.
 

@@ -72,6 +72,23 @@ def evaluate(client, spec, png_bytes):
         refl = state.get("reflections") or []
         find("reflections", len(refl) >= expect["reflections"],
              f"{len(refl)} loaded")
+    if "markers" in expect:
+        markers = state.get("markers") or []
+        find("markers", len(markers) >= expect["markers"],
+             f"{len(markers)} placed")
+    if expect.get("kernel"):
+        kernel = state.get("kernel")
+        find("kernel", bool(kernel), f"{kernel!r}"[:120])
+    if "edits" in expect:
+        try:
+            out = client.call("python", {
+                "code": "import json; print(json.dumps("
+                        "[len(app.model_edits(m['id'])) "
+                        "for m in app._models]))"})
+            counts = _python_stdout_json(out) or []
+            find("edits", sum(counts) >= expect["edits"], str(counts))
+        except Exception as exc:
+            findings.append(("edits", None, repr(exc)[:120]))
     if expect.get("selection_nonempty"):
         sel = state.get("selection") or {}
         ok = any(n > 0 for n in sel.values())

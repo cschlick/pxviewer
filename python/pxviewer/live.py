@@ -2541,6 +2541,11 @@ class LiveSession:
             indices = sorted({i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms})
             self._mouse_selection_indices = indices
             selection = self._make_selection(indices)
+            # Vertex order is semantic for angle/dihedral measures and edits —
+            # keep the click order alongside the sorted set so appcode that
+            # needs sequence (measure_selection, add_edit_from_selection) has it.
+            selection.order = list(dict.fromkeys(
+                i for i in raw if isinstance(i, int) and 0 <= i < self._n_atoms))
             self._selection_changed.set()
             for handler in self._selection_handlers:
                 try:
