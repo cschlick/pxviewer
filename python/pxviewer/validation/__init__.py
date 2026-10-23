@@ -43,6 +43,9 @@ class ValidationResult:
                  without knowing whether they are Angstrom, degrees, percentages of a
                  reference distribution or standard deviations, and the tab is where
                  the reader is when the question arises.
+    ``error``    the validator's own exception text when it raised — ``run_all``
+                 isolates failures into a result that carries the error rather
+                 than dropping the whole run. Empty when it succeeded.
     """
 
     key: str
@@ -53,6 +56,7 @@ class ValidationResult:
     summary: str
     tab: str = ""
     notes: str = ""
+    error: str = ""
 
 
 class ValidatorSpec(NamedTuple):
@@ -122,7 +126,30 @@ def run_all(model: Any, analysis: Any = None, keys=None) -> List[ValidationResul
     if keys is not None:
         wanted = set(keys)
         specs = [spec for spec in specs if spec.key in wanted]
-    return [_run_validator(spec.run, model, analysis) for spec in specs]
+    out = []
+    for spec in specs:
+        try:
+            out.append(_run_validator(spec.run, model, analysis))
+        except Exception as exc:
+            # One validator's crash must not take every other result with it —
+            # the old comprehension dropped the whole run and left a "successful"
+            # job with an empty Validation tab (figfuzz m06). Keep the row: the
+            # tab shows the failure where the user looks for the result, and
+            # callers watching job_errors see which key died.
+            text = str(exc).strip() or type(exc).__name__
+            out.append(ValidationResult(
+                key=spec.key,
+                title=spec.title,
+                columns=["error"],
+                rows=[[text]],
+                markup=[],
+                summary=f"failed: {text.splitlines()[0]}",
+                tab=spec.title,
+                notes="the validator itself raised — this cell is the error, "
+                      "not a score",
+                error=text,
+            ))
+    return out
 
 
 def _run_validator(run: Callable, model: Any, analysis: Any) -> ValidationResult:

@@ -139,6 +139,36 @@ def exercise_rama_z_on_ubiquitin():
     assert [row[0] for row in result.rows] == ["Helix", "Sheet", "Loop", "Whole"]
 
 
+def exercise_one_validator_raising_loses_only_itself():
+    """run_all must isolate failures: before m06, a single crashing validator
+    (rama_z on a too-small model) discarded every computed result and the job
+    reported success with an empty tab. A raised validator becomes an
+    error-carrying result in place; the rest still answer."""
+    structure = model()
+    key = "cbetadev"
+    specs = dict((s.key, s) for s in validation.validators())
+    spec = specs[key]
+
+    def boom(m):
+        raise RuntimeError("simulated validator crash")
+
+    validation._REGISTRY[key] = spec._replace(run=boom)
+    try:
+        results = validation.run_all(structure)
+    finally:
+        validation._REGISTRY[key] = spec
+
+    by_key = dict((r.key, r) for r in results)
+    assert len(results) == len(EXPECTED_KEYS)          # nothing dropped
+    bad = by_key[key]
+    assert bad.error and "simulated" in bad.error      # the crash is carried
+    assert "failed" in bad.summary
+    assert bad.key == key and bad.title == spec.title  # the tab still exists
+    for r in results:
+        if r.key != key:
+            assert not r.error, (r.key, r.error)       # survivors are clean
+
+
 def exercise_every_validator_labels_its_tab_and_explains_its_columns():
     """Two things a results table cannot supply for itself.
 

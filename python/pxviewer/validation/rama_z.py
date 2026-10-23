@@ -31,15 +31,18 @@ def run(model: Any) -> ValidationResult:
     from mmtbx.validation.rama_z import rama_z
 
     result = rama_z(models=[model], log=null_out())
-    scores = result.get_z_scores()  # {region: (z, std_err)}
+    scores = result.get_z_scores()  # {region: (z, std_err) | None}
 
     rows = []
     for key, label in _REGIONS:
-        z, err = scores[key]
+        pair = scores.get(key)  # None when the region could not be scored
+        z, err = pair if pair else (None, None)
         rows.append([label, _fmt(z, 2), _fmt(err, 2)])
 
-    whole_z = scores["W"][0]
-    summary = f"whole-model Z = {whole_z:+.2f}"
+    whole = scores.get("W")
+    whole_z = whole[0] if whole else None
+    summary = (f"whole-model Z = {whole_z:+.2f}" if whole_z is not None
+               else "no score — too few scored residues")
     return ValidationResult(
         key="rama_z",
         title="Rama-Z",

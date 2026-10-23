@@ -2941,14 +2941,33 @@ class AppCore:
             self._status(f"validating {name}…")
             results = validation.run_all(model, analysis, keys=keys)
         except Exception as exc:  # pragma: no cover - validator/runtime errors
+            traceback.print_exc()
+            with self._busy_lock:
+                self._job_errors.append({"name": "validation", "label": f"{name} validation",
+                                         "error": _first_line(exc),
+                                         "when": time.time()})
+                del self._job_errors[:-8]
             self._status(f"validation failed: {exc}")
             return
         ventry = self._model_entry(mid)
         if ventry is not None:  # cache so marker toggles redraw without re-running
             ventry["validation"] = {r.key: r for r in results}
             self._mark_validated(ventry)  # fingerprint the coordinates these describe
+        # A validator that raised survives run_all as an error-carrying result —
+        # its tab tells the user, and job_errors tells an MCP client (m06).
+        failures = [r for r in results if r.error]
+        for r in failures:
+            with self._busy_lock:
+                self._job_errors.append({"name": f"validation:{r.key}",
+                                         "label": f"{name} {r.title}",
+                                         "error": r.error.splitlines()[0],
+                                         "when": time.time()})
+                del self._job_errors[:-8]
         total = sum(len(r.markup) for r in results)
-        self._status(f"{name}: {len(results)} validators, {total} markers")
+        self._status(f"{name}: {len(results)} validators, {total} markers"
+                     + (f" ({len(failures)} failed: "
+                        + ", ".join(r.key for r in failures) + ")"
+                        if failures else ""))
         self.bridge.validation_ready.emit((mid, results))
         self._refresh_validation_staleness()  # fresh results: clear any stale warning
 
@@ -2975,9 +2994,13 @@ class AppCore:
             session.clear_markup(channel)
             if visible and (result is None or not result.markup):
                 # Distinguish "ran, found nothing" from a broken toggle —
-                # otherwise a silent no-op reads the same (figfuzz j07).
-                self._status(f"{key} has nothing to draw"
-                             + ("" if result is not None else " (not run yet)"))
+                # otherwise a silent no-op reads the same (figfuzz j07) — and a
+                # failed validator from both of those (figfuzz m06).
+                if result is not None and result.error:
+                    self._status(f"{key} failed: {result.error.splitlines()[0]}")
+                else:
+                    self._status(f"{key} has nothing to draw"
+                                 + ("" if result is not None else " (not run yet)"))
 
 
     def set_tug_into_density(self, enabled: bool) -> None:
