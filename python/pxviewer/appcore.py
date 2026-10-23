@@ -8322,8 +8322,13 @@ class AppCore:
         this", however it was indicated. Returns the equivalent selection
         expression (for the selection box), or ``None`` when the index names no
         atom."""
-        self.set_active_model(mid)
         entry = self._model_entry(mid)
+        if entry is not None and not entry["visible"]:
+            # A pick on a hidden model is impossible — the page only reports
+            # clicks on drawn atoms. Accepting one would activate an invisible
+            # object and write a selection onto nothing drawn (figfuzz n01).
+            return None
+        self.set_active_model(mid)
         session = entry["session"] if entry else None
         if session is None or getattr(session, "model", None) is None:
             return None
@@ -8358,8 +8363,10 @@ class AppCore:
         selection box ('' when emptied or no longer expressible as whole residues),
         or ``None`` when the index names no atom.
         """
-        self.set_active_model(mid)
         entry = self._model_entry(mid)
+        if entry is not None and not entry["visible"]:
+            return None  # impossible pick — hidden models draw nothing
+        self.set_active_model(mid)
         session = entry["session"] if entry else None
         if session is None or getattr(session, "model", None) is None:
             return None

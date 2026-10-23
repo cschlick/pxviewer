@@ -660,6 +660,34 @@ def exercise_stopped_session_fails_loudly():
         app.stop()
 
 
+def exercise_picks_on_a_hidden_model_are_refused():
+    """A pick on an invisible model is impossible — the page only reports
+    clicks on drawn atoms. Before n01, select_picked_atom on a hidden mid
+    activated the invisible object and wrote a selection onto nothing
+    drawn."""
+    from pxviewer.appcore import AppCore
+    from pxviewer.loader import sample_structure_path
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(sample_structure_path())
+        app.load_file(data_path("zn_site.pdb"))
+        m1, m2 = app._models[0]["id"], app._models[1]["id"]
+        app.set_active_model(m2)
+        app.set_model_visible(m1, False)
+
+        assert app.select_picked_atom(m1, 5) is None
+        assert app.toggle_picked_residue(m1, 5) is None
+        assert app._active_model_id == m2, "the hidden model was activated"
+        assert app._scene_selection.get(m1) is None, "a ghost selection was written"
+
+        app.set_model_visible(m1, True)
+        assert app.select_picked_atom(m1, 5) is not None
+    finally:
+        app.stop()
+
+
 def run():
     for name, fn in sorted(globals().items()):
         if name.startswith("exercise") and _exercise_selected(name):
