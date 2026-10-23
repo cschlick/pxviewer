@@ -3417,11 +3417,22 @@ function findVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
  *  stall the apply chain for five seconds waiting for a contour it does not have.
  */
 async function awaitVolumeNegativeReprCell(plugin: PluginContext, ref: string) {
-    for (let i = 0; i < 200; i++) {
+    // The replay case only needs the wait until the volume's OWN repr exists —
+    // the negative sibling is built in the same mvs apply, so it follows within
+    // a few frames. A ref whose volume never arrives is bogus, not late; a ref
+    // whose volume has a repr but no negative contour is a plain map. Neither
+    // should pay the full five seconds.
+    const vol = await findVolumeReprCell(plugin, ref);
+    if (!vol) {
+        console.warn(`[pxviewer] negative-contour message for unknown volume ${ref} — ignoring`);
+        return undefined;
+    }
+    for (let i = 0; i < 40; i++) {   // ~1 s of grace for the same-build sibling
         const cell = findVolumeNegativeReprCell(plugin, ref);
         if (cell) return cell;
         await new Promise((r) => setTimeout(r, 25));
     }
+    console.warn(`[pxviewer] volume ${ref} has no negative contour — ignoring`);
     return undefined;
 }
 

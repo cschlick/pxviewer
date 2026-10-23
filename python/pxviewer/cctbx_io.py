@@ -148,7 +148,13 @@ def write_model_with_attributes(model: Any, attributes: dict, path: str | Path) 
     import iotbx.cif
     from cctbx.array_family import flex
 
-    cif_model = iotbx.cif.reader(input_string=model.model_as_mmcif()).model()
+    # The hierarchy's mmCIF, not model_as_mmcif(): that computes geometry
+    # statistics whenever restraints exist — every minimized model here has
+    # them — and clashscore shells to the molprobity Probe binary, which we
+    # neither ship nor need to write a coordinate file (same reason as
+    # AppCore.write_object).
+    cif_model = iotbx.cif.reader(input_string=model.get_hierarchy().as_mmcif_string(
+        crystal_symmetry=model.crystal_symmetry())).model()
     block_name = list(cif_model.keys())[0]
     block = cif_model[block_name]
     loop = block.get_loop("_atom_site")

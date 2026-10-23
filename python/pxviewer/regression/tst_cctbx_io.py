@@ -429,6 +429,22 @@ def exercise_write_cif_roundtrips_attributes():
         assert list(back._attributes["plddt"]) == [10.0, 20.0, 30.0]
 
 
+def exercise_write_cif_never_shells_to_probe():
+    """write_cif on a restrained model must write coordinates, not a
+    validation report: the old model_as_mmcif() base computed clashscore
+    whenever restraints existed and shelled to Probe, which we do not ship
+    (figfuzz n02 — RuntimeError 'Probe could not be detected')."""
+    session = LiveSession.from_model_file(UBIQUITIN)
+    session.select_by(selection="backbone")   # builds restraints — the trigger
+    assert session.model.restraints_manager_available()
+    with tmp_dir() as work:
+        out = os.path.join(work, "out.cif")
+        session.write_cif(out)
+        assert os.path.getsize(out) > 0
+        back = LiveSession.from_model_file(out)
+        assert len(back.select_by(selection="chain A").indices) == 660
+
+
 def exercise_load_attributes_aligns_by_identity():
     with tmp_dir() as work:
         model_cif = cif_with_columns(
