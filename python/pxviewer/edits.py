@@ -328,6 +328,13 @@ def get_edits(model: Any) -> Any:
 #: Serializes restraint builds; see build_restraints.
 _BUILD_LOCK = threading.Lock()
 
+#: Public alias of ``_BUILD_LOCK`` for *mutators*, not builders: ``model.process()``
+#: reads ``crystal_symmetry()`` at entry and stamps a rebuilt one at the end, so a
+#: symmetry/frame write that lands while a build is in flight (pairing installing the
+#: map's working frame over a background restraint warm, figfuzz n04) is silently
+#: overwritten. Hold the same lock around those writes and either order is correct.
+RESTRAINT_BUILD_LOCK = _BUILD_LOCK
+
 
 def set_edits(model: Any, scope: Any) -> None:
     """Carry an edits scope on ``model`` so the next restraint build applies it.

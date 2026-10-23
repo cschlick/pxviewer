@@ -358,6 +358,19 @@ def exercise_volume_display_position_offsets_mask_box_and_view():
             except (TypeError, ValueError):
                 pass
 
+        # Placement reads in the data frame the app draws in — a paired map's
+        # working frame, not its file coordinates. ``grid_affine`` used to
+        # subtract shift_cart and report the file frame, so every display-space
+        # consumer (sphere centers, box payloads, sample_at_sites) landed
+        # ~shift away (figfuzz n04).
+        from pxviewer.volume_io import grid_affine, sample_at_sites
+        mm = app.group_mmm(entry["group"]).map_manager()
+        origin, _steps = grid_affine(mm)
+        assert np.linalg.norm(origin) < 1e-6, origin   # re-gridded to (0,0,0)
+        sampled = sample_at_sites(mm, sites)
+        assert np.count_nonzero(np.abs(sampled) > 0.5) == len(sites), \
+            "model sites do not sample the density they are drawn inside"
+
         # The transform is view state: it serializes and lands on restore
         # before the mask/box that depend on it.
         target = tempfile.mktemp(prefix="pxview-")

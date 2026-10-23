@@ -370,6 +370,14 @@ def exercise_minimization_runs_continuously_until_stopped():
                    "never reached the held state", timeout=MINIMIZE_TIMEOUT_S)
         assert not app._minimize_idle.is_set()     # held means still running
 
+        # A second run while held must refuse, not spawn a parallel minimizer
+        # racing set_sites_cart on the same model (figfuzz n04).
+        try:
+            app.minimize_model(use_map=False)
+            raise AssertionError("re-entrant minimize accepted")
+        except ValueError as exc:
+            assert "already minimizing" in str(exc), str(exc)
+
         app.stop_minimization()
         pump_until(lambda: app._minimize_idle.is_set(),
                    "the run never ended", timeout=5)

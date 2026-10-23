@@ -1237,9 +1237,18 @@ class AppCore:
                 external_hint = tuple(-float(v) for v in external)
                 source_map.external_origin = (0, 0, 0)
 
-        mmm = map_model_manager(
-            model=model, map_manager=source_map,
-            ignore_symmetry_conflicts=True)
+        from . import edits
+        # The working-frame write (set_crystal_symmetry/shift_cart inside the
+        # ctor, plus the detect-shift shift below) must not land while a
+        # restraint build is mid-process(): process reads crystal_symmetry at
+        # entry and stamps a rebuilt one at exit, so a frame install under it
+        # is silently overwritten — leaving sites in working coords against a
+        # molecule-bounding cell, and every sites_frac consumer (masks, refine,
+        # spatial selections) computing in the wrong frame (figfuzz n04).
+        with edits.RESTRAINT_BUILD_LOCK:
+            mmm = map_model_manager(
+                model=model, map_manager=source_map,
+                ignore_symmetry_conflicts=True)
 
         detected = None
         if detect_shift:
@@ -1251,9 +1260,10 @@ class AppCore:
                 # may be sub-voxel and therefore cannot honestly be stored as the map's integer
                 # origin_shift_grid_units. Record it on the model with cctbx's shift-aware API;
                 # normal model output can undo it and recover the source coordinates.
-                mmm.model().shift_model_and_set_crystal_symmetry(
-                    shift_cart=detected,
-                    crystal_symmetry=mmm.map_manager().crystal_symmetry())
+                with edits.RESTRAINT_BUILD_LOCK:
+                    mmm.model().shift_model_and_set_crystal_symmetry(
+                        shift_cart=detected,
+                        crystal_symmetry=mmm.map_manager().crystal_symmetry())
                 self._invalidate_model_state(mentry)
             mentry["detected_shift_cart"] = detected
             ventry["external_origin_hint_used"] = True
@@ -1323,8 +1333,10 @@ class AppCore:
         detected = self._detect_map_model_shift(
             mmm.model(), mm, initial_shift=external_hint)
         if max(abs(v) for v in detected) > 1e-6:
-            mmm.model().shift_model_and_set_crystal_symmetry(
-                shift_cart=detected, crystal_symmetry=mm.crystal_symmetry())
+            from . import edits
+            with edits.RESTRAINT_BUILD_LOCK:  # same race as pairing (figfuzz n04)
+                mmm.model().shift_model_and_set_crystal_symmetry(
+                    shift_cart=detected, crystal_symmetry=mm.crystal_symmetry())
             self._invalidate_model_state(mentry)
         ventry["external_origin_hint_used"] = True
         mentry["detected_shift_cart"] = detected
@@ -4020,6 +4032,16 @@ class AppCore:
         if model is None:
             raise ValueError("the active object has no cctbx model")
         name = entry["name"]
+
+        # One writer to the coordinates at a time: a second run would spawn a
+        # parallel minimizer racing set_sites_cart on the same model (figfuzz
+        # n04), and a drag already owns the stream — the symmetric of the
+        # drag's own stop-the-minimize takeover below.
+        if self._minimize_mid is not None and not self._minimize_idle.is_set():
+            raise ValueError(
+                f"already minimizing {self._minimize_mid} — stop_minimization() first")
+        if self._tug is not None:
+            raise ValueError("a drag is in progress — finish it before minimizing")
 
         map_data = self.map_for_model(entry["id"]) if use_map else None
         if use_map and map_data is None:

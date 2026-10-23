@@ -314,17 +314,15 @@ def grid_affine(map_manager: Any) -> Tuple[np.ndarray, np.ndarray]:
     # matrix divided by that axis's grid count. (unit_cell_grid still refers to the full cell,
     # so it must NOT be used here.)
     steps = ortho @ np.diag([1.0 / nx, 1.0 / ny, 1.0 / nz])
-    # Cartesian placement has two independent cctbx representations:
-    #
-    # * CCP4 NXSTART is retained as map_data().origin() (the new hotspot writer uses this);
-    # * a map_model_manager working frame is recorded in shift_cart.
-    #
-    # The first stored array element is at the NXSTART grid coordinate, then shifted back
-    # out of cctbx's working frame. Considering only shift_cart incorrectly put standalone
-    # NXSTART-placed maps at Cartesian zero.
+    # Cartesian placement is the grid's own data frame: the first stored
+    # element sits at the NXSTART coordinate times the step vectors. Inside a
+    # map_model_manager's working frame the box re-origins to (0, 0, 0) and
+    # shift_cart records the way back to FILE coordinates — subtracting it here
+    # answered in a frame nothing draws in (paired maps reported ~shift away
+    # from the model; figfuzz n04). Converting to file coordinates is
+    # ``write_map``'s job, not placement's.
     grid_origin = np.asarray(md.origin(), dtype="float64")
-    shift = np.asarray(map_manager.shift_cart(), dtype="float64")
-    return steps @ grid_origin - shift, steps
+    return steps @ grid_origin, steps
 
 
 def sample_at_sites(map_manager: Any, sites_cart: Any, *, array: Any = None) -> np.ndarray:
