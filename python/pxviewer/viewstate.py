@@ -177,6 +177,7 @@ def _volume_spec(app, entry, path, data_dir, bundle_data) -> dict:
         "negative_opacity": entry.get("negative_opacity"),
         "negative_style": entry.get("negative_style"),
         "mask_radius": entry.get("mask_radius"),
+        "position": list(entry["position"]) if entry.get("position") else None,
         "is_resolution": bool(entry.get("is_resolution")),
         "pinned_to": entry.get("pinned_to"),
         "color_by_resolution": bool(entry.get("color_by_resolution")),
@@ -567,6 +568,11 @@ def _apply_volume_state(app, spec, vid) -> None:
         entry["sphere"] = {"mode": sphere["mode"], "radius": sphere.get("radius"),
                            "center": sphere.get("center")}
         app._send_volume_clip(entry)
+    if spec.get("position") is not None:
+        # Before the mask and the box: both are display-space intents carved
+        # back through the offset — restoring position later would leave them
+        # computed against the unmoved frame.
+        app.set_volume_position(vid, spec["position"])
     if spec.get("mask_radius") is not None:
         try:
             app.set_volume_mask(vid, spec["mask_radius"])

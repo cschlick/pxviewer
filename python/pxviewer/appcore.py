@@ -4774,8 +4774,17 @@ class AppCore:
         entry = self._volume_entry(vid)
         if entry is None:
             return
-        pos = [float(c) for c in position]
-        if len(pos) != 3 or any(not math.isfinite(c) for c in pos):
+        if isinstance(position, (str, bytes)):
+            raise ValueError("position must be three finite Angstrom offsets, "
+                             f"got {position!r}")
+        try:
+            raw = list(position)
+            pos = [float(c) for c in raw]
+        except (TypeError, ValueError) as exc:
+            raise ValueError("position must be three finite Angstrom offsets, "
+                             f"got {position!r}") from exc
+        if len(pos) != 3 or any(not math.isfinite(c) for c in pos) \
+                or any(isinstance(c, bool) for c in raw):
             raise ValueError("position must be three finite Angstrom offsets")
         if entry.get("position") == pos:
             return
@@ -5643,7 +5652,19 @@ class AppCore:
             return entry["data"]
         from .volume_io import VolumeData, masked_map_copy
 
-        masked = masked_map_copy(mmm, entry["data"].map_id, radius)
+        model = None
+        pos = entry.get("position")
+        if pos:
+            # The map draws shifted by `position`: "mask around the model"
+            # means density DISPLAYED near the model — in the map's data
+            # frame that is the atoms shifted back by the same offset.
+            # Without it the kept blob renders `pos` away from the model
+            # while the density actually on it is cut away (figfuzz n03).
+            model = mmm.model().deep_copy()
+            from scitbx.array_family import flex
+            sites = model.get_sites_cart().as_numpy_array() - np.asarray(pos)
+            model.set_sites_cart(flex.vec3_double(sites))
+        masked = masked_map_copy(mmm, entry["data"].map_id, radius, model=model)
         vd = VolumeData.from_map_manager(masked, name=entry["data"].name)
         # Sliced to its nonzero region — the served grid's extent is what the
         # viewport's bounding sphere fits to, so reset_view should frame the
@@ -6188,7 +6209,12 @@ class AppCore:
             return
         g0, steps = grid_affine(mm)
         inv = np.linalg.inv(steps)
-        center_g = inv @ (np.asarray(box["center"], dtype=float) - g0)
+        # The caller names the center in displayed space — where they see the
+        # box land. The served grid lives in data space, `position` behind it:
+        # carve at center - position or the box lands the offset away
+        # (figfuzz n03).
+        pos = np.asarray(entry.get("position") or (0.0, 0.0, 0.0), dtype=float)
+        center_g = inv @ (np.asarray(box["center"], dtype=float) - pos - g0)
         # Per-axis halfwidth in grid units: radius over the step vector's length,
         # plus one voxel so a contour right at the box face still closes.
         hw = float(box["radius"]) / np.linalg.norm(steps, axis=0) + 1.0

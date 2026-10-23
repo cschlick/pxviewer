@@ -236,7 +236,7 @@ def split_map_model_manager(mmm: Any, *, name: Optional[str] = None) -> Tuple[Op
     return model_data, volumes
 
 
-def masked_map_copy(mmm: Any, map_id: str, radius: float) -> Any:
+def masked_map_copy(mmm: Any, map_id: str, radius: float, model: Any = None) -> Any:
     """A copy of ``mmm``'s ``map_id`` with density further than ``radius`` A from the
     model removed.
 
@@ -247,18 +247,24 @@ def masked_map_copy(mmm: Any, map_id: str, radius: float) -> Any:
     not pile them up.
 
     Needs a paired model — which is the manager's whole point, and why this takes one.
+    ``model`` overrides it: callers that need the mask drawn around shifted or
+    filtered atoms pass their own. With an override the mask runs on a scratch
+    ``deep_copy`` of the manager: mask creation leaves bookkeeping on the mmm
+    that makes a *second* mask against a model it does not own come back empty,
+    and the scratch manager also keeps the register/remove churn off the real one.
     """
+    work = mmm.deep_copy() if model is not None else mmm
     made = []
     try:
-        mmm.create_mask_around_atoms(model=mmm.model(), mask_atoms_atom_radius=float(radius))
-        made = list(mmm.create_masked_copies_of_maps(map_id_list=[map_id], mask_id="mask"))
+        work.create_mask_around_atoms(model=model or work.model(), mask_atoms_atom_radius=float(radius))
+        made = list(work.create_masked_copies_of_maps(map_id_list=[map_id], mask_id="mask"))
         if not made:
             raise ValueError("cctbx produced no masked copy")
-        return mmm.get_map_manager_by_id(made[0]).deep_copy()
+        return work.get_map_manager_by_id(made[0]).deep_copy()
     finally:
         for scratch in made + ["mask"]:
             try:
-                mmm.remove_map_manager_by_id(scratch)
+                work.remove_map_manager_by_id(scratch)
             except Exception:  # pragma: no cover - nothing to remove
                 pass
 

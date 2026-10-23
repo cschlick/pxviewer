@@ -283,6 +283,100 @@ def exercise_volume_box_carves_the_grid_and_keeps_sigma_honest():
         app.stop()
 
 
+def exercise_volume_display_position_offsets_mask_box_and_view():
+    """``position`` is a display transform: it moves what the viewer draws, not
+    the data. The two operations that carve in display space — mask-around-model
+    and the served box — must work through the offset: masked density is what
+    *displays* near the model (atoms shifted back by the offset in data space),
+    and a box center is named where the user sees it. Saved views carry the
+    transform so a restored scene lands where the saved one did (figfuzz n03)."""
+    if not have("iotbx.map_manager"):
+        return
+    import tempfile
+
+    import numpy as np
+
+    from pxviewer import viewstate
+    from pxviewer.appcore import AppCore
+    from pxviewer.volume_io import VolumeData
+
+    app = AppCore(port=0)
+    try:
+        app._webapp.start()
+        app.load_file(str(data_path("zn_site.pdb")))
+        mid = app._models[0]["id"]
+        # A generated grid (spacing 1, origin -20) with flat density everywhere —
+        # then the mask itself is the kept region and its centroid is the
+        # atom-cloud's centroid.
+        vid = app._add_volume(
+            VolumeData.from_numpy(np.ones((48, 48, 48), dtype=np.float32),
+                                  origin=(-20, -20, -20), name="flat"), "flat")
+        app.pair_model_with_map(mid, vid)
+        entry = app._volume_entry(vid)
+        sites = np.asarray(app.group_mmm(entry["group"]).model()
+                           .get_sites_cart().as_numpy_array())
+        mean = sites.mean(axis=0)
+
+        def kept_centroid():
+            data = app._display_map_data(entry)
+            idx = np.nonzero(np.abs(np.asarray(data.array)) > 1e-6)
+            assert idx[0].size, "mask kept no density"
+            return np.array([i.mean() + o for i, o in zip(idx, data.origin)])
+
+        # Unshifted: the mask keeps the density at the model — and keeps doing
+        # it on a repeat call (a stale mask on the shared manager emptied the
+        # second build; figfuzz n03).
+        app.set_volume_mask(vid, 4.0)
+        first = kept_centroid()
+        assert np.linalg.norm(first - mean) < 1.5, (first, mean)
+        again = kept_centroid()
+        assert np.linalg.norm(again - first) < 0.5, (first, again)
+
+        # Shifted display: the kept density moves `position` back in data space —
+        # the blob that draws *under* the model is what must survive the mask.
+        app.set_volume_position(vid, [8, 0, 0])
+        app.set_volume_mask(vid, 4.0)
+        moved = kept_centroid()
+        want = mean - np.array([8.0, 0.0, 0.0])
+        assert np.linalg.norm(moved - want) < 1.5, (moved, want)
+
+        # The box center is display space: carved `position` back on the grid.
+        app.set_volume_mask(vid, None)
+        app.set_volume_box(vid, center=mean.tolist(), radius=6.0)
+        boxed = VolumeData.from_map_file(
+            str(app._webapp.volume_dir / "vols" / f"{vid}.box.map"))
+        idx = np.nonzero(np.abs(boxed.array) > 1e-6)
+        cbox = np.array([i.mean() + o for i, o in zip(idx, boxed.origin)])
+        assert np.linalg.norm(cbox - want) < 1.5, (cbox, want)
+
+        # Position input is a finite 3-vector, not anything indexable
+        # ('123' once became [1, 2, 3] through string iteration).
+        for bad in ("123", [True, False, True], [1, 2], [1, 2, float("nan")]):
+            try:
+                app.set_volume_position(vid, bad)
+                raise AssertionError(f"accepted {bad!r}")
+            except (TypeError, ValueError):
+                pass
+
+        # The transform is view state: it serializes and lands on restore
+        # before the mask/box that depend on it.
+        target = tempfile.mktemp(prefix="pxview-")
+        doc = viewstate.save_view(app, target)
+        saved = [o for o in doc["objects"] if o.get("kind") == "volume"][0]
+        assert saved["position"] == [8.0, 0.0, 0.0], saved["position"]
+
+        app2 = AppCore(port=0)
+        try:
+            app2._webapp.start()
+            viewstate.load_view(app2, str(target) + ".pxview.json")
+            restored = app2._volumes[0]
+            assert restored.get("position") == [8.0, 0.0, 0.0], restored
+        finally:
+            app2.stop()
+    finally:
+        app.stop()
+
+
 def exercise_volume_load_detects_a_difference_map():
     """A map file declares no map type, so content decides: a grid with a real
     negative lobe is a difference map and must draw both lobes (green/red at
@@ -510,7 +604,7 @@ def exercise_set_camera_rejects_malformed_states():
         session = app._control_session()
         assert session is not None
         good = {"target": [0, 0, 0], "position": [0, 0, 50], "up": [0, 1, 0],
-                "radius": 40.0, "fov": 30.0}
+                "radius": 40.0, "fov": 0.5}
         bad = [
             (TypeError, "nonsense"),
             (TypeError, 42),
