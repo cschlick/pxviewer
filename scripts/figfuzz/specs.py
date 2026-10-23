@@ -751,6 +751,94 @@ def corpus(data_dir, seed=0):
               "Check channel isolation — clearing one channel must leave "
               "the others drawn.",
               expect={"models": 1}),
+
+        _spec("n01-active-session", "Active model failover and rebinding",
+              f"Load {p('zn_site.pdb')} and {p('1ubq.pdb')} and "
+              f"{p('3nir.pdb')}. The kernel `session` var re-binds to the "
+              "active model on switch — verify: api.find('active') for the "
+              "switch verb, then check session's model identity follows "
+              "each switch (atom counts differ: 32/660/1026). Select on the "
+              "active model only — does select_by_expression ever write to "
+              "a hidden model's selection? Remove the ACTIVE model: does "
+              "the session var rebind to a live model or point at a stopped "
+              "session that raises? Does status() report a coherent active "
+              "id? Pick like a user: app picking APIs should only ever "
+              "target the active model. Finally: with all models removed, "
+              "does a selection API fail honestly rather than reference a "
+              "ghost?",
+              expect={"models": 0}),
+
+        _spec("n02-api-catalog", "The advertised API surface vs reality",
+              "The MCP api map and api.find are the contract agents program "
+              "against — verify every advertised verb exists and accepts its "
+              "documented signature. Enumerate api.* (the categorized map): "
+              "for each entry, getattr the verb on app/session and call it "
+              "with the documented arg count (help() each signature). Any "
+              "advertised verb that doesn't exist, raises TypeError on the "
+              "documented args, or raises NotImplemented is a BUG. Reverse "
+              "check: public methods on app/session NOT in the api map — "
+              "are they intentionally hidden (underscore/private) or "
+              "undocumented surface? Load "
+              f"{p('zn_site.pdb')} first so verbs have state to answer.",
+              expect={"models": 1}),
+
+        _spec("n03-volume-position", "Volume repositioning semantics",
+              f"Load {p('zn_site.pdb')} and the staged map file posmap.mrc "
+              "from this directory — find set_volume_position "
+              "(api.find('position')). Move the map by a known offset "
+              "(e.g. +10, 0, 0 A): verify the served grid origin shifts "
+              "(app.map_for_model or the volume entry's transform), the "
+              "screenshot changes, and iso/clip state survives the move. "
+              "Then: does within() between the moved map's region and model "
+              "atoms reflect the MOVE (positions are semantic, not just "
+              "draw)? Save a view, reload, and check the position persists. "
+              "Non-finite or wrong-arity offsets must fail honestly.",
+              stage=[{"path": "posmap.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              anchor=p("zn_site.pdb"),
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("n04-minimize-map", "Minimize into density",
+              f"Load {p('zn_site.pdb')} plus the staged map file minmap.mrc "
+              "from this directory. api.find('minimize') — geometry-only "
+              "minimize vs a map-restrained one (app.minimize_model? "
+              "check for a map/density arg or a with-map variant). Move an "
+              "atom deliberately out of density (set_sites_cart + "
+              "session.push), run the map-restrained minimize, verify it "
+              "moves the atom TOWARD the density (compare final distance "
+              "to the map's peak vs the displaced distance — compute the "
+              "peak position from the grid). Verify job_state reports the "
+              "run, stop mid-run leaves a sane conformation, and status() "
+              "doesn't claim idle while coordinates stream.",
+              stage=[{"path": "minmap.mrc", "kind": "blob", "shape": (96, 96, 96)}],
+              anchor=p("zn_site.pdb"),
+              expect={"models": 1, "volumes": 1}),
+
+        _spec("n05-multi-object-view", "Saved view with a crowded scene",
+              f"Load {p('zn_site.pdb')}, {p('1ubq.pdb')}, and the staged "
+              "volume scenemap.mrc from this directory — hide one model, "
+              "color another, clip the volume to a slab, add a marker and "
+              "a distance primitive, "
+              "select atoms on BOTH models, orient the camera. save_view, "
+              "clear_all (or reload), load_view — then diff EVERYTHING: "
+              "object count/order/ids, each model's rep+color+visibility, "
+              "volume iso/clip, selections per model, marker, primitive, "
+              "camera. Any field that silently reverted to default is a "
+              "BUG — multi-object restore is where k01's fixes get stressed.",
+              stage=[{"path": "scenemap.mrc", "kind": "blob", "shape": (64, 64, 64)}],
+              expect={"models": 2, "volumes": 1, "markers": 1,
+                      "primitives": 1}),
+
+        _spec("n06-cli-surface", "Command-line entry honesty",
+              "Probe the CLI surface (python -m pxviewer / the pxviewer "
+              "script): --help lists real flags; invalid flag → nonzero "
+              "exit + usage, not a traceback; pxviewer mcp serves on a "
+              "port and answers tools/list (spawn it, probe, kill); a "
+              "nonexistent file arg fails with a named error; "
+              "PXVIEWER_HEADLESS=1 pxviewer desktop refuses or adapts "
+              "honestly rather than crashing on missing display. Repo "
+              "checkout at /Users/user/software/pxviewer, env python at "
+              "/opt/homebrew/Caskroom/miniforge/base/envs/pxviewer/bin/python.",
+              expect={}),
     ]
     return specs
 
