@@ -4046,7 +4046,8 @@ class AppCore:
         map_data = self.map_for_model(entry["id"]) if use_map else None
         if use_map and map_data is None:
             raise ValueError(
-                "this model is not paired with a map — load the two together to pair them")
+                "this model is not paired with a map — pair it with "
+                "pair_model_with_map(model_id, volume_id) first")
 
         self._minimize_stop.clear()
         self._minimize_idle.clear()
