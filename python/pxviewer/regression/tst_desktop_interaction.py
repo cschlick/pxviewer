@@ -1255,6 +1255,11 @@ def exercise_a_saved_view_round_trips():
         entry["session"].add_distance(0, 1)
         entry["session"].add_label(2, "site")
         app.place_marker([1.0, 2.0, 3.0])
+        # Caller-added representation layers past the app's own stack — the
+        # saved view must keep the whole stack, not just layer zero (n05).
+        entry["session"].add_representation("ball-and-stick", on=[10, 12, 14])
+        entry["session"].add_representation(
+            "spacefill", color="uniform", color_value="#00ff00", opacity=0.5)
 
         bundled = viewstate.save_view(
             app, f"{tmp}/fig.pxview.json", bundle_data=True)
@@ -1265,6 +1270,8 @@ def exercise_a_saved_view_round_trips():
         assert os.path.isfile(f"{tmp}/{spec_m['data']}")
         assert os.path.isfile(f"{tmp}/{spec_v['data']}")
         assert spec_m["sphere"]["mode"] == "selection"
+        assert [r["type"] for r in spec_m["reprs"]] == [
+            "ball-and-stick", "spacefill"], spec_m["reprs"]
         assert spec_m["clip_depth"] == 12.5
         assert spec_m["visible"] is False
 
@@ -1279,9 +1286,10 @@ def exercise_a_saved_view_round_trips():
 
         expected_color_default = entry["color_default"]
 
-      # The reference-mode file restores from the original paths too.
+      # The reference-mode file restores from the original paths too — via the
+      # bare name: save_view('x') writes 'x.pxview.json', so load_view takes it.
       with desktop() as restored:
-        viewstate.load_view(restored, f"{tmp}/light.pxview.json")
+        viewstate.load_view(restored, f"{tmp}/light")
         assert len(restored._models) == 1 and len(restored._volumes) == 1
 
       # A source path that no longer resolves strands its object, not the
@@ -1304,8 +1312,11 @@ def exercise_a_saved_view_round_trips():
         restored.load_file(data_path("1ubq.pdb"))
         restored.load_file(data_path("1ubq.pdb"))
         assert len(restored._models) == 2
+        restored.place_marker([9.0, 9.0, 9.0])
         viewstate.load_view(restored, f"{tmp}/fig.pxview.json")
         assert len(restored._models) == 1 and len(restored._volumes) == 1
+        # A clear-all clears markers too: only the saved marker survives.
+        assert [m["position"] for m in restored._markers] == [[1.0, 2.0, 3.0]]
 
       # And the bundled file restores every appearance field that was set.
       with desktop(can_hide=True) as restored:
@@ -1358,6 +1369,18 @@ def exercise_a_saved_view_round_trips():
         assert restored._markers[0]["position"] == [1.0, 2.0, 3.0]
         fresh = nentry["session"].add_distance(1, 2)
         assert fresh.id != "distance-1"  # the counter advanced past restore
+
+        # The whole representation stack round-trips — caller-added layers land
+        # after the app's own main/context layers, in order (figfuzz n05).
+        reps = list(nentry["session"]._representations.values())
+        n_app = len(nentry.get("reps") or [nentry["rep"]]) \
+            + (1 if nentry.get("context_on") else 0)
+        extra_specs = reps[n_app:]
+        assert [r["type"] for r in extra_specs] == [
+            "ball-and-stick", "spacefill"], [r["type"] for r in reps]
+        assert extra_specs[0]["on"]["list"] == [10, 12, 14]
+        assert extra_specs[1]["colorValue"] == "#00ff00"
+        assert abs(extra_specs[1]["opacity"] - 0.5) < 1e-6
 
         # The entry was right even while the render was wrong: a volume's
         # appearance is baked into the scene MVSJ, which was composed at

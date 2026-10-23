@@ -6628,6 +6628,9 @@ class AppCore:
         self._volumes.clear()
         self._reflections.clear()
         self._groups.clear()
+        # Placed markers are scene state too — a "clear everything" that keeps
+        # them is not clear (figfuzz n05).
+        self._markers.clear()
         self._active_model_id = None
         self._rebind_kernel_session()
         with self._scene_lock:

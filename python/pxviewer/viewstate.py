@@ -111,6 +111,16 @@ def _model_spec(app, entry, path, data_dir, bundle_data) -> dict:
     # spec is always the main layer (context/extra layers append after).
     live = list(getattr(entry.get("session"), "_representations", {}).values())
     rep = live[0]["type"] if live else entry.get("rep")
+    # The stack may carry caller-added layers the entry model does not know
+    # (session.add_representation/on=... — figfuzz n05). They always append
+    # after the app's own stack, which ends at the fixed-id context layer if
+    # one exists — locating it beats trusting entry["context_on"], which can
+    # outlive the layer (stale after an incompatible rep switch).
+    ctx_pos = next((i for i, r in enumerate(live)
+                    if r.get("id") == f"context-{mid}"), None)
+    n_app = (ctx_pos + 1) if ctx_pos is not None else \
+        len(entry.get("reps") or [rep])
+    extras = [dict(r) for r in live[n_app:]]
     spec = {
         "kind": "model",
         "id": mid,
@@ -120,6 +130,7 @@ def _model_spec(app, entry, path, data_dir, bundle_data) -> dict:
         "visible": bool(entry["visible"]),
         "group": _group_name(app, entry.get("group")),
         "rep": rep,
+        "reprs": extras or None,
         "color": entry.get("color"),
         # Serialized, not re-rolled: the palette pick is random per session, so
         # without it a reloaded view could come back a different color.
@@ -245,6 +256,12 @@ def load_view(app, path) -> dict:
     the view to restore around it.
     """
     path = Path(path)
+    if not path.is_file() and not str(path).endswith(".json"):
+        # save_view('scene') writes 'scene.pxview.json' — take the bare name too
+        # rather than a FileNotFoundError on a path save accepted (figfuzz n05).
+        suffixed = path.with_suffix(VIEW_SUFFIX)
+        if suffixed.is_file():
+            path = suffixed
     doc = json.loads(path.read_text())
     if doc.get("format") != VIEW_FORMAT:
         raise ValueError(f"{path.name} is not a pxviewer view file")
@@ -531,6 +548,45 @@ def _apply_model_state(app, spec, mid) -> None:
             session._send_control(dict(message))
         except Exception:
             pass
+
+    # Caller-added representation layers — everything past the app's own
+    # main/context layers (figfuzz n05). Replayed through the session verbs so
+    # ids, selections and attribute payloads rebuild fresh; an unresolvable
+    # layer skips rather than sinking the restore.
+    for layer in spec.get("reprs") or []:
+        _replay_rep_layer(session, layer)
+
+
+def _decode_index_set(enc) -> list:
+    """Inverse of live._encode_index_set — the wire's {runs}/{list} forms."""
+    enc = enc or {}
+    idx = [i for s, e in enc.get("runs") or [] for i in range(int(s), int(e) + 1)]
+    idx.extend(int(i) for i in enc.get("list") or [])
+    return idx
+
+
+def _replay_rep_layer(session, spec: dict) -> None:
+    on = _decode_index_set(spec.get("on")) if spec.get("on") else None
+    try:
+        if spec.get("color") == "attribute":
+            attr = spec.get("attribute") or {}
+            domain = attr.get("domain")
+            session.color_by(attr.get("name"), type=spec.get("type"),
+                             palette=attr.get("palette") or "turbo",
+                             domain=tuple(domain) if domain else None,
+                             on=on, replace=False)
+            return
+        color = spec.get("color")
+        session.add_representation(
+            spec["type"],
+            color=None if color in (None, "uniform") else color,
+            color_value=spec.get("colorValue"),
+            carbon_color=spec.get("carbonColor"),
+            on=on,
+            opacity=spec.get("opacity"),
+            params=spec.get("params"))
+    except Exception:  # pragma: no cover - a dead layer must not sink the load
+        pass
 
 
 def _apply_volume_state(app, spec, vid) -> None:

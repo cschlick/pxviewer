@@ -996,7 +996,11 @@ export class LiveViewer {
         const camera = this.plugin.canvas3d?.camera;
         if (camera && slabIsOpen(slab) && camera.state.radiusMax) {
             const radius = Math.max(camera.state.radiusMax, 1.0);
-            if (radius !== camera.state.radius) camera.setState({ radius });
+            // Lift only: a radius already deeper than the scene bound is a
+            // caller-set depth (a saved view restores radius != radiusMax), not
+            // a parked slab to release — shrinking it clobbered restored
+            // cameras by the scene bound (figfuzz n05).
+            if (camera.state.radius < radius) camera.setState({ radius });
         } else if (camera && typeof slab.depth === 'number') {
             // A lifted clip is re-applied away from the camera flight that set its
             // depth slab up, so the near/far cut travels with the message instead.
